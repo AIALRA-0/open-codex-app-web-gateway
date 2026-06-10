@@ -1739,3 +1739,48 @@ Open follow-ups:
   - Public HTTPS returned HTTP/2 200 from `https://opencodexapp.aialra.online`.
   - UI smoke passed with marker `ui-smoke-mq80pdf1`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Background Restart Reconciliation
+
+- Closed the "stuck forever after restart" part of the local background
+  response gap:
+  - bridge startup now scans file-backed Responses records;
+  - stale `background:true` + `status:"in_progress"` records are marked
+    `failed`;
+  - the terminal error uses
+    `code:"background_job_interrupted_by_restart"` and
+    `type:"compatibility_bridge_error"`;
+  - `metadata.compatibility.background_restart` is set to
+    `marked_failed_on_startup`.
+- This does not yet resume an interrupted upstream call; full native-style
+  background durability still needs a persisted job queue. It does prevent
+  Codex/UI clients from polling an orphaned local background response forever.
+- Added a server test that seeds a file-backed stale background response before
+  creating the bridge server and verifies startup reconciliation through
+  `GET /v1/responses/{response_id}`.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - targeted background server tests: passed, including normal background
+    completion, cancellation, and startup reconciliation.
+  - `npm test`: 63/63 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Live deployment restart reconciliation passed by writing a temporary
+    non-secret stale response record `resp_stale_live_1781093229`, restarting
+    `aialra-opencodexapp-bridge.service`, verifying it returned
+    `status:"failed"` with `background_job_interrupted_by_restart`, then
+    deleting it through `DELETE /v1/responses/{response_id}`.
+  - Temporary live stale response files after cleanup: 0.
+  - After restart, bridge, web, and app-server services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Full live `bridge-regression` passed 22/22 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1881 ms, P95 latency 4093 ms, and total
+    usage 3219 tokens. The normal `responses-background` case completed after
+    several `in_progress` polls.
+  - Public HTTPS returned HTTP/2 200 from `https://opencodexapp.aialra.online`.
+  - UI smoke passed with marker `ui-smoke-mq80ygqx`, reload persistence
+    confirmed, console errors 0, warnings 0.

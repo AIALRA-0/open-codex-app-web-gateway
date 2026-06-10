@@ -528,6 +528,39 @@ function storeCancelledBackgroundResponse(store, responseId, reason) {
   }));
 }
 
+function reconcileStaleBackgroundResponses(store) {
+  if (typeof store?.list !== "function" || typeof store?.put !== "function") return 0;
+  let reconciled = 0;
+  for (const record of store.list()) {
+    const response = record?.response;
+    if (!response || response.status !== "in_progress" || response.background !== true) continue;
+    const responseId = response.id || record.id;
+    if (!responseId) continue;
+    store.put(responseId, {
+      ...record,
+      response: {
+        ...response,
+        status: "failed",
+        completed_at: nowSeconds(),
+        error: {
+          message: "background response was interrupted by bridge restart",
+          type: "compatibility_bridge_error",
+          code: "background_job_interrupted_by_restart",
+          param: null,
+        },
+        metadata: {
+          ...(response.metadata || {}),
+          compatibility: mergeCompatibility(response.metadata?.compatibility, {
+            background_restart: "marked_failed_on_startup",
+          }),
+        },
+      },
+    });
+    reconciled += 1;
+  }
+  return reconciled;
+}
+
 function updateStoredResponse(store, responseId, updater) {
   const record = store.get(responseId);
   if (!record?.response) return null;
@@ -2367,6 +2400,10 @@ function createServer(config = loadConfig()) {
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const backgroundJobs = new Map();
+  const reconciledBackgroundJobs = reconcileStaleBackgroundResponses(store);
+  if (reconciledBackgroundJobs) {
+    log("reconciled stale background responses after startup", { count: reconciledBackgroundJobs });
+  }
 
   return http.createServer(async (req, res) => {
     try {

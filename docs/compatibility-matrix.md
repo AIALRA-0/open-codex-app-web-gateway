@@ -51,7 +51,7 @@ implementations for those tools.
 | `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility |
 | `previous_response_id` | local replay store | Emulated locally |
 | `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
-| `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution |
+| `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution; startup reconciliation marks stale in-progress background records failed after a bridge restart |
 | `tools[type=function]` | chat function tools | Direct |
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
@@ -118,7 +118,7 @@ behavior.
 | `finish_reason=content_filter` | `status=incomplete`, `incomplete_details.reason=content_filter` | Direct for non-streaming and streaming Chat output |
 | `finish_reason=insufficient_system_resource` | `status=failed`, `error.code=server_error` | DeepSeek-specific Chat termination mapped to Responses failure because Responses incomplete reasons do not include this value |
 | `finish_reason=stop`, `tool_calls`, or legacy `function_call` | `status=completed` | Direct |
-| local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
+| local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled`; stale in-progress background records are reconciled to failed on startup instead of remaining stuck |
 | local input file context | compatibility metadata `local_input_files` | Emulated before upstream Chat calls for Responses create, background, streaming, `/input_tokens`, and local compaction |
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
@@ -129,7 +129,7 @@ behavior.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage; `conversation` replays and appends local Conversation items |
+| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage; bridge startup marks interrupted background records as failed; `conversation` replays and appends local Conversation items |
 | `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
@@ -433,7 +433,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
-| Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
+| Background durability after process restart | Local background jobs are in-process while the response record is file-backed; startup now reconciles interrupted in-progress background records to explicit `failed` responses, but it does not resume the upstream call | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
 

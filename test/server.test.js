@@ -8,6 +8,7 @@ const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
 const { createServer, loadConfig } = require("../src/bridge/server");
+const { FileResponseStore } = require("../src/bridge/store");
 const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
 function listen(server) {
@@ -1834,6 +1835,54 @@ test("POST /v1/responses/{id}/cancel cancels an in-progress background response"
     const fetchedJson = await fetched.json();
     assert.equal(fetchedJson.status, "cancelled");
   });
+});
+
+test("server startup reconciles stale in-progress background responses", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-stale-background-"));
+  const responseId = "resp_stale_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+        },
+      },
+    },
+    input_items: [{ id: "item_stale", type: "message", role: "user", content: "stale background" }],
+    messages: [{ role: "user", content: "stale background" }],
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: "http://127.0.0.1:9",
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+    assert.equal(fetched.status, 200);
+    const json = await fetched.json();
+    assert.equal(json.status, "failed");
+    assert.equal(json.background, true);
+    assert.equal(json.error.type, "compatibility_bridge_error");
+    assert.equal(json.error.code, "background_job_interrupted_by_restart");
+    assert.equal(json.metadata.compatibility.background, "local_async");
+    assert.equal(json.metadata.compatibility.background_restart, "marked_failed_on_startup");
+  } finally {
+    await close(bridge);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
 });
 
 test("local Conversations API persists items and feeds Responses conversation context", async () => {
