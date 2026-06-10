@@ -292,9 +292,27 @@ function buildSuites(defaultModel) {
           && json.compatibility?.provider === "local",
       },
       {
+        id: "moderations-local",
+        mode: "moderations",
+        request: {
+          model: "omni-moderation-latest",
+          input: ["A calm compatibility check.", "I want to kill them."],
+        },
+        check: ({ json }) => json?.id?.startsWith("modr_")
+          && json.model === "omni-moderation-latest"
+          && json.results?.length === 2
+          && json.results[0].flagged === false
+          && json.results[1].flagged === true
+          && json.results[1].categories?.violence === true
+          && json.results[1].categories?.["harassment/threatening"] === true
+          && json.results[1].category_applied_input_types?.violence?.includes("text")
+          && json.compatibility?.provider === "local",
+      },
+      {
         id: "batch-embeddings-local",
-        mode: "batch-embeddings",
+        mode: "batch-local",
         endpoint: "/v1/embeddings",
+        usage: "embeddings",
         requests: [
           {
             custom_id: "batch-embedding-a",
@@ -316,6 +334,33 @@ function buildSuites(defaultModel) {
           && outputLines.every((line) => line.response?.status_code === 200 && !line.error)
           && outputLines[0].response?.body?.data?.[0]?.embedding?.length === 12
           && outputLines[1].response?.body?.data?.length === 2,
+      },
+      {
+        id: "batch-moderations-local",
+        mode: "batch-local",
+        endpoint: "/v1/moderations",
+        requests: [
+          {
+            custom_id: "batch-moderation-safe",
+            body: { input: "A calm compatibility batch check." },
+          },
+          {
+            custom_id: "batch-moderation-threat",
+            body: { model: "omni-moderation-latest", input: "I will kill you." },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => batch?.object === "batch"
+          && batch.status === "completed"
+          && batch.request_counts?.total === 2
+          && batch.request_counts?.completed === 2
+          && batch.request_counts?.failed === 0
+          && !batch.error_file_id
+          && !errorText
+          && outputLines.length === 2
+          && outputLines.every((line) => line.response?.status_code === 200 && !line.error)
+          && outputLines[0].response?.body?.results?.[0]?.flagged === false
+          && outputLines[1].response?.body?.results?.[0]?.flagged === true
+          && outputLines[1].response?.body?.results?.[0]?.categories?.violence === true,
       },
       {
         id: "chat-passthrough",
@@ -1134,14 +1179,17 @@ async function runCase(testCase, context) {
     if (testCase.mode === "model-get") {
       return await runModelGetCase(testCase, context, started);
     }
-    if (testCase.mode === "batch-embeddings") {
-      return await runBatchEmbeddingsCase(testCase, context, started);
+    if (testCase.mode === "batch-local" || testCase.mode === "batch-embeddings") {
+      return await runBatchLocalCase(testCase, context, started);
     }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
     }
     if (testCase.mode === "embeddings") {
       return await runJsonCase(testCase, context, started, "/v1/embeddings", embeddingOutputText, embeddingUsage);
+    }
+    if (testCase.mode === "moderations") {
+      return await runJsonCase(testCase, context, started, "/v1/moderations", moderationOutputText, moderationUsage);
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
@@ -1395,7 +1443,7 @@ async function runModelGetCase(testCase, context, started) {
   });
 }
 
-async function runBatchEmbeddingsCase(testCase, context, started) {
+async function runBatchLocalCase(testCase, context, started) {
   const endpoint = testCase.endpoint || "/v1/embeddings";
   let inputFile = null;
   let batch = null;
@@ -1473,7 +1521,7 @@ async function runBatchEmbeddingsCase(testCase, context, started) {
       fetched_status: fetched.status,
       list_status: listed.status,
       cancel_status: cancelledResponse.status,
-      usage: sumUsage(outputLines.map((line) => embeddingUsage(line.response?.body)).filter(Boolean)),
+      usage: sumUsage(outputLines.map((line) => batchResponseUsage(testCase, line.response?.body)).filter(Boolean)),
     });
   } finally {
     if (inputFile?.id) await deleteJson(`${baseUrl}/v1/files/${inputFile.id}`);
@@ -2422,6 +2470,12 @@ function embeddingOutputText(response) {
   return `embeddings:${response?.data?.length || 0}x${response?.data?.[0]?.embedding?.length || 0}`;
 }
 
+function moderationOutputText(response) {
+  const results = response?.results || [];
+  const flagged = results.filter((result) => result?.flagged).length;
+  return `moderations:${results.length}:flagged:${flagged}`;
+}
+
 function responseUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -2456,6 +2510,19 @@ function embeddingUsage(response) {
     output_tokens: 0,
     total_tokens: usage.total_tokens || 0,
   };
+}
+
+function moderationUsage() {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  };
+}
+
+function batchResponseUsage(testCase, response) {
+  if (testCase.usage === "embeddings") return embeddingUsage(response);
+  return moderationUsage(response);
 }
 
 function sumUsage(values) {

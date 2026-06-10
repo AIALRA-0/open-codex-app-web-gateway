@@ -12,6 +12,7 @@ Primary sources:
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
+- OpenAI Moderations OpenAPI operation `createModeration`: https://api.openai.com/v1/moderations
 - OpenAI Batch OpenAPI operation `createBatch`: https://api.openai.com/v1/batches
 - OpenAI Batch guide: https://developers.openai.com/api/docs/guides/batch
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
@@ -243,8 +244,8 @@ OpenAI's current endpoint list includes `GET /v1/models` and
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns the configured default bridge model |
-| `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to the configured default model only when the requested ID matches it |
+| `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns local bridge models for the configured default Chat provider model, local embeddings model, and local moderations model |
+| `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to local bridge model objects for the configured default, embeddings, or moderations model IDs |
 
 ## Embeddings Endpoint Coverage
 
@@ -265,6 +266,27 @@ defaults to `CODEXCOMPAT_EMBEDDINGS_MODEL=hashed-semantic-256` and
 The `model` response field echoes the request model when provided so SDKs that
 require a model id can still validate the response shape.
 
+## Moderations Endpoint Coverage
+
+OpenAI's `POST /v1/moderations` operation returns an `id`, `model`, and
+`results` array with `flagged`, `categories`, `category_scores`, and current
+omni moderation `category_applied_input_types` fields. The bridge implements a
+local deterministic compatibility adapter so Chat-Completions-only providers
+can satisfy SDK and workflow calls that expect moderation-shaped responses.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/moderations` | Implemented locally | Accepts a string, an array of strings, or a multimodal text/image content-part array; returns OpenAI-style category booleans, category scores, applied input types, and a `modr_` id without calling the upstream Chat provider |
+
+The local classifier is a conservative keyword/rule compatibility baseline,
+not OpenAI's hosted moderation model and not image-content inspection. It
+includes the current omni category set (`harassment`,
+`harassment/threatening`, `sexual`, `hate`, `hate/threatening`, `illicit`,
+`illicit/violent`, `self-harm`, `self-harm/intent`,
+`self-harm/instructions`, `sexual/minors`, `violence`, and
+`violence/graphic`) and defaults to
+`CODEXCOMPAT_MODERATIONS_MODEL=omni-moderation-latest`.
+
 ## Batch Endpoint Coverage
 
 OpenAI's Batch API creates an asynchronous job from a `purpose:"batch"` JSONL
@@ -282,8 +304,9 @@ OpenAI-compatible surfaces without adding a separate job runner.
 | `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary |
 
 Local Batch execution currently accepts `/v1/responses`,
-`/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings`, because those
-surfaces are implemented by the bridge. Streaming (`stream:true`) and
+`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, and
+`/v1/moderations`, because those surfaces are implemented by the bridge.
+Streaming (`stream:true`) and
 background Responses (`background:true`) requests are rejected per JSONL line
 and written to the error file because a completed Batch output file cannot
 represent an open stream or a still-running background response. The local
@@ -564,6 +587,7 @@ Configuration:
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local text files |
 | `CODEXCOMPAT_EMBEDDINGS_MODEL` | `hashed-semantic-256` | Model id returned by local `/v1/embeddings` when the request omits `model` |
 | `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` | `256` | Default local `/v1/embeddings` vector dimensions; requests may override `dimensions` from 1 to 3072 |
+| `CODEXCOMPAT_MODERATIONS_MODEL` | `omni-moderation-latest` | Model id returned by local `/v1/moderations` when the request omits `model` |
 | `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git and prune with runtime policy if needed |
 | `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at the official 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
 | `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at the official 64 MB Part limit |
@@ -633,7 +657,8 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
-| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding endpoints and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service and does not yet execute `/v1/moderations`, images, edits, or videos | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, and adapters for future moderation/image/video endpoints |
+| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service and does not yet execute images, edits, or videos | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, and adapters for future image/video endpoints |
+| OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |

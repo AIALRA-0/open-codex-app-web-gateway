@@ -70,6 +70,30 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/chat/completions",
   "/v1/completions",
   "/v1/embeddings",
+  "/v1/moderations",
+]);
+
+const MODERATION_CATEGORIES = Object.freeze([
+  "harassment",
+  "harassment/threatening",
+  "sexual",
+  "hate",
+  "hate/threatening",
+  "illicit",
+  "illicit/violent",
+  "self-harm",
+  "self-harm/intent",
+  "self-harm/instructions",
+  "sexual/minors",
+  "violence",
+  "violence/graphic",
+]);
+
+const MODERATION_IMAGE_AWARE_CATEGORIES = new Set([
+  "sexual",
+  "self-harm",
+  "violence",
+  "violence/graphic",
 ]);
 
 function isPlainObject(value) {
@@ -121,6 +145,7 @@ function loadConfig(overrides = {}) {
     defaultModel: process.env.CODEXCOMPAT_DEFAULT_MODEL || "deepseek-v4-pro",
     embeddingsModel: process.env.CODEXCOMPAT_EMBEDDINGS_MODEL || "hashed-semantic-256",
     embeddingsDimensions: numberFromEnv("CODEXCOMPAT_EMBEDDINGS_DIMENSIONS", LOCAL_EMBEDDING_DIMENSIONS, 1, 3072),
+    moderationsModel: process.env.CODEXCOMPAT_MODERATIONS_MODEL || "omni-moderation-latest",
     batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
@@ -2807,7 +2832,7 @@ async function handleModels(req, res, config) {
 
   sendJson(res, 200, {
     object: "list",
-    data: [localModelObject(config.defaultModel)],
+    data: localModelCatalog(config),
   });
 }
 
@@ -2826,7 +2851,7 @@ async function handleModelGet(req, res, config, modelId) {
     }
   }
 
-  if (modelId === config.defaultModel) {
+  if (localModelCatalog(config).some((model) => model.id === modelId)) {
     sendJson(res, 200, localModelObject(modelId));
     return;
   }
@@ -2884,6 +2909,14 @@ function localModelObject(modelId) {
     created: 0,
     owned_by: "compatibility-bridge",
   };
+}
+
+function localModelCatalog(config) {
+  return [...new Set([
+    config.defaultModel,
+    config.embeddingsModel,
+    config.moderationsModel,
+  ].filter(Boolean))].map((modelId) => localModelObject(modelId));
 }
 
 async function handleEmbeddings(req, res, config) {
@@ -2947,6 +2980,247 @@ async function handleEmbeddings(req, res, config) {
       reason: "chat_provider_embedding_compatibility",
     },
   });
+}
+
+async function handleModerations(req, res, config) {
+  const request = await readJson(req);
+  let inputs = [];
+  try {
+    inputs = normalizeModerationInputs(request.input);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message, {
+      type: "invalid_request_error",
+      code: error.code || "invalid_moderation_input",
+      param: "input",
+    });
+    return;
+  }
+
+  const model = request.model || config.moderationsModel || "omni-moderation-latest";
+  const results = inputs.map((input) => classifyModerationInput(input));
+
+  sendJson(res, 200, {
+    id: prefixedId("modr"),
+    model,
+    results,
+    compatibility: {
+      provider: "local",
+      classifier: "deterministic-keyword-safety",
+      reason: "chat_provider_moderation_compatibility",
+      supports_image_inspection: false,
+    },
+  });
+}
+
+function normalizeModerationInputs(input) {
+  if (input === undefined || input === null) {
+    const error = new Error("input is required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (Array.isArray(input)) {
+    if (!input.length) {
+      const error = new Error("input array must not be empty");
+      error.status = 400;
+      throw error;
+    }
+    if (input.every((item) => typeof item === "string")) {
+      return input.map((item) => moderationInputFromText(item));
+    }
+    if (input.some((item) => isModerationContentPart(item))) {
+      return [moderationInputFromParts(input)];
+    }
+    return input.map((item) => moderationInputFromValue(item));
+  }
+
+  return [moderationInputFromValue(input)];
+}
+
+function moderationInputFromValue(value) {
+  if (Array.isArray(value)) return moderationInputFromParts(value);
+  if (isModerationContentPart(value)) return moderationInputFromParts([value]);
+  return moderationInputFromText(stringifyContent(value));
+}
+
+function moderationInputFromText(text) {
+  return {
+    text: stringifyContent(text),
+    input_types: ["text"],
+  };
+}
+
+function moderationInputFromParts(parts) {
+  const text = [];
+  const inputTypes = [];
+  for (const part of parts) {
+    if (!isPlainObject(part)) {
+      text.push(stringifyContent(part));
+      inputTypes.push("text");
+      continue;
+    }
+    const type = part.type || "text";
+    if (type === "text" || type === "input_text" || part.text != null || part.content != null) {
+      text.push(stringifyContent(part.text ?? part.content ?? ""));
+      inputTypes.push("text");
+      continue;
+    }
+    if (type === "image_url" || type === "input_image") {
+      const caption = part.caption ?? part.alt_text ?? "";
+      if (caption) {
+        text.push(stringifyContent(caption));
+        inputTypes.push("text");
+      }
+      inputTypes.push("image");
+      continue;
+    }
+    text.push(stringifyContent(part));
+    inputTypes.push("text");
+  }
+  return {
+    text: text.filter(Boolean).join("\n"),
+    input_types: [...new Set(inputTypes.length ? inputTypes : ["text"])],
+  };
+}
+
+function isModerationContentPart(value) {
+  if (!isPlainObject(value)) return false;
+  return ["text", "input_text", "image_url", "input_image"].includes(value.type)
+    || value.text != null
+    || value.content != null
+    || value.image_url != null;
+}
+
+function classifyModerationInput(input) {
+  const normalized = String(input.text || "").toLowerCase();
+  const baseScore = Math.min(0.15, 0.005 + normalized.length / 20000);
+  const categories = Object.fromEntries(MODERATION_CATEGORIES.map((category) => [category, false]));
+  const categoryScores = Object.fromEntries(MODERATION_CATEGORIES.map((category) => [category, score(baseScore)]));
+  const mark = (category, value) => {
+    categories[category] = true;
+    categoryScores[category] = Math.max(categoryScores[category], score(value));
+  };
+
+  const violence = matchesAny(normalized, [
+    /\bkill\b/,
+    /\bmurder\b/,
+    /\bshoot\b/,
+    /\bstab\b/,
+    /\bbomb\b/,
+    /\battack\b/,
+    /\bassault\b/,
+    /\bbeat\b/,
+    /\bweapon\b/,
+  ]);
+  const targetedThreat = matchesAny(normalized, [
+    /\bi\s+(?:will|want to|am going to)\s+(?:kill|murder|shoot|stab|hurt|attack)\b/,
+    /\b(?:kill|murder|shoot|stab|hurt|attack)\s+(?:you|him|her|them|people)\b/,
+    /\byou\s+(?:should|deserve to)\s+(?:die|be hurt)\b/,
+  ]);
+  const graphicViolence = matchesAny(normalized, [
+    /\bgore\b/,
+    /\bgraphic\b/,
+    /\bblood(?:y)?\b/,
+    /\bdismember\b/,
+    /\bcorpse\b/,
+  ]);
+  const harassment = matchesAny(normalized, [
+    /\bidiot\b/,
+    /\bmoron\b/,
+    /\bloser\b/,
+    /\btrash\b/,
+    /\bworthless\b/,
+    /\bshut up\b/,
+    /\bi hate you\b/,
+  ]);
+  const hate = matchesAny(normalized, [
+    /\bracial slur\b/,
+    /\bethnic slur\b/,
+    /\bdehumaniz(?:e|ing)\b/,
+    /\bsupremacist\b/,
+    /\bnazi\b/,
+    /\bgenocide\b/,
+  ]);
+  const selfHarmIntent = matchesAny(normalized, [
+    /\bkill myself\b/,
+    /\bend my life\b/,
+    /\bi want to die\b/,
+    /\bsuicide\b/,
+    /\boverdose\b/,
+  ]);
+  const selfHarmInstructions = matchesAny(normalized, [
+    /\bhow to\s+(?:kill myself|commit suicide|self harm)\b/,
+    /\bsuicide method\b/,
+    /\bbest way to die\b/,
+    /\bself harm instructions\b/,
+  ]);
+  const selfHarm = selfHarmIntent || selfHarmInstructions || matchesAny(normalized, [
+    /\bself[- ]harm\b/,
+    /\bcut myself\b/,
+  ]);
+  const sexual = matchesAny(normalized, [
+    /\bsex(?:ual)?\b/,
+    /\bporn\b/,
+    /\bnude\b/,
+    /\bexplicit\b/,
+    /\berotic\b/,
+  ]);
+  const minors = matchesAny(normalized, [
+    /\bminor\b/,
+    /\bunderage\b/,
+    /\bchild\b/,
+    /\bchildren\b/,
+  ]);
+  const illicit = matchesAny(normalized, [
+    /\bsteal\b/,
+    /\bfraud\b/,
+    /\bphishing\b/,
+    /\bmalware\b/,
+    /\bcounterfeit\b/,
+    /\bexplosive\b/,
+    /\billegal drug\b/,
+    /\bbypass security\b/,
+  ]);
+  const violentIllicit = illicit && (violence || matchesAny(normalized, [/\bweapon\b/, /\bexplosive\b/, /\bbomb\b/]));
+
+  if (harassment || targetedThreat) mark("harassment", targetedThreat ? 0.84 : 0.72);
+  if (targetedThreat) mark("harassment/threatening", 0.92);
+  if (sexual) mark("sexual", 0.76);
+  if (sexual && minors) mark("sexual/minors", 0.95);
+  if (hate) mark("hate", 0.82);
+  if (hate && violence) mark("hate/threatening", 0.9);
+  if (illicit) mark("illicit", violentIllicit ? 0.78 : 0.7);
+  if (violentIllicit) mark("illicit/violent", 0.88);
+  if (selfHarm) mark("self-harm", selfHarmInstructions ? 0.9 : 0.78);
+  if (selfHarmIntent) mark("self-harm/intent", 0.9);
+  if (selfHarmInstructions) mark("self-harm/instructions", 0.93);
+  if (violence) mark("violence", targetedThreat ? 0.88 : 0.74);
+  if (graphicViolence) mark("violence/graphic", 0.84);
+
+  return {
+    flagged: Object.values(categories).some(Boolean),
+    categories,
+    category_scores: categoryScores,
+    category_applied_input_types: moderationAppliedInputTypes(input.input_types || ["text"]),
+  };
+}
+
+function moderationAppliedInputTypes(inputTypes) {
+  const unique = new Set(inputTypes);
+  return Object.fromEntries(MODERATION_CATEGORIES.map((category) => {
+    const applied = [];
+    if (unique.has("text")) applied.push("text");
+    if (unique.has("image") && MODERATION_IMAGE_AWARE_CATEGORIES.has(category)) applied.push("image");
+    return [category, applied];
+  }));
+}
+
+function matchesAny(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+function score(value) {
+  return Number(Number(value || 0).toFixed(6));
 }
 
 function normalizeEmbeddingInputs(input) {
@@ -3336,6 +3610,8 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleLegacyCompletions(req, res, config);
     } else if (endpoint === "/v1/embeddings") {
       await handleEmbeddings(req, res, config);
+    } else if (endpoint === "/v1/moderations") {
+      await handleModerations(req, res, config);
     } else {
       return {
         ok: false,
@@ -3866,6 +4142,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/embeddings") {
         await handleEmbeddings(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/moderations") {
+        await handleModerations(req, res, config);
         return;
       }
 

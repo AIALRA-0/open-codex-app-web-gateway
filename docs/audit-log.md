@@ -2839,3 +2839,75 @@ Open follow-ups:
   persisted async workers, restartable queues, larger disk-governed staging
   profiles, and Batch coverage for moderation/image/video endpoints as those
   local adapters are implemented.
+
+## 2026-06-10 Local Moderations Compatibility
+
+- Added local OpenAI-compatible Moderations API coverage for
+  Chat-Completions-only provider deployments.
+- Official source checked on 2026-06-10:
+  - OpenAI OpenAPI operation `createModeration` at `/v1/moderations`
+    classifies text and/or image inputs and returns an object with `id`,
+    `model`, and `results`.
+  - Each result contains `flagged`, `categories`, `category_scores`, and, for
+    current omni moderation responses, `category_applied_input_types`.
+  - Current omni categories include harassment, harassment/threatening, sexual,
+    hate, hate/threatening, illicit, illicit/violent, self-harm,
+    self-harm/intent, self-harm/instructions, sexual/minors, violence, and
+    violence/graphic.
+- Implemented a local deterministic adapter:
+  - `POST /v1/moderations` accepts a string, an array of strings, or a
+    multimodal text/image content-part array;
+  - returns `modr_` ids, OpenAI-style category booleans, category scores, and
+    applied input-type metadata;
+  - uses `CODEXCOMPAT_MODERATIONS_MODEL`, defaulting to
+    `omni-moderation-latest`, when the request omits `model`;
+  - adds the configured moderation model to local `/v1/models/{model}` fallback
+    behavior when the upstream provider does not expose it;
+  - explicitly marks the response as local deterministic compatibility
+    metadata and does not call the upstream Chat provider;
+  - extends local Batch execution to accept `/v1/moderations` JSONL requests
+    alongside Responses, Chat, legacy Completions, and Embeddings.
+- Added unit tests for:
+  - direct local Moderations response shape, flagged/unflagged text categories,
+    multimodal applied input types, and input validation;
+  - local Batch execution over `/v1/moderations` without upstream provider
+    calls;
+  - model retrieval fallback for `omni-moderation-latest`.
+- Added live `moderations-local` and `batch-moderations-local` to
+  `bridge-regression`.
+- Updated the compatibility matrix, deployment docs, and evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 57/57 passing tests.
+  - `npm test`: 85/85 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Direct local `/v1/moderations` probe returned HTTP 200, a `modr_` id, two
+    results, and one flagged violence/threat result.
+  - Targeted live `moderations-local` passed 1/1, elapsed 58 ms, output
+    `moderations:2:flagged:1`.
+  - Targeted live `batch-moderations-local` passed 1/1, elapsed 141 ms, created
+    a local `batch` with 2 completed requests, no error file, 2 output JSONL
+    lines, retrieve/list/cancel all HTTP 200, and zero provider token usage.
+  - Full live `bridge-regression` passed 34/34 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 2075 ms, P95 latency 5653 ms, and total usage
+    8559 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq89emsz`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 256 runtime candidates,
+    selected 11 old UI screenshots by retention policy, deleted 0, selected
+    625129 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 42 GB available; bridge state is 1.5 MB and output
+    artifacts are 4.8 MB.
+- Remaining known gap: this is deterministic local moderation compatibility,
+  not OpenAI's hosted moderation classifier and not image-pixel inspection.
+  Future work should add provider-backed or specialized moderation models,
+  multilingual safety evals, image inspection, and larger safety benchmark
+  suites while preserving the local no-upstream fallback.

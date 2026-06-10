@@ -3495,6 +3495,60 @@ test("POST /v1/embeddings supports base64 token inputs and validates parameters"
   });
 });
 
+test("POST /v1/moderations returns local OpenAI-compatible category results", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "moderations should not call upstream" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/moderations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "omni-moderation-latest",
+        input: ["A calm release note.", "I want to kill them."],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.match(json.id, /^modr_/);
+    assert.equal(json.model, "omni-moderation-latest");
+    assert.equal(json.results.length, 2);
+    assert.equal(json.results[0].flagged, false);
+    assert.equal(json.results[0].categories.violence, false);
+    assert.equal(json.results[1].flagged, true);
+    assert.equal(json.results[1].categories.violence, true);
+    assert.equal(json.results[1].categories["harassment/threatening"], true);
+    assert.ok(json.results[1].category_scores.violence > 0.7);
+    assert.deepEqual(json.results[1].category_applied_input_types.violence, ["text"]);
+    assert.equal(json.compatibility.provider, "local");
+    assert.equal(requests.length, 0);
+
+    const multimodal = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/moderations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: [
+          { type: "text", text: "A neutral product photo." },
+          { type: "image_url", image_url: { url: "https://example.test/photo.png" } },
+        ],
+      }),
+    });
+    assert.equal(multimodal.status, 200);
+    const multimodalJson = await multimodal.json();
+    assert.equal(multimodalJson.results.length, 1);
+    assert.deepEqual(multimodalJson.results[0].category_applied_input_types.violence, ["text", "image"]);
+
+    const invalid = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/moderations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: [] }),
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json()).error.param, "input");
+  });
+});
+
 test("POST /v1/completions maps legacy prompts to Chat Completions", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");
@@ -4064,6 +4118,69 @@ test("local Batch API executes local embeddings without provider calls", async (
   });
 });
 
+test("local Batch API executes local moderations without provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "moderation-safe",
+        method: "POST",
+        url: "/v1/moderations",
+        body: { input: "A calm project status update." },
+      }),
+      JSON.stringify({
+        custom_id: "moderation-threat",
+        method: "POST",
+        url: "/v1/moderations",
+        body: { model: "omni-moderation-latest", input: "I will kill you." },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "moderations-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/moderations",
+        completion_window: "24h",
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 2);
+    assert.equal(batch.request_counts.completed, 2);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 2);
+    assert.equal(outputLines[0].response.body.results[0].flagged, false);
+    assert.equal(outputLines[1].response.body.results[0].flagged, true);
+    assert.equal(outputLines[1].response.body.results[0].categories.violence, true);
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);
@@ -4147,8 +4264,19 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
       owned_by: "provider-list",
     });
 
+    const localModeration = await fetch(`${baseUrl}/v1/models/omni-moderation-latest`);
+    assert.equal(localModeration.status, 200);
+    assert.deepEqual(await localModeration.json(), {
+      id: "omni-moderation-latest",
+      object: "model",
+      created: 0,
+      owned_by: "compatibility-bridge",
+    });
+
     assert.equal(requests[0].req.url, "/models/direct-model");
     assert.equal(requests[1].req.url, "/models/listed-model");
     assert.equal(requests[2].req.url, "/models");
+    assert.equal(requests[3].req.url, "/models/omni-moderation-latest");
+    assert.equal(requests[4].req.url, "/models");
   });
 });
