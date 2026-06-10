@@ -1,0 +1,29 @@
+[Unit]
+Description=AIALRA Open CodexApp app-server
+After=network-online.target aialra-opencodexapp-bridge.service
+Wants=network-online.target
+Requires=aialra-opencodexapp-bridge.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/apps/open-codex-app-web-gateway
+Environment=HOME=/srv/aialra/state/root-home
+Environment=USER=root
+Environment=NODE_ENV=production
+Environment=CODEX_HOME=/srv/aialra/state/opencodexapp-codex-home
+Environment=CODEXAPP_CODEX_CLI=/usr/bin/codex
+Environment=CODEXAPP_APP_VERSION=0.137.0
+EnvironmentFile=/srv/aialra/config/secrets/opencodexapp.env
+ExecStart=/usr/bin/codex app-server --remote-control --listen ws://127.0.0.1:12921 --analytics-default-enabled
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=30s
+StandardOutput=append:/srv/aialra/logs/opencodexapp/app-server/service.log
+StandardError=append:/srv/aialra/logs/opencodexapp/app-server/service.log
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

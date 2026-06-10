@@ -1,0 +1,22 @@
+[Unit]
+Description=AIALRA Open CodexApp Responses bridge
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/apps/open-codex-app-web-gateway
+Environment=NODE_ENV=production
+EnvironmentFile=/srv/aialra/config/secrets/opencodexapp.env
+ExecStart=/usr/bin/node /srv/aialra/apps/open-codex-app-web-gateway/src/bridge/server.js
+Restart=always
+RestartSec=3
+KillMode=process
+StandardOutput=append:/srv/aialra/logs/opencodexapp/bridge/service.log
+StandardError=append:/srv/aialra/logs/opencodexapp/bridge/service.log
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

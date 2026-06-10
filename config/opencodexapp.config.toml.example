@@ -1,0 +1,8 @@
+model = "deepseek-v4-pro"
+model_provider = "opencodex_deepseek"
+
+[model_providers.opencodex_deepseek]
+name = "Open Codex DeepSeek Bridge"
+base_url = "http://127.0.0.1:12912/v1"
+env_key = "DEEPSEEK_API_KEY"
+wire_api = "responses"

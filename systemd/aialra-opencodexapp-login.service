@@ -1,0 +1,25 @@
+[Unit]
+Description=AIALRA Open CodexApp login proxy
+After=network-online.target aialra-opencodexapp-web.service
+Wants=network-online.target
+Requires=aialra-opencodexapp-web.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/apps/open-codex-app-web-gateway
+Environment=NODE_ENV=production
+Environment=CODEXAPP_PORT=12923
+Environment=CODEXAPP_UPSTREAM=http://127.0.0.1:12920
+EnvironmentFile=/srv/aialra/config/secrets/opencodexapp.env
+ExecStart=/usr/bin/node /srv/aialra/apps/open-codex-app-web-gateway/login-proxy.js
+Restart=always
+RestartSec=3
+KillMode=process
+StandardOutput=append:/srv/aialra/logs/opencodexapp/login/service.log
+StandardError=append:/srv/aialra/logs/opencodexapp/login/service.log
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

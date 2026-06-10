@@ -1,0 +1,17 @@
+{
+  "name": "open-codex-app-web-gateway",
+  "private": true,
+  "version": "0.2.0",
+  "type": "commonjs",
+  "description": "Codex App web gateway plus a Responses API compatibility bridge for OpenAI-compatible Chat Completions providers.",
+  "scripts": {
+    "start": "node web-server.js",
+    "start:bridge": "node src/bridge/server.js",
+    "test": "node --test",
+    "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
+    "secret-scan": "node scripts/secret-scan.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

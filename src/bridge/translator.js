@@ -1,0 +1,500 @@
+"use strict";
+
+const crypto = require("node:crypto");
+
+const DEFAULT_TEXT = Object.freeze({ format: { type: "text" } });
+const DEFAULT_REASONING = Object.freeze({ effort: null, summary: null });
+
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function prefixedId(prefix) {
+  return `${prefix}_${crypto.randomBytes(16).toString("hex")}`;
+}
+
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function asArray(value) {
+  if (value == null) return [];
+  return Array.isArray(value) ? value : [value];
+}
+
+function stringifyContent(value) {
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return JSON.stringify(value);
+}
+
+function normalizeContentParts(content, role = "user") {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return stringifyContent(content);
+
+  const parts = [];
+  const textFallback = [];
+
+  for (const part of content) {
+    if (!isPlainObject(part)) {
+      textFallback.push(stringifyContent(part));
+      continue;
+    }
+
+    if (part.type === "input_text" || part.type === "output_text" || part.type === "text") {
+      const text = stringifyContent(part.text ?? part.content ?? "");
+      if (role === "user") parts.push({ type: "text", text });
+      else textFallback.push(text);
+      continue;
+    }
+
+    if (part.type === "input_image" || part.type === "image_url") {
+      const url = part.image_url?.url || part.image_url || part.url;
+      if (role === "user" && url) {
+        parts.push({ type: "image_url", image_url: { url } });
+      } else {
+        textFallback.push(`[image:${url || part.file_id || "inline"}]`);
+      }
+      continue;
+    }
+
+    if (part.type === "input_file") {
+      const fileHint = part.file_url || part.file_id || part.filename || "attached-file";
+      const text = part.text ? `\n${part.text}` : "";
+      textFallback.push(`[file:${fileHint}]${text}`);
+      continue;
+    }
+
+    if (part.type === "refusal" || part.type === "output_refusal") {
+      textFallback.push(stringifyContent(part.refusal ?? part.text ?? ""));
+      continue;
+    }
+
+    textFallback.push(`[${part.type || "content"}:${JSON.stringify(part)}]`);
+  }
+
+  if (parts.length > 0) {
+    if (textFallback.length > 0) parts.unshift({ type: "text", text: textFallback.join("\n") });
+    return parts;
+  }
+
+  return textFallback.join("\n");
+}
+
+function normalizeChatRole(role, options = {}) {
+  if (role === "developer") return options.developerRole || "system";
+  if (role === "system") return "system";
+  if (role === "assistant") return "assistant";
+  if (role === "tool") return "tool";
+  return "user";
+}
+
+function inputItemToChatMessages(item, options = {}) {
+  if (typeof item === "string") return [{ role: "user", content: item }];
+  if (!isPlainObject(item)) return [{ role: "user", content: stringifyContent(item) }];
+
+  if (item.type === "message" || item.role) {
+    const role = normalizeChatRole(item.role, options);
+    const message = {
+      role,
+      content: normalizeContentParts(item.content, role),
+    };
+    if (item.name) message.name = item.name;
+    if (item.tool_call_id) message.tool_call_id = item.tool_call_id;
+    if (item.reasoning_content) message.reasoning_content = item.reasoning_content;
+    if (Array.isArray(item.tool_calls)) message.tool_calls = item.tool_calls;
+    return [message];
+  }
+
+  if (item.type === "function_call") {
+    return [{
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: item.call_id || item.id || prefixedId("call"),
+        type: "function",
+        function: {
+          name: item.name,
+          arguments: stringifyContent(item.arguments),
+        },
+      }],
+      ...(item.reasoning_content ? { reasoning_content: item.reasoning_content } : {}),
+    }];
+  }
+
+  if (item.type === "function_call_output") {
+    return [{
+      role: "tool",
+      tool_call_id: item.call_id,
+      content: stringifyContent(item.output ?? item.content ?? ""),
+    }];
+  }
+
+  if (item.type === "reasoning") {
+    const text = reasoningItemToText(item);
+    if (!text) return [];
+    return [{ role: "assistant", content: "", reasoning_content: text }];
+  }
+
+  return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+function reasoningItemToText(item) {
+  if (!isPlainObject(item)) return "";
+  if (typeof item.text === "string") return item.text;
+  if (typeof item.content === "string") return item.content;
+  if (typeof item.encrypted_content === "string") return item.encrypted_content;
+  if (Array.isArray(item.summary)) {
+    return item.summary
+      .map((part) => stringifyContent(part?.text ?? part?.summary_text ?? part))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
+}
+
+function responseInputToChatMessages(input, options = {}) {
+  if (input == null) return [];
+  if (typeof input === "string") return [{ role: "user", content: input }];
+  if (!Array.isArray(input)) return inputItemToChatMessages(input, options);
+  return input.flatMap((item) => inputItemToChatMessages(item, options));
+}
+
+function mapResponsesTools(tools = []) {
+  const mapped = [];
+  const unsupported = [];
+
+  for (const tool of tools || []) {
+    if (!isPlainObject(tool)) continue;
+    if (tool.type === "function") {
+      mapped.push({
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description || "",
+          parameters: tool.parameters || { type: "object", properties: {} },
+          ...(tool.strict != null ? { strict: tool.strict } : {}),
+        },
+      });
+    } else {
+      unsupported.push(tool.type || "unknown");
+    }
+  }
+
+  return { mapped, unsupported };
+}
+
+function mapToolChoice(toolChoice) {
+  if (toolChoice == null) return undefined;
+  if (typeof toolChoice === "string") return toolChoice;
+  if (!isPlainObject(toolChoice)) return undefined;
+  if (toolChoice.type === "function") {
+    const name = toolChoice.name || toolChoice.function?.name;
+    if (name) return { type: "function", function: { name } };
+  }
+  return toolChoice;
+}
+
+function mapTextFormat(text, options = {}) {
+  const format = text?.format || text;
+  if (!isPlainObject(format)) return undefined;
+  if (format.type === "json_object") return { type: "json_object" };
+  if (format.type === "json_schema") {
+    if (options.jsonSchemaMode === "json_object") return { type: "json_object" };
+    if (options.jsonSchemaMode === "off") return undefined;
+    return {
+      type: "json_schema",
+      json_schema: {
+        name: format.name,
+        description: format.description,
+        strict: format.strict,
+        schema: format.schema,
+      },
+    };
+  }
+  return undefined;
+}
+
+function mapReasoning(reasoning, options = {}) {
+  if (!isPlainObject(reasoning)) return {};
+  const mapped = {};
+  if (reasoning.effort) mapped.reasoning_effort = normalizeReasoningEffort(reasoning.effort, options);
+  if (reasoning.summary && options.forwardReasoningSummary) mapped.reasoning_summary = reasoning.summary;
+  return mapped;
+}
+
+function normalizeReasoningEffort(effort, options = {}) {
+  if (!options.deepseekReasoningEffortCompat) return effort;
+  if (effort === "xhigh") return "max";
+  if (effort === "minimal" || effort === "low" || effort === "medium") return "high";
+  return effort;
+}
+
+function makeCompatibilityMessage(unsupportedTools) {
+  if (!unsupportedTools.length) return null;
+  const unique = Array.from(new Set(unsupportedTools)).join(", ");
+  return {
+    role: "system",
+    content: [
+      "Compatibility notice: this upstream provider only exposes Chat Completions function tools.",
+      `The client requested Responses hosted tool types that cannot be invoked upstream: ${unique}.`,
+      "Use available function tools or explain the unavailable capability instead of inventing hosted tool results.",
+    ].join("\n"),
+  };
+}
+
+function responsesToChatRequest(request, previousMessages = [], options = {}) {
+  const messages = [];
+  if (request.instructions) {
+    messages.push({ role: options.instructionsRole || "system", content: stringifyContent(request.instructions) });
+  }
+
+  const structuredOutputMessage = makeStructuredOutputMessage(request.text, options);
+  if (structuredOutputMessage) messages.push(structuredOutputMessage);
+
+  for (const message of previousMessages || []) {
+    if (isPlainObject(message)) messages.push(message);
+  }
+
+  messages.push(...responseInputToChatMessages(request.input, options));
+
+  const { mapped: tools, unsupported } = mapResponsesTools(request.tools || []);
+  const compatibilityMessage = makeCompatibilityMessage(unsupported);
+  if (compatibilityMessage) messages.unshift(compatibilityMessage);
+
+  const chat = {
+    model: request.model || options.defaultModel,
+    messages,
+    stream: !!request.stream,
+  };
+
+  copyIfPresent(request, chat, "temperature");
+  copyIfPresent(request, chat, "top_p");
+  copyIfPresent(request, chat, "frequency_penalty");
+  copyIfPresent(request, chat, "presence_penalty");
+  copyIfPresent(request, chat, "seed");
+  copyIfPresent(request, chat, "user");
+  copyIfPresent(request, chat, "metadata");
+  copyIfPresent(request, chat, "store");
+  copyIfPresent(request, chat, "parallel_tool_calls");
+  copyIfPresent(request, chat, "logprobs");
+  copyIfPresent(request, chat, "top_logprobs");
+
+  const maxTokensField = options.maxTokensField || "max_tokens";
+  if (request.max_output_tokens != null) chat[maxTokensField] = request.max_output_tokens;
+
+  if (tools.length) chat.tools = tools;
+  const toolChoice = mapToolChoice(request.tool_choice);
+  if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+
+  const responseFormat = mapTextFormat(request.text, options);
+  if (responseFormat) chat.response_format = responseFormat;
+
+  Object.assign(chat, mapReasoning(request.reasoning, options));
+  if (options.deepseekThinkingMode && request.reasoning?.effort) chat.thinking = { type: "enabled" };
+
+  return { chat, compatibility: { unsupported_tools: unsupported } };
+}
+
+function makeStructuredOutputMessage(text, options = {}) {
+  const format = text?.format || text;
+  if (!isPlainObject(format) || format.type !== "json_schema" || options.jsonSchemaMode !== "json_object") return null;
+  return {
+    role: "system",
+    content: [
+      "Structured output compatibility: return only valid JSON matching this JSON Schema.",
+      JSON.stringify({
+        name: format.name,
+        strict: format.strict,
+        schema: format.schema,
+      }),
+    ].join("\n"),
+  };
+}
+
+function copyIfPresent(source, target, key) {
+  if (source[key] !== undefined) target[key] = source[key];
+}
+
+function mapUsage(usage) {
+  if (!usage) return null;
+  const inputTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const outputTokens = usage.completion_tokens ?? usage.output_tokens ?? 0;
+  const reasoningTokens =
+    usage.completion_tokens_details?.reasoning_tokens ??
+    usage.output_tokens_details?.reasoning_tokens ??
+    0;
+
+  return {
+    input_tokens: inputTokens,
+    input_tokens_details: {
+      cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? 0,
+    },
+    output_tokens: outputTokens,
+    output_tokens_details: { reasoning_tokens: reasoningTokens },
+    total_tokens: usage.total_tokens ?? inputTokens + outputTokens,
+  };
+}
+
+function createResponseSkeleton(request = {}, overrides = {}) {
+  const createdAt = overrides.created_at || nowSeconds();
+  return {
+    id: overrides.id || prefixedId("resp"),
+    object: "response",
+    created_at: createdAt,
+    status: overrides.status || "in_progress",
+    completed_at: overrides.completed_at ?? null,
+    error: overrides.error ?? null,
+    incomplete_details: overrides.incomplete_details ?? null,
+    instructions: request.instructions ?? null,
+    max_output_tokens: request.max_output_tokens ?? null,
+    max_tool_calls: request.max_tool_calls ?? null,
+    model: request.model || overrides.model || null,
+    output: [],
+    parallel_tool_calls: request.parallel_tool_calls ?? true,
+    previous_response_id: request.previous_response_id ?? null,
+    reasoning: request.reasoning || { ...DEFAULT_REASONING },
+    service_tier: request.service_tier ?? "default",
+    store: request.store ?? true,
+    temperature: request.temperature ?? 1,
+    text: request.text || clone(DEFAULT_TEXT),
+    tool_choice: request.tool_choice ?? "auto",
+    tools: request.tools || [],
+    top_logprobs: request.top_logprobs ?? 0,
+    top_p: request.top_p ?? 1,
+    truncation: request.truncation ?? "disabled",
+    usage: null,
+    user: request.user ?? null,
+    metadata: request.metadata || {},
+  };
+}
+
+function chatCompletionToResponse(chat, request = {}, options = {}) {
+  const response = createResponseSkeleton(request, {
+    id: options.responseId || prefixedId("resp"),
+    created_at: chat.created || nowSeconds(),
+    model: chat.model || request.model,
+  });
+
+  const choice = chat.choices?.[0] || {};
+  const message = choice.message || {};
+
+  appendReasoningOutput(response, message.reasoning_content);
+  appendMessageOutput(response, message);
+  appendToolCallOutputs(response, message.tool_calls || []);
+
+  const finishReason = choice.finish_reason;
+  response.status = finishReason === "length" ? "incomplete" : "completed";
+  response.completed_at = nowSeconds();
+  response.incomplete_details = finishReason === "length" ? { reason: "max_output_tokens" } : null;
+  response.usage = mapUsage(chat.usage);
+
+  return response;
+}
+
+function appendReasoningOutput(response, reasoningContent) {
+  if (!reasoningContent) return;
+  response.output.push({
+    id: prefixedId("rs"),
+    type: "reasoning",
+    status: "completed",
+    summary: [{ type: "summary_text", text: stringifyContent(reasoningContent) }],
+  });
+}
+
+function appendMessageOutput(response, message) {
+  const hasText = message.content != null && message.content !== "";
+  const hasRefusal = message.refusal != null && message.refusal !== "";
+  if (!hasText && !hasRefusal && Array.isArray(message.tool_calls) && message.tool_calls.length) return;
+  if (!hasText && !hasRefusal) return;
+
+  const content = [];
+  if (hasText) {
+    content.push({
+      type: "output_text",
+      text: normalizeAssistantText(message.content),
+      annotations: Array.isArray(message.annotations) ? message.annotations : [],
+      ...(message.logprobs ? { logprobs: message.logprobs } : {}),
+    });
+  }
+  if (hasRefusal) {
+    content.push({ type: "refusal", refusal: stringifyContent(message.refusal) });
+  }
+
+  response.output.push({
+    id: prefixedId("msg"),
+    type: "message",
+    status: "completed",
+    role: "assistant",
+    content,
+  });
+}
+
+function normalizeAssistantText(content) {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (typeof part === "string") return part;
+        return part?.text ?? part?.content ?? JSON.stringify(part);
+      })
+      .join("");
+  }
+  return stringifyContent(content);
+}
+
+function appendToolCallOutputs(response, toolCalls) {
+  for (const toolCall of toolCalls || []) {
+    if (!toolCall || toolCall.type !== "function") continue;
+    response.output.push({
+      id: prefixedId("fc"),
+      type: "function_call",
+      call_id: toolCall.id || prefixedId("call"),
+      name: toolCall.function?.name,
+      arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+      status: "completed",
+    });
+  }
+}
+
+function chatCompletionToReplayMessages(chat) {
+  const choice = chat.choices?.[0] || {};
+  const message = choice.message || {};
+  if (!message || Object.keys(message).length === 0) return [];
+
+  const replay = {
+    role: "assistant",
+    content: message.content ?? null,
+  };
+  if (message.tool_calls) replay.tool_calls = message.tool_calls;
+  if (message.reasoning_content) replay.reasoning_content = message.reasoning_content;
+  if (message.refusal) replay.refusal = message.refusal;
+  return [replay];
+}
+
+function responseOutputToReplayMessages(response) {
+  return asArray(response.output).flatMap((item) => inputItemToChatMessages(item));
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+module.exports = {
+  chatCompletionToReplayMessages,
+  chatCompletionToResponse,
+  createResponseSkeleton,
+  inputItemToChatMessages,
+  mapResponsesTools,
+  mapTextFormat,
+  mapToolChoice,
+  mapUsage,
+  normalizeReasoningEffort,
+  prefixedId,
+  responseInputToChatMessages,
+  responseOutputToReplayMessages,
+  responsesToChatRequest,
+  stringifyContent,
+};

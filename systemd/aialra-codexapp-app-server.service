@@ -1,0 +1,28 @@
+[Unit]
+Description=AIALRA Codex App app-server (root, persistent)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/codexapp-current
+Environment=HOME=/srv/aialra/state/root-home
+Environment=USER=root
+Environment=NODE_ENV=production
+Environment=CODEX_HOME=/srv/aialra/state/root-home/.codex
+Environment=CODEXAPP_CODEX_CLI=/srv/aialra/state/root-home/.codex/packages/standalone/current/bin/codex
+Environment=CODEXAPP_APP_VERSION=0.136.0
+EnvironmentFile=/srv/aialra/config/secrets/codexapp.env
+ExecStart=/srv/aialra/state/root-home/.codex/packages/standalone/current/bin/codex app-server --remote-control --listen ws://127.0.0.1:12911 --analytics-default-enabled
+Restart=always
+RestartSec=3
+KillMode=control-group
+TimeoutStopSec=30s
+StandardOutput=append:/srv/aialra/logs/codexapp/app-server/service.log
+StandardError=append:/srv/aialra/logs/codexapp/app-server/service.log
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,17 @@
+state/
+node_modules/
+output/
+.playwright-cli/
+__pycache__/
+*.pyc
+*.bak
+*.bak.*
+*.tmp
+*.tmp.*
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.env
+*.env
+.DS_Store

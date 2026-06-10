@@ -1,0 +1,32 @@
+[Unit]
+Description=AIALRA Codex App true web bridge (root)
+After=network-online.target aialra-codexapp-app-server.service
+Wants=network-online.target
+Requires=aialra-codexapp-app-server.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/apps/codexapp
+Environment=HOME=/srv/aialra/state/root-home
+Environment=USER=root
+Environment=NODE_ENV=production
+Environment=CODEX_HOME=/srv/aialra/state/root-home/.codex
+Environment=CODEXAPP_CODEX_CLI=/srv/aialra/state/root-home/.codex/packages/standalone/current/bin/codex
+Environment=CODEXAPP_APP_VERSION=0.136.0
+Environment=CODEXAPP_CODEX_PACKAGE_JSON=/usr/lib/node_modules/@openai/codex/package.json
+Environment=CODEXAPP_STATE_DIR=/srv/aialra/apps/codexapp/state
+Environment=CODEXAPP_WEBVIEW_DIR=/opt/codex-desktop/content/webview
+Environment=CODEXAPP_EXTERNAL_APP_SERVER=1
+EnvironmentFile=/srv/aialra/config/secrets/codexapp.env
+ExecStart=/usr/bin/node /srv/aialra/apps/codexapp/web-server.js
+Restart=always
+RestartSec=3
+KillMode=process
+StandardOutput=append:/srv/aialra/logs/codexapp/web/service.log
+StandardError=append:/srv/aialra/logs/codexapp/web/service.log
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

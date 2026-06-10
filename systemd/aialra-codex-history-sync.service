@@ -1,0 +1,21 @@
+[Unit]
+Description=AIALRA Codex VS Code and Codex App history sync
+After=network-online.target aialra-code-server-primary.service aialra-codexapp-web.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+Environment=CODEX_HISTORY_VSCODE_HOME=/srv/aialra/state/root-home/.codex
+Environment=CODEX_HISTORY_CODEXAPP_HOME=/home/aialra/.codex
+Environment=CODEX_HISTORY_SYNC_INTERVAL=30
+Environment=CODEX_HISTORY_SYNC_MIN_FREE_MB=10240
+ExecStart=/srv/aialra/apps/codexapp/sync-history.sh
+Restart=always
+RestartSec=2
+StandardOutput=append:/srv/aialra/logs/codexapp/history-sync/service.log
+StandardError=append:/srv/aialra/logs/codexapp/history-sync/service.log
+
+[Install]
+WantedBy=multi-user.target
