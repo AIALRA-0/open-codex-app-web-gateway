@@ -16,6 +16,7 @@ Primary sources:
 - OpenAI Skills guide: https://developers.openai.com/api/docs/guides/tools-skills
 - OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
 - OpenAI Containers reference: https://platform.openai.com/docs/api-reference/containers
+- OpenAI Uploads reference: https://developers.openai.com/api/reference/resources/uploads
 - OpenAI Files reference: https://platform.openai.com/docs/api-reference/files
 - OpenAI Vector Stores reference: https://platform.openai.com/docs/api-reference/vector-stores
 - Codex config reference: https://developers.openai.com/codex/config-reference
@@ -45,7 +46,7 @@ implementations for those tools.
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
 | `input_image` | chat `image_url` content part | Provider-dependent |
-| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
+| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
@@ -204,13 +205,20 @@ OpenAI's current endpoint list includes `GET /v1/models` and
 | `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns the configured default bridge model |
 | `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to the configured default model only when the requested ID matches it |
 
-## Files and Vector Stores Endpoint Coverage
+## Uploads, Files and Vector Stores Endpoint Coverage
 
-These endpoints back the local `file_search` adapter. File content is stored
-under the configured bridge state directory, not in Git.
+Uploads are local intermediate objects for large/client-side file ingestion.
+`complete` creates a regular local File object, so the completed content can be
+used through `input_file`, direct Files API reads, or the local `file_search`
+adapter. File content is stored under the configured bridge state directory,
+not in Git.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
+| `POST /v1/uploads` | Implemented | Creates a pending local Upload from `filename`, `purpose`, `bytes`, `mime_type`, and optional `expires_after`; returns OpenAI-style `status` and `expires_at`; local `CODEXCOMPAT_UPLOAD_MAX_BYTES` defaults to the local Files size cap |
+| `POST /v1/uploads/{upload_id}/parts` | Implemented | Adds an ordered candidate Part from JSON `data`/`data_base64`/`content`, multipart `data`, or raw body; each part is capped by `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` and the official 64 MB part maximum |
+| `POST /v1/uploads/{upload_id}/complete` | Implemented | Requires ordered `part_ids`, verifies the final byte count matches the original Upload `bytes`, then returns `status:"completed"` with nested `file` object ready for the rest of the platform |
+| `POST /v1/uploads/{upload_id}/cancel` | Implemented | Marks a pending Upload `cancelled`; no new Parts may be added after cancel |
 | `POST /v1/files` | Implemented | Accepts JSON `{filename,purpose,content,metadata}`, basic multipart upload, or raw body with `x-filename`; stores text content locally |
 | `GET /v1/files` | Implemented | Lists local files with `purpose`, `limit`, `after`, `before`, and `order` pagination |
 | `GET /v1/files/{file_id}` | Implemented | Returns local file metadata |
@@ -467,6 +475,9 @@ Configuration:
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local file/vector-store state path; keep outside Git |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum retrieved chunks injected into Chat context; direct vector-store search defaults to 10 and accepts up to 50 via `max_num_results` |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local text files |
+| `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git and prune with runtime policy if needed |
+| `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at the official 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
+| `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at the official 64 MB Part limit |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH` | `true` | Disables DeepSeek thinking mode for local file-search requests to avoid reasoning-only completions exhausting small output budgets |
 
 This is a bridge compatibility layer, not native OpenAI file search. The current
@@ -534,6 +545,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
+| OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, and File creation, but completed content is stored through the current text-backed local Files store and local disk caps are intentionally much smaller than OpenAI hosted limits by default | Add binary-safe local Files storage, resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search or reranker | Add provider/model-backed embeddings, ANN vector indexing, file parsers, async batches, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |

@@ -25,6 +25,11 @@ const {
   prepareFileSearchContext,
 } = require("./local_file_search");
 const {
+  LocalUploadStore,
+  OFFICIAL_UPLOAD_MAX_BYTES,
+  OFFICIAL_UPLOAD_PART_MAX_BYTES,
+} = require("./local_uploads");
+const {
   attachShellOutput,
   injectShellMessages,
   localShellToolTypes,
@@ -87,6 +92,16 @@ function loadConfig(overrides = {}) {
   const compactionSecretFile = overrides.compactionSecretFile
     || process.env.CODEXCOMPAT_COMPACTION_SECRET_FILE
     || path.join(stateDir, "compaction.key");
+  const fileSearchMaxFileBytes = overrides.fileSearchMaxFileBytes
+    || numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES", 4 * 1024 * 1024, 1024, 64 * 1024 * 1024);
+  const uploadMaxBytes = overrides.uploadMaxBytes
+    || numberFromEnv("CODEXCOMPAT_UPLOAD_MAX_BYTES", fileSearchMaxFileBytes, 1024, OFFICIAL_UPLOAD_MAX_BYTES);
+  const uploadMaxPartBytes = overrides.uploadMaxPartBytes || numberFromEnv(
+    "CODEXCOMPAT_UPLOAD_MAX_PART_BYTES",
+    Math.min(OFFICIAL_UPLOAD_PART_MAX_BYTES, uploadMaxBytes),
+    1024,
+    OFFICIAL_UPLOAD_PART_MAX_BYTES,
+  );
   return {
     host: process.env.CODEXCOMPAT_HOST || "127.0.0.1",
     port: Number(process.env.CODEXCOMPAT_PORT || 12912),
@@ -127,7 +142,10 @@ function loadConfig(overrides = {}) {
     fileSearchProvider: process.env.CODEXCOMPAT_FILE_SEARCH_PROVIDER || "local",
     fileSearchStateDir: process.env.CODEXCOMPAT_FILE_SEARCH_STATE_DIR || path.join(stateDir, "local-file-search"),
     fileSearchMaxResults: numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS", 5, 1, 50),
-    fileSearchMaxFileBytes: numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES", 4 * 1024 * 1024, 1024, 64 * 1024 * 1024),
+    fileSearchMaxFileBytes,
+    uploadStateDir: process.env.CODEXCOMPAT_UPLOAD_STATE_DIR || path.join(stateDir, "local-uploads"),
+    uploadMaxBytes,
+    uploadMaxPartBytes,
     shellProvider: process.env.CODEXCOMPAT_SHELL_PROVIDER || "local",
     shellStateDir: process.env.CODEXCOMPAT_SHELL_STATE_DIR || path.join(stateDir, "local-containers"),
     shellCommandTimeoutMs: numberFromEnv("CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS", 10 * 1000, 1000, 120 * 1000),
@@ -887,6 +905,25 @@ function handleFileDelete(res, fileSearchStore, fileId) {
   sendJson(res, 200, deleted);
 }
 
+async function handleUploadCreate(req, res, uploadStore) {
+  const body = await readJson(req);
+  sendJson(res, 200, uploadStore.createUpload(body));
+}
+
+async function handleUploadPartCreate(req, res, config, uploadStore, uploadId) {
+  const content = await readUploadPartRequest(req, config);
+  sendJson(res, 200, uploadStore.addPart(uploadId, content));
+}
+
+async function handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId) {
+  const body = await readJson(req);
+  sendJson(res, 200, uploadStore.completeUpload(uploadId, body, fileSearchStore));
+}
+
+function handleUploadCancel(res, uploadStore, uploadId) {
+  sendJson(res, 200, uploadStore.cancelUpload(uploadId));
+}
+
 async function handleVectorStoreCreate(req, res, fileSearchStore) {
   const body = await readJson(req);
   sendJson(res, 200, fileSearchStore.createVectorStore(body));
@@ -1277,6 +1314,36 @@ async function readFileCreateRequest(req, config) {
     purpose: req.headers["x-purpose"] || "assistants",
     content: body,
   };
+}
+
+async function readUploadPartRequest(req, config) {
+  const contentType = req.headers["content-type"] || "";
+  const maxPartBytes = config.uploadMaxPartBytes || OFFICIAL_UPLOAD_PART_MAX_BYTES;
+  const maxBodyBytes = Math.ceil(maxPartBytes * 4 / 3) + 1024 * 1024;
+  if (contentType.includes("application/json")) {
+    const raw = await readRawBody(req, maxBodyBytes);
+    const body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
+    if (typeof body.data_base64 === "string") return decodeBase64Payload(body.data_base64);
+    if (typeof body.data === "string") return Buffer.from(body.data, "utf8");
+    if (typeof body.content === "string") return Buffer.from(body.content, "utf8");
+    return Buffer.alloc(0);
+  }
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = parseMultipartFormBinary(await readRawBody(req, maxBodyBytes), contentType);
+    const file = form.files.find((item) => item.name === "data") || form.files[0];
+    if (file) return file.content;
+    if (typeof form.fields.data === "string") return Buffer.from(form.fields.data, "utf8");
+    return Buffer.alloc(0);
+  }
+
+  return readRawBody(req, maxPartBytes);
+}
+
+function decodeBase64Payload(value) {
+  const raw = String(value || "");
+  const dataUrl = raw.match(/^data:[^,]*;base64,(.*)$/s);
+  return Buffer.from(dataUrl ? dataUrl[1] : raw, "base64");
 }
 
 function parseMultipartForm(buffer, contentType) {
@@ -2591,6 +2658,7 @@ function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
   const conversationStore = config.conversationStore || new FileConversationStore({ dir: config.conversationStateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
+  const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
   const backgroundJobs = new Map();
@@ -2725,6 +2793,29 @@ function createServer(config = loadConfig()) {
         }
         if (req.method === "DELETE") {
           handleContainerDelete(res, containerStore, containerId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/uploads" && req.method === "POST") {
+        await handleUploadCreate(req, res, uploadStore);
+        return;
+      }
+
+      const uploadRoute = url.pathname.match(/^\/v1\/uploads\/([^/]+)\/(parts|complete|cancel)$/);
+      if (uploadRoute) {
+        const uploadId = decodeURIComponent(uploadRoute[1]);
+        const action = uploadRoute[2];
+        if (action === "parts" && req.method === "POST") {
+          await handleUploadPartCreate(req, res, config, uploadStore, uploadId);
+          return;
+        }
+        if (action === "complete" && req.method === "POST") {
+          await handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId);
+          return;
+        }
+        if (action === "cancel" && req.method === "POST") {
+          handleUploadCancel(res, uploadStore, uploadId);
           return;
         }
       }

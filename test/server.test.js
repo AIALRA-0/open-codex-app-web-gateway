@@ -1776,6 +1776,154 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
   });
 });
 
+test("local Uploads API assembles ordered parts into Files and Responses input_file", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses input_file compatibility extracted file inputs/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /Upload fixture says upload-input-ok/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_upload_input_file",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "upload-input-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const partAContent = "Upload fixture says ";
+    const partBContent = "upload-input-ok.";
+    const fullContent = `${partAContent}${partBContent}`;
+
+    const createdUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "upload-fixture.txt",
+        purpose: "user_data",
+        bytes: Buffer.byteLength(fullContent, "utf8"),
+        mime_type: "text/plain",
+        expires_after: { anchor: "created_at", seconds: 3600 },
+      }),
+    });
+    assert.equal(createdUploadResponse.status, 200);
+    const upload = await createdUploadResponse.json();
+    assert.equal(upload.object, "upload");
+    assert.equal(upload.status, "pending");
+    assert.equal(upload.bytes, Buffer.byteLength(fullContent, "utf8"));
+
+    const partBResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data_base64: Buffer.from(partBContent, "utf8").toString("base64"),
+      }),
+    });
+    assert.equal(partBResponse.status, 200);
+    const partB = await partBResponse.json();
+    assert.equal(partB.object, "upload.part");
+    assert.equal(partB.upload_id, upload.id);
+
+    const partAResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: partAContent,
+    });
+    assert.equal(partAResponse.status, 200);
+    const partA = await partAResponse.json();
+
+    const completedResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [partA.id, partB.id] }),
+    });
+    assert.equal(completedResponse.status, 200);
+    const completed = await completedResponse.json();
+    assert.equal(completed.status, "completed");
+    assert.equal(completed.file.object, "file");
+    assert.equal(completed.file.filename, "upload-fixture.txt");
+    assert.equal(completed.file.purpose, "user_data");
+
+    const contentResponse = await fetch(`${baseUrl}/v1/files/${completed.file.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.equal(await contentResponse.text(), fullContent);
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_file", file_id: completed.file.id },
+            { type: "input_text", text: "Using the uploaded file, return exactly this text and nothing else: upload-input-ok" },
+          ],
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "upload-input-ok");
+    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+
+    const cancelUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "cancel-me.txt",
+        purpose: "assistants",
+        bytes: 1,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(cancelUploadResponse.status, 200);
+    const cancelUpload = await cancelUploadResponse.json();
+    const cancelResponse = await fetch(`${baseUrl}/v1/uploads/${cancelUpload.id}/cancel`, { method: "POST" });
+    assert.equal(cancelResponse.status, 200);
+    assert.equal((await cancelResponse.json()).status, "cancelled");
+    const afterCancelPart = await fetch(`${baseUrl}/v1/uploads/${cancelUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "x",
+    });
+    assert.equal(afterCancelPart.status, 400);
+
+    const mismatchUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "mismatch.txt",
+        purpose: "assistants",
+        bytes: 5,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(mismatchUploadResponse.status, 200);
+    const mismatchUpload = await mismatchUploadResponse.json();
+    const mismatchPartResponse = await fetch(`${baseUrl}/v1/uploads/${mismatchUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "abc",
+    });
+    assert.equal(mismatchPartResponse.status, 200);
+    const mismatchPart = await mismatchPartResponse.json();
+    const mismatchComplete = await fetch(`${baseUrl}/v1/uploads/${mismatchUpload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [mismatchPart.id] }),
+    });
+    assert.equal(mismatchComplete.status, 400);
+    assert.equal((await mismatchComplete.json()).error.code, "upload_bytes_mismatch");
+  });
+});
+
 test("local Vector Store file batches attach files and expose batch lifecycle", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

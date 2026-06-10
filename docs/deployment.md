@@ -113,6 +113,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output; configurable up to 50 |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local text files |
+| `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at OpenAI's 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
+| `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at OpenAI's 64 MB Part limit |
 | `CODEXCOMPAT_SHELL_PROVIDER` | `local` | Local Responses `shell` / `code_interpreter` adapter provider. Use `disabled` to leave it unsupported |
 | `CODEXCOMPAT_SHELL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-containers` | Local container workspace/artifact path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS` | `10000` | Per-command local shell timeout |

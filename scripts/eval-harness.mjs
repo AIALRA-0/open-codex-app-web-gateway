@@ -349,6 +349,33 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
       },
       {
+        id: "responses-upload-input-file",
+        mode: "responses-upload-input-file",
+        upload: {
+          filename: "bridge-upload-input-file.txt",
+          purpose: "user_data",
+          mime_type: "text/plain",
+          content: "Bridge Uploads API fixture. The exact answer is upload-input-ok.",
+        },
+        request: ({ fileId }) => ({
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_file", file_id: fileId },
+              { type: "input_text", text: "Using the uploaded file content, return exactly this text and nothing else: upload-input-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, upload, fileId }) => /upload-input-ok/i.test(text)
+          && upload?.status === "completed"
+          && upload?.file?.id === fileId
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
+      },
+      {
         id: "responses-input-file-url",
         mode: "responses-input-file-url",
         fileUrl: {
@@ -954,6 +981,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-input-file") {
       return await runInputFileCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-upload-input-file") {
+      return await runUploadInputFileCase(testCase, context, started);
     }
     if (testCase.mode === "responses-input-file-url") {
       return await runInputFileUrlCase(testCase, context, started);
@@ -1595,6 +1625,102 @@ async function runInputFileCase(testCase, context, started) {
   }
 }
 
+async function runUploadInputFileCase(testCase, context, started) {
+  let file = null;
+  try {
+    const fixture = testCase.upload || {};
+    const content = String(fixture.content || "");
+    const splitAt = Math.max(1, Math.floor(content.length / 2));
+    const firstChunk = content.slice(0, splitAt);
+    const secondChunk = content.slice(splitAt);
+    const uploadResponse = await postJson(`${baseUrl}/v1/uploads`, {
+      filename: fixture.filename || "bridge-upload.txt",
+      purpose: fixture.purpose || "user_data",
+      bytes: Buffer.byteLength(content, "utf8"),
+      mime_type: fixture.mime_type || "text/plain",
+      expires_after: { anchor: "created_at", seconds: 3600 },
+    });
+    const uploadBody = await uploadResponse.text();
+    if (!uploadResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: uploadResponse.status,
+        error: truncate(uploadBody),
+      });
+    }
+    const upload = JSON.parse(uploadBody);
+
+    const secondPartResponse = await postJson(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      data_base64: Buffer.from(secondChunk, "utf8").toString("base64"),
+    });
+    const secondPartBody = await secondPartResponse.text();
+    if (!secondPartResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: secondPartResponse.status,
+        upload_id: upload.id,
+        error: truncate(secondPartBody),
+      });
+    }
+    const secondPart = JSON.parse(secondPartBody);
+
+    const firstPartResponse = await postRaw(`${baseUrl}/v1/uploads/${upload.id}/parts`, firstChunk, "text/plain");
+    const firstPartBody = await firstPartResponse.text();
+    if (!firstPartResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: firstPartResponse.status,
+        upload_id: upload.id,
+        error: truncate(firstPartBody),
+      });
+    }
+    const firstPart = JSON.parse(firstPartBody);
+
+    const completeResponse = await postJson(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
+      part_ids: [firstPart.id, secondPart.id],
+    });
+    const completeBody = await completeResponse.text();
+    if (!completeResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: completeResponse.status,
+        upload_id: upload.id,
+        error: truncate(completeBody),
+      });
+    }
+    const completed = JSON.parse(completeBody);
+    file = completed.file || null;
+
+    const request = resolveRequest(testCase.request, { ...context, fileId: file?.id, upload: completed });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        upload_id: upload.id,
+        file_id: file?.id || null,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const ok = !!testCase.check({ json, text, upload: completed, fileId: file?.id });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      upload_id: upload.id,
+      file_id: file?.id || null,
+      part_ids: [firstPart.id, secondPart.id],
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
+  }
+}
+
 async function runInputFileUrlCase(testCase, context, started) {
   const fixture = testCase.fileUrl || {};
   const server = http.createServer((req, res) => {
@@ -1831,6 +1957,21 @@ async function postJson(url, body) {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function postRaw(url, body, contentType = "application/octet-stream") {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, {
+      method: "POST",
+      headers: { "content-type": contentType },
+      body,
       signal: controller.signal,
     });
   } finally {

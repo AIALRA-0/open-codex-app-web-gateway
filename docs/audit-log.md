@@ -2450,3 +2450,64 @@ Open follow-ups:
   - `npm run prune:runtime -- --dry-run` scanned 217 runtime candidates,
     selected 1 old UI screenshot by retention policy, deleted 0, and reported
     0 errors.
+
+## 2026-06-10 Local Uploads API Compatibility
+
+- Closed a Responses/Files compatibility gap where clients using OpenAI's
+  intermediate Uploads API could not create a File before using `input_file` or
+  local `file_search`.
+- Official sources checked on 2026-06-10:
+  - OpenAI `POST /v1/uploads` creates an intermediate Upload object from
+    request fields including `purpose`, `filename`, `bytes`, and `mime_type`;
+    the returned object has `status:"pending"`, an expiration around one hour,
+    and an official maximum of 8 GB.
+  - OpenAI Upload Parts add byte chunks to an Upload; each Part has an
+    official maximum of 64 MB and parts can be added independently.
+  - OpenAI Upload completion accepts ordered `part_ids`; the final byte count
+    must match the originally declared Upload `bytes`; the returned completed
+    Upload includes a nested usable File object.
+  - OpenAI Upload cancellation returns `status:"cancelled"` and prevents more
+    Parts from being added.
+- Added `src/bridge/local_uploads.js`, a local file-backed Uploads registry
+  under `$CODEXCOMPAT_STATE_DIR/local-uploads` that:
+  - creates pending Upload objects with local disk-bounded size limits;
+  - accepts Part data as JSON `data` / `data_base64` / `content`, multipart
+    `data`, or raw request body;
+  - completes ordered `part_ids` into a regular local File and returns the
+    completed Upload with nested `file`;
+  - rejects byte-count mismatches and blocks new Parts after cancellation.
+- Wired `/v1/uploads`, `/v1/uploads/{upload_id}/parts`,
+  `/v1/uploads/{upload_id}/complete`, and
+  `/v1/uploads/{upload_id}/cancel` into the bridge.
+- Updated the local Files store to accept Buffer content from Upload
+  completion while preserving the existing text-backed file-search/input-file
+  behavior.
+- Added `responses-upload-input-file` to live `bridge-regression`; it creates
+  an Upload, adds Parts in reverse order, completes them with ordered
+  `part_ids`, and uses the resulting File as a Responses `input_file`.
+- Updated the compatibility matrix, deployment environment table, and
+  evaluation plan.
+- Verified:
+  - `node --check` passed for `src/bridge/local_uploads.js`,
+    `src/bridge/server.js`, and `scripts/eval-harness.mjs`.
+  - Targeted local Uploads server test passed inside the full server test run,
+    covering ordered Part completion, File content retrieval, Responses
+    `input_file` use, cancel blocking, and byte mismatch errors.
+  - `npm test`: 75/75 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-upload-input-file` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1439 ms, output `upload-input-ok`, and total
+    usage 170 tokens.
+  - Full live `bridge-regression` passed 27/27 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1894 ms, P95 latency 4273 ms, and total usage
+    8294 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq86piuw`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 222 runtime candidates,
+    selected 2 old UI screenshots by retention policy, deleted 0, and reported
+    0 errors.

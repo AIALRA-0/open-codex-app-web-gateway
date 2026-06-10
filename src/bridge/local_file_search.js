@@ -117,7 +117,7 @@ class LocalFileSearchStore {
   }
 
   createFile({ filename, purpose = "assistants", content = "", metadata = {} }) {
-    const body = stringifyContent(content);
+    const body = Buffer.isBuffer(content) ? content.toString("utf8") : stringifyContent(content);
     const bytes = Buffer.byteLength(body);
     if (bytes > this.maxFileBytes) {
       const error = new Error(`file exceeds local limit of ${this.maxFileBytes} bytes`);
