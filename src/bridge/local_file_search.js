@@ -305,6 +305,7 @@ class LocalFileSearchStore {
     const query = stringifyContent(body.query || "");
     const maxResults = Math.max(1, Math.min(Number(body.max_num_results || body.limit || 5), 20));
     const filters = body.filters || body.filter || null;
+    const rankingOptions = normalizeRankingOptions(body.ranking_options || body.rankingOptions);
     const attached = this.listVectorStoreFiles(storeId)?.data || [];
     const results = [];
 
@@ -321,7 +322,7 @@ class LocalFileSearchStore {
       if (!matchesMetadataFilter(filters, attributes)) continue;
       for (const chunk of chunkText(record.content, item.chunking_strategy)) {
         const score = scoreText(query, chunk.text, record.file.filename);
-        if (score <= 0) continue;
+        if (score <= 0 || score < rankingOptions.score_threshold) continue;
         results.push({
           file_id: record.file.id,
           filename: record.file.filename,
@@ -339,6 +340,7 @@ class LocalFileSearchStore {
     return {
       object: "vector_store.search_results.page",
       search_query: query,
+      ranking_options: rankingOptions,
       data: page,
       has_more: results.length > page.length,
     };
@@ -461,6 +463,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
         query,
         max_num_results: maxResults,
         filters: tool.filters,
+        ranking_options: tool.ranking_options,
       });
       const results = page?.data || [];
       allResults.push(...results.map((result) => ({ ...result, vector_store_id: vectorStoreId })));
@@ -470,6 +473,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
         status: page ? "completed" : "failed",
         queries: [query],
         vector_store_ids: [vectorStoreId],
+        ...(page?.ranking_options ? { ranking_options: page.ranking_options } : {}),
         ...(includeResults ? { results } : {}),
       });
     }
@@ -482,6 +486,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
       status: "failed",
       queries: [query],
       vector_store_ids: [],
+      ranking_options: normalizeRankingOptions(null),
       ...(includeResults ? { results: [] } : {}),
     });
   }
@@ -493,6 +498,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     calls,
     results: allResults.slice(0, config.fileSearchMaxResults || 5),
+    ranking_options: calls.find((call) => call.ranking_options)?.ranking_options || normalizeRankingOptions(null),
   };
 }
 
@@ -535,6 +541,7 @@ function fileSearchOutputItems(context) {
     status: call.status || "completed",
     queries: call.queries || [context.query || ""],
     ...(call.vector_store_ids ? { vector_store_ids: call.vector_store_ids } : {}),
+    ...(call.ranking_options ? { ranking_options: call.ranking_options } : {}),
     ...(call.results ? { results: call.results } : {}),
   }));
 }
@@ -547,6 +554,7 @@ function fileSearchCompatibility(context) {
       status: context.calls?.some((call) => call.status === "completed") ? "completed" : "failed",
       result_count: context.results?.length || 0,
       tool_types: context.tool_types || [],
+      ranking_options: context.ranking_options || normalizeRankingOptions(null),
     },
   };
 }
@@ -685,7 +693,52 @@ function scoreText(query, text, filename = "") {
   const coverage = hits / terms.length;
   const frequency = terms.reduce((sum, term) => sum + haystackTokens.filter((token) => token === term).length, 0);
   const phraseBoost = String(text || "").toLowerCase().includes(String(query || "").toLowerCase()) ? 0.25 : 0;
-  return coverage + Math.min(frequency / Math.max(haystackTokens.length, 1), 0.25) + phraseBoost;
+  return Math.min(1, coverage + Math.min(frequency / Math.max(haystackTokens.length, 1), 0.25) + phraseBoost);
+}
+
+function normalizeRankingOptions(value) {
+  const source = isPlainObject(value) ? value : {};
+  const threshold = Number(source.score_threshold ?? 0);
+  if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+    const error = new Error("ranking_options.score_threshold must be between 0.0 and 1.0");
+    error.status = 400;
+    throw error;
+  }
+
+  const rankingOptions = {
+    ranker: typeof source.ranker === "string" && source.ranker.trim() ? source.ranker.trim() : "auto",
+    score_threshold: threshold,
+  };
+
+  if (isPlainObject(source.hybrid_search)) {
+    rankingOptions.hybrid_search = normalizeHybridSearchOptions(source.hybrid_search);
+  }
+  return rankingOptions;
+}
+
+function normalizeHybridSearchOptions(value) {
+  const embeddingWeight = Number(value.embedding_weight ?? value.rrf_embedding_weight ?? 0);
+  const textWeight = Number(value.text_weight ?? value.rrf_text_weight ?? 1);
+  if (!Number.isFinite(embeddingWeight) || embeddingWeight < 0) {
+    const error = new Error("ranking_options.hybrid_search.embedding_weight must be non-negative");
+    error.status = 400;
+    throw error;
+  }
+  if (!Number.isFinite(textWeight) || textWeight < 0) {
+    const error = new Error("ranking_options.hybrid_search.text_weight must be non-negative");
+    error.status = 400;
+    throw error;
+  }
+  if (embeddingWeight === 0 && textWeight === 0) {
+    const error = new Error("ranking_options.hybrid_search requires embedding_weight or text_weight to be greater than zero");
+    error.status = 400;
+    throw error;
+  }
+  return {
+    embedding_weight: embeddingWeight,
+    text_weight: textWeight,
+    local_mode: "text_only",
+  };
 }
 
 function effectiveChunkingStrategy(value) {

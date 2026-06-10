@@ -1343,7 +1343,56 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(search.status, 200);
     const searchJson = await search.json();
     assert.equal(searchJson.object, "vector_store.search_results.page");
+    assert.deepEqual(searchJson.ranking_options, { ranker: "auto", score_threshold: 0 });
     assert.equal(searchJson.data[0].file_id, file.id);
+    assert.ok(searchJson.data[0].score <= 1);
+
+    const looseRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok absent-token",
+        max_num_results: 3,
+        filters: { type: "eq", key: "suite", value: "server-test" },
+        ranking_options: {
+          ranker: "default_2024_08_21",
+          score_threshold: 0.5,
+          hybrid_search: { embedding_weight: 0, text_weight: 1 },
+        },
+      }),
+    });
+    assert.equal(looseRankingSearch.status, 200);
+    const looseRankingJson = await looseRankingSearch.json();
+    assert.equal(looseRankingJson.data[0].file_id, file.id);
+    assert.deepEqual(looseRankingJson.ranking_options, {
+      ranker: "default_2024_08_21",
+      score_threshold: 0.5,
+      hybrid_search: { embedding_weight: 0, text_weight: 1, local_mode: "text_only" },
+    });
+
+    const strictRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok absent-token",
+        max_num_results: 3,
+        filters: { type: "eq", key: "suite", value: "server-test" },
+        ranking_options: { score_threshold: 0.95 },
+      }),
+    });
+    assert.equal(strictRankingSearch.status, 200);
+    assert.deepEqual((await strictRankingSearch.json()).data, []);
+
+    const invalidRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        ranking_options: { score_threshold: 1.5 },
+      }),
+    });
+    assert.equal(invalidRankingSearch.status, 400);
+    assert.match(await invalidRankingSearch.text(), /score_threshold/);
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -1356,6 +1405,10 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
           vector_store_ids: [vectorStore.id],
           max_num_results: 3,
           filters: { type: "eq", key: "suite", value: "server-test" },
+          ranking_options: {
+            ranker: "default_2024_08_21",
+            score_threshold: 0.8,
+          },
         }],
         include: ["file_search_call.results"],
         store: false,
@@ -1367,6 +1420,10 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(json.output[0].status, "completed");
     assert.equal(json.output[0].queries[0], "file-search-ok");
     assert.deepEqual(json.output[0].vector_store_ids, [vectorStore.id]);
+    assert.deepEqual(json.output[0].ranking_options, {
+      ranker: "default_2024_08_21",
+      score_threshold: 0.8,
+    });
     assert.equal(json.output[0].results[0].file_id, file.id);
     assert.equal(json.output[1].type, "message");
     assert.equal(json.output[1].content[0].text, "file-search-ok [1]");
@@ -1378,6 +1435,10 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     }]);
     assert.equal(json.metadata.compatibility.local_file_search.provider, "local");
     assert.equal(json.metadata.compatibility.local_file_search.result_count, 1);
+    assert.deepEqual(json.metadata.compatibility.local_file_search.ranking_options, {
+      ranker: "default_2024_08_21",
+      score_threshold: 0.8,
+    });
     assert.equal(json.metadata.compatibility.local_file_search.deepseek_thinking, "disabled_for_local_file_search");
 
     const genericResponse = await fetch(`${baseUrl}/v1/responses`, {

@@ -2039,3 +2039,61 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq82ko1e`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local File Search Ranking Options
+
+- Closed another local `file_search` parity gap by accepting OpenAI-style
+  `ranking_options` on both direct vector-store search requests and Responses
+  `file_search` tools.
+- Local vector-store search now:
+  - normalizes lexical relevance scores to the documented 0..1 range;
+  - honors `ranking_options.score_threshold` by filtering low-score chunks
+    before sorting and truncating results;
+  - returns effective `ranking_options` on
+    `/v1/vector_stores/{vector_store_id}/search`;
+  - preserves `ranker` and normalized `hybrid_search` metadata for audit
+    output, marking hybrid search as `local_mode:"text_only"` because local
+    embedding similarity is not available yet;
+  - rejects invalid `score_threshold` and hybrid weights with explicit 400
+    errors.
+- Responses `file_search_call` output items and
+  `metadata.compatibility.local_file_search` now include the effective
+  ranking options used for the local search.
+- Extended live bridge regression coverage so `responses-file-search` sends
+  `ranking_options:{ranker:"default_2024_08_21",score_threshold:0.8}` and
+  verifies the call output preserves the threshold. The direct
+  `vector-store-lifecycle` case now also verifies the search result page
+  carries `score_threshold:0.8`.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/assistants/tools/file-search#improve-file-search-result-relevance-with-chunk-ranking`,
+  which documents `file_search.ranking_options`, `ranker`,
+  `score_threshold` from 0.0 to 1.0, and hybrid search weights.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Remaining known gap: this remains local lexical ranking, not OpenAI's managed
+  semantic/hybrid file-search stack. Embedding search, reciprocal-rank fusion,
+  managed rerankers, and hosted retrieval policy still require future work.
+- Verified:
+  - `node --check src/bridge/local_file_search.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Targeted local file-search/vector-store tests passed 3/3, covering default
+    ranking options, strict `score_threshold` filtering, hybrid metadata
+    normalization, invalid threshold rejection, and Responses call metadata.
+  - `npm test`: 69/69 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-file-search` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1545 ms, output `file-search-ok [1]`, and total
+    usage 178 tokens.
+  - Targeted live `vector-store-lifecycle` passed 1/1, elapsed 129 ms, with
+    `content_parts:4` and threshold-filtered `search_results:2`.
+  - Full live `bridge-regression` passed 24/24 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 2094 ms, P95 latency 5208 ms, and total usage
+    7320 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq82w599`, reload persistence
+    confirmed, console errors 0, warnings 0.

@@ -394,6 +394,10 @@ lexical search over uploaded text. The adapter:
 - annotates final message text with `file_citation` entries;
 - supports simple metadata filters such as `{type:"eq",key:"suite",value:"x"}`
   over file metadata and vector-store-file attributes;
+- accepts OpenAI-style `ranking_options` on vector-store search requests and
+  Responses `file_search` tools. `score_threshold` filters local lexical
+  results on a normalized 0..1 score, while `ranker` and `hybrid_search` are
+  preserved in result metadata for auditability;
 - honors OpenAI-style `chunking_strategy` when files are attached to vector
   stores. Missing or `auto` strategies use the documented default static
   behavior: 800-token chunks with 400-token overlap. Static strategies are
@@ -414,7 +418,9 @@ This is a bridge compatibility layer, not native OpenAI file search. The current
 retriever is intentionally local, auditable, and disk-bounded; it supports
 overlapping static chunks but is not yet an embedding-based vector index and
 does not process binary PDFs, OCR, image files, asynchronous batch indexing, or
-OpenAI's complete ranking behavior.
+OpenAI's managed semantic ranking behavior. Local `hybrid_search` metadata is
+reported as `local_mode:"text_only"` because embedding similarity is not
+available yet.
 
 ## Local Shell and Code Interpreter Adapter
 
@@ -461,7 +467,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
-| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed semantic vector search | Add embedding/vector indexing, file parsers, async batches, richer filters, reranking, and larger eval sets |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search or reranker | Add embedding/vector indexing, file parsers, async batches, richer filters, managed-style reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |

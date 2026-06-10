@@ -630,6 +630,10 @@ function buildSuites(defaultModel) {
             vector_store_ids: [vectorStoreId],
             max_num_results: 3,
             filters: { type: "eq", key: "suite", value: "bridge-regression" },
+            ranking_options: {
+              ranker: "default_2024_08_21",
+              score_threshold: 0.8,
+            },
           }],
           include: ["file_search_call.results"],
           max_output_tokens: 128,
@@ -643,6 +647,7 @@ function buildSuites(defaultModel) {
           return !!call
             && call.status === "completed"
             && call.vector_store_ids?.includes(vectorStoreId)
+            && call.ranking_options?.score_threshold === 0.8
             && call.results?.some((result) => result.file_id === fileId)
             && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === fileId)
             && /file-search-ok/i.test(text);
@@ -717,6 +722,7 @@ function buildSuites(defaultModel) {
           && content?.chunking_strategy?.static?.chunk_overlap_tokens === 50
           && content?.chunks?.some((chunk) => chunk.chunk_index === 1 && chunk.token_count === 100)
           && content?.content?.some((part) => /vector-lifecycle-ok/i.test(part.text || ""))
+          && search?.ranking_options?.score_threshold === 0.8
           && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index)),
       },
       {
@@ -1367,6 +1373,7 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
       query: "vector-lifecycle-ok",
       filters: { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
       max_num_results: 3,
+      ranking_options: { score_threshold: 0.8 },
     });
     const searchBody = await searchResponse.text();
     if (!searchResponse.ok) {
