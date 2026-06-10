@@ -145,17 +145,24 @@ function buildSuites(defaultModel) {
           messages: [{ role: "user", content: "Return the exact string chat-life-ok." }],
           max_tokens: 96,
         },
-        check: ({ json, text, fetched, updated, messages, list, oldList }) => /chat-life-ok/i.test(text)
+        check: ({ json, text, fetched, updated, messages, list, oldList, deleted, afterDelete, postDeleteList }) => /chat-life-ok/i.test(text)
           && fetched?.id
           && updated?.metadata?.suite === "chat-life-updated"
           && updated?.metadata?.audit === "bridge-regression"
+          && updated?.metadata?.completion_id === json.id
           && messages?.object === "list"
           && messages.data?.some((message) => message.role === "user")
           && messages.data?.some((message) => message.role === "assistant")
           && list?.object === "list"
           && list.data?.some((completion) => completion.id === json.id)
           && oldList?.object === "list"
-          && !oldList.data?.some((completion) => completion.id === json.id),
+          && !oldList.data?.some((completion) => completion.id === json.id)
+          && deleted?.object === "chat.completion.deleted"
+          && deleted?.id === json.id
+          && deleted?.deleted === true
+          && afterDelete?.status === 404
+          && postDeleteList?.object === "list"
+          && !postDeleteList.data?.some((completion) => completion.id === json.id),
       },
       {
         id: "responses-input-tokens",
@@ -568,9 +575,12 @@ async function runChatLifecycleCase(testCase, context, started) {
   const created = JSON.parse(createdBody);
   const fetched = await getJson(`${baseUrl}/v1/chat/completions/${created.id}`);
   let updated = { status: 0, ok: false, json: null, body: "" };
+  const updatedMetadata = testCase.updateMetadata
+    ? { ...testCase.updateMetadata, completion_id: created.id }
+    : null;
   if (testCase.updateMetadata) {
     const updatedResponse = await postJson(`${baseUrl}/v1/chat/completions/${created.id}`, {
-      metadata: testCase.updateMetadata,
+      metadata: updatedMetadata,
     });
     const updatedBody = await updatedResponse.text();
     updated = {
@@ -581,11 +591,14 @@ async function runChatLifecycleCase(testCase, context, started) {
     };
   }
   const messages = await getJson(`${baseUrl}/v1/chat/completions/${created.id}/messages?limit=20`);
-  const listUrl = testCase.updateMetadata?.suite
-    ? `${baseUrl}/v1/chat/completions?metadata[suite]=${encodeURIComponent(testCase.updateMetadata.suite)}&order=desc&limit=50`
+  const listUrl = updatedMetadata?.completion_id
+    ? `${baseUrl}/v1/chat/completions?metadata[completion_id]=${encodeURIComponent(updatedMetadata.completion_id)}&order=desc&limit=50`
     : `${baseUrl}/v1/chat/completions?order=desc&limit=50`;
   const list = await getJson(listUrl);
   const oldList = await getJson(`${baseUrl}/v1/chat/completions?metadata[suite]=chat-life-initial&order=desc&limit=50`);
+  const deletion = await deleteJson(`${baseUrl}/v1/chat/completions/${created.id}`);
+  const afterDelete = await getJson(`${baseUrl}/v1/chat/completions/${created.id}`);
+  const postDeleteList = await getJson(listUrl);
   const text = chatOutputText(created);
   const ok = !!testCase.check({
     json: created,
@@ -595,6 +608,9 @@ async function runChatLifecycleCase(testCase, context, started) {
     messages: messages.json,
     list: list.json,
     oldList: oldList.json,
+    deleted: parseJsonish(deletion.body),
+    afterDelete,
+    postDeleteList: postDeleteList.json,
   });
   return finishResult(testCase, context, started, {
     ok,
@@ -606,6 +622,9 @@ async function runChatLifecycleCase(testCase, context, started) {
     messages_status: messages.status,
     list_status: list.status,
     old_list_status: oldList.status,
+    delete_status: deletion.status,
+    post_delete_get_status: afterDelete.status,
+    post_delete_list_status: postDeleteList.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
     list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
   });

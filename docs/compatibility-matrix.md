@@ -138,8 +138,8 @@ behavior.
 OpenAI's current Chat Completions paths include `/v1/chat/completions`,
 `/v1/chat/completions/{completion_id}`, and
 `/v1/chat/completions/{completion_id}/messages`. The bridge implements create,
-list, retrieve, update metadata, and messages retrieval for locally stored Chat
-completion records.
+list, retrieve, update metadata, delete, and messages retrieval for locally
+stored Chat completion records.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
@@ -147,6 +147,7 @@ completion records.
 | `GET /v1/chat/completions` | Implemented for local `store:true` records | Lists locally stored upstream Chat completion objects with `model`, `metadata[key]`, `limit`, `after`, and `order` filters |
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
 | `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions |
+| `DELETE /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Deletes a locally stored Chat completion and returns `object:"chat.completion.deleted"` |
 | `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with `limit`, `after`, `before`, and `order` pagination |
 
 The bridge stores Chat completions only when the incoming Chat request sets

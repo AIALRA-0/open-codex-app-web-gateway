@@ -1945,6 +1945,26 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
   sendJson(res, 200, updatedRecord.chat_completion);
 }
 
+function handleChatCompletionDelete(res, store, completionId) {
+  const record = store.get(completionId);
+  if (!record?.chat_completion) {
+    sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+
+  const deleted = store.delete(completionId);
+  if (!deleted) {
+    sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+
+  sendJson(res, 200, {
+    id: completionId,
+    object: "chat.completion.deleted",
+    deleted: true,
+  });
+}
+
 function handleChatCompletionsList(res, store, url) {
   const model = url.searchParams.get("model");
   const metadataFilters = metadataFiltersFromUrl(url);
@@ -2292,6 +2312,10 @@ function createServer(config = loadConfig()) {
         }
         if (!action && req.method === "POST") {
           await handleChatCompletionUpdate(req, res, store, completionId);
+          return;
+        }
+        if (!action && req.method === "DELETE") {
+          handleChatCompletionDelete(res, store, completionId);
           return;
         }
         if (action === "messages" && req.method === "GET") {

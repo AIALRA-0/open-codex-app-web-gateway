@@ -1278,3 +1278,51 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7x3zir` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Stored Chat Completion Delete
+
+- Used the current OpenAI Chat Completions API reference to confirm
+  `DELETE /chat/completions/{completion_id}` deletes only stored Chat
+  Completions created with `store:true` and returns a
+  `ChatCompletionDeleted` object:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/delete/
+- Added local support for `DELETE /v1/chat/completions/{completion_id}`:
+  - only locally stored Chat completion records can be deleted;
+  - non-Chat records in the shared response store are not deleted by this route;
+  - successful deletion returns
+    `{object:"chat.completion.deleted", id, deleted:true}`;
+  - follow-up get/messages calls return 404 and list filters no longer return
+    the deleted id.
+- Extended the bridge regression harness:
+  - `chat-lifecycle` now writes the created completion id into updated
+    metadata, lists by that unique metadata key, deletes the stored Chat
+    completion, verifies `post_delete_get_status=404`, and confirms the
+    metadata-filtered list no longer contains the deleted id.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` with
+  the delete endpoint and regression coverage.
+- Added regression coverage for:
+  - successful delete response shape;
+  - get/messages 404 after delete;
+  - list filter empty after delete;
+  - repeated delete 404.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted server test for stored Chat lifecycle: passed.
+  - `npm test`: 54/54 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active after systemd settled.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1780 ms, P95 latency 3617 ms, total usage 2150 tokens. The
+    `chat-lifecycle` case returned `update_status:200`, `delete_status:200`,
+    `post_delete_get_status:404`, and `post_delete_list_status:200`.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7xa7js` appeared before reload and after reload, console errors
+    0, warnings 0.

@@ -1606,6 +1606,31 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     const filtered = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=other`);
     assert.equal(filtered.status, 200);
     assert.equal((await filtered.json()).data.length, 0);
+
+    const deleted = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      id: json.id,
+      object: "chat.completion.deleted",
+      deleted: true,
+    });
+
+    const missingAfterDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(missingAfterDelete.status, 404);
+
+    const messagesAfterDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages`);
+    assert.equal(messagesAfterDelete.status, 404);
+
+    const listedAfterDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated`);
+    assert.equal(listedAfterDelete.status, 200);
+    assert.equal((await listedAfterDelete.json()).data.length, 0);
+
+    const repeatedDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(repeatedDelete.status, 404);
   });
 });
 
