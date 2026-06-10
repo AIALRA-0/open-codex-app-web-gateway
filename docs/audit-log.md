@@ -4646,3 +4646,76 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 14 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Direct Chat Tool Choice Thinking Compatibility
+
+- Re-checked current tool-call field expectations before changing direct Chat
+  passthrough behavior:
+  - OpenAI developer docs / OpenAPI for `POST /v1/chat/completions` document
+    Chat `tools` and `tool_choice`, including `none`, `auto`, `required`, and
+    forcing a specific function tool.
+  - DeepSeek's official Create Chat Completion reference documents
+    `thinking:{type:"enabled|disabled"}` with default `enabled`, `tools`,
+    and `tool_choice` with the same control values.
+  - DeepSeek's official Thinking Mode and Tool Calls guides document
+    thinking-mode tool calls, but also require `reasoning_content` from
+    tool-call turns to be passed back on later requests.
+- Found a direct Chat passthrough gap:
+  - Responses-to-Chat translation already disabled DeepSeek thinking by default
+    when function tools and `tool_choice` were present;
+  - direct `POST /v1/chat/completions` passthrough preserved `tools` and
+    `tool_choice` but did not apply the same default, so OpenAI Chat clients
+    could accidentally enter DeepSeek thinking-mode tool-call state without
+    managing DeepSeek-specific `reasoning_content` replay.
+- Added provider-aware direct Chat tool-choice thinking compatibility:
+  - when `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE=true`, direct
+    Chat passthrough requests with function `tools` plus `tool_choice` now send
+    upstream `thinking:{type:"disabled"}`;
+  - the original `tools` and `tool_choice` payloads continue to pass through;
+  - returned and stored Chat completion metadata records
+    `metadata.compatibility.chat_passthrough.deepseek_thinking` with
+    `source=tool_choice`, `target=thinking`, `reason=disabled_for_tool_choice`,
+    the chosen tool value, the mapped thinking value, and any previous thinking
+    value.
+- Added regression coverage:
+  - a unit test asserts direct Chat tool-choice requests preserve `tools` /
+    `tool_choice`, override `thinking:{type:"enabled"}` to
+    `thinking:{type:"disabled"}`, and attach compatibility metadata;
+  - the live `bridge-regression` suite now includes `chat-tool-choice-compat`,
+    which forces a `record_result` tool call through direct Chat passthrough and
+    verifies both the returned `tool_calls` payload and compatibility metadata.
+- Updated compatibility, deployment, and evaluation docs to state that
+  `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` covers both Responses
+  translation and direct Chat passthrough.
+- Verification:
+  - `node --check src/bridge/server.js`, `node --check scripts/eval-harness.mjs`,
+    and `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "tool_choice|normalizes OpenAI Chat fields|reasoning_effort"`:
+    89/89 passing tests, including the new direct Chat `tool_choice` case.
+  - `npm test`: 126/126 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-tool-choice-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1232 ms, total usage 371 tokens, and direct Chat
+    tool-call metadata checks passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1201 ms, P95 latency 1271 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 47/47 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1110 ms, P95 latency 2216 ms, and total usage
+    9776 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8l7u5x`, sidebar controls, new
+    conversation submit, reload persistence, console errors 0, warnings 0, and
+    screenshot `output/playwright/ui-smoke-2026-06-10T21-35-17-877Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 488 runtime candidates,
+    selected 44 old UI screenshots by retention policy, deleted 0, selected
+    3442101 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 38 GB available; repository checkout
+    is 47 MB, `state/` is 4.3 MB, `output/` is 7.6 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 14 MB.
+  - No API keys, account credentials, or local secret files were committed.

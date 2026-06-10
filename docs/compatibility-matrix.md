@@ -78,7 +78,7 @@ implementations for those tools.
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
-| `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
+| `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` on Responses translation and direct Chat passthrough when tool choice is present unless overridden |
 | `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, and `computer` adapters. The shared budget is consumed before each local built-in tool call/action; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
@@ -111,10 +111,13 @@ current OpenAI and DeepSeek docs. The DeepSeek default upstream path is
 `/chat/completions`, not `/v1/chat/completions`; OpenAI-style `/v1` paths remain
 configurable for other providers.
 
-DeepSeek thinking mode defaults to enabled in current DeepSeek docs. The bridge
-therefore disables thinking only for requests that include function tools and a
-`tool_choice`, because the live `deepseek-v4-pro` endpoint rejects that
-combination in thinking mode. Set
+DeepSeek thinking mode defaults to enabled in current DeepSeek docs, and
+thinking-mode tool calls require `reasoning_content` to be passed back on later
+turns. The bridge therefore disables thinking by default for Responses
+translation and direct Chat passthrough requests that include function tools and
+a `tool_choice`, preserving OpenAI-compatible tool-call behavior for clients
+that do not manage DeepSeek-specific reasoning state. This also retains the
+earlier live-endpoint guard for `tool_choice` compatibility. Set
 `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE=false` or force
 `CODEXCOMPAT_DEEPSEEK_THINKING_MODE=true` to override this compatibility
 behavior.
@@ -842,7 +845,7 @@ capture, secrets isolation, per-session cleanup, and multi-action loop control.
 | Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; text-only providers such as DeepSeek do not natively understand audio input and do not return audio payloads for the bridge to synthesize | Add optional provider/model adapters for audio-capable Chat or Realtime models and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
-| Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests and filters known unsupported OpenAI-only fields for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |
+| Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests, token aliases, reasoning effort, DeepSeek `user_id`, direct Chat `tool_choice` thinking compatibility, and filters known unsupported OpenAI-only fields for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |
 
 ## Reference Projects Reviewed
 

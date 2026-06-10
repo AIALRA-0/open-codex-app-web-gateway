@@ -6128,6 +6128,89 @@ test("POST /v1/chat/completions maps OpenAI reasoning_effort values for DeepSeek
   });
 });
 
+test("POST /v1/chat/completions disables DeepSeek thinking for direct Chat tool_choice", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.tools, [{
+      type: "function",
+      function: {
+        name: "record_result",
+        description: "Record a benchmark result.",
+        parameters: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+          additionalProperties: false,
+        },
+      },
+    }]);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: "record_result" },
+    });
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_tool_choice_compat",
+      object: "chat.completion",
+      created: 1700000413,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_1",
+            type: "function",
+            function: { name: "record_result", arguments: "{\"ok\":true}" },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 5, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-tool-choice-compat" },
+        messages: [{ role: "user", content: "Call record_result with ok=true." }],
+        tools: [{
+          type: "function",
+          function: {
+            name: "record_result",
+            description: "Record a benchmark result.",
+            parameters: {
+              type: "object",
+              properties: { ok: { type: "boolean" } },
+              required: ["ok"],
+              additionalProperties: false,
+            },
+          },
+        }],
+        tool_choice: { type: "function", function: { name: "record_result" } },
+        thinking: { type: "enabled" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.tool_calls[0].function.name, "record_result");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.deepseek_thinking, {
+      source: "tool_choice",
+      target: "thinking",
+      value: { type: "function", function: { name: "record_result" } },
+      mapped: { type: "disabled" },
+      previous_thinking: { type: "enabled" },
+      forwarded: true,
+      reason: "disabled_for_tool_choice",
+    });
+  });
+});
+
 test("POST /v1/chat/completions aliases token limits to configured provider field", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.max_new_tokens, 21);

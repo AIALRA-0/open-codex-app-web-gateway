@@ -3306,6 +3306,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const reasoningEffort = normalizeChatPassthroughReasoningEffort(upstreamBody, config);
   if (reasoningEffort) compatibility.reasoning_effort = reasoningEffort;
 
+  const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
+  if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
+
   const serviceTier = filterChatPassthroughServiceTier(upstreamBody, config);
   if (serviceTier) compatibility.service_tier = serviceTier;
 
@@ -3443,6 +3446,30 @@ function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}) {
   }
 
   return null;
+}
+
+function normalizeChatPassthroughToolChoiceThinking(upstreamBody, config = {}) {
+  if (
+    !config.deepseekDisableThinkingForToolChoice
+    || config.deepseekThinkingMode
+    || !Array.isArray(upstreamBody.tools)
+    || upstreamBody.tools.length === 0
+    || upstreamBody.tool_choice === undefined
+  ) {
+    return null;
+  }
+
+  const previousThinking = isPlainObject(upstreamBody.thinking) ? clone(upstreamBody.thinking) : upstreamBody.thinking;
+  upstreamBody.thinking = { type: "disabled" };
+  return {
+    source: "tool_choice",
+    target: "thinking",
+    value: clone(upstreamBody.tool_choice),
+    mapped: clone(upstreamBody.thinking),
+    previous_thinking: previousThinking,
+    forwarded: true,
+    reason: "disabled_for_tool_choice",
+  };
 }
 
 function filterChatPassthroughServiceTier(upstreamBody, config = {}) {

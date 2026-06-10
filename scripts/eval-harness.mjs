@@ -554,6 +554,44 @@ function buildSuites(defaultModel) {
           && json.moderation?.input?.results?.[0]?.flagged === false,
       },
       {
+        id: "chat-tool-choice-compat",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          messages: [{
+            role: "user",
+            content: "Call record_result with ok=true and label=\"chat-tool-ok\". Do not answer in prose.",
+          }],
+          tools: [{
+            type: "function",
+            function: {
+              name: "record_result",
+              description: "Record a benchmark result.",
+              parameters: {
+                type: "object",
+                properties: {
+                  ok: { type: "boolean" },
+                  label: { type: "string" },
+                },
+                required: ["ok", "label"],
+                additionalProperties: false,
+              },
+            },
+          }],
+          tool_choice: { type: "function", function: { name: "record_result" } },
+          max_completion_tokens: 128,
+        },
+        check: ({ json }) => {
+          const toolCall = json?.choices?.[0]?.message?.tool_calls?.[0];
+          if (toolCall?.function?.name !== "record_result") return false;
+          if (json.metadata?.compatibility?.chat_passthrough?.deepseek_thinking?.reason !== "disabled_for_tool_choice") {
+            return false;
+          }
+          const parsed = parseJsonish(toolCall.function.arguments);
+          return parsed?.ok === true && parsed?.label === "chat-tool-ok";
+        },
+      },
+      {
         id: "completions-legacy",
         mode: "completions",
         request: {
