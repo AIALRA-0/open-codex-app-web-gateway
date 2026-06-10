@@ -616,6 +616,21 @@ function buildSuites(defaultModel) {
         check: ({ json, text }) => json?.object === "text_completion" && /completion-ok/i.test(text),
       },
       {
+        id: "chat-reasoning-object-compat",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          messages: [{ role: "user", content: "Return the exact string chat-reasoning-object-ok." }],
+          reasoning: { effort: "none", summary: "auto" },
+          max_completion_tokens: 64,
+        },
+        check: ({ json, text }) => /chat-reasoning-object-ok/i.test(text)
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning?.filtered?.includes("summary")
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning?.effort?.source === "reasoning.effort"
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning?.effort?.reason === "deepseek_thinking_disabled"
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning?.effort?.forwarded === false,
+      },
+      {
         id: "chat-lifecycle",
         mode: "chat-lifecycle",
         updateMetadata: { suite: "chat-life-updated", audit: "bridge-regression" },

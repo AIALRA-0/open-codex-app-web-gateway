@@ -6220,6 +6220,113 @@ test("POST /v1/chat/completions maps OpenAI reasoning_effort values for DeepSeek
   });
 });
 
+test("POST /v1/chat/completions maps OpenAI reasoning object for DeepSeek-compatible providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning, undefined);
+    assert.equal(call.body.reasoning_effort, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_reasoning_object",
+      object: "chat.completion",
+      created: 1700000413,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-reasoning-object-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-reasoning-object" },
+        messages: [{ role: "user", content: "Return chat-reasoning-object-ok." }],
+        reasoning: { effort: "none", summary: "auto" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-reasoning-object-ok");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.reasoning, {
+      source: "reasoning",
+      filtered: ["summary"],
+      reason: "chat_passthrough_reasoning_object",
+      effort: {
+        source: "reasoning.effort",
+        target: "thinking",
+        value: "none",
+        mapped: { type: "disabled" },
+        forwarded: false,
+        reason: "deepseek_thinking_disabled",
+      },
+    });
+  }, {
+    deepseekReasoningEffortCompat: true,
+  });
+});
+
+test("POST /v1/chat/completions prefers explicit reasoning_effort over reasoning.effort", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning, undefined);
+    assert.equal(call.body.reasoning_effort, "max");
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_reasoning_precedence",
+      object: "chat.completion",
+      created: 1700000414,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-reasoning-precedence-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "Return chat-reasoning-precedence-ok." }],
+        reasoning: { effort: "none" },
+        reasoning_effort: "xhigh",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-reasoning-precedence-ok");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.reasoning, {
+      source: "reasoning",
+      reason: "chat_passthrough_reasoning_object",
+      effort: {
+        source: "reasoning.effort",
+        value: "none",
+        forwarded: false,
+        reason: "reasoning_effort_precedence",
+      },
+    });
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.reasoning_effort, {
+      source: "reasoning_effort",
+      target: "reasoning_effort",
+      value: "xhigh",
+      mapped: "max",
+      forwarded: true,
+      reason: "deepseek_effort_compat",
+    });
+  }, {
+    deepseekReasoningEffortCompat: true,
+  });
+});
+
 test("POST /v1/chat/completions disables DeepSeek thinking for direct Chat tool_choice", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.tools, [{

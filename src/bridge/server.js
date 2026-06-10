@@ -3322,6 +3322,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const maxTokens = normalizeChatPassthroughMaxTokens(upstreamBody, config);
   if (maxTokens) Object.assign(compatibility, maxTokens);
 
+  const reasoning = normalizeChatPassthroughReasoningObject(upstreamBody, config);
+  if (reasoning) compatibility.reasoning = reasoning;
+
   const reasoningEffort = normalizeChatPassthroughReasoningEffort(upstreamBody, config);
   if (reasoningEffort) compatibility.reasoning_effort = reasoningEffort;
 
@@ -3452,8 +3455,58 @@ function normalizeChatPassthroughMaxTokens(upstreamBody, config = {}) {
   return null;
 }
 
-function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}) {
+function normalizeChatPassthroughReasoningObject(upstreamBody, config = {}) {
+  if (!config.deepseekReasoningEffortCompat || !isPlainObject(upstreamBody.reasoning)) return null;
+  const reasoning = clone(upstreamBody.reasoning);
+  delete upstreamBody.reasoning;
+
+  const filtered = Object.keys(reasoning).filter((key) => key !== "effort");
+  const compatibility = {
+    source: "reasoning",
+    ...(filtered.length ? { filtered } : {}),
+    reason: "chat_passthrough_reasoning_object",
+  };
+
+  if (reasoning.effort == null) {
+    return {
+      ...compatibility,
+      forwarded: false,
+      reason: "provider_unsupported_object",
+    };
+  }
+
+  if (upstreamBody.reasoning_effort != null) {
+    return {
+      ...compatibility,
+      effort: {
+        source: "reasoning.effort",
+        value: reasoning.effort,
+        forwarded: false,
+        reason: "reasoning_effort_precedence",
+      },
+    };
+  }
+
+  upstreamBody.reasoning_effort = reasoning.effort;
+  const effortCompatibility = normalizeChatPassthroughReasoningEffort(upstreamBody, config, {
+    source: "reasoning.effort",
+  }) || {
+    source: "reasoning.effort",
+    target: "reasoning_effort",
+    value: reasoning.effort,
+    forwarded: true,
+    reason: "chat_passthrough_reasoning_alias",
+  };
+
+  return {
+    ...compatibility,
+    effort: effortCompatibility,
+  };
+}
+
+function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}, options = {}) {
   if (!config.deepseekReasoningEffortCompat || upstreamBody.reasoning_effort == null) return null;
+  const source = options.source || "reasoning_effort";
   const value = upstreamBody.reasoning_effort;
   const mapped = normalizeReasoningEffort(value, config);
 
@@ -3462,7 +3515,7 @@ function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}) {
     delete upstreamBody.reasoning_effort;
     upstreamBody.thinking = { type: "disabled" };
     return {
-      source: "reasoning_effort",
+      source,
       target: "thinking",
       value,
       mapped: upstreamBody.thinking,
@@ -3475,7 +3528,7 @@ function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}) {
   if (mapped !== value) {
     upstreamBody.reasoning_effort = mapped;
     return {
-      source: "reasoning_effort",
+      source,
       target: "reasoning_effort",
       value,
       mapped,
