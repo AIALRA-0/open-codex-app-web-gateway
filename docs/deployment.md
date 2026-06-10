@@ -130,6 +130,8 @@ The repo provides these templates:
 - `systemd/aialra-opencodexapp-app-server.service`
 - `systemd/aialra-opencodexapp-web.service`
 - `systemd/aialra-opencodexapp-login.service`
+- `systemd/aialra-opencodexapp-runtime-prune.service`
+- `systemd/aialra-opencodexapp-runtime-prune.timer`
 
 Install by copying or symlinking them into `/etc/systemd/system/`, then:
 
@@ -139,6 +141,8 @@ systemctl enable --now aialra-opencodexapp-bridge.service
 systemctl enable --now aialra-opencodexapp-app-server.service
 systemctl enable --now aialra-opencodexapp-web.service
 systemctl enable --now aialra-opencodexapp-login.service
+# Optional daily ignored runtime-artifact pruning:
+systemctl enable --now aialra-opencodexapp-runtime-prune.timer
 ```
 
 ## Nginx
@@ -158,6 +162,7 @@ Before exposing traffic:
 ```bash
 npm test
 npm run secret-scan
+npm run prune:runtime -- --dry-run
 curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
@@ -187,6 +192,36 @@ template proxies directly to the web service; the optional login proxy service i
 not in the public request path unless nginx is changed to target port `12923`.
 Broader automated UI coverage still needs upload, interrupt/resume, generated
 artifact display, and full page switching checks.
+
+## Runtime Retention
+
+Long-running bridge and UI verification create ignored local artifacts under
+`state/`, `output/`, and `.playwright-cli/`. These paths must not be committed,
+but they also should not grow forever.
+
+Use the runtime prune script in dry-run mode before applying changes:
+
+```bash
+npm run prune:runtime -- --dry-run
+npm run prune:runtime -- --apply
+```
+
+The script prints a JSON report. By default it only prunes:
+
+- UI smoke screenshots under `output/playwright/`;
+- Playwright CLI captures under `.playwright-cli/`;
+- temporary code-benchmark work directories under `output/code-benchmark/`;
+- top-level local response JSON records under `state/responses-bridge/`;
+- stale local shell/code-interpreter container work directories under
+  `state/responses-bridge/local-containers/`.
+
+It intentionally does not prune local `file_search` vector-store state by
+default, because those files can be user-provided retrieval data. Use explicit
+manual deletion for vector stores whose lifecycle has ended.
+
+The optional `aialra-opencodexapp-runtime-prune.timer` runs the same script with
+`--apply` daily and writes its JSON reports to
+`/srv/aialra/logs/opencodexapp/prune/service.log`.
 
 ## Playwright Storage Note
 

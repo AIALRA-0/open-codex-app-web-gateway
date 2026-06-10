@@ -14,6 +14,7 @@
     "soak:bridge": "node scripts/soak-test-bridge.mjs",
     "smoke:ui": "node scripts/ui-smoke.mjs",
     "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
+    "prune:runtime": "node scripts/prune-runtime-state.mjs",
     "bench:swe": "node scripts/swebench-runner.mjs",
     "bench:swe:score": "node scripts/swebench-evaluate.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"

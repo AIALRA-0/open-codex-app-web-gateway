@@ -1,0 +1,14 @@
+[Unit]
+Description=AIALRA Open CodexApp runtime artifact prune
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+WorkingDirectory=/srv/aialra/apps/open-codex-app-web-gateway
+ExecStartPre=/usr/bin/install -d -m 0755 /srv/aialra/logs/opencodexapp/prune
+ExecStart=/usr/bin/node /srv/aialra/apps/open-codex-app-web-gateway/scripts/prune-runtime-state.mjs --apply --root /srv/aialra/apps/open-codex-app-web-gateway
+StandardOutput=append:/srv/aialra/logs/opencodexapp/prune/service.log
+StandardError=append:/srv/aialra/logs/opencodexapp/prune/service.log

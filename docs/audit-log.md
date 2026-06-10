@@ -2309,3 +2309,41 @@ Open follow-ups:
   - Bridge, web, and app-server services were all active.
   - UI smoke passed with marker `ui-smoke-mq84ou0p`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Runtime Artifact Retention Guard
+
+- Closed an operational maturity gap from the long-running goal: repeated UI
+  smoke tests, bridge evaluations, local response storage, and local shell
+  artifacts can accumulate under ignored runtime directories even though they
+  are not committed to Git.
+- Added `scripts/prune-runtime-state.mjs`, a dependency-free retention tool that:
+  - defaults to dry-run reporting and only deletes when `--apply` is passed;
+  - scans ignored runtime paths under the repository root;
+  - prunes by age, item count, and total byte budget;
+  - emits a JSON report with scanned, selected, deleted, byte, and reason
+    totals for auditability;
+  - intentionally leaves local `file_search` vector-store state alone by
+    default because it can contain user-provided retrieval data.
+- Added `npm run prune:runtime`.
+- Added `systemd/aialra-opencodexapp-runtime-prune.service` and
+  `systemd/aialra-opencodexapp-runtime-prune.timer` templates for optional
+  daily pruning. The service creates its log directory before execution and
+  writes JSON reports to `/srv/aialra/logs/opencodexapp/prune/service.log`.
+- Updated `docs/deployment.md` and `docs/evaluation-plan.md` with dry-run/apply
+  usage, the optional timer, and the retention gate in the 95% parity checklist.
+- Verified:
+  - `node --check scripts/prune-runtime-state.mjs`: passed.
+  - `node --check test/prune_runtime_state.test.js`: passed.
+  - Targeted prune test passed 1/1, proving dry-run does not delete, `--apply`
+    deletes only selected runtime artifacts, and local file-search state remains
+    untouched by default.
+  - `npm run prune:runtime -- --dry-run` scanned 211 runtime candidates across
+    five targets, selected 0, deleted 0, and reported 0 errors.
+  - `npm test`: 73/73 passing tests.
+  - `systemd-analyze verify` passed for the runtime prune service and timer
+    templates.
+  - Bridge, web, and app-server services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.

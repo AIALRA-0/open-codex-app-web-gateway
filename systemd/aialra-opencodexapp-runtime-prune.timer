@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AIALRA Open CodexApp runtime artifact prune
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=15m
+Unit=aialra-opencodexapp-runtime-prune.service
+
+[Install]
+WantedBy=timers.target

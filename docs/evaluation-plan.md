@@ -45,6 +45,7 @@ larger agent evaluations.
 | `swebench-runner` | Disk-bounded SWE-bench prediction generator for local JSONL subsets; writes official predictions JSONL and compact audit reports outside the repo |
 | `swebench-evaluate` | Guarded wrapper around the official SWE-bench Docker harness; parses scorer artifacts into compact JSON/Markdown reports |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
+| `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
 Useful commands:
 
@@ -235,7 +236,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `hybrid_search.embedding_weight` / `hybrid_search.text_weight`.
 - Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.
-- State/log growth remains bounded under the configured cleanup policy.
+- State/log growth remains bounded under the configured cleanup policy, with
+  `npm run prune:runtime -- --dry-run` producing an auditable candidate report
+  and `--apply` reserved for explicit pruning.
 
 ## SWE-bench Storage Policy
 
