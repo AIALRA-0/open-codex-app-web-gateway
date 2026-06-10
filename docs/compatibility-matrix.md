@@ -96,8 +96,10 @@ behavior.
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
 | `service_tier` | `service_tier` | Direct when a Chat provider echoes the actual tier used |
-| `finish_reason=length` | `status=incomplete` | Direct |
-| other finish reasons | `status=completed` | Direct |
+| `finish_reason=length` | `status=incomplete`, `incomplete_details.reason=max_output_tokens` | Direct for non-streaming and streaming Chat output |
+| `finish_reason=content_filter` | `status=incomplete`, `incomplete_details.reason=content_filter` | Direct for non-streaming and streaming Chat output |
+| `finish_reason=insufficient_system_resource` | `status=failed`, `error.code=server_error` | DeepSeek-specific Chat termination mapped to Responses failure because Responses incomplete reasons do not include this value |
+| `finish_reason=stop`, `tool_calls`, or legacy `function_call` | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
 | local input file context | compatibility metadata `local_input_files` | Emulated before upstream Chat calls for Responses create, background, streaming, `/input_tokens`, and local compaction |
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
@@ -200,6 +202,8 @@ The bridge emits:
 - `response.reasoning_summary_text.done`
 - `response.output_item.done`
 - `response.completed`
+- `response.incomplete`
+- `response.failed`
 - `error`
 
 Chat stream chunks with `delta.content` become text deltas. Chunks with
@@ -207,7 +211,10 @@ Chat stream chunks with `delta.content` become text deltas. Chunks with
 with DeepSeek `delta.reasoning_content` become reasoning summary deltas and are
 kept in the replay store so later tool turns can pass the reasoning content back.
 Chat stream chunks with `choice.logprobs.content[]` are accumulated and attached
-to the final `output_text` content part and completed response.
+to the final `output_text` content part and terminal response.
+Terminal `choice.finish_reason` values are aggregated across chunks. `length`
+and `content_filter` end the stream with `response.incomplete`; DeepSeek
+`insufficient_system_resource` ends the stream with `response.failed`.
 When `web_search_preview` is handled by the local adapter, the bridge emits a
 `web_search_call` output item and applies URL citation annotations to the final
 message content.

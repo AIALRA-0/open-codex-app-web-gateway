@@ -486,14 +486,56 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   }
 
   const finishReasons = choices.map((choice) => choice.finish_reason).filter(Boolean);
-  const lengthLimited = finishReasons.includes("length");
-  response.status = lengthLimited ? "incomplete" : "completed";
-  response.completed_at = nowSeconds();
-  response.incomplete_details = lengthLimited ? { reason: "max_output_tokens" } : null;
+  const terminal = responseTerminalStateFromFinishReasons(finishReasons);
+  response.status = terminal.status;
+  response.completed_at = terminal.completed_at;
+  response.incomplete_details = terminal.incomplete_details;
+  response.error = terminal.error;
   response.usage = mapUsage(chat.usage);
   if (chat.service_tier != null) response.service_tier = chat.service_tier;
 
   return response;
+}
+
+function responseTerminalStateFromFinishReasons(finishReasons = []) {
+  const reasons = new Set(asArray(finishReasons).filter(Boolean).map(String));
+
+  if (reasons.has("insufficient_system_resource")) {
+    return {
+      status: "failed",
+      completed_at: null,
+      incomplete_details: null,
+      error: {
+        code: "server_error",
+        message: "Upstream chat completion ended with finish_reason=\"insufficient_system_resource\".",
+      },
+    };
+  }
+
+  if (reasons.has("content_filter")) {
+    return {
+      status: "incomplete",
+      completed_at: null,
+      incomplete_details: { reason: "content_filter" },
+      error: null,
+    };
+  }
+
+  if (reasons.has("length") || reasons.has("max_tokens") || reasons.has("max_output_tokens")) {
+    return {
+      status: "incomplete",
+      completed_at: null,
+      incomplete_details: { reason: "max_output_tokens" },
+      error: null,
+    };
+  }
+
+  return {
+    status: "completed",
+    completed_at: nowSeconds(),
+    incomplete_details: null,
+    error: null,
+  };
 }
 
 function appendReasoningOutput(response, reasoningContent) {
@@ -636,6 +678,7 @@ module.exports = {
   normalizeOutputTextLogprobs,
   normalizeReasoningEffort,
   prefixedId,
+  responseTerminalStateFromFinishReasons,
   responseInputToChatMessages,
   responseOutputToReplayMessages,
   responsesToChatRequest,

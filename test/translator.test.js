@@ -355,6 +355,41 @@ test("preserves multiple Chat choices as Responses output items", () => {
   assert.equal(replay[3].tool_calls[0].function.name, "legacy_tool");
 });
 
+test("maps Chat finish reasons to Responses terminal status", () => {
+  const contentFiltered = chatCompletionToResponse({
+    id: "chatcmpl_filter",
+    created: 444,
+    model: "deepseek-chat",
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: "" },
+      finish_reason: "content_filter",
+    }],
+  }, { model: "deepseek-chat" }, { responseId: "resp_filter" });
+
+  assert.equal(contentFiltered.status, "incomplete");
+  assert.equal(contentFiltered.completed_at, null);
+  assert.deepEqual(contentFiltered.incomplete_details, { reason: "content_filter" });
+  assert.equal(contentFiltered.error, null);
+
+  const resourceInterrupted = chatCompletionToResponse({
+    id: "chatcmpl_resource",
+    created: 445,
+    model: "deepseek-chat",
+    choices: [{
+      index: 0,
+      message: { role: "assistant", content: "partial" },
+      finish_reason: "insufficient_system_resource",
+    }],
+  }, { model: "deepseek-chat" }, { responseId: "resp_resource" });
+
+  assert.equal(resourceInterrupted.status, "failed");
+  assert.equal(resourceInterrupted.completed_at, null);
+  assert.equal(resourceInterrupted.incomplete_details, null);
+  assert.equal(resourceInterrupted.error.code, "server_error");
+  assert.match(resourceInterrupted.error.message, /insufficient_system_resource/);
+});
+
 test("keeps DeepSeek reasoning_content in replay messages", () => {
   const messages = chatCompletionToReplayMessages({
     choices: [{

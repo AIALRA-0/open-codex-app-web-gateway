@@ -722,3 +722,46 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7t10sk` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Chat Finish Reason Terminal State Mapping
+
+- Used the current OpenAI OpenAPI schema to confirm:
+  - Responses terminal stream events include `response.completed`,
+    `response.incomplete`, and `response.failed`;
+  - `Response.incomplete_details.reason` is limited to
+    `max_output_tokens` and `content_filter`;
+  - `Response.error.code` supports `server_error` for failed generations.
+- Used current DeepSeek Chat Completion docs to confirm Chat
+  `finish_reason` values include `stop`, `length`, `content_filter`,
+  `tool_calls`, and `insufficient_system_resource`.
+- Added a shared Chat-to-Responses terminal-state mapper:
+  - `length` maps to `status=incomplete` with
+    `incomplete_details.reason=max_output_tokens`;
+  - `content_filter` maps to `status=incomplete` with
+    `incomplete_details.reason=content_filter`;
+  - DeepSeek `insufficient_system_resource` maps to `status=failed` with
+    `error.code=server_error`;
+  - `stop`, `tool_calls`, and legacy `function_call` remain completed.
+- Applied the mapper to both non-streaming and streaming Responses output.
+  Streaming now collects terminal `choice.finish_reason` values from Chat
+  chunks and emits `response.incomplete` or `response.failed` instead of
+  always emitting `response.completed`.
+- Added regression coverage for:
+  - non-streaming `content_filter` and `insufficient_system_resource`
+    terminal states;
+  - streaming `length` producing a `response.incomplete` terminal event;
+  - streaming `insufficient_system_resource` producing a `response.failed`
+    terminal event.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 37/37 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Full live `bridge-regression` against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+  2153 ms, P95 latency 4280 ms, total usage 2496 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7tegzw` appeared before reload and after reload, console errors
+  0, warnings 0.

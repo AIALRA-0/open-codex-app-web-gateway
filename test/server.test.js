@@ -350,6 +350,78 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
   });
 });
 
+test("POST /v1/responses streams incomplete terminal events from Chat finish reasons", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_length",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: "partial" },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream length",
+        stream: true,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: response\.incomplete/);
+    assert.doesNotMatch(text, /event: response\.completed/);
+    assert.match(text, /"status":"incomplete"/);
+    assert.match(text, /"completed_at":null/);
+    assert.match(text, /"incomplete_details":\{"reason":"max_output_tokens"\}/);
+  });
+});
+
+test("POST /v1/responses streams failed terminal events from Chat finish reasons", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_resource",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: "partial" },
+        finish_reason: "insufficient_system_resource",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream resource",
+        stream: true,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: response\.failed/);
+    assert.doesNotMatch(text, /event: response\.completed/);
+    assert.match(text, /"status":"failed"/);
+    assert.match(text, /"code":"server_error"/);
+    assert.match(text, /insufficient_system_resource/);
+  });
+});
+
 test("POST /v1/responses streams local web_search_preview call and citations", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.thinking, { type: "disabled" });

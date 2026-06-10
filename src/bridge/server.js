@@ -36,6 +36,7 @@ const {
   mapUsage,
   normalizeOutputTextLogprobs,
   prefixedId,
+  responseTerminalStateFromFinishReasons,
   responsesToChatRequest,
   stringifyContent,
 } = require("./translator");
@@ -1079,15 +1080,19 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     syncStreamTextFromResponse(state);
     const doneEvents = finishStreamState(state);
     for (const event of doneEvents) writeSse(res, event.type, sequence(state, event));
-    response.status = "completed";
-    response.completed_at = Math.floor(Date.now() / 1000);
+    const terminal = responseTerminalStateFromFinishReasons(state.finishReasons);
+    response.status = terminal.status;
+    response.completed_at = terminal.completed_at;
+    response.incomplete_details = terminal.incomplete_details;
+    response.error = terminal.error;
     response.usage = state.usage;
     response.metadata = {
       ...(response.metadata || {}),
       compatibility,
       upstream_object: "chat.completion.chunk",
     };
-    writeSse(res, "response.completed", sequence(state, { type: "response.completed", response: clone(response) }));
+    const terminalEvent = terminalEventForResponseStatus(response.status);
+    writeSse(res, terminalEvent, sequence(state, { type: terminalEvent, response: clone(response) }));
 
     if (request.store !== false) {
       store.put(response.id, {
@@ -1130,9 +1135,16 @@ function createStreamState(response, compatibility) {
     reasoningText: "",
     outputTextLogprobs: [],
     toolCalls: new Map(),
+    finishReasons: [],
     outputDone: new Set(),
     usage: null,
   };
+}
+
+function terminalEventForResponseStatus(status) {
+  if (status === "failed") return "response.failed";
+  if (status === "incomplete") return "response.incomplete";
+  return "response.completed";
 }
 
 function sequence(state, event) {
@@ -1259,9 +1271,10 @@ function ensureToolCallItem(state, index, deltaToolCall) {
 
 function applyChatStreamChunk(state, chunk) {
   const events = [];
-  if (chunk.usage) state.usage = require("./translator").mapUsage(chunk.usage);
+  if (chunk.usage) state.usage = mapUsage(chunk.usage);
 
   for (const choice of chunk.choices || []) {
+    if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);
     const delta = choice.delta || {};
 
     if (delta.reasoning_content) {
