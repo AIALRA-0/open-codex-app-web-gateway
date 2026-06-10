@@ -227,6 +227,18 @@ chunks, request metadata, and message history. This matches the
 stored-completion lifecycle intent and avoids unbounded state growth for
 ordinary passthrough Chat traffic.
 
+DeepSeek-compatible Chat passthrough uses provider-aware request normalization
+before proxying: OpenAI Chat `messages[].role:"developer"` entries are mapped to
+`system` by default, `user` / `safety_identifier` / `prompt_cache_key` are
+normalized into DeepSeek `user_id`, `service_tier` is filtered when unsupported,
+`stream_options` are removed on non-streaming requests, and configured
+OpenAI-only Chat fields such as `modalities`, `moderation`, `prediction`, and
+legacy `functions` / `function_call` are filtered instead of being sent to the
+provider. Non-streaming JSON responses and stored reconstructed streaming
+responses record these actions under
+`metadata.compatibility.chat_passthrough`, while stored Chat messages preserve
+the original client request shape for `/messages` retrieval.
+
 ## Conversations Endpoint Coverage
 
 OpenAI's current endpoint list includes `/v1/conversations`,
@@ -757,6 +769,8 @@ Configuration:
 | `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git |
 | `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload bundle size |
 | `CODEXCOMPAT_SKILL_MAX_FILE_COUNT` | `500` | Maximum files accepted in one local skill bundle |
+| `CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT` | `true` for DeepSeek providers | Maps direct Chat passthrough `role:"developer"` messages to `CODEXCOMPAT_CHAT_DEVELOPER_ROLE` before upstream proxying |
+| `CODEXCOMPAT_CHAT_DEVELOPER_ROLE` | `system` | Provider role used for direct Chat passthrough developer-message compatibility |
 
 This is a bridge compatibility layer, not OpenAI hosted shell or a Docker/VM
 sandbox. It uses a local workspace, command timeouts, limited environment
@@ -824,6 +838,7 @@ capture, secrets isolation, per-session cleanup, and multi-action loop control.
 | Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; text-only providers such as DeepSeek do not natively understand audio input and do not return audio payloads for the bridge to synthesize | Add optional provider/model adapters for audio-capable Chat or Realtime models and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
+| Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests and filters known unsupported OpenAI-only fields for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |
 
 ## Reference Projects Reviewed
 

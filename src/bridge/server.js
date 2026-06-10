@@ -229,6 +229,8 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
     deepseekDisableThinkingForLocalComputer: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_COMPUTER, true),
     deepseekDisableThinkingForInputFiles: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES, true),
+    chatDeveloperRoleCompat: parseBoolean(process.env.CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT, deepseekProvider),
+    chatDeveloperRole: process.env.CODEXCOMPAT_CHAT_DEVELOPER_ROLE || "system",
     deepseekUserIdCompat: parseBoolean(
       process.env.CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT,
       deepseekProvider,
@@ -3246,21 +3248,22 @@ async function* iterateSseJson(stream) {
 
 async function handleChatPassthrough(req, res, config, store) {
   const body = await readJson(req);
-  const upstreamBody = chatPassthroughUpstreamBody(body, config);
+  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(body, config);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
   if (body.store === true && body.stream && upstream.ok && isEventStreamResponse(upstream)) {
-    await handleStoredChatStreamPassthrough(res, upstream, headers, body, store);
+    await handleStoredChatStreamPassthrough(res, upstream, headers, body, store, compatibility);
     return;
   }
 
   const needsJsonPostProcessing = !body.stream
     && isJsonResponse(upstream)
-    && (body.store === true || inlineModerationConfig(body.moderation).enabled);
+    && (body.store === true || inlineModerationConfig(body.moderation).enabled || compatibility);
   if (needsJsonPostProcessing) {
     const text = await upstream.text();
     const json = parseJsonOrNull(text);
     const localModeration = upstream.ok ? attachLocalChatInlineModeration(json, body, config) : null;
+    const attachedCompatibility = upstream.ok ? attachChatPassthroughCompatibility(json, body, compatibility) : false;
     if (upstream.ok && json?.id) {
       store.put(json.id, {
         chat_completion: json,
@@ -3268,7 +3271,7 @@ async function handleChatPassthrough(req, res, config, store) {
         chat_request: sanitizeChatRequest(body),
       });
     }
-    if (localModeration && isPlainObject(json)) {
+    if ((localModeration || attachedCompatibility) && isPlainObject(json)) {
       res.writeHead(upstream.status, headers);
       res.end(`${JSON.stringify(json)}\n`);
       return;
@@ -3286,14 +3289,154 @@ async function handleChatPassthrough(req, res, config, store) {
 }
 
 function chatPassthroughUpstreamBody(body, config) {
-  if (!isPlainObject(body)) return body;
-  if (body.moderation === undefined || config.forwardChatNativeFields !== false) return body;
+  if (!isPlainObject(body)) return { upstreamBody: body, compatibility: null };
   const upstreamBody = clone(body);
-  delete upstreamBody.moderation;
-  return upstreamBody;
+
+  const compatibility = {};
+  const developerRole = normalizeChatPassthroughDeveloperRole(upstreamBody, config);
+  if (developerRole) compatibility.developer_role = developerRole;
+
+  const deepseekUserId = normalizeChatPassthroughDeepSeekUserId(upstreamBody, config);
+  if (deepseekUserId) compatibility.deepseek_user_id = deepseekUserId;
+
+  const serviceTier = filterChatPassthroughServiceTier(upstreamBody, config);
+  if (serviceTier) compatibility.service_tier = serviceTier;
+
+  const streamOptions = filterChatPassthroughStreamOptions(upstreamBody, config);
+  if (streamOptions) compatibility.stream_options = streamOptions;
+
+  const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config);
+  if (nativeFields) compatibility.chat_native_fields = nativeFields;
+
+  return {
+    upstreamBody,
+    compatibility: Object.keys(compatibility).length ? compatibility : null,
+  };
 }
 
-async function handleStoredChatStreamPassthrough(res, upstream, headers, request, store) {
+function normalizeChatPassthroughDeveloperRole(upstreamBody, config = {}) {
+  if (!config.chatDeveloperRoleCompat || !Array.isArray(upstreamBody.messages)) return null;
+  const targetRole = normalizeProviderChatRole(config.chatDeveloperRole || "system");
+  let mapped = 0;
+  upstreamBody.messages = upstreamBody.messages.map((message) => {
+    if (!isPlainObject(message) || message.role !== "developer") return message;
+    mapped += 1;
+    return { ...message, role: targetRole };
+  });
+  if (!mapped) return null;
+  return {
+    source: "messages[].role",
+    from: "developer",
+    to: targetRole,
+    count: mapped,
+    reason: "provider_developer_role_compat",
+  };
+}
+
+function normalizeProviderChatRole(value) {
+  return ["system", "user", "assistant", "tool"].includes(value) ? value : "system";
+}
+
+function normalizeChatPassthroughDeepSeekUserId(upstreamBody, config = {}) {
+  if (!config.deepseekUserIdCompat || upstreamBody.user_id != null) return null;
+  const candidates = [
+    ["safety_identifier", upstreamBody.safety_identifier],
+    ["prompt_cache_key", upstreamBody.prompt_cache_key],
+    ["user", upstreamBody.user],
+  ];
+  const found = candidates.find(([, value]) => value != null && value !== "");
+  if (!found) return null;
+  const [source, value] = found;
+  upstreamBody.user_id = normalizeProviderUserId(value);
+  delete upstreamBody.user;
+  return {
+    source,
+    target: "user_id",
+    normalized: upstreamBody.user_id === value ? "direct" : "sha256",
+  };
+}
+
+function filterChatPassthroughServiceTier(upstreamBody, config = {}) {
+  if (upstreamBody.service_tier === undefined || config.forwardServiceTier !== false) return null;
+  const value = upstreamBody.service_tier;
+  delete upstreamBody.service_tier;
+  return {
+    source: "service_tier",
+    value,
+    forwarded: false,
+    reason: "provider_unsupported",
+  };
+}
+
+function filterChatPassthroughStreamOptions(upstreamBody, config = {}) {
+  if (upstreamBody.stream_options === undefined) return null;
+  if (!upstreamBody.stream) {
+    delete upstreamBody.stream_options;
+    return {
+      source: "stream_options",
+      forwarded: false,
+      reason: "stream_required",
+    };
+  }
+  if (config.forwardStreamOptions !== false) return null;
+  delete upstreamBody.stream_options;
+  return {
+    source: "stream_options",
+    forwarded: false,
+    reason: "provider_unsupported",
+  };
+}
+
+function filterChatPassthroughNativeFields(upstreamBody, config = {}) {
+  if (config.forwardChatNativeFields !== false) return null;
+  const filterable = [
+    "logit_bias",
+    "modalities",
+    "audio",
+    "prediction",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "moderation",
+    "verbosity",
+    "web_search_options",
+    "functions",
+    "function_call",
+  ];
+  const filtered = [];
+  for (const field of filterable) {
+    if (Object.prototype.hasOwnProperty.call(upstreamBody, field) && upstreamBody[field] !== undefined) {
+      filtered.push(field);
+      delete upstreamBody[field];
+    }
+  }
+  if (!filtered.length) return null;
+  return {
+    filtered,
+    reason: "provider_unsupported",
+  };
+}
+
+function attachChatPassthroughCompatibility(completion, request, compatibility) {
+  if (!compatibility || !isPlainObject(completion)) return false;
+  const metadata = isPlainObject(completion.metadata)
+    ? clone(completion.metadata)
+    : isPlainObject(request?.metadata)
+      ? clone(request.metadata)
+      : {};
+  const existingCompatibility = isPlainObject(metadata.compatibility) ? metadata.compatibility : {};
+  metadata.compatibility = {
+    ...existingCompatibility,
+    chat_passthrough: {
+      ...(isPlainObject(existingCompatibility.chat_passthrough) ? existingCompatibility.chat_passthrough : {}),
+      ...clone(compatibility),
+    },
+  };
+  completion.metadata = metadata;
+  return true;
+}
+
+async function handleStoredChatStreamPassthrough(res, upstream, headers, request, store, compatibility = null) {
   const accumulator = createChatStreamAccumulator(request);
   res.writeHead(upstream.status, headers);
 
@@ -3309,6 +3452,7 @@ async function handleStoredChatStreamPassthrough(res, upstream, headers, request
 
     const completion = finalizeChatStreamCompletion(accumulator);
     if (completion?.id) {
+      attachChatPassthroughCompatibility(completion, request, compatibility);
       store.put(completion.id, {
         chat_completion: completion,
         chat_messages: normalizeStoredChatMessages(request.messages, completion),

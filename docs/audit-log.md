@@ -4417,3 +4417,78 @@ Open follow-ups:
     repository checkout is 45 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Direct Chat Developer Role Compatibility
+
+- Re-checked the current OpenAI OpenAPI endpoint list and Chat/Responses specs
+  through the official OpenAI developer docs MCP. The OpenAPI metadata was
+  version `2.3.0`; current Chat examples use `role:"developer"` messages, and
+  Chat Completions still exposes create/list/retrieve/update/delete/messages
+  lifecycle paths.
+- Found a direct Chat passthrough gap:
+  - Responses-to-Chat translation already normalized Responses/developer-style
+    instruction roles for upstream Chat providers;
+  - direct `POST /v1/chat/completions` passthrough still sent OpenAI Chat
+    `messages[].role:"developer"` and OpenAI-only request fields directly to
+    the upstream provider;
+  - DeepSeek-compatible providers expect a narrower Chat role/field surface, so
+    direct SDK calls could fail even though the equivalent Responses request
+    worked.
+- Added provider-aware direct Chat passthrough normalization:
+  - `CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT` defaults to true for DeepSeek
+    providers and maps Chat `developer` messages to
+    `CODEXCOMPAT_CHAT_DEVELOPER_ROLE`, default `system`, before proxying;
+  - DeepSeek user identity compatibility now also applies to direct Chat
+    passthrough, mapping `user`, `safety_identifier`, or `prompt_cache_key` to
+    `user_id` and hashing values that do not match DeepSeek's safe character
+    set;
+  - unsupported `service_tier`, non-streaming `stream_options`, and configured
+    OpenAI-only Chat fields such as `modalities`, `moderation`, `prediction`,
+    `verbosity`, `web_search_options`, and legacy `functions` /
+    `function_call` are filtered before the upstream call;
+  - non-streaming JSON Chat responses and locally reconstructed stored streaming
+    Chat completions record the compatibility action under
+    `metadata.compatibility.chat_passthrough`;
+  - stored Chat `/messages` retrieval continues to preserve the original client
+    request messages, including `role:"developer"`, so audit/replay state is not
+    silently rewritten.
+- Added unit coverage for direct Chat passthrough against a mock provider:
+  upstream sees `developer` mapped to `system`, unsupported fields filtered,
+  `user` normalized to hashed `user_id`, returned metadata records
+  `chat_passthrough`, local inline moderation still works when `moderation` is
+  filtered, retrieve preserves metadata, and `/messages` preserves the original
+  developer input message.
+- Added a live `chat-developer-compat` bridge-regression case that sends direct
+  Chat `developer` role input plus DeepSeek-filtered Chat fields through
+  `/v1/chat/completions` and requires both exact output and compatibility
+  metadata.
+- Updated compatibility, deployment, and evaluation docs for the new direct
+  Chat provider-profile behavior and environment knobs.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 86/86 passing tests.
+  - `npm test`: 123/123 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-developer-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1156 ms, total usage 31 tokens, visible text
+    `chat-developer-ok`, and compatibility metadata checks passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 998 ms, P95 latency 1064 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 46/46 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1108 ms, P95 latency 2306 ms, and total usage
+    9365 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8k42j3`, reload persistence
+    confirmed, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T21-04-22-479Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 458 runtime candidates,
+    selected 39 old UI screenshots by retention policy, deleted 0, selected
+    3009969 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 40 GB available; repository checkout
+    is 34 MB, `state/` is 4.0 MB, and `output/` is 7.2 MB.
+  - No API keys, account credentials, or local secret files were committed.

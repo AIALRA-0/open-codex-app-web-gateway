@@ -134,6 +134,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload size |
 | `CODEXCOMPAT_SKILL_MAX_FILE_COUNT` | `500` | Maximum files accepted in a local skill bundle |
+| `CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT` | `true` for DeepSeek providers | Maps direct Chat passthrough `role:"developer"` messages to `CODEXCOMPAT_CHAT_DEVELOPER_ROLE` before upstream proxying |
+| `CODEXCOMPAT_CHAT_DEVELOPER_ROLE` | `system` | Provider role used for direct Chat passthrough developer-message compatibility |
 
 ## Systemd
 

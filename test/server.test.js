@@ -5987,6 +5987,84 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
   });
 });
 
+test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compatible providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [
+      { role: "system", content: "Use terse answers." },
+      { role: "user", content: "Return chat-developer-ok." },
+    ]);
+    assert.equal(call.body.user, undefined);
+    assert.match(call.body.user_id, /^sha256_[a-f0-9]{64}$/);
+    assert.equal(call.body.service_tier, undefined);
+    assert.equal(call.body.modalities, undefined);
+    assert.equal(call.body.moderation, undefined);
+    assert.equal(call.body.stream_options, undefined);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_developer_compat",
+      object: "chat.completion",
+      created: 1700000410,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-developer-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 3, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-developer-compat" },
+        messages: [
+          { role: "developer", content: "Use terse answers." },
+          { role: "user", content: "Return chat-developer-ok." },
+        ],
+        user: "developer-user@example.com",
+        service_tier: "flex",
+        modalities: ["text"],
+        moderation: { input: true },
+        stream_options: { include_usage: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-developer-ok");
+    assert.equal(json.metadata.suite, "chat-developer-compat");
+    assert.equal(json.metadata.compatibility.chat_passthrough.developer_role.count, 1);
+    assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.source, "user");
+    assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.normalized, "sha256");
+    assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
+    assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
+    assert.deepEqual(
+      json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
+      ["modalities", "moderation"].sort(),
+    );
+    assert.equal(json.moderation.input.results[0].flagged, false);
+
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.developer_role.to, "system");
+
+    const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.equal(messagesJson.data[0].role, "developer");
+    assert.equal(messagesJson.data[0].direction, "input");
+  }, {
+    chatDeveloperRoleCompat: true,
+    deepseekUserIdCompat: true,
+    forwardChatNativeFields: false,
+    forwardServiceTier: false,
+  });
+});
+
 test("POST /v1/chat/completions attaches local inline moderation when provider field is filtered", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.moderation, undefined);

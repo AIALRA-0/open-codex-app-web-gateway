@@ -522,6 +522,33 @@ function buildSuites(defaultModel) {
         check: ({ text }) => /chat-ok/i.test(text),
       },
       {
+        id: "chat-developer-compat",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          metadata: { suite: "chat-developer-compat" },
+          messages: [
+            { role: "developer", content: "You must answer with the exact requested marker and no prose." },
+            { role: "user", content: "Return the exact string chat-developer-ok." },
+          ],
+          user: "developer-compat@example.com",
+          service_tier: "flex",
+          modalities: ["text"],
+          moderation: { input: true },
+          stream_options: { include_usage: true },
+          thinking: { type: "disabled" },
+          max_tokens: 64,
+        },
+        check: ({ json, text }) => /chat-developer-ok/i.test(text)
+          && json.metadata?.compatibility?.chat_passthrough?.developer_role?.count === 1
+          && json.metadata?.compatibility?.chat_passthrough?.deepseek_user_id?.source === "user"
+          && json.metadata?.compatibility?.chat_passthrough?.service_tier?.forwarded === false
+          && json.metadata?.compatibility?.chat_passthrough?.stream_options?.reason === "stream_required"
+          && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("modalities")
+          && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("moderation")
+          && json.moderation?.input?.results?.[0]?.flagged === false,
+      },
+      {
         id: "completions-legacy",
         mode: "completions",
         request: {
