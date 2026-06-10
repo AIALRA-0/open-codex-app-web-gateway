@@ -496,7 +496,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
   attachWebSearchOutput(response, localWebSearch);
-  attachFileSearchOutput(response, localFileSearch);
+  attachFileSearchOutput(response, localFileSearch, { includeResults: true });
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
   response.metadata = {
@@ -835,7 +835,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
     ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
     ...webSearchOutputItems(contexts.web_search),
-    ...fileSearchOutputItems(contexts.file_search),
+    ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
   ];
 }
 
@@ -913,6 +913,7 @@ function prependLocalOutputItems(response, items = []) {
 function responseWithFullLocalOutputs(response, contexts = {}) {
   const full = clone(response);
   if (contexts.localShell) mergeFullShellOutputs(full, contexts.localShell);
+  if (contexts.localFileSearch) mergeFullFileSearchOutputs(full, contexts.localFileSearch);
   return full;
 }
 
@@ -926,6 +927,20 @@ function mergeFullShellOutputs(response, localShell) {
   response.output = response.output.map((item) => {
     if (item?.type !== "code_interpreter_call" || !item.id) return item;
     return fullCodeCalls.get(item.id) || item;
+  });
+  return response;
+}
+
+function mergeFullFileSearchOutputs(response, localFileSearch) {
+  if (!Array.isArray(response?.output)) return response;
+  const fullFileSearchItems = fileSearchOutputItems(localFileSearch, { includeResults: true });
+  const fullFileSearchCalls = new Map(fullFileSearchItems
+    .filter((item) => item?.type === "file_search_call" && item.id)
+    .map((item) => [item.id, item]));
+  if (!fullFileSearchCalls.size) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "file_search_call" || !item.id) return item;
+    return fullFileSearchCalls.get(item.id) || item;
   });
   return response;
 }
@@ -2636,7 +2651,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     writeSse(res, terminalEvent, sequence(state, { type: terminalEvent, response: clone(response) }));
 
     if (request.store !== false) {
-      const storedResponse = responseWithFullLocalOutputs(response, { localShell });
+      const storedResponse = responseWithFullLocalOutputs(response, { localShell, localFileSearch });
       store.put(response.id, {
         response: storedResponse,
         input_items: normalizeStoredInputItems(request.input),
@@ -5376,6 +5391,9 @@ function projectResponseForIncludeSet(response, includes = new Set()) {
   if (!includes.has("code_interpreter_call.outputs")) {
     projected = redactCodeInterpreterCallOutputs(projected);
   }
+  if (!includes.has("file_search_call.results")) {
+    projected = redactFileSearchCallResults(projected);
+  }
   return projected;
 }
 
@@ -5385,6 +5403,17 @@ function redactCodeInterpreterCallOutputs(response) {
     if (item?.type !== "code_interpreter_call") return item;
     const cloned = { ...item };
     delete cloned.outputs;
+    return cloned;
+  });
+  return response;
+}
+
+function redactFileSearchCallResults(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "file_search_call") return item;
+    const cloned = { ...item };
+    delete cloned.results;
     return cloned;
   });
   return response;

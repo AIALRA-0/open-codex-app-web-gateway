@@ -626,7 +626,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store, option
         queries: page?.search_queries || toolQueries,
         vector_store_ids: [vectorStoreId],
         ...(page?.ranking_options ? { ranking_options: page.ranking_options } : {}),
-        ...(includeResults ? { results } : {}),
+        results,
       });
     }
   }
@@ -640,7 +640,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store, option
         queries,
         vector_store_ids: [],
         ranking_options: normalizeRankingOptions(null),
-        ...(includeResults ? { results: [] } : {}),
+        results: [],
       });
     }
   }
@@ -654,6 +654,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store, option
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     calls,
     skipped_calls: skippedCalls,
+    include_results: includeResults,
     results: allResults.slice(0, config.fileSearchMaxResults || 5),
     ranking_options: calls.find((call) => call.ranking_options)?.ranking_options || normalizeRankingOptions(null),
   };
@@ -667,10 +668,10 @@ function injectFileSearchMessages(chat, context) {
   });
 }
 
-function attachFileSearchOutput(response, context) {
+function attachFileSearchOutput(response, context, options = {}) {
   if (!context) return response;
   response.output = [
-    ...fileSearchOutputItems(context),
+    ...fileSearchOutputItems(context, options),
     ...(response.output || []),
   ];
   annotateFileSearchResponse(response, context);
@@ -691,7 +692,8 @@ function annotateFileSearchResponse(response, context) {
   return response;
 }
 
-function fileSearchOutputItems(context) {
+function fileSearchOutputItems(context, options = {}) {
+  const includeResults = options.includeResults ?? !!context?.include_results;
   return (context?.calls || []).map((call) => ({
     id: call.id,
     type: "file_search_call",
@@ -699,7 +701,7 @@ function fileSearchOutputItems(context) {
     queries: call.queries || [context.query || ""],
     ...(call.vector_store_ids ? { vector_store_ids: call.vector_store_ids } : {}),
     ...(call.ranking_options ? { ranking_options: call.ranking_options } : {}),
-    ...(call.results ? { results: call.results } : {}),
+    ...(includeResults ? { results: cloneJson(call.results || []) } : {}),
   }));
 }
 

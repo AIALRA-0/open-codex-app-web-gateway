@@ -1214,10 +1214,13 @@ function buildSuites(defaultModel) {
           }],
           include: ["file_search_call.results"],
           max_output_tokens: 128,
-          store: false,
+          store: true,
         }),
-        check: ({ json, text, fileId, vectorStoreId }) => {
+        retrieveResponseInclude: "file_search_call.results",
+        check: ({ json, text, fileId, vectorStoreId, hiddenResponse, includedResponse }) => {
           const call = (json.output || []).find((item) => item.type === "file_search_call");
+          const hiddenCall = (hiddenResponse?.output || []).find((item) => item.type === "file_search_call");
+          const includedCall = (includedResponse?.output || []).find((item) => item.type === "file_search_call");
           const annotations = (json.output || [])
             .flatMap((item) => item.content || [])
             .flatMap((part) => part.annotations || []);
@@ -1228,6 +1231,8 @@ function buildSuites(defaultModel) {
             && call.queries?.includes("file-search-extra-ok")
             && call.ranking_options?.score_threshold === 0.8
             && call.results?.some((result) => result.file_id === fileId && result.matched_queries?.includes("file-search-extra-ok"))
+            && hiddenCall?.results === undefined
+            && includedCall?.results?.some((result) => result.file_id === fileId && result.matched_queries?.includes("file-search-extra-ok"))
             && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === fileId)
             && /file-search-ok/i.test(text);
         },
@@ -2114,6 +2119,7 @@ async function runFileSearchCase(testCase, context, started) {
   let file = null;
   let vectorStore = null;
   let fileBatch = null;
+  let responseId = null;
   try {
     const fileResponse = await postJson(`${baseUrl}/v1/files`, testCase.file);
     const fileBody = await fileResponse.text();
@@ -2176,18 +2182,39 @@ async function runFileSearchCase(testCase, context, started) {
     }
 
     const json = JSON.parse(body);
+    responseId = request.store !== false ? json.id || null : null;
+    let hiddenResponse = { ok: false, status: 0, json: null };
+    let includedResponse = { ok: false, status: 0, json: null };
+    if (testCase.retrieveResponseInclude && json.id) {
+      hiddenResponse = await getJson(`${baseUrl}/v1/responses/${json.id}`);
+      const include = encodeURIComponent(testCase.retrieveResponseInclude);
+      includedResponse = await getJson(`${baseUrl}/v1/responses/${json.id}?include[]=${include}`);
+    }
     const text = responseOutputText(json);
-    const ok = !!testCase.check({ json, text, fileId: file.id, vectorStoreId: vectorStore.id, fileBatch });
+    const ok = !!testCase.check({
+      json,
+      text,
+      fileId: file.id,
+      vectorStoreId: vectorStore.id,
+      fileBatch,
+      hiddenResponse: hiddenResponse.json,
+      includedResponse: includedResponse.json,
+    });
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
       file_id: file.id,
       vector_store_id: vectorStore.id,
       ...(fileBatch?.id ? { file_batch_id: fileBatch.id, file_batch_status: fileBatch.status } : {}),
+      ...(testCase.retrieveResponseInclude ? {
+        hidden_response_status: hiddenResponse.status,
+        included_response_status: includedResponse.status,
+      } : {}),
       usage: responseUsage(json),
       output_text: truncate(text),
     });
   } finally {
+    if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
     if (vectorStore?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
     if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
   }

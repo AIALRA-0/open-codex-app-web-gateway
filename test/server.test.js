@@ -2720,6 +2720,38 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(genericJson.output[0].queries[0], "file-search-ok");
     assert.equal(genericJson.output[0].results[0].file_id, file.id);
 
+    const storedWithoutInclude = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Using the file search result, return exactly this text and nothing else: file-search-ok [1]",
+        tools: [{
+          type: "file_search",
+          vector_store_ids: [vectorStore.id],
+          max_num_results: 3,
+          filters: { type: "eq", key: "suite", value: "server-test" },
+        }],
+        store: true,
+      }),
+    });
+    assert.equal(storedWithoutInclude.status, 200);
+    const storedWithoutIncludeJson = await storedWithoutInclude.json();
+    assert.equal(storedWithoutIncludeJson.output[0].type, "file_search_call");
+    assert.equal(storedWithoutIncludeJson.output[0].results, undefined);
+
+    const hiddenStoredResponse = await fetch(`${baseUrl}/v1/responses/${storedWithoutIncludeJson.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].type, "file_search_call");
+    assert.equal(hiddenStoredJson.output[0].results, undefined);
+
+    const includedStoredResponse = await fetch(`${baseUrl}/v1/responses/${storedWithoutIncludeJson.id}?include=file_search_call.results`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].type, "file_search_call");
+    assert.equal(includedStoredJson.output[0].results[0].file_id, file.id);
+
     const listed = await fetch(`${baseUrl}/v1/files?purpose=assistants`);
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, file.id);

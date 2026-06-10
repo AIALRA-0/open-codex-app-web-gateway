@@ -4040,6 +4040,63 @@ Open follow-ups:
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
 
+## 2026-06-10 File Search Results Stored-Response Projection
+
+- Re-checked the current OpenAI Responses reference through the official OpenAI
+  developer docs MCP. The supported `include` values list includes
+  `file_search_call.results`, defined as exposing search results from the file
+  search tool call.
+- Extended the local file-search adapter from create-time result inclusion to
+  stored-response projection:
+  - local file-search result arrays are kept internally on the response output
+    item for `store:true` responses;
+  - create responses hide `file_search_call.results` unless the request includes
+    `include:["file_search_call.results"]`;
+  - `GET /v1/responses/{response_id}` hides file-search results by default;
+  - `GET /v1/responses/{response_id}?include[]=file_search_call.results`
+    returns the stored result details.
+- Kept final text citation annotations unchanged: `file_citation` annotations
+  remain visible on generated output text, while the detailed result array is
+  controlled by the include projection.
+- Preserved streaming terminal response behavior for clients while storing a
+  full internal response after completion so later retrieve calls can project
+  file-search results with the include query.
+- Updated the live `responses-file-search` regression case to create a stored
+  response, verify immediate include output, verify default retrieve redaction,
+  verify include retrieve recovery, and delete the stored response after the
+  case to control runtime state growth.
+- Updated compatibility and evaluation docs to record the stored-response
+  projection behavior.
+- Verification:
+  - `node --check src/bridge/server.js src/bridge/local_file_search.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-file-search` passed 1/1 against
+    `deepseek-v4-pro`, latency 1329 ms, total usage 222 tokens, visible text
+    `file-search-ok [1]`, and both hidden/included stored-response retrieves
+    returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1153 ms, P95 latency 1219 ms, and total usage 158 tokens.
+  - Full live `bridge-regression` passed 44/44 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1428 ms, P95 latency 3118 ms, and total usage
+    9476 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8i1yvb`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 408 runtime candidates,
+    selected 34 old UI screenshots by retention policy, deleted 0, selected
+    2579476 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
+    repository checkout is 43 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.
+
 ## 2026-06-10 Code Interpreter Outputs Stored-Response Projection
 
 - Re-checked the current OpenAI Responses reference through the official OpenAI
