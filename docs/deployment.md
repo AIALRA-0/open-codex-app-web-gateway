@@ -86,6 +86,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_FORWARD_SERVICE_TIER` | auto: `false` for DeepSeek, `true` otherwise | Forwards Responses/OpenAI `service_tier` to upstream Chat providers that support it; filtered requests are recorded in compatibility metadata |
 | `CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS` | auto: `false` for DeepSeek, `true` otherwise | Forwards Chat-native request fields such as `logit_bias`, `modalities`, `prediction`, `n`, `parallel_tool_calls`, prompt-cache hints, `web_search_options`, and legacy `functions/function_call`; filtered requests are recorded in compatibility metadata |
 | `CODEXCOMPAT_FORWARD_STREAM_OPTIONS` | `true` | Forwards Chat-native `stream_options` when a Responses request uses `stream:true` |
+| `CODEXCOMPAT_STREAM_OPTION_FIELDS` | auto: `include_usage` for DeepSeek, unrestricted otherwise | Optional comma-separated allowlist for forwarded `stream_options` subfields. Use `*` or `all` to forward every subfield, or `none` to filter all subfields |
 | `CODEXCOMPAT_STREAM_INCLUDE_USAGE` | `true` | Adds `stream_options.include_usage=true` to streaming upstream Chat requests unless the caller sets it explicitly |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
 | `CODEXCOMPAT_PROMPT_TEMPLATES` | empty | Optional JSON object of local Responses prompt templates keyed by prompt id or `id@version`; supports `instructions`, `messages`, `input`, `content`, and `{{variable}}` substitution. Keep private templates out of Git |

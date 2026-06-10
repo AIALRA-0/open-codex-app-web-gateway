@@ -4873,3 +4873,89 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 14 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 Stream Options Provider Filtering
+
+- Re-checked current streaming request-field expectations:
+  - OpenAI Chat Completions documents `stream_options` as a streaming-only
+    request parameter and includes newer subfields such as usage and
+    obfuscation controls.
+  - DeepSeek's official Create Chat Completion reference documents
+    `stream_options` for `/chat/completions`, but the supported surface is
+    narrower; in practice the safe common subfield is `include_usage`.
+- Found a provider-profile gap:
+  - Responses-to-Chat translation copied all caller `stream_options` subfields
+    when `stream:true`;
+  - direct Chat passthrough only filtered the whole field for non-streaming
+    calls, so OpenAI-only subfields could still reach DeepSeek during streams;
+  - legacy `/v1/completions` streaming also copied caller `stream_options`
+    before adding bridge usage chunks.
+- Added provider-aware `stream_options` subfield filtering:
+  - introduced reusable `filterStreamOptionsForProvider`;
+  - added `CODEXCOMPAT_STREAM_OPTION_FIELDS`, defaulting to `include_usage` for
+    DeepSeek providers and unrestricted for other OpenAI-compatible providers;
+  - supports `*` / `all` for unrestricted forwarding and `none` for filtering
+    all subfields;
+  - applied the filter to Responses translation, direct Chat passthrough, and
+    legacy Completions streaming;
+  - records filtered subfields with
+    `metadata.compatibility.stream_options.reason=provider_stream_option_filter`
+    or `metadata.compatibility.chat_passthrough.stream_options.reason=provider_stream_option_filter`.
+- Hardened live regression stability:
+  - `responses-inline-moderation` and `responses-prompt-template-local` are
+    exact-marker protocol tests, not reasoning-quality tests, so the harness now
+    sends `reasoning:{effort:"none"}` for those two cases to avoid DeepSeek
+    returning hidden reasoning without visible text.
+  - Targeted reruns for both cases passed after the adjustment.
+- Added regression coverage:
+  - translator tests cover unrestricted caller subfields and DeepSeek-style
+    allowlist filtering;
+  - server tests cover Responses streaming filtering, direct Chat streaming
+    stored-completion filtering, legacy Completions streaming filtering, and
+    DeepSeek default config behavior;
+  - live eval harness checks `include_obfuscation` is filtered while
+    `include_usage` remains available for Responses SSE and direct Chat stream
+    lifecycle cases.
+- Verification:
+  - `node --check src/bridge/translator.js`, `node --check src/bridge/server.js`,
+    `node --check scripts/eval-harness.mjs`, and `git diff --check`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "stream options"`:
+    34/34 passing tests.
+  - `node --test test/server.test.js --test-name-pattern "stream_options|streams Chat chunks|completions streams|streams and stores reconstructed|loadConfig filters"`:
+    90/90 passing tests.
+  - `npm test`: 127/127 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-stream-events` passed 1/1 against
+    `deepseek-v4-pro`, latency 1324 ms, total usage 50 tokens, visible text
+    `stream-ok`, and stream-option subfield filter metadata checks passed.
+  - Targeted live `chat-stream-lifecycle` passed 1/1 against
+    `deepseek-v4-pro`, latency 1143 ms, total usage 19 tokens, visible text
+    `chat-stream-life-ok`, stored Chat lifecycle checks passed, and direct Chat
+    stream-option subfield filter metadata checks passed.
+  - Targeted live `responses-inline-moderation` passed 1/1 after non-thinking
+    marker hardening, latency 1156 ms, total usage 19 tokens, visible text
+    `inline-moderation-ok`.
+  - Targeted live `responses-prompt-template-local` passed 1/1 after
+    non-thinking marker hardening, latency 806 ms, total usage 27 tokens,
+    visible text `prompt-template-ok`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 770 ms, P95 latency 828 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 47/47 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1050 ms, P95 latency 2029 ms, and total usage
+    9594 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8moyd4`, sidebar controls, new
+    conversation submit, reload persistence, console errors 0, warnings 0, and
+    screenshot `output/playwright/ui-smoke-2026-06-10T22-16-36-088Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 541 runtime candidates,
+    selected 47 old UI screenshots by retention policy, deleted 0, selected
+    3702996 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 41 GB available; repository checkout
+    is 48 MB, `state/` is 4.8 MB, `output/` is 7.9 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 15 MB.
+  - No API keys, account credentials, or local secret files were committed.

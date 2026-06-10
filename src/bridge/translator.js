@@ -829,7 +829,63 @@ function mapStreamOptions(request, chat, options = {}) {
     }
   }
 
+  const filtered = filterStreamOptionsForProvider(chat.stream_options, options);
+  if (filtered.compatibility) {
+    if (filtered.streamOptions === undefined) delete chat.stream_options;
+    else chat.stream_options = filtered.streamOptions;
+    return {
+      ...filtered.compatibility,
+      ...(compatibility ? { include_usage: compatibility } : {}),
+    };
+  }
+
   return compatibility;
+}
+
+function filterStreamOptionsForProvider(streamOptions, options = {}) {
+  const allowed = normalizeStreamOptionFields(options.streamOptionFields);
+  if (!allowed || !isPlainObject(streamOptions)) {
+    return {
+      streamOptions: isPlainObject(streamOptions) ? clone(streamOptions) : streamOptions,
+      compatibility: null,
+    };
+  }
+
+  const filtered = [];
+  const forwarded = [];
+  const next = {};
+  for (const [key, value] of Object.entries(streamOptions)) {
+    if (allowed.has(key)) {
+      next[key] = value === undefined ? undefined : clone(value);
+      forwarded.push(key);
+    } else {
+      filtered.push(key);
+    }
+  }
+
+  return {
+    streamOptions: Object.keys(next).length ? next : undefined,
+    compatibility: filtered.length
+      ? {
+        source: "stream_options",
+        ...(forwarded.length ? { forwarded } : {}),
+        filtered,
+        reason: "provider_stream_option_filter",
+      }
+      : null,
+  };
+}
+
+function normalizeStreamOptionFields(value) {
+  if (value == null || value === "*" || value === "all") return null;
+  const fields = Array.isArray(value)
+    ? value
+    : String(value).split(",");
+  const normalized = fields
+    .map((field) => String(field || "").trim())
+    .filter((field) => field && field !== "*" && field !== "all");
+  if (normalized.some((field) => field.toLowerCase() === "none")) return new Set();
+  return new Set(normalized);
 }
 
 function mapServiceTier(request, chat, options = {}) {
@@ -1288,6 +1344,7 @@ module.exports = {
   chatCompletionToResponse,
   chatUsageCompatibilityMetadata,
   createResponseSkeleton,
+  filterStreamOptionsForProvider,
   inputItemToChatMessages,
   mapResponsesTools,
   mapTextFormat,

@@ -473,10 +473,24 @@ test("preserves caller stream options and filters them outside streaming", () =>
     model: "mock-model",
     input: "Stream without bridge-added usage.",
     stream: true,
-    stream_options: { include_usage: false },
+    stream_options: { include_usage: false, include_obfuscation: false },
   });
-  assert.deepEqual(streaming.chat.stream_options, { include_usage: false });
+  assert.deepEqual(streaming.chat.stream_options, { include_usage: false, include_obfuscation: false });
   assert.equal(streaming.compatibility.stream_options, undefined);
+
+  const providerFiltered = responsesToChatRequest({
+    model: "mock-model",
+    input: "Stream with provider-limited options.",
+    stream: true,
+    stream_options: { include_usage: false, include_obfuscation: false },
+  }, [], { streamOptionFields: ["include_usage"] });
+  assert.deepEqual(providerFiltered.chat.stream_options, { include_usage: false });
+  assert.deepEqual(providerFiltered.compatibility.stream_options, {
+    source: "stream_options",
+    forwarded: ["include_usage"],
+    filtered: ["include_obfuscation"],
+    reason: "provider_stream_option_filter",
+  });
 
   const nonStreaming = responsesToChatRequest({
     model: "mock-model",

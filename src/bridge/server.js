@@ -59,6 +59,7 @@ const {
   chatCompletionToResponse,
   chatUsageCompatibilityMetadata,
   createResponseSkeleton,
+  filterStreamOptionsForProvider,
   mapUsage,
   normalizeChatAudioPart,
   normalizeOutputTextLogprobs,
@@ -126,6 +127,18 @@ function numberFromEnv(name, fallback, min, max) {
   const value = Number(process.env[name]);
   if (!Number.isFinite(value)) return fallback;
   return Math.max(min, Math.min(max, Math.trunc(value)));
+}
+
+function streamOptionFieldsFromEnv(fallback) {
+  const value = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
+  if (value == null || value === "") return fallback;
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "*" || normalized === "all") return null;
+  if (normalized === "none") return [];
+  return String(value)
+    .split(",")
+    .map((field) => field.trim())
+    .filter(Boolean);
 }
 
 function loadConfig(overrides = {}) {
@@ -240,6 +253,7 @@ function loadConfig(overrides = {}) {
     forwardServiceTier: parseBoolean(process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER, !deepseekProvider),
     forwardChatNativeFields: parseBoolean(process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS, !deepseekProvider),
     forwardStreamOptions: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STREAM_OPTIONS, true),
+    streamOptionFields: streamOptionFieldsFromEnv(deepseekProvider ? ["include_usage"] : null),
     streamIncludeUsage: parseBoolean(process.env.CODEXCOMPAT_STREAM_INCLUDE_USAGE, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
@@ -3519,7 +3533,13 @@ function filterChatPassthroughStreamOptions(upstreamBody, config = {}) {
       reason: "stream_required",
     };
   }
-  if (config.forwardStreamOptions !== false) return null;
+  if (config.forwardStreamOptions !== false) {
+    const filtered = filterStreamOptionsForProvider(upstreamBody.stream_options, config);
+    if (!filtered.compatibility) return null;
+    if (filtered.streamOptions === undefined) delete upstreamBody.stream_options;
+    else upstreamBody.stream_options = filtered.streamOptions;
+    return filtered.compatibility;
+  }
   delete upstreamBody.stream_options;
   return {
     source: "stream_options",
@@ -3797,6 +3817,11 @@ function legacyCompletionToChatRequest(request, prompt, config) {
       if (config.streamIncludeUsage !== false) {
         if (!isPlainObject(chat.stream_options)) chat.stream_options = {};
         if (chat.stream_options.include_usage === undefined) chat.stream_options.include_usage = true;
+      }
+      const filtered = filterStreamOptionsForProvider(chat.stream_options, config);
+      if (filtered.compatibility) {
+        if (filtered.streamOptions === undefined) delete chat.stream_options;
+        else chat.stream_options = filtered.streamOptions;
       }
     }
   }

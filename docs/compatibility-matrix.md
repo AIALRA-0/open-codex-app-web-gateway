@@ -91,7 +91,7 @@ implementations for those tools.
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
 | `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
 | `moderation` | same-name Chat field plus local inline moderation fallback | Provider-aware Chat-native passthrough when supported; when the field is filtered or the upstream Chat provider returns no moderation payload, the bridge attaches local `input`/`output` moderation results to `response.moderation` and records `metadata.compatibility.local_moderation` |
-| `stream_options` with `stream:true` | `stream_options` | Direct; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage |
+| `stream_options` with `stream:true` | `stream_options` | Provider-aware subfield passthrough; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage. DeepSeek defaults to forwarding only `include_usage` and records filtered subfields with `metadata.compatibility.stream_options.reason=provider_stream_option_filter` |
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | Chat `logprobs:true` plus local output projection | Emulated through Chat providers that support token log probabilities. Output-text `logprobs` are hidden by default and returned when this include value is requested on create or on `GET /v1/responses/{id}` |
@@ -194,7 +194,7 @@ Chat responses back to `object:"text_completion"` completion objects.
 | `logit_bias` | same-name Chat field when Chat-native passthrough is enabled | Provider-dependent |
 | `user` | OpenAI-compatible `user`, or DeepSeek-compatible normalized `user_id` when `CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT=true` | Provider-aware |
 | `stream:true` | upstream Chat stream transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]` | Implemented |
-| `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks | Provider-dependent |
+| `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks and applies provider-aware subfield filtering | Provider-dependent; DeepSeek defaults to `include_usage` only |
 | `echo:true` | the bridge prefixes the original prompt to returned completion text, including the first stream chunk for each choice | Emulated locally |
 | `suffix` | added as suffix context in the Chat prompt because Chat Completions has no insertion-suffix primitive | Best-effort local compatibility |
 | `best_of` | accepted but not forwarded; Chat Completions has no equivalent server-side generation/ranking primitive | Not losslessly representable |
@@ -240,8 +240,10 @@ conflicting legacy `max_tokens` values are withheld and audited, OpenAI Chat
 `reasoning_effort` values are mapped to DeepSeek `reasoning_effort` /
 `thinking`, `store` and `metadata` are kept as local stored-completion
 semantics and filtered for DeepSeek upstream calls, `service_tier` is filtered
-when unsupported, `stream_options` are removed on non-streaming requests, and
-configured OpenAI-only Chat fields such as `modalities`, `moderation`,
+when unsupported, `stream_options` are removed on non-streaming requests,
+provider-unsupported streaming subfields are filtered by
+`CODEXCOMPAT_STREAM_OPTION_FIELDS`, and configured OpenAI-only Chat fields such
+as `modalities`, `moderation`,
 `prediction`, `parallel_tool_calls`, and legacy `functions` / `function_call`
 are filtered instead of being sent to the provider. Non-streaming JSON
 responses and stored reconstructed streaming responses record these actions under

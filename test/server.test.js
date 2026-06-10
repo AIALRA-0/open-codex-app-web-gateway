@@ -1782,6 +1782,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
         model: "mock-model",
         input: "stream",
         stream: true,
+        stream_options: { include_obfuscation: false },
         include: ["message.output_text.logprobs"],
         top_logprobs: 2,
         service_tier: "priority",
@@ -1833,8 +1834,11 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.equal(completed.metadata.compatibility.chat_audio[0].transcript, "hello");
     assert.equal(completed.metadata.compatibility.chat_usage.prompt_tokens_details.cached_tokens, 1);
     assert.equal(completed.metadata.compatibility.chat_usage.completion_tokens_details.accepted_prediction_tokens, 1);
-    assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
-  });
+    assert.equal(completed.metadata.compatibility.stream_options.reason, "provider_stream_option_filter");
+    assert.deepEqual(completed.metadata.compatibility.stream_options.forwarded, ["include_usage"]);
+    assert.deepEqual(completed.metadata.compatibility.stream_options.filtered, ["include_obfuscation"]);
+    assert.equal(completed.metadata.compatibility.stream_options.include_usage.reason, "enabled_by_bridge");
+  }, { streamOptionFields: ["include_usage"] });
 });
 
 test("POST /v1/responses streams encrypted reasoning content when requested", async () => {
@@ -5936,6 +5940,7 @@ test("POST /v1/completions streams Chat chunks as legacy completion chunks", asy
         model: "mock-model",
         prompt: "stream legacy",
         stream: true,
+        stream_options: { include_obfuscation: false },
         max_tokens: 32,
       }),
     });
@@ -5954,7 +5959,7 @@ test("POST /v1/completions streams Chat chunks as legacy completion chunks", asy
     assert.equal(chunks[1].choices[0].text, "completion-ok");
     assert.equal(chunks[1].choices[0].finish_reason, "stop");
     assert.deepEqual(chunks[1].usage, { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 });
-  });
+  }, { streamOptionFields: ["include_usage"] });
 });
 
 test("POST /v1/chat/completions proxies and stores chat responses when requested", async () => {
@@ -6400,6 +6405,7 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(call.body.store, true);
     assert.equal(call.body.stream, true);
     assert.deepEqual(call.body.metadata, { suite: "chat-stream-list" });
+    assert.deepEqual(call.body.stream_options, { include_usage: true });
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream_store",
@@ -6472,7 +6478,7 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
             parameters: { type: "object", properties: { ok: { type: "boolean" } } },
           },
         }],
-        stream_options: { include_usage: true },
+        stream_options: { include_usage: true, include_obfuscation: false },
       }),
     });
 
@@ -6493,7 +6499,13 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(fetchedJson.model, "mock-stream-model");
     assert.equal(fetchedJson.system_fingerprint, "fp_chat_stream_store");
     assert.equal(fetchedJson.service_tier, "flex");
-    assert.deepEqual(fetchedJson.metadata, { suite: "chat-stream-list" });
+    assert.equal(fetchedJson.metadata.suite, "chat-stream-list");
+    assert.deepEqual(fetchedJson.metadata.compatibility.chat_passthrough.stream_options, {
+      source: "stream_options",
+      forwarded: ["include_usage"],
+      filtered: ["include_obfuscation"],
+      reason: "provider_stream_option_filter",
+    });
     assert.deepEqual(fetchedJson.usage, { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 });
     assert.equal(fetchedJson.choices[0].message.content, "stream-store-ok");
     assert.equal(fetchedJson.choices[0].finish_reason, "stop");
@@ -6520,7 +6532,7 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     const listedJson = await listed.json();
     assert.equal(listedJson.data.length, 1);
     assert.equal(listedJson.data[0].id, "chatcmpl_stream_store");
-  });
+  }, { streamOptionFields: ["include_usage"] });
 });
 
 test("Chat completion retrieval only returns explicitly stored chat completions", async () => {
@@ -6929,19 +6941,32 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousServiceTier = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   const previousStoredChatFields = process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   const previousChatNativeFields = process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
+  const previousStreamOptionFields = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
+  delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
     assert.equal(deepseekConfig.forwardStoredChatFields, false);
     assert.equal(deepseekConfig.forwardChatNativeFields, false);
+    assert.deepEqual(deepseekConfig.streamOptionFields, ["include_usage"]);
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
     assert.equal(openaiCompatibleConfig.forwardStoredChatFields, true);
     assert.equal(openaiCompatibleConfig.forwardChatNativeFields, true);
+    assert.equal(openaiCompatibleConfig.streamOptionFields, null);
+
+    process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields, null);
+
+    process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "include_usage, provider_extra";
+    assert.deepEqual(
+      loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields,
+      ["include_usage", "provider_extra"],
+    );
   } finally {
     if (previousServiceTier === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
     else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previousServiceTier;
@@ -6949,6 +6974,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS = previousStoredChatFields;
     if (previousChatNativeFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
     else process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS = previousChatNativeFields;
+    if (previousStreamOptionFields === undefined) delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
+    else process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = previousStreamOptionFields;
   }
 });
 

@@ -319,6 +319,7 @@ function buildSuites(defaultModel) {
           metadata: { suite: "responses-inline-moderation" },
           moderation: { input: true, output: true },
           parallel_tool_calls: false,
+          reasoning: { effort: "none" },
           max_output_tokens: 64,
           store: false,
         },
@@ -347,6 +348,7 @@ function buildSuites(defaultModel) {
             },
           },
           input: "Follow the reusable prompt template.",
+          reasoning: { effort: "none" },
           max_output_tokens: 128,
           store: false,
         },
@@ -652,7 +654,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           store: true,
           stream: true,
-          stream_options: { include_usage: true },
+          stream_options: { include_usage: true, include_obfuscation: false },
           metadata: { suite: "chat-stream-life-initial" },
           messages: [{ role: "user", content: "Stream the exact string chat-stream-life-ok." }],
           max_tokens: 128,
@@ -663,6 +665,8 @@ function buildSuites(defaultModel) {
           && fetched?.object === "chat.completion"
           && /chat-stream-life-ok/i.test(chatOutputText(fetched))
           && (fetched?.usage?.total_tokens || 0) > 0
+          && fetched?.metadata?.compatibility?.chat_passthrough?.stream_options?.reason === "provider_stream_option_filter"
+          && fetched?.metadata?.compatibility?.chat_passthrough?.stream_options?.filtered?.includes("include_obfuscation")
           && updated?.metadata?.suite === "chat-stream-life-updated"
           && updated?.metadata?.audit === "bridge-regression"
           && updated?.metadata?.completion_id === id
@@ -1509,6 +1513,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           input: "Stream the exact string stream-ok.",
           stream: true,
+          stream_options: { include_obfuscation: false },
           max_output_tokens: 256,
           store: false,
         },
@@ -1518,7 +1523,9 @@ function buildSuites(defaultModel) {
             && types.has("response.created")
             && types.has("response.output_text.delta")
             && types.has("response.completed")
-            && json?.metadata?.compatibility?.stream_options?.reason === "enabled_by_bridge"
+            && json?.metadata?.compatibility?.stream_options?.reason === "provider_stream_option_filter"
+            && json?.metadata?.compatibility?.stream_options?.filtered?.includes("include_obfuscation")
+            && json?.metadata?.compatibility?.stream_options?.include_usage?.reason === "enabled_by_bridge"
             && (json.usage?.total_tokens || 0) > 0;
         },
       },
