@@ -75,6 +75,16 @@ function normalizeContentParts(content, role = "user") {
       continue;
     }
 
+    if (part.type === "input_audio" || part.type === "audio") {
+      const audio = normalizeInputAudioContentPart(part);
+      if (role === "user" && audio) {
+        parts.push(audio);
+      } else {
+        textFallback.push(inputAudioFallbackText(part, audio));
+      }
+      continue;
+    }
+
     if (part.type === "input_file") {
       const fileHint = part.file_url || part.file_id || part.filename || "attached-file";
       const text = part.text ? `\n${part.text}` : "";
@@ -96,6 +106,33 @@ function normalizeContentParts(content, role = "user") {
   }
 
   return textFallback.join("\n");
+}
+
+function normalizeInputAudioContentPart(part) {
+  if (!isPlainObject(part)) return null;
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  const data = source.data ?? source.audio_data ?? source.file_data;
+  if (data == null) return null;
+  const inputAudio = {
+    data: stringifyContent(data),
+  };
+  if (source.format != null) inputAudio.format = stringifyContent(source.format);
+  for (const [key, value] of Object.entries(source)) {
+    if (["data", "audio_data", "file_data", "format"].includes(key) || value === undefined) continue;
+    inputAudio[key] = clone(value);
+  }
+  return {
+    type: "input_audio",
+    input_audio: inputAudio,
+  };
+}
+
+function inputAudioFallbackText(part, audio) {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  const format = audio?.input_audio?.format || source.format || "unknown-format";
+  const hint = source.file_id || source.filename || source.url || "inline";
+  const transcript = source.transcript || part.transcript || "";
+  return `[audio:${stringifyContent(format)}:${stringifyContent(hint)}]${transcript ? `\n${stringifyContent(transcript)}` : ""}`;
 }
 
 function normalizeChatRole(role, options = {}) {

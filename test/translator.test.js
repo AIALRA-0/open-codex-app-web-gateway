@@ -96,6 +96,7 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
       content: [
         { type: "input_text", text: "Describe this" },
         { type: "input_image", image_url: "https://example.test/a.png" },
+        { type: "input_audio", input_audio: { data: "UklGRg==", format: "wav", transcript: "hello audio" } },
       ],
     },
   ]);
@@ -105,8 +106,27 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
     content: [
       { type: "text", text: "Describe this" },
       { type: "image_url", image_url: { url: "https://example.test/a.png" } },
+      { type: "input_audio", input_audio: { data: "UklGRg==", format: "wav", transcript: "hello audio" } },
     ],
   }]);
+});
+
+test("falls back to text for non-user audio content parts", () => {
+  const messages = responseInputToChatMessages([
+    {
+      role: "assistant",
+      content: [
+        { type: "output_text", text: "Prior audible answer" },
+        { type: "input_audio", data: "UklGRg==", format: "wav", filename: "prior.wav", transcript: "hello" },
+      ],
+    },
+  ]);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "assistant");
+  assert.match(messages[0].content, /Prior audible answer/);
+  assert.match(messages[0].content, /\[audio:wav:prior\.wav\]/);
+  assert.match(messages[0].content, /hello/);
 });
 
 test("maps Responses function tools and tool_choice", () => {

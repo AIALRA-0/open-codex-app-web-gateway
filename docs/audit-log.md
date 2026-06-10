@@ -3647,3 +3647,59 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
     repository checkout is 39 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Chat Audio Input Mapping
+
+- Checked the current official OpenAI audio guidance through the OpenAI
+  developer-docs MCP. Chat audio input uses a user-message content part shaped
+  as `type:"input_audio"` with `input_audio:{data,format}`. Responses docs
+  still frame audio through provider/model support, so this bridge treats audio
+  input as an audio-capable Chat provider compatibility surface rather than a
+  feature that DeepSeek text models can understand locally.
+- Added Responses-to-Chat audio input normalization:
+  - user `input_audio` and compatible `audio` content parts now become Chat
+    `input_audio` content parts when inline audio bytes are present;
+  - canonical `input_audio.data`, plus compatible top-level `data`,
+    `audio_data`, and `file_data`, are accepted and string-normalized;
+  - `format` and provider-specific extra audio fields are preserved under
+    `input_audio`;
+  - non-user or non-forwardable audio parts become explicit text markers with
+    any available transcript so replay context remains visible without breaking
+    Chat message schemas.
+- Added tests for:
+  - translator mapping of mixed text, image, and audio Responses input content
+    into Chat content parts;
+  - assistant/non-user audio fallback text for replay-safe Chat messages;
+  - mock `/v1/responses` forwarding that proves upstream Chat receives
+    `messages[].content[]` with `text` plus `input_audio`, alongside
+    `modalities` and `audio` when supported.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` to
+  document audio input mapping, audio-capable provider expectations, and the
+  remaining text-only-provider boundary for DeepSeek.
+- Verified:
+  - `node --check src/bridge/translator.js test/translator.test.js test/server.test.js`: passed.
+  - `node --test test/translator.test.js test/server.test.js`: 110/110 passing
+    tests.
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs test/server.test.js test/translator.test.js`: passed.
+  - `git diff --check`: passed.
+  - `npm test`: 113/113 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1507 ms, P95 latency 1651 ms, and total usage 150 tokens.
+  - Full live `bridge-regression` passed 40/40 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1410 ms, P95 latency 2824 ms, and total usage
+    9176 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8f7o87`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 346 runtime candidates,
+    selected 26 old UI screenshots by retention policy, deleted 0, selected
+    1891646 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 38 GB available;
+    repository checkout is 40 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.
