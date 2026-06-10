@@ -604,10 +604,15 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     attachFileSearchOutput(response, localFileSearch);
     response.background = true;
     const localModeration = attachLocalResponseInlineModeration(response, request, config);
+    const storedResponse = store.get(responseId)?.response;
+    const storedMetadata = isPlainObject(storedResponse?.metadata) ? clone(storedResponse.metadata) : {};
+    const responseMetadata = isPlainObject(response.metadata) ? response.metadata : {};
     response.metadata = {
-      ...(response.metadata || {}),
+      ...responseMetadata,
+      ...storedMetadata,
       compatibility: mergeCompatibility(
-        response.metadata?.compatibility,
+        responseMetadata.compatibility,
+        storedMetadata.compatibility,
         finalCompatibility,
         localModeration ? { local_moderation: localModeration } : {},
       ),
@@ -4237,6 +4242,51 @@ function handleResponseGet(res, store, responseId) {
   sendJson(res, 200, record.response);
 }
 
+async function handleResponseUpdate(req, res, store, responseId) {
+  const body = await readJson(req);
+  const record = store.get(responseId);
+  if (!record?.response) {
+    sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  const keys = Object.keys(isPlainObject(body) ? body : {});
+  const unsupported = keys.filter((key) => key !== "metadata");
+  if (!keys.includes("metadata") || unsupported.length || !isPlainObject(body.metadata)) {
+    sendError(res, 400, "only metadata updates are supported for stored responses", {
+      type: "invalid_request_error",
+      param: unsupported[0] || "metadata",
+      code: "unsupported_response_update",
+    });
+    return;
+  }
+
+  const metadata = clone(body.metadata);
+  const existingMetadata = isPlainObject(record.response.metadata) ? record.response.metadata : {};
+  if (isPlainObject(existingMetadata.compatibility) || isPlainObject(metadata.compatibility)) {
+    metadata.compatibility = mergeCompatibility(metadata.compatibility, existingMetadata.compatibility);
+  }
+  if (Object.prototype.hasOwnProperty.call(existingMetadata, "upstream_object") && !Object.prototype.hasOwnProperty.call(metadata, "upstream_object")) {
+    metadata.upstream_object = existingMetadata.upstream_object;
+  }
+
+  const updatedRecord = {
+    ...record,
+    response: {
+      ...record.response,
+      metadata,
+    },
+    request: record.request
+      ? {
+        ...record.request,
+        metadata: clone(body.metadata),
+      }
+      : record.request,
+  };
+  store.put(responseId, updatedRecord);
+  sendJson(res, 200, updatedRecord.response);
+}
+
 function handleResponseDelete(res, store, responseId, backgroundJobs) {
   const job = backgroundJobs?.get(responseId);
   if (job) {
@@ -4974,6 +5024,10 @@ function createServer(config = loadConfig()) {
         const action = responseRoute[2] || "";
         if (!action && req.method === "GET") {
           handleResponseGet(res, store, responseId);
+          return;
+        }
+        if (!action && req.method === "POST") {
+          await handleResponseUpdate(req, res, store, responseId);
           return;
         }
         if (!action && req.method === "DELETE") {

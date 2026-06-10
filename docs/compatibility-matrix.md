@@ -151,6 +151,7 @@ behavior.
 | --- | --- | --- |
 | `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage; bridge startup marks interrupted background records as failed; `conversation` replays and appends local Conversation items |
 | `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
+| `POST /v1/responses/{response_id}` | Implemented for local `store:true` and local background records | Updates only the stored response `metadata` field; local compatibility metadata is preserved so bridge-emulated behavior remains inspectable, and metadata updates made while a background response is `in_progress` are retained when the final completed response is stored |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
 | `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |

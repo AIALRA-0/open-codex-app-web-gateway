@@ -736,6 +736,37 @@ function buildSuites(defaultModel) {
           && /background-ok/i.test(text),
       },
       {
+        id: "responses-lifecycle",
+        mode: "responses-lifecycle",
+        updateMetadata: { suite: "responses-life-updated", audit: "bridge-regression" },
+        request: {
+          model: defaultModel,
+          input: [{
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "Return the exact string responses-life-ok." }],
+          }],
+          metadata: { suite: "responses-life-initial" },
+          max_output_tokens: 96,
+          store: true,
+        },
+        check: ({ created, text, fetched, updated, inputItems, cancelled, deleted, afterDelete }) => /responses-life-ok/i.test(text)
+          && fetched?.id === created.id
+          && updated?.metadata?.suite === "responses-life-updated"
+          && updated?.metadata?.audit === "bridge-regression"
+          && updated?.metadata?.response_id === created.id
+          && updated?.metadata?.compatibility
+          && updated?.metadata?.upstream_object === "chat.completion"
+          && inputItems?.object === "list"
+          && inputItems.data?.length >= 1
+          && cancelled?.id === created.id
+          && /terminal responses/.test(cancelled?.metadata?.compatibility_cancel || "")
+          && deleted?.object === "response.deleted"
+          && deleted?.id === created.id
+          && deleted?.deleted === true
+          && afterDelete?.status === 404,
+      },
+      {
         id: "responses-conversation-lifecycle",
         mode: "responses-conversation",
         conversation: {
@@ -1202,6 +1233,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
     }
+    if (testCase.mode === "responses-lifecycle") {
+      return await runResponsesLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "responses-conversation") {
       return await runConversationCase(testCase, context, started);
     }
@@ -1610,6 +1644,67 @@ async function runBackgroundCase(testCase, context, started) {
     status_history: history,
     usage: responseUsage(final),
     output_text: truncate(text),
+  });
+}
+
+async function runResponsesLifecycleCase(testCase, context, started) {
+  const createdResponse = await postJson(`${baseUrl}/v1/responses`, testCase.request);
+  const createdBody = await createdResponse.text();
+  if (!createdResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: createdResponse.status,
+      error: truncate(createdBody),
+    });
+  }
+
+  const created = JSON.parse(createdBody);
+  const fetched = await getJson(`${baseUrl}/v1/responses/${created.id}`);
+  const updatedMetadata = testCase.updateMetadata
+    ? { ...testCase.updateMetadata, response_id: created.id }
+    : null;
+  let updated = { status: 0, ok: false, json: null, body: "" };
+  if (updatedMetadata) {
+    const updatedResponse = await postJson(`${baseUrl}/v1/responses/${created.id}`, {
+      metadata: updatedMetadata,
+    });
+    const updatedBody = await updatedResponse.text();
+    updated = {
+      status: updatedResponse.status,
+      ok: updatedResponse.ok,
+      json: parseJsonish(updatedBody),
+      body: updatedBody,
+    };
+  }
+  const inputItems = await getJson(`${baseUrl}/v1/responses/${created.id}/input_items?limit=10`);
+  const cancelResponse = await postJson(`${baseUrl}/v1/responses/${created.id}/cancel`, {});
+  const cancelBody = await cancelResponse.text();
+  const deletion = await deleteJson(`${baseUrl}/v1/responses/${created.id}`);
+  const afterDelete = await getJson(`${baseUrl}/v1/responses/${created.id}`);
+  const text = responseOutputText(created);
+  const ok = !!testCase.check({
+    created,
+    text,
+    fetched: fetched.json,
+    updated: updated.json,
+    inputItems: inputItems.json,
+    cancelled: parseJsonish(cancelBody),
+    deleted: parseJsonish(deletion.body),
+    afterDelete,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: createdResponse.status,
+    response_id: created.id,
+    usage: responseUsage(created),
+    output_text: truncate(text),
+    fetched_status: fetched.status,
+    update_status: updated.status,
+    input_items_status: inputItems.status,
+    cancel_status: cancelResponse.status,
+    delete_status: deletion.status,
+    post_delete_get_status: afterDelete.status,
+    input_item_count: Array.isArray(inputItems.json?.data) ? inputItems.json.data.length : 0,
   });
 }
 

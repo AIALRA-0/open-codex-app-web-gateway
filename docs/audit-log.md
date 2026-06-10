@@ -3232,3 +3232,61 @@ Open follow-ups:
   Chat Completions providers do not expose the Responses service's exact
   tokenizer/context-window truncation behavior. Provider-specific tokenizers can
   replace the estimate later for closer parity.
+
+## 2026-06-10 Stored Responses Metadata Update Compatibility
+
+- Added local support for `POST /v1/responses/{response_id}`:
+  - accepts only a JSON `metadata` object, matching the stored-object update
+    surface already implemented for Chat Completions;
+  - returns `404 response_not_found` for missing local response records;
+  - returns `400 unsupported_response_update` when callers try to update fields
+    other than `metadata` or pass non-object metadata;
+  - preserves local `metadata.compatibility` and `metadata.upstream_object`
+    observability fields when replacing user metadata.
+- Added background-response metadata durability:
+  - metadata updates applied while a local background response is still
+    `in_progress` are merged into the final completed response after the
+    upstream Chat Completions call returns;
+  - final background records still preserve local compatibility flags such as
+    `background` and `stream`.
+- Official source checked on 2026-06-10:
+  - OpenAI's OpenAPI endpoint list includes
+    `/responses/{response_id}` alongside `/responses/{response_id}/cancel` and
+    `/responses/{response_id}/input_items`.
+- Added tests for:
+  - successful stored Responses metadata update and subsequent GET persistence;
+  - invalid non-metadata update rejection;
+  - missing response update returning 404;
+  - in-progress background response metadata update persisting into the
+    completed response.
+- Extended the live `bridge-regression` suite with `responses-lifecycle`,
+  covering create, retrieve, update metadata, list input items, terminal cancel
+  no-op, delete, and post-delete 404.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 66/66 passing tests.
+  - `npm test`: 97/97 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Targeted live `responses-lifecycle` passed 1/1, elapsed 2278 ms, returned
+    update/input-items/cancel/delete statuses 200/200/200/200, post-delete GET
+    404, and total usage 67 tokens.
+  - Full live `bridge-regression` passed 37/37 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1617 ms, P95 latency 4206 ms, and total usage
+    8828 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8bnefq`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 286 runtime candidates,
+    selected 17 old UI screenshots by retention policy, deleted 0, selected
+    1129626 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 39 GB available; bridge state is 2.0 MB, output
+    artifacts are 5.4 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.

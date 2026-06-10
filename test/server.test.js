@@ -3083,6 +3083,48 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(fetchedJson.id, createdJson.id);
     assert.equal(fetchedJson.output[0].content[0].text, "stored response");
 
+    const updated = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: {
+          suite: "response-lifecycle",
+          state: "updated",
+        },
+      }),
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.id, createdJson.id);
+    assert.equal(updatedJson.metadata.suite, "response-lifecycle");
+    assert.equal(updatedJson.metadata.state, "updated");
+    assert.equal(typeof updatedJson.metadata.compatibility, "object");
+    assert.equal(updatedJson.metadata.upstream_object, "chat.completion");
+
+    const refetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+    assert.equal(refetched.status, 200);
+    const refetchedJson = await refetched.json();
+    assert.equal(refetchedJson.metadata.suite, "response-lifecycle");
+    assert.equal(refetchedJson.metadata.state, "updated");
+
+    const invalidUpdate = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: { suite: "response-lifecycle" },
+        model: "other-model",
+      }),
+    });
+    assert.equal(invalidUpdate.status, 400);
+    assert.equal((await invalidUpdate.json()).error.code, "unsupported_response_update");
+
+    const missingUpdate = await fetch(`${baseUrl}/v1/responses/resp_missing_lifecycle`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "missing" } }),
+    });
+    assert.equal(missingUpdate.status, 404);
+
     const inputItems = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/input_items?limit=1`);
     assert.equal(inputItems.status, 200);
     const inputItemsJson = await inputItems.json();
@@ -3111,8 +3153,12 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
 });
 
 test("POST /v1/responses with background true returns in_progress and later completes", async () => {
+  let releaseProvider;
+  const providerRelease = new Promise((resolve) => {
+    releaseProvider = resolve;
+  });
   await withMockProvider(async (_req, res) => {
-    await sleep(40);
+    await providerRelease;
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_background",
@@ -3152,6 +3198,24 @@ test("POST /v1/responses with background true returns in_progress and later comp
     assert.equal(pending.status, 200);
     assert.equal((await pending.json()).status, "in_progress");
 
+    const updated = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: {
+          suite: "background-update",
+          state: "in_progress",
+        },
+      }),
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.status, "in_progress");
+    assert.equal(updatedJson.metadata.suite, "background-update");
+    assert.equal(updatedJson.metadata.state, "in_progress");
+    assert.equal(updatedJson.metadata.compatibility.background, "local_store_forced");
+
+    releaseProvider();
     let finalJson = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await sleep(20);
@@ -3164,6 +3228,8 @@ test("POST /v1/responses with background true returns in_progress and later comp
     assert.equal(finalJson.background, true);
     assert.equal(finalJson.output[0].content[0].text, "background done");
     assert.equal(finalJson.usage.total_tokens, 11);
+    assert.equal(finalJson.metadata.suite, "background-update");
+    assert.equal(finalJson.metadata.state, "in_progress");
     assert.equal(finalJson.metadata.compatibility.background, "local_store_forced");
     assert.equal(finalJson.metadata.compatibility.stream, "disabled_for_background");
     assert.equal(requests[0].body.stream, false);
