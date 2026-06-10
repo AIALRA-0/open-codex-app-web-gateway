@@ -2207,3 +2207,52 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq83r5va`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local File Search Attribute Filters
+
+- Closed a vector-store search compatibility gap where the local
+  `file_search` adapter accepted only simple metadata filters and direct search
+  used a smaller max-result ceiling than the OpenAI retrieval guide documents.
+- Official sources checked on 2026-06-10:
+  - `https://developers.openai.com/api/docs/guides/retrieval#attribute-filtering`,
+    which describes attribute filtering over file attributes, comparison
+    filters, and compound `and`/`or` filters.
+  - `https://developers.openai.com/api/docs/guides/retrieval#semantic-search`,
+    which documents vector-store search defaulting to 10 results and accepting
+    up to 50 via `max_num_results`.
+- Added local vector-store search support for:
+  - comparison filters: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`;
+  - legacy-compatible array filters: `in`, `nin`;
+  - compound filters: `and`, `or`;
+  - aliases such as `attribute_filter`, `attributeFilter`, `filter`, and
+    `filters`;
+  - plain shorthand maps such as `{suite:"server-test", archived:false}`.
+- Invalid filters now fail closed with `400 invalid_vector_store_filter`
+  instead of silently behaving like a match-all query. Invalid direct search
+  limits now fail with `400 invalid_vector_store_search_limit`.
+- Raised the local direct vector-store search `max_num_results` ceiling to 50
+  while keeping injected Responses `file_search` context bounded by
+  `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS`.
+- Updated the evaluation harness, compatibility matrix, deployment notes, and
+  95% parity criteria to include comparison/compound attribute filters.
+- Remaining known gap: retrieval is still local lexical chunk matching, not
+  OpenAI managed semantic vector retrieval, hosted query rewriting, or managed
+  reranking.
+- Verified:
+  - `node --check` passed for `src/bridge/local_file_search.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - `npm test`: 72/72 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `vector-store-lifecycle` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 292 ms, with `content_parts:4` and
+    `search_results:3`.
+  - Full live `bridge-regression` passed 25/25 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1646 ms, P95 latency 3890 ms, and total usage
+    7760 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq8460h0`, reload persistence
+    confirmed, console errors 0, warnings 0.

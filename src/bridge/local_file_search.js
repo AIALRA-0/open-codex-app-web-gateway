@@ -15,6 +15,11 @@ const DEFAULT_CHUNKING_STRATEGY = Object.freeze({
 });
 const MAX_SEARCH_QUERIES = 4;
 const MAX_SEARCH_QUERY_CHARS = 240;
+const DEFAULT_VECTOR_SEARCH_RESULTS = 10;
+const MAX_VECTOR_SEARCH_RESULTS = 50;
+const COMPARISON_FILTER_TYPES = new Set(["eq", "ne", "gt", "gte", "lt", "lte"]);
+const ARRAY_FILTER_TYPES = new Set(["in", "nin"]);
+const COMPOUND_FILTER_TYPES = new Set(["and", "or"]);
 
 function isFileSearchTool(tool) {
   return !!tool && typeof tool === "object" && FILE_SEARCH_TOOL_TYPES.has(tool.type);
@@ -307,8 +312,8 @@ class LocalFileSearchStore {
     if (!this.getVectorStore(storeId)) return null;
     const queries = normalizeSearchQueries(body.query || "");
     const query = queries[0] || "";
-    const maxResults = Math.max(1, Math.min(Number(body.max_num_results || body.limit || 5), 20));
-    const filters = body.filters || body.filter || null;
+    const maxResults = normalizeSearchMaxResults(body.max_num_results ?? body.limit);
+    const filters = normalizeMetadataFilter(body.filters ?? body.filter ?? body.attribute_filter ?? body.attributeFilter);
     const rankingOptions = normalizeRankingOptions(body.ranking_options || body.rankingOptions);
     const attached = this.listVectorStoreFiles(storeId)?.data || [];
     const results = [];
@@ -347,6 +352,7 @@ class LocalFileSearchStore {
       object: "vector_store.search_results.page",
       search_query: query,
       search_queries: queries,
+      filters,
       ranking_options: rankingOptions,
       data: page,
       has_more: results.length > page.length,
@@ -487,7 +493,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store, option
       const page = store.searchVectorStore(vectorStoreId, {
         query: toolQueries,
         max_num_results: maxResults,
-        filters: tool.filters,
+        filters: tool.filters ?? tool.filter ?? tool.attribute_filter ?? tool.attributeFilter,
         ranking_options: tool.ranking_options,
       });
       const results = page?.data || [];
@@ -892,26 +898,152 @@ function chunkMetadata(chunk) {
   };
 }
 
+function normalizeSearchMaxResults(value) {
+  const raw = value == null ? DEFAULT_VECTOR_SEARCH_RESULTS : value;
+  const number = Number(raw);
+  if (!Number.isInteger(number) || number < 1 || number > MAX_VECTOR_SEARCH_RESULTS) {
+    const error = new Error(`max_num_results must be an integer between 1 and ${MAX_VECTOR_SEARCH_RESULTS}`);
+    error.status = 400;
+    error.code = "invalid_vector_store_search_limit";
+    error.param = "max_num_results";
+    throw error;
+  }
+  return number;
+}
+
+function normalizeMetadataFilter(filter, path = "filters") {
+  if (filter == null) return null;
+  if (Array.isArray(filter)) {
+    const filters = filter.map((item, index) => normalizeMetadataFilter(item, `${path}[${index}]`)).filter(Boolean);
+    return filters.length ? { type: "and", filters } : null;
+  }
+  if (!isPlainObject(filter)) {
+    filterError(`${path} must be an object, array, or null`, path);
+  }
+
+  const rawType = filter.type ?? filter.operator;
+  const type = normalizeFilterType(rawType);
+  const typeIsKnown = COMPOUND_FILTER_TYPES.has(type)
+    || COMPARISON_FILTER_TYPES.has(type)
+    || ARRAY_FILTER_TYPES.has(type);
+  const key = filter.key ?? filter.field ?? filter.attribute;
+  const hasStructuredIntent =
+    typeIsKnown
+    || Object.prototype.hasOwnProperty.call(filter, "filters")
+    || Object.prototype.hasOwnProperty.call(filter, "key")
+    || Object.prototype.hasOwnProperty.call(filter, "field")
+    || Object.prototype.hasOwnProperty.call(filter, "attribute")
+    || Object.prototype.hasOwnProperty.call(filter, "value");
+
+  if (rawType != null && !typeIsKnown && hasStructuredIntent) {
+    filterError(`${path}.type is unsupported: ${String(rawType)}`, `${path}.type`);
+  }
+
+  if (COMPOUND_FILTER_TYPES.has(type)) {
+    if (!Array.isArray(filter.filters) || !filter.filters.length) {
+      filterError(`${path}.filters must be a non-empty array for ${type}`, `${path}.filters`);
+    }
+    return {
+      type,
+      filters: filter.filters.map((item, index) => normalizeMetadataFilter(item, `${path}.filters[${index}]`)).filter(Boolean),
+    };
+  }
+
+  if (key != null || hasStructuredIntent) {
+    const operator = type || "eq";
+    if (!COMPARISON_FILTER_TYPES.has(operator) && !ARRAY_FILTER_TYPES.has(operator)) {
+      filterError(`${path}.type must be a comparison operator`, `${path}.type`);
+    }
+    if (typeof key !== "string" || !key.trim()) {
+      filterError(`${path}.key must be a non-empty string`, `${path}.key`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(filter, "value")) {
+      filterError(`${path}.value is required`, `${path}.value`);
+    }
+    validateFilterValue(operator, filter.value, `${path}.value`);
+    return {
+      type: operator,
+      key: key.trim(),
+      value: cloneJson(filter.value),
+    };
+  }
+
+  const filters = Object.entries(filter).map(([plainKey, plainValue]) => {
+    if (typeof plainKey !== "string" || !plainKey.trim()) {
+      filterError(`${path} keys must be non-empty strings`, path);
+    }
+    validateFilterValue("eq", plainValue, `${path}.${plainKey}`);
+    return {
+      type: "eq",
+      key: plainKey,
+      value: cloneJson(plainValue),
+    };
+  });
+  return filters.length ? { type: "and", filters } : null;
+}
+
+function normalizeFilterType(value) {
+  if (value == null || value === "") return "";
+  const normalized = String(value).trim().toLowerCase();
+  const aliases = {
+    "=": "eq",
+    "==": "eq",
+    equals: "eq",
+    equal: "eq",
+    "!=": "ne",
+    "<>": "ne",
+    neq: "ne",
+    not_equal: "ne",
+    not_equals: "ne",
+    greater_than: "gt",
+    ">": "gt",
+    greater_than_or_equal: "gte",
+    ">=": "gte",
+    less_than: "lt",
+    "<": "lt",
+    less_than_or_equal: "lte",
+    "<=": "lte",
+    not_in: "nin",
+  };
+  return aliases[normalized] || normalized;
+}
+
+function validateFilterValue(operator, value, path) {
+  if (ARRAY_FILTER_TYPES.has(operator)) {
+    if (!Array.isArray(value) || !value.length) {
+      filterError(`${path} must be a non-empty array for ${operator}`, path);
+    }
+    for (const [index, item] of value.entries()) {
+      if (!isScalarFilterValue(item)) filterError(`${path}[${index}] must be a string, number, or boolean`, `${path}[${index}]`);
+    }
+    return;
+  }
+  if (!isScalarFilterValue(value)) {
+    filterError(`${path} must be a string, number, or boolean`, path);
+  }
+}
+
+function isScalarFilterValue(value) {
+  return typeof value === "string"
+    || typeof value === "number"
+    || typeof value === "boolean";
+}
+
+function filterError(message, param) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = "invalid_vector_store_filter";
+  error.param = param;
+  throw error;
+}
+
 function matchesMetadataFilter(filter, attributes = {}) {
   if (!filter) return true;
-  if (Array.isArray(filter)) return filter.every((item) => matchesMetadataFilter(item, attributes));
-  if (!isPlainObject(filter)) return true;
-
-  const type = String(filter.type || filter.operator || "").toLowerCase();
+  const type = filter.type;
   const nested = Array.isArray(filter.filters) ? filter.filters : [];
   if (type === "and") return nested.every((item) => matchesMetadataFilter(item, attributes));
   if (type === "or") return nested.some((item) => matchesMetadataFilter(item, attributes));
-
-  const key = filter.key || filter.field || filter.attribute;
-  if (!key) {
-    return Object.entries(filter).every(([plainKey, plainValue]) => {
-      if (["type", "operator", "filters"].includes(plainKey)) return true;
-      return compareMetadataValue(attributes[plainKey], "eq", plainValue);
-    });
-  }
-
-  const operator = type || "eq";
-  return compareMetadataValue(attributes[key], operator, filter.value);
+  return compareMetadataValue(attributes[filter.key], type, filter.value);
 }
 
 function compareMetadataValue(actual, operator, expected) {
@@ -921,13 +1053,10 @@ function compareMetadataValue(actual, operator, expected) {
     case "ne":
       return actual !== expected;
     case "gt":
-      return Number(actual) > Number(expected);
     case "gte":
-      return Number(actual) >= Number(expected);
     case "lt":
-      return Number(actual) < Number(expected);
     case "lte":
-      return Number(actual) <= Number(expected);
+      return compareOrderedMetadataValue(actual, expected, operator);
     case "in":
       return Array.isArray(expected) && expected.includes(actual);
     case "nin":
@@ -937,11 +1066,35 @@ function compareMetadataValue(actual, operator, expected) {
   }
 }
 
+function compareOrderedMetadataValue(actual, expected, operator) {
+  if (actual == null) return false;
+  const actualNumber = Number(actual);
+  const expectedNumber = Number(expected);
+  let left;
+  let right;
+  if (Number.isFinite(actualNumber) && Number.isFinite(expectedNumber)) {
+    left = actualNumber;
+    right = expectedNumber;
+  } else {
+    left = String(actual);
+    right = String(expected);
+  }
+  if (operator === "gt") return left > right;
+  if (operator === "gte") return left >= right;
+  if (operator === "lt") return left < right;
+  if (operator === "lte") return left <= right;
+  return false;
+}
+
 function tokenize(value) {
   return String(value || "")
     .toLowerCase()
     .split(/[^a-z0-9_]+/)
     .filter((part) => part.length >= 2);
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function paginateList(items, url) {

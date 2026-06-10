@@ -1470,7 +1470,16 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const attached = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ file_id: file.id, attributes: { suite: "server-test" } }),
+      body: JSON.stringify({
+        file_id: file.id,
+        attributes: {
+          suite: "server-test",
+          region: "emea",
+          year: 2026,
+          archived: false,
+          type: "fixture",
+        },
+      }),
     });
     assert.equal(attached.status, 200);
     const vectorFile = await attached.json();
@@ -1508,6 +1517,84 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.deepEqual(multiQueryJson.search_queries, ["file-search-ok", "secondary-ok"]);
     assert.equal(multiQueryJson.data[0].file_id, file.id);
     assert.deepEqual(multiQueryJson.data[0].matched_queries, ["file-search-ok", "secondary-ok"]);
+
+    const compoundFilterSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        max_num_results: 50,
+        attribute_filter: {
+          type: "and",
+          filters: [
+            { type: "eq", key: "suite", value: "server-test" },
+            { type: "gte", key: "year", value: 2025 },
+            { type: "ne", key: "archived", value: true },
+            {
+              type: "or",
+              filters: [
+                { type: "eq", key: "region", value: "emea" },
+                { type: "eq", key: "region", value: "apac" },
+              ],
+            },
+          ],
+        },
+      }),
+    });
+    assert.equal(compoundFilterSearch.status, 200);
+    const compoundFilterJson = await compoundFilterSearch.json();
+    assert.equal(compoundFilterJson.data[0].file_id, file.id);
+    assert.equal(compoundFilterJson.filters.type, "and");
+
+    const plainFilterSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        filters: { suite: "server-test", archived: false, type: "fixture" },
+      }),
+    });
+    assert.equal(plainFilterSearch.status, 200);
+    assert.equal((await plainFilterSearch.json()).data[0].file_id, file.id);
+
+    const excludedFilterSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        filters: {
+          type: "and",
+          filters: [
+            { type: "eq", key: "suite", value: "server-test" },
+            { type: "lt", key: "year", value: 2020 },
+          ],
+        },
+      }),
+    });
+    assert.equal(excludedFilterSearch.status, 200);
+    assert.deepEqual((await excludedFilterSearch.json()).data, []);
+
+    const invalidFilterSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        filters: { type: "and", filters: [] },
+      }),
+    });
+    assert.equal(invalidFilterSearch.status, 400);
+    assert.match(await invalidFilterSearch.text(), /invalid_vector_store_filter|filters/);
+
+    const invalidLimitSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        max_num_results: 51,
+      }),
+    });
+    assert.equal(invalidLimitSearch.status, 400);
+    assert.match(await invalidLimitSearch.text(), /max_num_results/);
 
     const looseRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",

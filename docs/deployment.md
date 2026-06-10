@@ -111,7 +111,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_WEB_SEARCH_USER_AGENT` | `open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)` | User-Agent sent to Wikipedia search endpoints; include contact/site context to satisfy Wikimedia API policy |
 | `CODEXCOMPAT_FILE_SEARCH_PROVIDER` | `local` | Local Responses `file_search` adapter provider. Use `disabled` to leave it unsupported |
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
-| `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output; configurable up to 50 |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local text files |
 | `CODEXCOMPAT_SHELL_PROVIDER` | `local` | Local Responses `shell` / `code_interpreter` adapter provider. Use `disabled` to leave it unsupported |
 | `CODEXCOMPAT_SHELL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-containers` | Local container workspace/artifact path; keep outside Git and monitor disk growth |

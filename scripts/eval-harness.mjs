@@ -750,10 +750,12 @@ function buildSuites(defaultModel) {
           && attached?.object === "vector_store.file"
           && attached?.chunking_strategy?.static?.max_chunk_size_tokens === 100
           && updatedFile?.attributes?.suite === "vector-lifecycle-updated"
+          && updatedFile?.attributes?.region === "emea"
           && content?.chunking_strategy?.static?.chunk_overlap_tokens === 50
           && content?.chunks?.some((chunk) => chunk.chunk_index === 1 && chunk.token_count === 100)
           && content?.content?.some((part) => /vector-lifecycle-ok/i.test(part.text || ""))
           && search?.search_queries?.includes("vectorword150")
+          && search?.filters?.type === "and"
           && search?.ranking_options?.score_threshold === 0.8
           && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index)),
       },
@@ -1380,7 +1382,12 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
     const attached = JSON.parse(attachBody);
 
     const updatedFileResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/files/${file.id}`, {
-      attributes: { suite: "vector-lifecycle-updated" },
+      attributes: {
+        suite: "vector-lifecycle-updated",
+        region: "emea",
+        year: 2026,
+        archived: false,
+      },
     });
     const updatedFileBody = await updatedFileResponse.text();
     if (!updatedFileResponse.ok) {
@@ -1403,8 +1410,22 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
 
     const searchResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/search`, {
       query: ["vector-lifecycle-ok", "vectorword150"],
-      filters: { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
-      max_num_results: 3,
+      attribute_filter: {
+        type: "and",
+        filters: [
+          { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
+          { type: "gte", key: "year", value: 2025 },
+          { type: "ne", key: "archived", value: true },
+          {
+            type: "or",
+            filters: [
+              { type: "eq", key: "region", value: "emea" },
+              { type: "eq", key: "region", value: "apac" },
+            ],
+          },
+        ],
+      },
+      max_num_results: 50,
       ranking_options: { score_threshold: 0.8 },
     });
     const searchBody = await searchResponse.text();
