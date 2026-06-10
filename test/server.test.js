@@ -3613,6 +3613,192 @@ test("server startup resumes provider-pending background responses", async () =>
   }
 });
 
+test("server startup resumes ready local-preparation background checkpoints", async () => {
+  const requests = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_background_prepare_resume",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "preparation resumed" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-resume-preparing-background-"));
+  const responseId = "resp_resume_preparing_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  const request = {
+    model: "mock-model",
+    input: "resume local preparation",
+    background: true,
+    stream: false,
+    store: true,
+    max_tool_calls: 2,
+    tools: [
+      { type: "shell" },
+      { type: "computer" },
+    ],
+  };
+  const chat = {
+    model: "mock-model",
+    messages: [
+      { role: "user", content: "resume local preparation" },
+      { role: "system", content: "Persisted shell checkpoint context. stdout: shell checkpoint" },
+    ],
+    stream: false,
+    store: true,
+  };
+  const compatibility = {
+    background: "local_async",
+    local_shell: {
+      provider: "local",
+      status: "completed",
+      tool_types: ["shell"],
+      command_count: 1,
+    },
+  };
+  const shellCall = {
+    id: "sh_checkpoint",
+    type: "shell_call",
+    call_id: "call_shell_checkpoint",
+    status: "completed",
+    container_id: "cntr_checkpoint",
+    action: {
+      type: "exec",
+      command: "echo shell checkpoint",
+    },
+  };
+  const shellOutput = {
+    id: "sho_checkpoint",
+    type: "shell_call_output",
+    status: "completed",
+    call_id: "call_shell_checkpoint",
+    shell_call_id: "sh_checkpoint",
+    container_id: "cntr_checkpoint",
+    output: [{
+      type: "logs",
+      stdout: "shell checkpoint\n",
+      stderr: "",
+    }],
+    outcome: {
+      type: "exit",
+      exit_code: 0,
+    },
+  };
+  const shellContext = {
+    provider: "local",
+    status: "completed",
+    tool_types: ["shell"],
+    calls: [shellCall],
+    outputs: [shellOutput],
+    executions: [{
+      command: "echo shell checkpoint",
+      container: { id: "cntr_checkpoint" },
+      result: { exit_code: 0, timed_out: false },
+    }],
+    artifacts: [],
+    mounted_skills: [],
+    skipped_calls: [],
+  };
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: { compatibility: { background: "local_async" } },
+    },
+    input_items: [{ id: "item_prepare_resume", type: "message", role: "user", content: "resume local preparation" }],
+    messages: chat.messages,
+    background_job: {
+      version: 1,
+      stage: "preparing",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      request,
+      chat,
+      compatibility,
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [],
+      prepare: {
+        version: 1,
+        status: "ready",
+        current_step: null,
+        next_step: "computer",
+        completed_steps: ["input_files", "shell"],
+        chat,
+        compatibility,
+        contexts: {
+          shell: shellContext,
+        },
+        tool_budget: {
+          limit: 2,
+          used: 1,
+          skipped: 0,
+          skipped_calls: [],
+        },
+      },
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+      assert.equal(fetched.status, 200);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.background, true);
+    assert.equal(finalJson.output.filter((item) => item.type === "shell_call").length, 1);
+    assert.equal(finalJson.output.filter((item) => item.type === "shell_call_output").length, 1);
+    assert.equal(finalJson.output.filter((item) => item.type === "computer_call").length, 1);
+    assert.equal(finalJson.output[0].call_id, "call_shell_checkpoint");
+    assert.equal(finalJson.output[1].call_id, "call_shell_checkpoint");
+    assert.equal(finalJson.output.at(-1).content[0].text, "preparation resumed");
+    assert.equal(finalJson.usage.total_tokens, 15);
+    assert.equal(finalJson.metadata.compatibility.background_restart, "resumed_preparation");
+    assert.equal(finalJson.metadata.compatibility.local_shell.command_count, 1);
+    assert.equal(finalJson.metadata.compatibility.local_computer.call_count, 1);
+    assert.equal(finalJson.metadata.compatibility.local_tool_budget.max_tool_calls, 2);
+    assert.equal(finalJson.metadata.compatibility.local_tool_budget.used, 2);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.messages[0].content, "resume local preparation");
+    assert.match(requests[0].body.messages.map((message) => message.content).join("\n"), /Local Responses computer compatibility is active/);
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    await close(bridge);
+    await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("server startup fails corrupt resumable background snapshots without crashing", async () => {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -3698,6 +3884,109 @@ test("server startup fails corrupt resumable background snapshots without crashi
     assert.equal(
       json.metadata.compatibility.background_restart_reason,
       "invalid_persistent_background_job_invalid_max_tool_calls",
+    );
+    assert.equal(requests.length, 0);
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    await close(bridge);
+    await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("server startup fails running local-preparation background snapshots closed", async () => {
+  const requests = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_unexpected_running_prepare",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "unexpected" },
+        finish_reason: "stop",
+      }],
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-running-preparing-background-"));
+  const responseId = "resp_running_prepare_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  const request = {
+    model: "mock-model",
+    input: "running local preparation",
+    background: true,
+    stream: false,
+    store: true,
+    tools: [{ type: "shell" }],
+  };
+  const chat = {
+    model: "mock-model",
+    messages: [{ role: "user", content: "running local preparation" }],
+    stream: false,
+    store: true,
+  };
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: { compatibility: { background: "local_async" } },
+    },
+    input_items: [{ id: "item_running_prepare", type: "message", role: "user", content: "running local preparation" }],
+    messages: chat.messages,
+    background_job: {
+      version: 1,
+      stage: "preparing",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      request,
+      chat,
+      compatibility: { background: "local_async" },
+      previous_messages: [],
+      conversation: null,
+      prepare: {
+        version: 1,
+        status: "running",
+        current_step: "shell",
+        next_step: "shell",
+        completed_steps: ["input_files"],
+        chat,
+        compatibility: { background: "local_async" },
+        contexts: {},
+        tool_budget: null,
+      },
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+    assert.equal(fetched.status, 200);
+    const json = await fetched.json();
+    assert.equal(json.status, "failed");
+    assert.equal(json.error.code, "background_job_interrupted_by_restart");
+    assert.equal(json.metadata.compatibility.background_restart, "marked_failed_on_startup");
+    assert.equal(
+      json.metadata.compatibility.background_restart_reason,
+      "interrupted_during_local_preparation_shell",
     );
     assert.equal(requests.length, 0);
     assert.equal(store.get(responseId).background_job, undefined);

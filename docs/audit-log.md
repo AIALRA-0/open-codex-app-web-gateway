@@ -3414,3 +3414,65 @@ Open follow-ups:
     193 GB filesystem with 38 GB available; repository checkout is 38 MB,
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 11 MB.
+
+## 2026-06-10 Background Preparation Checkpoints
+
+- Added resumable checkpoints inside local `background:true` preparation:
+  - the background job now records `prepare.status`, `current_step`,
+    `next_step`, completed steps, mutated upstream Chat request, compatibility
+    metadata, local context snapshots, and the shared local `max_tool_calls`
+    budget after each safe step boundary;
+  - completed local contexts are reused to build final Responses output items
+    after restart, so already-finished shell/computer/web/file-search work is
+    not repeated;
+  - startup resumes `stage:"preparing"` snapshots only when
+    `prepare.status:"ready"` points to a safe next step, and marks
+    `metadata.compatibility.background_restart:"resumed_preparation"`;
+  - snapshots interrupted while a local preparation step is actively
+    `running` still fail closed with
+    `background_restart_reason:"interrupted_during_local_preparation_<step>"`
+    to avoid re-running side-effecting local tools such as shell commands.
+- Hardened persisted local tool budgets:
+  - resume now validates persisted `used`, `skipped`, and bounded
+    `skipped_calls` before continuing;
+  - corrupt persisted budgets reconcile to explicit failed terminal responses
+    without crashing bridge startup or calling the upstream provider.
+- Added server tests for:
+  - resuming from a ready preparation checkpoint after a persisted shell step
+    and continuing with a local computer step;
+  - preserving exactly one persisted shell call/output plus the new computer
+    call in the final Responses output;
+  - failing `running` preparation snapshots closed without calling the
+    provider.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 73/73 passing tests.
+  - `npm test`: 106/106 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Targeted live `responses-background` passed 1/1 after the final deploy,
+    elapsed 2090 ms, status history `in_progress`, `in_progress`, `completed`,
+    and total usage 39 tokens.
+  - One full live `bridge-regression` attempt passed 37/38 because
+    `chat-passthrough` returned HTTP 200 with empty visible text; targeted
+    `chat-passthrough` rerun then passed 1/1, indicating provider output
+    nondeterminism rather than bridge failure.
+  - Final full live `bridge-regression` passed 38/38 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1545 ms, P95 latency
+    4025 ms, and total usage 8911 tokens.
+  - `protocol-smoke` passed 2/2, pass rate 1.0, average latency 1604 ms, P95
+    latency 1670 ms, and total usage 154 tokens.
+  - UI smoke passed with marker `ui-smoke-bgprep-final-20260610`, reload
+    persistence confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 319 runtime candidates,
+    selected 22 old UI screenshots by retention policy, deleted 0, selected
+    1553681 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 37 GB available; repository checkout is 38 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 11 MB.

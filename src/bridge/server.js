@@ -586,7 +586,9 @@ function startBackgroundJob(params) {
   return job;
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [] }) {
+const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "web_search", "file_search", "truncation"];
+
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
   try {
     if (prepared) {
       await runPreparedBackgroundProviderResponse({
@@ -605,49 +607,35 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       return;
     }
 
-    persistBackgroundJobState(store, responseId, { stage: "preparing" });
-    const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
-    let finalCompatibility = compatibility;
-    if (localInputFiles) {
-      finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles, config);
-    }
-    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget, skillStore });
-    if (localShell) {
-      finalCompatibility = applyLocalShellToChat(chat, { ...finalCompatibility }, localShell, config);
-    }
-    const localComputer = await prepareComputerContext(request, config, { toolBudget });
-    if (localComputer) {
-      finalCompatibility = applyLocalComputerToChat(chat, { ...finalCompatibility }, localComputer, config);
-    }
-    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal, toolBudget });
-    if (localWebSearch) {
-      finalCompatibility = applyLocalWebSearchToChat(chat, { ...finalCompatibility }, localWebSearch, config);
-    }
-    const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore, { toolBudget });
-    if (localFileSearch) {
-      finalCompatibility = applyLocalFileSearchToChat(chat, { ...finalCompatibility }, localFileSearch, config);
-    }
-    Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
-    const truncationError = applyLocalContextTruncation(chat, finalCompatibility, request, previousMessages, config);
-    if (truncationError) {
+    const preparedRequest = await prepareBackgroundProviderRequest({
+      config,
+      store,
+      job,
+      request,
+      chat,
+      responseId,
+      compatibility,
+      previousMessages,
+      fileSearchStore,
+      containerStore,
+      toolBudget,
+      skillStore,
+      preparationState,
+    });
+    if (preparedRequest.truncationError) {
+      const truncationError = preparedRequest.truncationError;
       storeFailedBackgroundResponse(store, responseId, truncationError.message, 400, {
         error: localTruncationErrorBody(truncationError).error,
       });
       return;
     }
 
-    const preparedLocalOutputItems = [
-      ...shellOutputItems(localShell),
-      ...computerOutputItems(localComputer),
-      ...webSearchOutputItems(localWebSearch),
-      ...fileSearchOutputItems(localFileSearch),
-    ];
     persistBackgroundJobState(store, responseId, {
       stage: "provider_pending",
       request,
-      chat,
-      compatibility: finalCompatibility,
-      local_output_items: preparedLocalOutputItems,
+      chat: preparedRequest.chat,
+      compatibility: preparedRequest.compatibility,
+      local_output_items: preparedRequest.localOutputItems,
       conversation,
     });
 
@@ -656,13 +644,13 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       store,
       job,
       request,
-      chat,
+      chat: preparedRequest.chat,
       responseId,
-      compatibility: finalCompatibility,
+      compatibility: preparedRequest.compatibility,
       incomingHeaders,
       conversationStore,
       conversation,
-      localOutputItems: preparedLocalOutputItems,
+      localOutputItems: preparedRequest.localOutputItems,
     });
   } catch (error) {
     if (job.deleted) return;
@@ -678,6 +666,164 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
   } finally {
     backgroundJobs.delete(responseId);
   }
+}
+
+async function prepareBackgroundProviderRequest({ config, store, job, request, chat, responseId, compatibility, previousMessages = [], fileSearchStore, containerStore, toolBudget, skillStore, preparationState = null }) {
+  const runtime = backgroundPreparationRuntime({
+    preparationState,
+    chat,
+    compatibility,
+    toolBudget,
+  });
+
+  persistBackgroundPrepareState(store, responseId, runtime, {
+    status: "ready",
+    current_step: null,
+  });
+
+  while (runtime.nextStep) {
+    const step = runtime.nextStep;
+    persistBackgroundPrepareState(store, responseId, runtime, {
+      status: "running",
+      current_step: step,
+    });
+
+    const result = await runBackgroundPrepareStep(step, {
+      config,
+      job,
+      request,
+      previousMessages,
+      fileSearchStore,
+      containerStore,
+      skillStore,
+      runtime,
+    });
+    if (result?.truncationError) {
+      return {
+        truncationError: result.truncationError,
+      };
+    }
+
+    runtime.completedSteps = Array.from(new Set([...runtime.completedSteps, step]));
+    runtime.nextStep = nextBackgroundPrepareStep(step);
+    persistBackgroundPrepareState(store, responseId, runtime, {
+      status: "ready",
+      current_step: null,
+    });
+  }
+
+  return {
+    chat: runtime.chat,
+    compatibility: runtime.compatibility,
+    localOutputItems: backgroundPreparationOutputItems(runtime.contexts),
+  };
+}
+
+async function runBackgroundPrepareStep(step, { config, job, request, previousMessages, fileSearchStore, containerStore, skillStore, runtime }) {
+  if (step === "input_files") {
+    const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
+    runtime.contexts.input_files = localInputFiles;
+    if (localInputFiles) {
+      runtime.compatibility = applyInputFilesToChat(runtime.chat, { ...runtime.compatibility }, localInputFiles, config);
+    }
+    return {};
+  }
+
+  if (step === "shell") {
+    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget: runtime.toolBudget, skillStore });
+    runtime.contexts.shell = localShell;
+    if (localShell) {
+      runtime.compatibility = applyLocalShellToChat(runtime.chat, { ...runtime.compatibility }, localShell, config);
+    }
+    return {};
+  }
+
+  if (step === "computer") {
+    const localComputer = await prepareComputerContext(request, config, { toolBudget: runtime.toolBudget });
+    runtime.contexts.computer = localComputer;
+    if (localComputer) {
+      runtime.compatibility = applyLocalComputerToChat(runtime.chat, { ...runtime.compatibility }, localComputer, config);
+    }
+    return {};
+  }
+
+  if (step === "web_search") {
+    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal, toolBudget: runtime.toolBudget });
+    runtime.contexts.web_search = localWebSearch;
+    if (localWebSearch) {
+      runtime.compatibility = applyLocalWebSearchToChat(runtime.chat, { ...runtime.compatibility }, localWebSearch, config);
+    }
+    return {};
+  }
+
+  if (step === "file_search") {
+    const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore, { toolBudget: runtime.toolBudget });
+    runtime.contexts.file_search = localFileSearch;
+    if (localFileSearch) {
+      runtime.compatibility = applyLocalFileSearchToChat(runtime.chat, { ...runtime.compatibility }, localFileSearch, config);
+    }
+    return {};
+  }
+
+  if (step === "truncation") {
+    Object.assign(runtime.compatibility, toolBudgetCompatibility(runtime.toolBudget));
+    const truncationError = applyLocalContextTruncation(runtime.chat, runtime.compatibility, request, previousMessages, config);
+    if (truncationError) return { truncationError };
+    return {};
+  }
+
+  throw new Error(`unknown background prepare step: ${stringifyContent(step)}`);
+}
+
+function backgroundPreparationRuntime({ preparationState = null, chat, compatibility, toolBudget }) {
+  const state = isPlainObject(preparationState) ? preparationState : {};
+  const hasPersistedNextStep = Object.prototype.hasOwnProperty.call(state, "next_step");
+  return {
+    status: "ready",
+    currentStep: null,
+    nextStep: hasPersistedNextStep && validBackgroundPrepareStep(state.next_step) ? state.next_step : "input_files",
+    completedSteps: Array.isArray(state.completed_steps) ? [...state.completed_steps] : [],
+    chat: isPlainObject(state.chat) ? clone(state.chat) : clone(chat || {}),
+    compatibility: isPlainObject(state.compatibility) ? clone(state.compatibility) : clone(compatibility || {}),
+    contexts: isPlainObject(state.contexts) ? clone(state.contexts) : {},
+    toolBudget: toolBudget || null,
+  };
+}
+
+function persistBackgroundPrepareState(store, responseId, runtime, patch = {}) {
+  return persistBackgroundJobState(store, responseId, {
+    stage: "preparing",
+    prepare: {
+      version: 1,
+      status: patch.status || runtime.status || "ready",
+      current_step: patch.current_step ?? runtime.currentStep ?? null,
+      next_step: runtime.nextStep || null,
+      completed_steps: clone(runtime.completedSteps || []),
+      chat: clone(runtime.chat || {}),
+      compatibility: clone(runtime.compatibility || {}),
+      contexts: clone(runtime.contexts || {}),
+      tool_budget: cloneToolCallBudget(runtime.toolBudget),
+    },
+  });
+}
+
+function backgroundPreparationOutputItems(contexts = {}) {
+  return [
+    ...shellOutputItems(contexts.shell),
+    ...computerOutputItems(contexts.computer),
+    ...webSearchOutputItems(contexts.web_search),
+    ...fileSearchOutputItems(contexts.file_search),
+  ];
+}
+
+function validBackgroundPrepareStep(step) {
+  return step == null || BACKGROUND_PREPARE_STEPS.includes(step);
+}
+
+function nextBackgroundPrepareStep(step) {
+  const index = BACKGROUND_PREPARE_STEPS.indexOf(step);
+  if (index < 0) return null;
+  return BACKGROUND_PREPARE_STEPS[index + 1] || null;
 }
 
 async function runPreparedBackgroundProviderResponse({ config, store, job, request, chat, responseId, compatibility, incomingHeaders = {}, conversationStore, conversation, localOutputItems = [] }) {
@@ -851,6 +997,37 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
       continue;
     }
 
+    if (canResumePreparingBackgroundJob(jobState)) {
+      const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls, jobState.prepare?.tool_budget);
+      if (toolBudget.error) {
+        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        summary.reconciled += 1;
+        continue;
+      }
+      markBackgroundRestart(store, responseId, "resumed_preparation");
+      startBackgroundJob({
+        config,
+        store,
+        backgroundJobs,
+        request: jobState.request,
+        chat: jobState.prepare.chat,
+        responseId,
+        compatibility: jobState.prepare.compatibility || jobState.compatibility || response.metadata?.compatibility || {},
+        incomingHeaders: {},
+        previousMessages: jobState.previous_messages || [],
+        fileSearchStore,
+        containerStore,
+        conversationStore,
+        conversation: jobState.conversation || null,
+        toolBudget: toolBudget.value,
+        skillStore,
+        resumed: true,
+        preparationState: jobState.prepare,
+      });
+      summary.resumed += 1;
+      continue;
+    }
+
     if (canResumeQueuedBackgroundJob(jobState)) {
       const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls);
       if (toolBudget.error) {
@@ -887,12 +1064,43 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
   return summary;
 }
 
-function createResumedToolCallBudget(maxToolCalls) {
+function createResumedToolCallBudget(maxToolCalls, persistedBudget = null) {
   try {
-    return { value: createToolCallBudget(maxToolCalls) };
+    const budget = createToolCallBudget(maxToolCalls);
+    if (!budget || !isPlainObject(persistedBudget)) return { value: budget };
+    const used = Number(persistedBudget.used || 0);
+    const skipped = Number(persistedBudget.skipped || 0);
+    if (!Number.isInteger(used) || used < 0 || used > budget.limit) {
+      const error = new Error("background job tool budget has invalid used count");
+      error.code = "invalid_tool_budget";
+      throw error;
+    }
+    if (!Number.isInteger(skipped) || skipped < 0) {
+      const error = new Error("background job tool budget has invalid skipped count");
+      error.code = "invalid_tool_budget";
+      throw error;
+    }
+    budget.used = used;
+    budget.skipped = skipped;
+    budget.skipped_calls = Array.isArray(persistedBudget.skipped_calls)
+      ? persistedBudget.skipped_calls.filter(isPlainObject).map(clone).slice(0, 20)
+      : [];
+    return { value: budget };
   } catch (error) {
     return { error };
   }
+}
+
+function cloneToolCallBudget(budget) {
+  if (!budget) return null;
+  return {
+    limit: budget.limit,
+    used: budget.used || 0,
+    skipped: budget.skipped || 0,
+    skipped_calls: Array.isArray(budget.skipped_calls)
+      ? budget.skipped_calls.filter(isPlainObject).map(clone).slice(0, 20)
+      : [],
+  };
 }
 
 function backgroundJobValidationFailureReason(error) {
@@ -908,6 +1116,20 @@ function canResumePreparedBackgroundJob(jobState) {
     && Array.isArray(jobState.chat.messages);
 }
 
+function canResumePreparingBackgroundJob(jobState) {
+  const prepare = jobState?.prepare;
+  return isPlainObject(jobState)
+    && jobState.stage === "preparing"
+    && isPlainObject(jobState.request)
+    && isPlainObject(prepare)
+    && prepare.status === "ready"
+    && Object.prototype.hasOwnProperty.call(prepare, "next_step")
+    && validBackgroundPrepareStep(prepare.next_step)
+    && isPlainObject(prepare.chat)
+    && Array.isArray(prepare.chat.messages)
+    && isPlainObject(prepare.compatibility);
+}
+
 function canResumeQueuedBackgroundJob(jobState) {
   return isPlainObject(jobState)
     && jobState.stage === "queued"
@@ -918,7 +1140,12 @@ function canResumeQueuedBackgroundJob(jobState) {
 
 function restartFailureReason(jobState) {
   if (!isPlainObject(jobState)) return "missing_persistent_background_job";
-  if (jobState.stage === "preparing") return "interrupted_during_local_preparation";
+  if (jobState.stage === "preparing") {
+    if (jobState.prepare?.status === "running") {
+      return `interrupted_during_local_preparation_${stringifyContent(jobState.prepare.current_step || "unknown").slice(0, 80)}`;
+    }
+    return "interrupted_during_local_preparation";
+  }
   return `unresumable_stage_${stringifyContent(jobState.stage || "unknown").slice(0, 80)}`;
 }
 
