@@ -476,17 +476,20 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
     model: chat.model || request.model,
   });
 
-  const choice = chat.choices?.[0] || {};
-  const message = choice.message || {};
+  const choices = Array.isArray(chat.choices) && chat.choices.length ? chat.choices : [{}];
+  for (const choice of choices) {
+    const message = choice.message || {};
+    appendReasoningOutput(response, message.reasoning_content);
+    appendMessageOutput(response, message, choice.logprobs);
+    appendToolCallOutputs(response, message.tool_calls || []);
+    appendLegacyFunctionCallOutput(response, message.function_call, legacyFunctionCallId(chat, choice));
+  }
 
-  appendReasoningOutput(response, message.reasoning_content);
-  appendMessageOutput(response, message, choice.logprobs);
-  appendToolCallOutputs(response, message.tool_calls || []);
-
-  const finishReason = choice.finish_reason;
-  response.status = finishReason === "length" ? "incomplete" : "completed";
+  const finishReasons = choices.map((choice) => choice.finish_reason).filter(Boolean);
+  const lengthLimited = finishReasons.includes("length");
+  response.status = lengthLimited ? "incomplete" : "completed";
   response.completed_at = nowSeconds();
-  response.incomplete_details = finishReason === "length" ? { reason: "max_output_tokens" } : null;
+  response.incomplete_details = lengthLimited ? { reason: "max_output_tokens" } : null;
   response.usage = mapUsage(chat.usage);
   if (chat.service_tier != null) response.service_tier = chat.service_tier;
 
@@ -567,19 +570,50 @@ function appendToolCallOutputs(response, toolCalls) {
   }
 }
 
-function chatCompletionToReplayMessages(chat) {
-  const choice = chat.choices?.[0] || {};
-  const message = choice.message || {};
-  if (!message || Object.keys(message).length === 0) return [];
+function appendLegacyFunctionCallOutput(response, functionCall, callId) {
+  if (!isPlainObject(functionCall) || !functionCall.name) return;
+  response.output.push({
+    id: prefixedId("fc"),
+    type: "function_call",
+    call_id: callId,
+    name: functionCall.name,
+    arguments: stringifyContent(functionCall.arguments ?? ""),
+    status: "completed",
+  });
+}
 
-  const replay = {
-    role: "assistant",
-    content: message.content ?? null,
-  };
-  if (message.tool_calls) replay.tool_calls = message.tool_calls;
-  if (message.reasoning_content) replay.reasoning_content = message.reasoning_content;
-  if (message.refusal) replay.refusal = message.refusal;
-  return [replay];
+function legacyFunctionCallId(chat, choice = {}) {
+  const raw = stringifyContent(chat?.id || "compat");
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48) || "compat";
+  return `call_${safe}_${choice.index ?? 0}`;
+}
+
+function chatCompletionToReplayMessages(chat) {
+  const choices = Array.isArray(chat?.choices) ? chat.choices : [];
+  return choices.flatMap((choice) => {
+    const message = choice.message || {};
+    if (!message || Object.keys(message).length === 0) return [];
+
+    const replay = {
+      role: "assistant",
+      content: message.content ?? null,
+    };
+    if (message.tool_calls) {
+      replay.tool_calls = message.tool_calls;
+    } else if (isPlainObject(message.function_call) && message.function_call.name) {
+      replay.tool_calls = [{
+        id: legacyFunctionCallId(chat, choice),
+        type: "function",
+        function: {
+          name: message.function_call.name,
+          arguments: stringifyContent(message.function_call.arguments ?? ""),
+        },
+      }];
+    }
+    if (message.reasoning_content) replay.reasoning_content = message.reasoning_content;
+    if (message.refusal) replay.refusal = message.refusal;
+    return [replay];
+  });
 }
 
 function responseOutputToReplayMessages(response) {

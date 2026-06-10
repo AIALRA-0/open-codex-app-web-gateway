@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/messages, Responses input-token counting, Responses output logprobs mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/messages, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
@@ -118,6 +118,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Stored Chat completion list/get/messages endpoints preserve local `store:true` lifecycle records with pagination and filters.
 - Tool-call replay works across multi-turn tasks.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content.
+- Non-streaming Chat responses with multiple `choices[]` map each returned message/tool/function call into Responses output items instead of dropping all but `choices[0]`.
 - Responses compatibility requests that include Chat-native `stop` sequences forward them to upstream Chat providers and verify the stop marker is omitted from visible output.
 - Background response polling and cancellation remain stable for in-process jobs.
 - Responses `input_file` text extraction works for local file IDs, inline base64 payloads, and bounded HTTP(S) file URLs, with failed/unsupported files surfaced in compatibility metadata.

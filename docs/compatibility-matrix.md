@@ -85,11 +85,12 @@ behavior.
 
 | Chat response field | Responses field | Status |
 | --- | --- | --- |
-| `choices[0].message.content` | output `message.content[].output_text` | Direct |
-| `choices[0].message.refusal` | output refusal content part | Direct when present |
-| `choices[0].message.tool_calls[]` | output `function_call` items | Direct |
-| `choices[0].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming Responses when provider returns Chat logprobs |
-| `choices[0].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
+| `choices[].message.content` | output `message.content[].output_text` | Direct for each non-streaming Chat choice returned by the provider |
+| `choices[].message.refusal` | output refusal content part | Direct when present |
+| `choices[].message.tool_calls[]` | output `function_call` items | Direct |
+| `choices[].message.function_call` | output `function_call` item | Legacy Chat function-call compatibility |
+| `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming Responses when provider returns Chat logprobs |
+| `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
@@ -345,7 +346,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
-| `n>1` multiple candidates | Responses removed `n`; Codex expects one output | Run multiple requests at caller layer |
+| `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve when present, synthesize only from local tools |
 
 ## Reference Projects Reviewed

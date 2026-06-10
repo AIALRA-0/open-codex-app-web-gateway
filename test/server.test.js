@@ -155,6 +155,89 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
   });
 });
 
+test("POST /v1/responses replays legacy Chat function_call outputs with stable call ids", async () => {
+  await withMockProvider(async (_req, res, _call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (_call.body.messages.some((message) => message.role === "tool")) {
+      res.end(JSON.stringify({
+        id: "chatcmpl_legacy_followup",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "legacy-tool-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
+      }));
+      return;
+    }
+
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          function_call: { name: "legacy_lookup", arguments: "{\"query\":\"bridge\"}" },
+        },
+        finish_reason: "function_call",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const firstResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Call the legacy lookup.",
+        tools: [{
+          type: "function",
+          name: "legacy_lookup",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        }],
+        store: true,
+      }),
+    });
+    assert.equal(firstResponse.status, 200);
+    const first = await firstResponse.json();
+    const call = first.output.find((item) => item.type === "function_call");
+    assert.equal(call.call_id, "call_chatcmpl_legacy_0");
+    assert.equal(call.name, "legacy_lookup");
+
+    const followResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        previous_response_id: first.id,
+        input: [{
+          type: "function_call_output",
+          call_id: call.call_id,
+          output: "{\"result\":\"ok\"}",
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(followResponse.status, 200);
+    const follow = await followResponse.json();
+    assert.equal(follow.output[0].content[0].text, "legacy-tool-ok");
+
+    const replay = requests[1].body.messages;
+    const assistantReplay = replay.find((message) => message.role === "assistant" && message.tool_calls);
+    const toolReplay = replay.find((message) => message.role === "tool");
+    assert.equal(assistantReplay.tool_calls[0].id, call.call_id);
+    assert.equal(assistantReplay.tool_calls[0].function.name, "legacy_lookup");
+    assert.equal(toolReplay.tool_call_id, call.call_id);
+  });
+});
+
 test("POST /v1/responses executes local web_search_preview compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

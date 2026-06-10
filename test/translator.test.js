@@ -289,6 +289,72 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });
 
+test("preserves multiple Chat choices as Responses output items", () => {
+  const completion = {
+    id: "chatcmpl_multi",
+    object: "chat.completion",
+    created: 321,
+    model: "multi-model",
+    choices: [
+      {
+        index: 0,
+        message: { role: "assistant", content: "alpha" },
+        finish_reason: "stop",
+      },
+      {
+        index: 1,
+        message: { role: "assistant", content: "beta" },
+        finish_reason: "length",
+      },
+      {
+        index: 2,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_choice_2",
+            type: "function",
+            function: { name: "modern_tool", arguments: "{\"ok\":true}" },
+          }],
+        },
+        finish_reason: "tool_calls",
+      },
+      {
+        index: 3,
+        message: {
+          role: "assistant",
+          content: null,
+          function_call: { name: "legacy_tool", arguments: "{\"legacy\":true}" },
+        },
+        finish_reason: "function_call",
+      },
+    ],
+    usage: { prompt_tokens: 12, completion_tokens: 8, total_tokens: 20 },
+  };
+  const response = chatCompletionToResponse(completion, { model: "multi-model" }, { responseId: "resp_multi" });
+
+  assert.equal(response.status, "incomplete");
+  assert.deepEqual(response.incomplete_details, { reason: "max_output_tokens" });
+  assert.deepEqual(
+    response.output
+      .filter((item) => item.type === "message")
+      .map((item) => item.content[0].text),
+    ["alpha", "beta"],
+  );
+  const calls = response.output.filter((item) => item.type === "function_call");
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].call_id, "call_choice_2");
+  assert.equal(calls[0].name, "modern_tool");
+  assert.equal(calls[1].name, "legacy_tool");
+  assert.equal(calls[1].call_id, "call_chatcmpl_multi_3");
+
+  const replay = chatCompletionToReplayMessages(completion);
+  assert.equal(replay.length, 4);
+  assert.equal(replay[2].tool_calls[0].id, "call_choice_2");
+  assert.equal(replay[3].tool_calls[0].id, "call_chatcmpl_multi_3");
+  assert.equal(replay[3].tool_calls[0].function.name, "legacy_tool");
+});
+
 test("keeps DeepSeek reasoning_content in replay messages", () => {
   const messages = chatCompletionToReplayMessages({
     choices: [{

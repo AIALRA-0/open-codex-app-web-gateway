@@ -683,3 +683,42 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7snjqg` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Multi-Choice Chat Response Preservation
+
+- Used current OpenAI migration guidance to confirm:
+  - Chat Completions can return multiple parallel generations as `choices[]`
+    through the `n` parameter;
+  - Responses removed `n` and returns typed output items instead of Chat
+    choices.
+- Added non-streaming Chat-to-Responses response mapping for every returned
+  `choices[]` entry instead of only `choices[0]`:
+  - `message.content` and `message.refusal` become output `message` items;
+  - `message.tool_calls[]` become Responses `function_call` items;
+  - legacy `message.function_call` becomes a Responses `function_call` item.
+- Added stable legacy function-call IDs derived from the upstream Chat
+  completion id and choice index. The same ID is used in Responses output and
+  in local replay messages so a later `function_call_output` can reference it.
+- Expanded replay storage for non-streaming Chat choices so multiple returned
+  assistant choices are retained as replay messages when a later request uses
+  `previous_response_id`.
+- Added regression coverage for:
+  - multiple Chat choices producing multiple Responses output items;
+  - `finish_reason:"length"` in any choice marking the aggregate response
+    `incomplete`;
+  - legacy `message.function_call` output conversion;
+  - server-level `previous_response_id` replay of a legacy Chat function call
+    followed by a `function_call_output`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 34/34 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Full live `bridge-regression` against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+  1977 ms, P95 latency 4308 ms, total usage 2354 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7t10sk` appeared before reload and after reload, console errors
+  0, warnings 0.
