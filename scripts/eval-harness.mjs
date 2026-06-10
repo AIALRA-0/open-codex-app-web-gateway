@@ -143,11 +143,13 @@ function buildSuites(defaultModel) {
           messages: [{ role: "user", content: "Return the exact string chat-life-ok." }],
           max_tokens: 96,
         },
-        check: ({ text, fetched, messages }) => /chat-life-ok/i.test(text)
+        check: ({ json, text, fetched, messages, list }) => /chat-life-ok/i.test(text)
           && fetched?.id
           && messages?.object === "list"
           && messages.data?.some((message) => message.role === "user")
-          && messages.data?.some((message) => message.role === "assistant"),
+          && messages.data?.some((message) => message.role === "assistant")
+          && list?.object === "list"
+          && list.data?.some((completion) => completion.id === json.id),
       },
       {
         id: "responses-input-tokens",
@@ -543,8 +545,9 @@ async function runChatLifecycleCase(testCase, context, started) {
   const created = JSON.parse(createdBody);
   const fetched = await getJson(`${baseUrl}/v1/chat/completions/${created.id}`);
   const messages = await getJson(`${baseUrl}/v1/chat/completions/${created.id}/messages?limit=20`);
+  const list = await getJson(`${baseUrl}/v1/chat/completions?order=desc&limit=50`);
   const text = chatOutputText(created);
-  const ok = !!testCase.check({ json: created, text, fetched: fetched.json, messages: messages.json });
+  const ok = !!testCase.check({ json: created, text, fetched: fetched.json, messages: messages.json, list: list.json });
   return finishResult(testCase, context, started, {
     ok,
     status: createdResponse.status,
@@ -552,7 +555,9 @@ async function runChatLifecycleCase(testCase, context, started) {
     output_text: truncate(text),
     fetched_status: fetched.status,
     messages_status: messages.status,
+    list_status: list.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+    list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
   });
 }
 

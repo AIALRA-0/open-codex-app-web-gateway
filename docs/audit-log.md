@@ -592,3 +592,42 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7ryfn9` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Stored Chat Completions List Endpoint
+
+- Used the current OpenAI Chat Completions OpenAPI schema to confirm
+  `GET /v1/chat/completions` lists only stored Chat Completions and supports
+  `model`, `metadata[key]`, `after`, `limit`, and `order` parameters. The
+  response is an OpenAI-style list with `data`, `first_id`, `last_id`, and
+  `has_more`.
+- Added local `GET /v1/chat/completions` support for Chat passthrough requests
+  created with `store:true`.
+- Implemented model filtering, bracketed metadata filtering, and existing local
+  pagination over the file-backed response store.
+- Added local completion normalization so list filtering can use request model
+  and request metadata when an upstream Chat provider does not echo those fields
+  in the completion object.
+- Added regression coverage for:
+  - stored Chat completion listing;
+  - `model` and `metadata[key]` filters;
+  - list pagination shape;
+  - unstored Chat completions remaining unavailable;
+  - live `chat-lifecycle` checking list/get/messages together.
+- Verified:
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 30/30 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live Chat lifecycle result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case chat-lifecycle --timeout-ms 90000 --verbose`
+  passed 1/1, latency 2119 ms, output `chat-life-ok`, list status 200, message
+  count 2, total usage 59 tokens.
+- Full live `bridge-regression` passed 16/16, pass rate 1.0, average latency
+  1950 ms, P95 latency 4494 ms, total usage 2273 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7s9mln` appeared before reload and after reload, console errors
+  0, warnings 0.

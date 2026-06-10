@@ -46,6 +46,27 @@ class FileResponseStore {
     return Array.isArray(record?.messages) ? record.messages : [];
   }
 
+  list() {
+    this.ensureDir();
+    try {
+      return fs.readdirSync(this.dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          const filePath = path.join(this.dir, name);
+          try {
+            const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+            return isPlainObject(value) ? value : null;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    } catch {
+      return [];
+    }
+  }
+
   delete(id) {
     const filePath = this.filePath(id);
     if (!filePath) return false;

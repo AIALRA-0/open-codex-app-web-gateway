@@ -905,6 +905,7 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
       body: JSON.stringify({
         model: "mock-model",
         store: true,
+        metadata: { suite: "chat-list" },
         messages: [{ role: "user", content: "hello" }],
       }),
     });
@@ -926,6 +927,21 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].role, "user");
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
+
+    const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?model=mock-model&metadata[suite]=chat-list&limit=10`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.object, "list");
+    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.data[0].id, json.id);
+    assert.equal(listedJson.data[0].metadata.suite, "chat-list");
+    assert.equal(listedJson.first_id, json.id);
+    assert.equal(listedJson.last_id, json.id);
+    assert.equal(listedJson.has_more, false);
+
+    const filtered = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=other`);
+    assert.equal(filtered.status, 200);
+    assert.equal((await filtered.json()).data.length, 0);
   });
 });
 

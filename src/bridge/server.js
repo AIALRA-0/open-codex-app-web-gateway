@@ -1675,6 +1675,42 @@ function handleChatCompletionGet(res, store, completionId) {
   sendJson(res, 200, record.chat_completion);
 }
 
+function handleChatCompletionsList(res, store, url) {
+  const model = url.searchParams.get("model");
+  const metadataFilters = metadataFiltersFromUrl(url);
+  const completions = store.list()
+    .filter((record) => record?.chat_completion)
+    .map((record) => normalizeListedChatCompletion(record))
+    .filter((completion) => !model || completion.model === model)
+    .filter((completion) => matchesMetadataFilters(completion.metadata || {}, metadataFilters));
+  sendJson(res, 200, paginateList(completions, url));
+}
+
+function normalizeListedChatCompletion(record) {
+  const completion = clone(record.chat_completion);
+  if (!completion.model && record.chat_request?.model) completion.model = record.chat_request.model;
+  const requestMetadata = record.chat_request?.metadata;
+  if (!completion.metadata && requestMetadata && typeof requestMetadata === "object" && !Array.isArray(requestMetadata)) {
+    completion.metadata = clone(requestMetadata);
+  }
+  if (!completion.metadata) completion.metadata = {};
+  return completion;
+}
+
+function metadataFiltersFromUrl(url) {
+  const filters = [];
+  for (const [key, value] of url.searchParams.entries()) {
+    const bracket = key.match(/^metadata\[([^\]]+)\]$/);
+    if (bracket) filters.push([bracket[1], value]);
+  }
+  return filters;
+}
+
+function matchesMetadataFilters(metadata, filters) {
+  if (!filters.length) return true;
+  return filters.every(([key, expected]) => String(metadata?.[key] ?? "") === expected);
+}
+
 function handleChatCompletionMessages(res, store, completionId, url) {
   const record = store.get(completionId);
   if (!record?.chat_completion) {
@@ -1965,9 +2001,15 @@ function createServer(config = loadConfig()) {
         }
       }
 
-      if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-        await handleChatPassthrough(req, res, config, store);
-        return;
+      if (url.pathname === "/v1/chat/completions") {
+        if (req.method === "GET") {
+          handleChatCompletionsList(res, store, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleChatPassthrough(req, res, config, store);
+          return;
+        }
       }
 
       const chatRoute = url.pathname.match(/^\/v1\/chat\/completions\/([^/]+)(?:\/([^/]+))?$/);
