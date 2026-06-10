@@ -17,7 +17,10 @@ const outputPath = args.get("output");
 const keepWorkdirs = !!args.get("keep-workdirs");
 const verbose = !!args.get("verbose");
 
-const suites = { micro: buildMicroSuite() };
+const suites = {
+  micro: buildMicroSuite(),
+  "humaneval-mbpp": buildHumanEvalMbppSuite(),
+};
 const selected = caseFilter
   ? suites[suite]?.filter((task) => task.id === caseFilter)
   : suites[suite];
@@ -178,6 +181,148 @@ console.log("duration tests passed");
       },
       testCommand: ["node", "test.js"],
       editableFiles: ["duration.js"],
+    },
+  ];
+}
+
+function buildHumanEvalMbppSuite() {
+  return [
+    {
+      id: "balanced-brackets",
+      issue: [
+        "Fix isBalancedBrackets(input).",
+        "Return true when every opening bracket has a matching closing bracket in the correct nested order.",
+        "Bracket pairs are (), [], and {}. Ignore every other character.",
+        "Return true for strings that contain no brackets.",
+      ].join("\n"),
+      files: {
+        "brackets.js": `function isBalancedBrackets(input) {
+  return String(input).includes("()");
+}
+
+module.exports = { isBalancedBrackets };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { isBalancedBrackets } = require("./brackets");
+
+assert.equal(isBalancedBrackets("function ok() { return [1, 2]; }"), true);
+assert.equal(isBalancedBrackets("([{}])"), true);
+assert.equal(isBalancedBrackets("([)]"), false);
+assert.equal(isBalancedBrackets("(()"), false);
+assert.equal(isBalancedBrackets("plain text"), true);
+console.log("balanced bracket tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["brackets.js"],
+    },
+    {
+      id: "dedupe-stable",
+      issue: [
+        "Fix uniqueBy(items, keyFn).",
+        "Return a new array containing the first item for each key produced by keyFn.",
+        "Keep the original order of the first occurrences.",
+        "Do not mutate the input array.",
+      ].join("\n"),
+      files: {
+        "unique.js": `function uniqueBy(items, keyFn) {
+  return Array.from(new Set(items.map(keyFn)));
+}
+
+module.exports = { uniqueBy };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { uniqueBy } = require("./unique");
+
+const input = [
+  { id: "a", value: 1 },
+  { id: "b", value: 2 },
+  { id: "a", value: 3 },
+  { id: "c", value: 4 },
+];
+const result = uniqueBy(input, (item) => item.id);
+assert.deepEqual(result, [
+  { id: "a", value: 1 },
+  { id: "b", value: 2 },
+  { id: "c", value: 4 },
+]);
+assert.equal(result[0], input[0]);
+assert.deepEqual(input.map((item) => item.value), [1, 2, 3, 4]);
+assert.deepEqual(uniqueBy(["A", "a", "B"], (value) => value.toLowerCase()), ["A", "B"]);
+console.log("stable dedupe tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["unique.js"],
+    },
+    {
+      id: "word-frequency",
+      issue: [
+        "Fix topWords(text, limit).",
+        "Count case-insensitive words made of ASCII letters and digits.",
+        "Return an array of [word, count] pairs sorted by descending count, then alphabetically.",
+        "Respect the numeric limit. Return all words when limit is missing.",
+      ].join("\n"),
+      files: {
+        "words.js": `function topWords(text, limit) {
+  return String(text).split(" ").slice(0, limit);
+}
+
+module.exports = { topWords };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { topWords } = require("./words");
+
+assert.deepEqual(topWords("Beta alpha beta, ALPHA beta gamma!", 2), [["beta", 3], ["alpha", 2]]);
+assert.deepEqual(topWords("one two two three three three"), [["three", 3], ["two", 2], ["one", 1]]);
+assert.deepEqual(topWords("id42 id42 id7", 10), [["id42", 2], ["id7", 1]]);
+assert.deepEqual(topWords("..."), []);
+console.log("word frequency tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["words.js"],
+    },
+    {
+      id: "rotate-matrix",
+      issue: [
+        "Fix rotateClockwise(matrix).",
+        "It receives an N x N array of arrays.",
+        "Return a new matrix rotated 90 degrees clockwise.",
+        "Do not mutate the input matrix. Handle empty matrices.",
+      ].join("\n"),
+      files: {
+        "matrix.js": `function rotateClockwise(matrix) {
+  return matrix.reverse();
+}
+
+module.exports = { rotateClockwise };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { rotateClockwise } = require("./matrix");
+
+const input = [
+  [1, 2, 3],
+  [4, 5, 6],
+  [7, 8, 9],
+];
+assert.deepEqual(rotateClockwise(input), [
+  [7, 4, 1],
+  [8, 5, 2],
+  [9, 6, 3],
+]);
+assert.deepEqual(input, [
+  [1, 2, 3],
+  [4, 5, 6],
+  [7, 8, 9],
+]);
+assert.deepEqual(rotateClockwise([[1]]), [[1]]);
+assert.deepEqual(rotateClockwise([]), []);
+console.log("matrix rotation tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["matrix.js"],
     },
   ];
 }

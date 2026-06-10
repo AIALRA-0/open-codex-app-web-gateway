@@ -194,6 +194,7 @@ npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 9000
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000
+npm run bench:code -- --suite humaneval-mbpp --timeout-ms 180000
 npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl --limit 3 --dry-run
 npm run bench:swe:score -- --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json --dry-run
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000

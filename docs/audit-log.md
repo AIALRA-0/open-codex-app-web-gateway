@@ -5173,3 +5173,55 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 15 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - HumanEval/MBPP-style code benchmark suite
+
+- Found a quality-evaluation gap:
+  - `scripts/code-benchmark.mjs` had only the default `micro` suite with three
+    simple JavaScript repair tasks;
+  - `docs/evaluation-plan.md` still called out HumanEval/MBPP-style unit-test
+    tasks as a planned quick regression signal before heavier SWE-bench runs.
+- Added a new explicit benchmark suite:
+  - `npm run bench:code -- --suite humaneval-mbpp --timeout-ms 180000`;
+  - cases cover balanced bracket validation, stable de-duplication by computed
+    key, deterministic word-frequency ranking, and non-mutating square-matrix
+    rotation;
+  - default `npm run bench:code` behavior remains the low-cost `micro` suite.
+- Updated documentation:
+  - README verification commands now include the new suite;
+  - deployment/evaluation docs list the suite and the covered task families;
+  - the evaluation plan now treats HumanEval/MBPP-style tasks as present quick
+    regression signal rather than future work.
+- Verification:
+  - `node --check scripts/code-benchmark.mjs`: passed.
+  - `git diff --check`: passed.
+  - `npm test`: 130/130 passing tests.
+  - Unknown-suite CLI guard still exits 2 and lists `micro, humaneval-mbpp`.
+  - Default live `micro` code benchmark still passed 3/3 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 19202 ms, P95 latency
+    27771 ms, and total usage 6088 tokens.
+  - Live `humaneval-mbpp` code benchmark passed 4/4 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 7813 ms, P95 latency 10219 ms, and total
+    usage 4423 tokens. Before-fix tests failed and after-fix tests passed for
+    all four cases.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1059 ms, P95 latency 1065 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 598 runtime candidates,
+    selected 51 old UI screenshots by retention policy, deleted 0, selected
+    4051398 bytes, and reported 0 errors.
+  - Report artifact written outside release docs at
+    `/srv/aialra/data/opencodexapp/eval/code-benchmark/humaneval-mbpp-latest.json`;
+    transient work directories remain under ignored `output/code-benchmark/`.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 50 MB, `state/` is 5.2 MB, `output/` is 8.2 MB,
+    `/srv/aialra/data/opencodexapp` is 68 KB, and
+    `/srv/aialra/logs/opencodexapp` is 15 MB.
+  - No API keys, account credentials, or local secret files were committed.
+  - This suite is not a SWE-bench substitute; it is a small, deterministic
+    pass/fail sentinel for issue-to-patch generation quality.
