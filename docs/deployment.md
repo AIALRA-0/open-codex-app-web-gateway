@@ -103,6 +103,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_WEB_SEARCH_OPEN_PAGES` | `1` for `wikipedia`, `0` for `static` unless explicitly set | Number of top search results to open with bounded local `open_page` extraction |
 | `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_BYTES` | `524288` | Maximum bytes read from each opened web page |
 | `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_TEXT_CHARS` | `12000` | Maximum extracted page text injected into Chat context per opened page |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE` | `true` | Emits local `find_in_page` call items for successfully opened pages by searching extracted page text |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_MAX_MATCHES` | `3` | Maximum snippets injected per opened page for local `find_in_page` |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_CONTEXT_CHARS` | `240` | Characters of surrounding context included on each local `find_in_page` snippet |
 | `CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS` | empty | JSON array of `{title,url,snippet}` results for the `static` provider; keep large/private fixtures outside Git |
 | `CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT` | `https://en.wikipedia.org/w/api.php` | Override endpoint for the no-key Wikipedia provider; the default endpoint falls back to the Wikipedia REST search API when rejected |
 | `CODEXCOMPAT_WEB_SEARCH_USER_AGENT` | `open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)` | User-Agent sent to Wikipedia search endpoints; include contact/site context to satisfy Wikimedia API policy |

@@ -1833,3 +1833,59 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq81cn6p`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local Web Search Find In Page Context
+
+- Closed the next local `web_search_preview` action-shape gap for Chat-only
+  providers:
+  - successfully opened pages now receive a local `find_in_page` scan over the
+    extracted page text;
+  - Responses output includes auditable `web_search_call` items for
+    `action.type:"search"`, `action.type:"open_page"`, and
+    `action.type:"find_in_page"`;
+  - bounded `find_in_page` snippets are injected into the upstream Chat prompt;
+  - compatibility metadata records `find_in_page_count`,
+    `find_in_page_match_count`, and `find_in_page_failed_count`.
+- Improved `open_page` robustness for large pages: local page fetches now read
+  up to `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_BYTES` and mark the page text
+  `truncated` instead of failing solely because the remote body is larger than
+  the local read limit.
+- Implementation follows the official OpenAI web search output shape where
+  `web_search_call.action` may be `search`, `open_page`, or `find_in_page`, with
+  final message URL citations. Source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/guides/tools-web-search#output-and-citations`.
+- Added bridge flags:
+  - `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE`;
+  - `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_MAX_MATCHES`;
+  - `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_CONTEXT_CHARS`.
+- Updated `.env.example`, `docs/deployment.md`,
+  `docs/compatibility-matrix.md`, and `docs/evaluation-plan.md`.
+- Remaining known gap: this is still a local compatibility adapter, not native
+  OpenAI hosted search. The default no-key provider remains Wikipedia-only, and
+  production-grade web ranking, source policy, and citation selection remain
+  future work.
+- Verified:
+  - `node --check src/bridge/web_search.js src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`:
+    passed.
+  - `npm test`: 66/66 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Direct live probe for `Use web search for OpenAI` returned completed
+    `search`, `open_page`, and `find_in_page` call actions for
+    `https://en.wikipedia.org/wiki/OpenAI`, with `opened_count:1`,
+    `find_in_page_count:1`, and `find_in_page_match_count:3`.
+  - Targeted live `responses-web-search` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 2553 ms, output `web-search-ok [1]`, and total
+    usage 4040 tokens. The harness now requires a completed `find_in_page`
+    action when the page opens successfully.
+  - Full live `bridge-regression` passed 22/22 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1629 ms, P95 latency 3589 ms, and total
+    usage 6812 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq81p7ky`, reload persistence
+    confirmed, console errors 0, warnings 0.

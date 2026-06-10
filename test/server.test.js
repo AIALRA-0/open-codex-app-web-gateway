@@ -760,6 +760,7 @@ test("local web_search can open result pages and inject extracted page text", as
       snippet: "Snippet before opening.",
     }],
     webSearchOpenPages: 1,
+    webSearchFindInPage: false,
     webSearchPageMaxTextChars: 2000,
   }, {
     fetch: async (url, options) => {
@@ -782,6 +783,40 @@ test("local web_search can open result pages and inject extracted page text", as
   assert.doesNotMatch(context.results[0].opened.text, /bad\(\)/);
 });
 
+test("local web_search can find matches inside opened pages", async () => {
+  const context = await prepareWebSearchContext({
+    input: "Use web search for open-page-ok.",
+    tools: [{ type: "web_search_preview" }],
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Find Page Fixture",
+      url: "https://example.test/find-page",
+      snippet: "Snippet before opening.",
+    }],
+    webSearchOpenPages: 1,
+    webSearchFindInPage: true,
+    webSearchFindInPageMaxMatches: 2,
+    webSearchFindInPageContextChars: 32,
+  }, {
+    fetch: async () => new Response("<main><p>Before text. The marker open-page-ok appears here. After text.</p></main>", {
+      status: 200,
+      headers: { "content-type": "text/html; charset=utf-8" },
+    }),
+  });
+
+  assert.equal(context.calls.length, 3);
+  assert.equal(context.calls[0].action.type, "search");
+  assert.equal(context.calls[1].action.type, "open_page");
+  assert.equal(context.calls[2].action.type, "find_in_page");
+  assert.equal(context.calls[2].status, "completed");
+  assert.equal(context.calls[2].action.url, "https://example.test/find-page");
+  assert.match(context.calls[2].action.query, /open-page-ok/);
+  assert.equal(context.results[0].find_in_page.status, "completed");
+  assert.equal(context.results[0].find_in_page.match_count, 1);
+  assert.match(context.results[0].find_in_page.matches[0].text, /open-page-ok/);
+});
+
 test("POST /v1/responses emits local web_search open_page calls", async () => {
   const pageServer = http.createServer((_req, res) => {
     res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
@@ -794,6 +829,8 @@ test("POST /v1/responses emits local web_search open_page calls", async () => {
       assert.match(prompt, /Bridge Open Page Result/);
       assert.match(prompt, /Opened page text:/);
       assert.match(prompt, /Opened page body says open-page-ok/);
+      assert.match(prompt, /Find in page matches/);
+      assert.match(prompt, /open-page-ok/);
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify({
         id: "chatcmpl_web_search_open",
@@ -826,9 +863,16 @@ test("POST /v1/responses emits local web_search open_page calls", async () => {
       assert.equal(json.output[1].action.type, "open_page");
       assert.equal(json.output[1].action.url, `http://127.0.0.1:${pageAddress.port}/open-page`);
       assert.equal(json.output[1].status, "completed");
-      assert.equal(json.output[2].type, "message");
+      assert.equal(json.output[2].type, "web_search_call");
+      assert.equal(json.output[2].action.type, "find_in_page");
+      assert.equal(json.output[2].action.url, `http://127.0.0.1:${pageAddress.port}/open-page`);
+      assert.equal(json.output[2].status, "completed");
+      assert.equal(json.output[3].type, "message");
       assert.equal(json.metadata.compatibility.local_web_search.opened_count, 1);
       assert.equal(json.metadata.compatibility.local_web_search.open_failed_count, 0);
+      assert.equal(json.metadata.compatibility.local_web_search.find_in_page_count, 1);
+      assert.equal(json.metadata.compatibility.local_web_search.find_in_page_match_count, 1);
+      assert.equal(json.metadata.compatibility.local_web_search.find_in_page_failed_count, 0);
     }, {
       webSearchProvider: "static",
       webSearchOpenPages: 1,

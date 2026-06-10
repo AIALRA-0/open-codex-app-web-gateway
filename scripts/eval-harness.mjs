@@ -506,15 +506,20 @@ function buildSuites(defaultModel) {
           const calls = (json.output || []).filter((item) => item.type === "web_search_call");
           const searchCall = calls.find((item) => item.action?.type === "search");
           const openPageCall = calls.find((item) => item.action?.type === "open_page");
+          const findInPageCall = calls.find((item) => item.action?.type === "find_in_page");
           const annotations = (json.output || [])
             .flatMap((item) => item.content || [])
             .flatMap((part) => part.annotations || []);
           const openAttemptCount = (json.metadata?.compatibility?.local_web_search?.opened_count || 0)
             + (json.metadata?.compatibility?.local_web_search?.open_failed_count || 0);
+          const findAttemptCount = (json.metadata?.compatibility?.local_web_search?.find_in_page_count || 0)
+            + (json.metadata?.compatibility?.local_web_search?.find_in_page_failed_count || 0);
+          const openedCount = json.metadata?.compatibility?.local_web_search?.opened_count || 0;
           return !!searchCall
             && searchCall.status === "completed"
             && !!openPageCall
             && ["completed", "failed"].includes(openPageCall.status)
+            && (openedCount === 0 || (!!findInPageCall && findInPageCall.status === "completed" && findAttemptCount >= 1))
             && annotations.some((annotation) => annotation.type === "url_citation" && /^https?:\/\//.test(annotation.url || ""))
             && openAttemptCount >= 1
             && /web-search-ok/i.test(text);

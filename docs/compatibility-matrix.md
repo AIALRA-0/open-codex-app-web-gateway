@@ -53,7 +53,7 @@ implementations for those tools.
 | `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution; startup reconciliation marks stale in-progress background records failed after a bridge restart |
 | `tools[type=function]` | chat function tools | Direct |
-| `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page items and `url_citation` annotations |
+| `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page/find_in_page items and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
 | `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output` |
@@ -120,7 +120,7 @@ behavior.
 | `finish_reason=stop`, `tool_calls`, or legacy `function_call` | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled`; stale in-progress background records are reconciled to failed on startup instead of remaining stuck |
 | local input file context | compatibility metadata `local_input_files` | Emulated before upstream Chat calls for Responses create, background, streaming, `/input_tokens`, and local compaction |
-| local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses; bounded `open_page` extraction can inject top result page text |
+| local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses; bounded `open_page` extraction can inject top result page text and local `find_in_page` snippets |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
 | local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation; replay-only for `/input_tokens` and local compaction probes |
@@ -288,8 +288,9 @@ When a Chat stream contains multiple `choices[].index` values, the bridge keeps
 separate Responses output items and replay messages per choice instead of
 merging deltas into one assistant message.
 When `web_search_preview` is handled by the local adapter, the bridge emits
-`web_search_call` output items for the search and any bounded local page opens,
-then applies URL citation annotations to the final message content.
+`web_search_call` output items for the search, any bounded local page opens, and
+local `find_in_page` scans over opened page text, then applies URL citation
+annotations to the final message content.
 When `file_search` is handled by the local adapter, the bridge emits a
 `file_search_call` output item before Chat text deltas and applies file citation
 annotations to the final message content.
@@ -305,7 +306,10 @@ Responses output to the OpenAI-style shape documented for web search:
 `web_search_call` plus `url_citation` annotations. For the first
 `CODEXCOMPAT_WEB_SEARCH_OPEN_PAGES` results, it can also fetch the page, extract
 bounded text from HTML/plain text, inject it into the Chat prompt, and emit an
-additional `web_search_call` with `action.type:"open_page"`.
+additional `web_search_call` with `action.type:"open_page"`. When
+`CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE` is enabled, the bridge searches that
+extracted text for the request query and injects bounded snippets while emitting
+`action.type:"find_in_page"`.
 
 Current providers:
 
@@ -324,10 +328,13 @@ Configuration:
 | `CODEXCOMPAT_WEB_SEARCH_OPEN_PAGES` | `1` for `wikipedia`, `0` for `static` unless explicitly set | Number of top results opened with local `open_page` extraction |
 | `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_BYTES` | `524288` | Maximum bytes read from each opened page |
 | `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_TEXT_CHARS` | `12000` | Maximum extracted page text injected per opened page |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE` | `true` | Enables local `find_in_page` scans over successfully opened page text |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_MAX_MATCHES` | `3` | Maximum local `find_in_page` snippets injected per opened page |
+| `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE_CONTEXT_CHARS` | `240` | Characters of surrounding context included in each local `find_in_page` snippet |
 
 This is a bridge compatibility layer, not native OpenAI web search. Full parity
-still requires a production-grade web index/provider, citation policy,
-`find_in_page` action support, and stronger citation ranking.
+still requires a production-grade web index/provider, citation policy, and
+stronger citation ranking.
 
 ## Local Input File Adapter
 
@@ -438,7 +445,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
-| OpenAI hosted `web_search` full parity | The local adapter can search, cite, and open bounded top-result pages, but the default no-key provider is Wikipedia-only and does not yet support reasoning-style `find_in_page` actions or full OpenAI ranking/policy behavior | Add production web-search provider support, `find_in_page` actions, and stronger citation ranking |
+| OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, and basic `.docx`/`.xlsx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |

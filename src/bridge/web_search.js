@@ -9,6 +9,25 @@ const WEB_SEARCH_TOOL_TYPES = new Set([
 ]);
 const DEFAULT_WIKIPEDIA_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 const DEFAULT_WEB_SEARCH_USER_AGENT = "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)";
+const FIND_IN_PAGE_STOP_WORDS = new Set([
+  "about",
+  "after",
+  "also",
+  "and",
+  "are",
+  "for",
+  "from",
+  "into",
+  "return",
+  "search",
+  "that",
+  "the",
+  "then",
+  "this",
+  "use",
+  "web",
+  "with",
+]);
 
 function isWebSearchTool(tool) {
   return !!tool && typeof tool === "object" && WEB_SEARCH_TOOL_TYPES.has(tool.type);
@@ -51,6 +70,7 @@ async function prepareWebSearchContext(request = {}, config = {}, options = {}) 
   try {
     context.results = await runSearchProvider(provider, query, maxResults, config, options);
     await openSearchResultPages(context, config, options);
+    findInOpenedPages(context, config);
     return context;
   } catch (error) {
     context.calls[0].status = "failed";
@@ -98,7 +118,7 @@ function webSearchOutputItems(context) {
     type: "web_search_call",
     status: call.status || "completed",
     action: call.action || { type: "search", query: context.query || "" },
-    ...(call.status === "failed" ? { error: context.error || "local web search failed" } : {}),
+    ...(call.status === "failed" ? { error: call.error || context.error || "local web search failed" } : {}),
   }));
 }
 
@@ -111,6 +131,9 @@ function webSearchCompatibility(context) {
       result_count: context.results?.length || 0,
       opened_count: context.results?.filter((result) => result.opened?.status === "completed").length || 0,
       open_failed_count: context.results?.filter((result) => result.opened?.status === "failed").length || 0,
+      find_in_page_count: context.results?.filter((result) => result.find_in_page?.status === "completed").length || 0,
+      find_in_page_match_count: context.results?.reduce((sum, result) => sum + (result.find_in_page?.match_count || 0), 0) || 0,
+      find_in_page_failed_count: context.results?.filter((result) => result.find_in_page?.status === "failed").length || 0,
       tool_types: context.tool_types || [],
       ...(context.error ? { error: context.error } : {}),
     },
@@ -143,6 +166,8 @@ function webSearchPrompt(context) {
     `Snippet: ${result.snippet || ""}`,
     result.opened?.status === "completed" ? `Opened page text:\n${result.opened.text}` : null,
     result.opened?.status === "failed" ? `Open page error: ${result.opened.error}` : null,
+    result.find_in_page?.status === "completed" ? findInPagePrompt(result.find_in_page) : null,
+    result.find_in_page?.status === "failed" ? `Find in page error: ${result.find_in_page.error}` : null,
   ].join("\n"));
 
   return [
@@ -195,6 +220,109 @@ async function openSearchResultPages(context, config = {}, options = {}) {
   }
 }
 
+function findInOpenedPages(context, config = {}) {
+  if (config.webSearchFindInPage === false || !context?.results?.length) return;
+  for (const result of context.results) {
+    if (result.opened?.status !== "completed") continue;
+    const call = {
+      id: prefixedId("ws"),
+      type: "web_search_call",
+      status: "completed",
+      action: {
+        type: "find_in_page",
+        url: result.url,
+        query: context.query || "",
+      },
+    };
+    try {
+      const found = findPageMatches(result.opened.text, context.query, config);
+      result.find_in_page = {
+        status: "completed",
+        query: found.query,
+        matches: found.matches,
+        match_count: found.match_count,
+        truncated: found.truncated,
+      };
+    } catch (error) {
+      call.status = "failed";
+      call.error = error.message || "local find_in_page failed";
+      result.find_in_page = {
+        status: "failed",
+        error: call.error,
+      };
+    }
+    context.calls.push(call);
+  }
+}
+
+function findPageMatches(text, query, config = {}) {
+  const pageText = String(text || "");
+  if (!pageText.trim()) throw new Error("find_in_page has no page text to search");
+  const needles = findInPageNeedles(query);
+  if (!needles.length) throw new Error("find_in_page query is empty");
+
+  const lowerText = pageText.toLowerCase();
+  const maxMatches = Math.max(1, Math.min(Number(config.webSearchFindInPageMaxMatches || 3), 10));
+  const contextChars = Math.max(40, Math.min(Number(config.webSearchFindInPageContextChars || 240), 2000));
+  const matches = [];
+  const seen = new Set();
+  let truncated = false;
+
+  for (const needle of needles) {
+    const lowerNeedle = needle.toLowerCase();
+    let from = 0;
+    while (matches.length < maxMatches) {
+      const index = lowerText.indexOf(lowerNeedle, from);
+      if (index === -1) break;
+      const start = Math.max(0, index - contextChars);
+      const end = Math.min(pageText.length, index + needle.length + contextChars);
+      const key = `${start}:${end}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        matches.push({
+          query: needle,
+          start_index: index,
+          end_index: index + needle.length,
+          text: pageText.slice(start, end).replace(/\s+/g, " ").trim(),
+        });
+      }
+      from = index + Math.max(needle.length, 1);
+    }
+    if (matches.length >= maxMatches) {
+      truncated = lowerText.indexOf(lowerNeedle, from) !== -1 || needles.indexOf(needle) < needles.length - 1;
+      break;
+    }
+  }
+
+  return {
+    query: String(query || "").trim(),
+    matches,
+    match_count: matches.length,
+    truncated,
+  };
+}
+
+function findInPageNeedles(query) {
+  const normalized = String(query || "").replace(/\s+/g, " ").trim();
+  const needles = [];
+  if (normalized.length >= 3 && normalized.length <= 120) needles.push(normalized);
+  const words = normalized.match(/[a-z0-9][a-z0-9'-]{2,}/gi) || [];
+  for (const word of words) {
+    const lower = word.toLowerCase();
+    if (FIND_IN_PAGE_STOP_WORDS.has(lower)) continue;
+    if (!needles.some((needle) => needle.toLowerCase() === lower)) needles.push(word);
+    if (needles.length >= 8) break;
+  }
+  return needles;
+}
+
+function findInPagePrompt(findInPage) {
+  const header = `Find in page matches for "${findInPage.query}":`;
+  if (!findInPage.matches?.length) return `${header} none`;
+  const lines = findInPage.matches.map((match, index) => `- Match ${index + 1} (${match.query}): ${match.text}`);
+  return [header, ...lines].join("\n");
+}
+
 async function fetchPageText(value, config = {}, options = {}) {
   let url;
   try {
@@ -222,21 +350,21 @@ async function fetchPageText(value, config = {}, options = {}) {
     });
     if (!response.ok) throw new Error(`open_page failed with HTTP ${response.status}`);
     const contentType = response.headers?.get?.("content-type") || "";
-    const buffer = await readResponseLimited(response, config.webSearchPageMaxBytes || 512 * 1024);
+    const { buffer, truncated: byteTruncated } = await readResponseLimited(response, config.webSearchPageMaxBytes || 512 * 1024);
     const rawText = buffer.toString("utf8").replace(/\u0000/g, "");
     let text = /^text\/html\b|application\/xhtml\+xml\b/i.test(contentType)
       ? htmlToText(rawText)
       : rawText;
     text = text.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
     const maxChars = config.webSearchPageMaxTextChars || 12000;
-    const truncated = text.length > maxChars;
-    if (truncated) text = text.slice(0, maxChars);
+    const textTruncated = text.length > maxChars;
+    if (textTruncated) text = text.slice(0, maxChars);
     if (!text) throw new Error("open_page returned no extractable text");
     return {
       text,
       content_type: contentType,
       bytes: buffer.length,
-      truncated,
+      truncated: byteTruncated || textTruncated,
     };
   } catch (error) {
     if (error.name === "AbortError") throw new Error("open_page timed out");
@@ -250,13 +378,24 @@ async function fetchPageText(value, config = {}, options = {}) {
 async function readResponseLimited(response, maxBytes) {
   const chunks = [];
   let size = 0;
+  let truncated = false;
   for await (const chunk of response.body) {
     const buffer = Buffer.from(chunk);
-    size += buffer.length;
-    if (size > maxBytes) throw new Error(`open_page exceeds local limit of ${maxBytes} bytes`);
+    const remaining = maxBytes - size;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    if (buffer.length > remaining) {
+      chunks.push(buffer.subarray(0, remaining));
+      size += remaining;
+      truncated = true;
+      break;
+    }
     chunks.push(buffer);
+    size += buffer.length;
   }
-  return Buffer.concat(chunks);
+  return { buffer: Buffer.concat(chunks), truncated };
 }
 
 function htmlToText(value) {
