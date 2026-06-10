@@ -2169,6 +2169,341 @@ function parseJsonOrNull(text) {
   }
 }
 
+async function handleLegacyCompletions(req, res, config) {
+  const request = await readJson(req);
+  const prompts = normalizeCompletionPrompts(request.prompt);
+  if (request.stream) {
+    await handleStreamingLegacyCompletions(req, res, config, request, prompts);
+    return;
+  }
+
+  const completionId = legacyCompletionId();
+  let created = nowSeconds();
+  const choices = [];
+  const usage = emptyCompletionUsage();
+  let model = request.model || config.defaultModel;
+  let systemFingerprint = null;
+  let sawUsage = false;
+
+  for (let promptIndex = 0; promptIndex < prompts.length; promptIndex += 1) {
+    const prompt = prompts[promptIndex];
+    const chat = legacyCompletionToChatRequest(request, prompt, config);
+    const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
+    const text = await upstream.text();
+    const upstreamJson = parseJsonOrNull(text);
+    if (!upstream.ok) {
+      sendJson(res, upstream.status, upstreamJson || { error: { message: text } });
+      return;
+    }
+
+    model = upstreamJson?.model || model;
+    if (upstreamJson?.created && promptIndex === 0) created = upstreamJson.created;
+    systemFingerprint = upstreamJson?.system_fingerprint || systemFingerprint;
+    const choiceBase = promptIndex * normalizedCompletionChoiceCount(request.n);
+    for (const [choiceOffset, choice] of (upstreamJson?.choices || []).entries()) {
+      choices.push(chatChoiceToLegacyCompletionChoice(choice, {
+        prompt,
+        request,
+        indexBase: choiceBase,
+        fallbackIndex: choiceOffset,
+      }));
+    }
+    if (addCompletionUsage(usage, upstreamJson?.usage)) sawUsage = true;
+  }
+
+  const response = {
+    id: completionId,
+    object: "text_completion",
+    created,
+    model,
+    choices,
+    ...(systemFingerprint ? { system_fingerprint: systemFingerprint } : {}),
+    ...(sawUsage ? { usage } : {}),
+  };
+  sendJson(res, 200, response);
+}
+
+async function handleStreamingLegacyCompletions(req, res, config, request, prompts) {
+  const completionId = legacyCompletionId();
+  const created = nowSeconds();
+  let headersWritten = false;
+  const echoedChoices = new Set();
+
+  for (let promptIndex = 0; promptIndex < prompts.length; promptIndex += 1) {
+    const prompt = prompts[promptIndex];
+    const chat = legacyCompletionToChatRequest(request, prompt, config);
+    const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
+    if (!upstream.ok) {
+      const text = await upstream.text();
+      const upstreamJson = parseJsonOrNull(text);
+      if (!headersWritten) {
+        sendJson(res, upstream.status, upstreamJson || { error: { message: text } });
+      } else {
+        writeLegacyCompletionSse(res, upstreamJson || {
+          error: {
+            message: text || `upstream provider returned HTTP ${upstream.status}`,
+            type: "upstream_provider_error",
+            code: upstream.status,
+          },
+        });
+        res.end();
+      }
+      return;
+    }
+
+    if (!headersWritten) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-cache, no-transform",
+        "connection": "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      headersWritten = true;
+    }
+
+    const choiceBase = promptIndex * normalizedCompletionChoiceCount(request.n);
+    for await (const payload of iterateSseJson(upstream.body)) {
+      if (payload === "[DONE]") break;
+      const chunk = chatStreamChunkToLegacyCompletionChunk(payload, {
+        completionId,
+        created,
+        model: request.model || config.defaultModel,
+        prompt,
+        request,
+        indexBase: choiceBase,
+        echoedChoices,
+      });
+      writeLegacyCompletionSse(res, chunk);
+    }
+  }
+
+  if (!headersWritten) {
+    res.writeHead(200, {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      "connection": "keep-alive",
+      "x-accel-buffering": "no",
+    });
+  }
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
+function legacyCompletionId() {
+  return `cmpl-${crypto.randomBytes(16).toString("hex")}`;
+}
+
+function normalizeCompletionPrompts(prompt) {
+  if (prompt == null) return [""];
+  if (!Array.isArray(prompt)) return [stringifyContent(prompt)];
+  if (!prompt.length) return [""];
+  if (prompt.every((part) => Number.isInteger(part))) {
+    return [prompt.map((part) => String(part)).join(" ")];
+  }
+  return prompt.map((part) => normalizeSingleCompletionPrompt(part));
+}
+
+function normalizeSingleCompletionPrompt(prompt) {
+  if (!Array.isArray(prompt)) return stringifyContent(prompt);
+  if (prompt.every((part) => Number.isInteger(part))) {
+    return prompt.map((part) => String(part)).join(" ");
+  }
+  return prompt.map((part) => stringifyContent(part)).join("");
+}
+
+function legacyCompletionToChatRequest(request, prompt, config) {
+  const chat = {
+    model: request.model || config.defaultModel,
+    messages: [{ role: "user", content: completionPromptForChat(prompt, request) }],
+  };
+
+  const maxTokensField = config.maxTokensField || "max_tokens";
+  if (request.max_tokens != null) chat[maxTokensField] = request.max_tokens;
+  for (const field of ["temperature", "top_p", "frequency_penalty", "presence_penalty", "stop", "seed", "n"]) {
+    copyDefinedField(chat, request, field);
+  }
+  if (request.logit_bias !== undefined && config.forwardChatNativeFields !== false) {
+    chat.logit_bias = clone(request.logit_bias);
+  }
+  if (request.logprobs != null) {
+    chat.logprobs = true;
+    const topLogprobs = Number(request.logprobs);
+    if (Number.isFinite(topLogprobs) && topLogprobs > 0) {
+      chat.top_logprobs = Math.min(20, Math.trunc(topLogprobs));
+    }
+  }
+  mapLegacyCompletionUser(request, chat, config);
+  if (request.stream) {
+    chat.stream = true;
+    if (config.forwardStreamOptions !== false) {
+      if (request.stream_options !== undefined) {
+        chat.stream_options = isPlainObject(request.stream_options)
+          ? clone(request.stream_options)
+          : request.stream_options;
+      }
+      if (config.streamIncludeUsage !== false) {
+        if (!isPlainObject(chat.stream_options)) chat.stream_options = {};
+        if (chat.stream_options.include_usage === undefined) chat.stream_options.include_usage = true;
+      }
+    }
+  }
+
+  return chat;
+}
+
+function copyDefinedField(target, source, field) {
+  if (source[field] !== undefined) target[field] = clone(source[field]);
+}
+
+function completionPromptForChat(prompt, request) {
+  if (request.suffix == null || request.suffix === "") return prompt;
+  return [
+    "Complete the prefix so it fits immediately before the suffix. Return only the missing continuation.",
+    "",
+    "Prefix:",
+    prompt,
+    "",
+    "Suffix:",
+    stringifyContent(request.suffix),
+  ].join("\n");
+}
+
+function mapLegacyCompletionUser(request, chat, config) {
+  if (request.user == null || request.user === "") return;
+  if (!config.deepseekUserIdCompat) {
+    chat.user = stringifyContent(request.user);
+    return;
+  }
+  chat.user_id = normalizeProviderUserId(request.user);
+}
+
+function normalizeProviderUserId(value) {
+  const raw = stringifyContent(value);
+  if (/^[A-Za-z0-9_-]{1,512}$/.test(raw)) return raw;
+  return `sha256_${crypto.createHash("sha256").update(raw).digest("hex")}`;
+}
+
+function normalizedCompletionChoiceCount(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.trunc(parsed);
+}
+
+function chatChoiceToLegacyCompletionChoice(choice, { prompt, request, indexBase, fallbackIndex }) {
+  const completionText = chatChoiceText(choice);
+  const text = request.echo ? `${prompt}${completionText}` : completionText;
+  return {
+    text,
+    index: indexBase + numericChoiceIndex(choice, fallbackIndex),
+    logprobs: chatLogprobsToLegacyCompletionLogprobs(choice?.logprobs),
+    finish_reason: choice?.finish_reason ?? null,
+  };
+}
+
+function chatStreamChunkToLegacyCompletionChunk(payload, options) {
+  const chunk = {
+    id: options.completionId,
+    object: "text_completion",
+    created: payload?.created || options.created,
+    model: payload?.model || options.model,
+    choices: (payload?.choices || []).map((choice, fallbackIndex) => {
+      const index = options.indexBase + numericChoiceIndex(choice, fallbackIndex);
+      let text = chatStreamChoiceText(choice);
+      if (options.request.echo && !options.echoedChoices.has(index)) {
+        text = `${options.prompt}${text}`;
+        options.echoedChoices.add(index);
+      }
+      return {
+        text,
+        index,
+        logprobs: chatLogprobsToLegacyCompletionLogprobs(choice?.logprobs),
+        finish_reason: choice?.finish_reason ?? null,
+      };
+    }),
+  };
+  if (payload?.system_fingerprint) chunk.system_fingerprint = payload.system_fingerprint;
+  const usage = completionUsage(payload?.usage);
+  if (usage) chunk.usage = usage;
+  return chunk;
+}
+
+function numericChoiceIndex(choice, fallbackIndex) {
+  const parsed = Number(choice?.index);
+  if (Number.isFinite(parsed)) return Math.trunc(parsed);
+  return fallbackIndex;
+}
+
+function chatChoiceText(choice) {
+  if (choice?.text != null) return stringifyContent(choice.text);
+  return chatContentToText(choice?.message?.content);
+}
+
+function chatStreamChoiceText(choice) {
+  if (choice?.text != null) return stringifyContent(choice.text);
+  return chatContentToText(choice?.delta?.content ?? choice?.message?.content ?? "");
+}
+
+function chatContentToText(content) {
+  if (!Array.isArray(content)) return stringifyContent(content);
+  return content
+    .map((part) => stringifyContent(part?.text ?? part?.content ?? part))
+    .join("");
+}
+
+function chatLogprobsToLegacyCompletionLogprobs(logprobs) {
+  const content = Array.isArray(logprobs?.content) ? logprobs.content : [];
+  if (!content.length) return null;
+  let offset = 0;
+  return {
+    tokens: content.map((item) => stringifyContent(item?.token ?? "")),
+    token_logprobs: content.map((item) => Number.isFinite(item?.logprob) ? item.logprob : null),
+    top_logprobs: content.map((item) => {
+      if (!Array.isArray(item?.top_logprobs)) return null;
+      return Object.fromEntries(item.top_logprobs.map((top) => [
+        stringifyContent(top?.token ?? ""),
+        Number.isFinite(top?.logprob) ? top.logprob : null,
+      ]));
+    }),
+    text_offset: content.map((item) => {
+      const current = offset;
+      offset += stringifyContent(item?.token ?? "").length;
+      return current;
+    }),
+  };
+}
+
+function emptyCompletionUsage() {
+  return { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 };
+}
+
+function addCompletionUsage(total, usage) {
+  const mapped = completionUsage(usage);
+  if (!mapped) return false;
+  total.prompt_tokens += mapped.prompt_tokens;
+  total.completion_tokens += mapped.completion_tokens;
+  total.total_tokens += mapped.total_tokens;
+  return true;
+}
+
+function completionUsage(usage) {
+  if (!usage) return null;
+  const promptTokens = usage.prompt_tokens ?? usage.input_tokens;
+  const completionTokens = usage.completion_tokens ?? usage.output_tokens;
+  const totalTokens = usage.total_tokens ?? (
+    Number(promptTokens || 0) + Number(completionTokens || 0)
+  );
+  if (![promptTokens, completionTokens, totalTokens].some((value) => Number.isFinite(Number(value)))) return null;
+  return {
+    prompt_tokens: Number(promptTokens || 0),
+    completion_tokens: Number(completionTokens || 0),
+    total_tokens: Number(totalTokens || 0),
+  };
+}
+
+function writeLegacyCompletionSse(res, payload) {
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
 function proxyResponseHeaders(upstream) {
   const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
   const headers = {
@@ -3014,6 +3349,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/responses/input_tokens") {
         await handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/completions") {
+        await handleLegacyCompletions(req, res, config);
         return;
       }
 

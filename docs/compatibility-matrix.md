@@ -10,6 +10,7 @@ Primary sources:
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
+- OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
@@ -30,7 +31,9 @@ Primary sources:
 Codex must see a Responses-compatible service. The bridge exposes
 `/v1/responses`, translates the request into `/v1/chat/completions`, then
 translates Chat response objects and Chat SSE chunks back into Responses objects
-and typed Responses SSE events.
+and typed Responses SSE events. It also exposes compatibility surfaces for
+Chat Completions passthrough and legacy text Completions so older OpenAI SDK
+paths and evaluation harnesses can target the same deployment.
 
 This gives strong compatibility for Codex's normal agent loop. It cannot make a
 chat-only provider truly support hosted OpenAI tools without adding local
@@ -140,6 +143,35 @@ behavior.
 | `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |
 | `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize request, `previous_response_id`, and local `conversation` state; returns `response.compaction`, attaches `response.conversation` when present, encrypts local compaction content with an AES-GCM key stored outside Git, and disables DeepSeek thinking for compaction replay follow-ups by default |
 | `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request, `previous_response_id`, and local `conversation` state to Chat Completions; forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` without appending Conversation items |
+
+## Legacy Completions Endpoint Coverage
+
+OpenAI's `POST /v1/completions` operation is marked legacy, but current
+clients and benchmarks still use it. The bridge implements it locally by
+mapping legacy prompt-style requests to upstream Chat Completions and mapping
+Chat responses back to `object:"text_completion"` completion objects.
+
+| Legacy Completions field | Chat bridge behavior | Status |
+| --- | --- | --- |
+| `prompt` string | one `role:"user"` Chat message | Direct |
+| `prompt` array of strings | one upstream Chat request per prompt, aggregated into one `text_completion` response | Emulated locally for non-stream and stream |
+| token-id prompts | token ids are preserved as visible numeric text because a Chat-only provider cannot decode the legacy model tokenizer | Best-effort local compatibility |
+| `model` | `model` | Direct, defaults to `CODEXCOMPAT_DEFAULT_MODEL` when omitted |
+| `max_tokens` | configured Chat max-token field, default `max_tokens` | Direct |
+| `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `n` | same-name Chat fields | Direct/provider-dependent |
+| `logprobs` | `logprobs:true` plus bounded `top_logprobs`; Chat token logprobs are reshaped to legacy `tokens`, `token_logprobs`, `top_logprobs`, and `text_offset` when present | Provider-dependent |
+| `logit_bias` | same-name Chat field when Chat-native passthrough is enabled | Provider-dependent |
+| `user` | OpenAI-compatible `user`, or DeepSeek-compatible normalized `user_id` when `CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT=true` | Provider-aware |
+| `stream:true` | upstream Chat stream transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]` | Implemented |
+| `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks | Provider-dependent |
+| `echo:true` | the bridge prefixes the original prompt to returned completion text, including the first stream chunk for each choice | Emulated locally |
+| `suffix` | added as suffix context in the Chat prompt because Chat Completions has no insertion-suffix primitive | Best-effort local compatibility |
+| `best_of` | accepted but not forwarded; Chat Completions has no equivalent server-side generation/ranking primitive | Not losslessly representable |
+
+Returned non-stream objects use local `cmpl-...` ids, `object:"text_completion"`,
+upstream `created` when available, upstream `model`, mapped legacy choices,
+optional `system_fingerprint`, and usage mapped from Chat
+`prompt_tokens`/`completion_tokens`/`total_tokens`.
 
 ## Chat Completions Endpoint Coverage
 

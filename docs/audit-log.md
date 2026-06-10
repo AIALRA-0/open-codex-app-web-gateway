@@ -2573,3 +2573,62 @@ Open follow-ups:
   - `npm run prune:runtime -- --dry-run` scanned 229 runtime candidates,
     selected 5 old UI screenshots by retention policy, deleted 0, and reported
     0 errors.
+
+## 2026-06-10 Legacy Completions Compatibility
+
+- Closed another OpenAI API surface gap by adding local `POST /v1/completions`
+  support for legacy prompt-style clients and older evaluation harnesses.
+- Official source checked on 2026-06-10:
+  - OpenAI OpenAPI operation `createCompletion` at `/v1/completions` is marked
+    legacy and returns `object:"text_completion"` for non-stream responses, or
+    a sequence of completion objects for stream responses.
+- Implemented the bridge adapter:
+  - maps legacy `prompt` strings to upstream Chat `messages`;
+  - supports prompt arrays by running one upstream Chat request per prompt and
+    aggregating choices;
+  - maps `max_tokens` to the configured upstream max-token field;
+  - forwards compatible sampling fields, `stop`, `seed`, `n`, optional
+    logprobs, stream options, and provider-aware `user`/DeepSeek `user_id`;
+  - maps Chat response choices back to legacy `choices[].text`,
+    `choices[].index`, `choices[].finish_reason`, and legacy logprobs when
+    Chat token logprobs are available;
+  - maps Chat streaming chunks to `data: {object:"text_completion"}` SSE
+    frames and terminates with `data: [DONE]`;
+  - emulates `echo:true` by prefixing the original prompt to returned text;
+  - documents best-effort handling for non-lossless legacy fields such as
+    `suffix`, token-id prompts, and `best_of`.
+- Added two local server tests:
+  - non-streaming `/v1/completions` field mapping and response conversion;
+  - streaming Chat chunk conversion to legacy completion SSE chunks.
+- Added live `completions-legacy` to `bridge-regression`.
+- Updated the compatibility matrix and evaluation plan with the legacy
+  Completions surface.
+- Verified:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - `npm test`: 78/78 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `completions-legacy` passed 1/1 against `deepseek-v4-pro`,
+    elapsed 2003 ms, output `completion-ok`, and total usage 52 tokens.
+  - Full live `bridge-regression` passed 29/29 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1743 ms, P95 latency 4301 ms, and total usage
+    8597 tokens.
+  - Direct non-stream `/v1/completions` returned HTTP 200,
+    `object:"text_completion"`, output `direct-completion-ok`, and usage 58
+    tokens.
+  - Direct stream `/v1/completions` returned HTTP 200,
+    `text/event-stream; charset=utf-8`, 45 SSE frames, `[DONE]`, and output
+    `stream-completion-ok`.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq87kvj8`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 232 runtime candidates,
+    selected 6 old UI screenshots by retention policy, deleted 0, and reported
+    0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 39 GB available; bridge state is 1.1 MB and output
+    artifacts are 4.5 MB.

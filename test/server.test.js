@@ -92,7 +92,7 @@ function parseSseEvents(text) {
         .filter((line) => line.startsWith("data:"))
         .map((line) => line.slice(5).trimStart())
         .join("\n");
-      return { event, data: data ? JSON.parse(data) : null };
+      return { event, data: data === "[DONE]" ? data : data ? JSON.parse(data) : null };
     });
 }
 
@@ -3403,6 +3403,141 @@ test("POST /v1/responses/input_tokens returns upstream prompt token usage", asyn
       { role: "system", content: "count only" },
       { role: "user", content: "How many tokens?" },
     ]);
+  });
+});
+
+test("POST /v1/completions maps legacy prompts to Chat Completions", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.deepEqual(call.body, {
+      model: "mock-model",
+      messages: [{ role: "user", content: "Return exactly completion-ok." }],
+      max_tokens: 32,
+      temperature: 0,
+      stop: ["END"],
+      seed: 7,
+      n: 2,
+      logprobs: true,
+      top_logprobs: 2,
+      user: "legacy-user",
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy",
+      object: "chat.completion",
+      created: 1700000123,
+      model: "mock-model",
+      system_fingerprint: "fp_legacy",
+      choices: [
+        {
+          index: 0,
+          message: { role: "assistant", content: "completion-ok" },
+          logprobs: {
+            content: [{
+              token: "completion-ok",
+              logprob: -0.1,
+              top_logprobs: [{ token: "completion-ok", logprob: -0.1 }],
+            }],
+          },
+          finish_reason: "stop",
+        },
+        {
+          index: 1,
+          message: { role: "assistant", content: "completion-alt" },
+          finish_reason: "length",
+        },
+      ],
+      usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Return exactly completion-ok.",
+        max_tokens: 32,
+        temperature: 0,
+        stop: ["END"],
+        seed: 7,
+        n: 2,
+        logprobs: 2,
+        user: "legacy-user",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.match(json.id, /^cmpl-/);
+    assert.equal(json.object, "text_completion");
+    assert.equal(json.created, 1700000123);
+    assert.equal(json.model, "mock-model");
+    assert.equal(json.system_fingerprint, "fp_legacy");
+    assert.deepEqual(json.usage, { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 });
+    assert.equal(json.choices[0].text, "completion-ok");
+    assert.equal(json.choices[0].index, 0);
+    assert.equal(json.choices[0].finish_reason, "stop");
+    assert.deepEqual(json.choices[0].logprobs, {
+      tokens: ["completion-ok"],
+      token_logprobs: [-0.1],
+      top_logprobs: [{ "completion-ok": -0.1 }],
+      text_offset: [0],
+    });
+    assert.equal(json.choices[1].text, "completion-alt");
+    assert.equal(json.choices[1].index, 1);
+    assert.equal(json.choices[1].logprobs, null);
+  });
+});
+
+test("POST /v1/completions streams Chat chunks as legacy completion chunks", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [{ role: "user", content: "stream legacy" }]);
+    assert.equal(call.body.stream, true);
+    assert.deepEqual(call.body.stream_options, { include_usage: true });
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_legacy_stream",
+      object: "chat.completion.chunk",
+      created: 1700000222,
+      model: "mock-model",
+      system_fingerprint: "fp_stream",
+      choices: [{ index: 0, delta: { role: "assistant", content: "stream-" }, finish_reason: null }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_legacy_stream",
+      object: "chat.completion.chunk",
+      model: "mock-model",
+      choices: [{ index: 0, delta: { content: "completion-ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "stream legacy",
+        stream: true,
+        max_tokens: 32,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /text\/event-stream/);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+    const chunks = events.slice(0, -1).map((event) => event.data);
+    assert.match(chunks[0].id, /^cmpl-/);
+    assert.equal(chunks[0].object, "text_completion");
+    assert.equal(chunks[0].created, 1700000222);
+    assert.equal(chunks[0].system_fingerprint, "fp_stream");
+    assert.equal(chunks[0].choices[0].text, "stream-");
+    assert.equal(chunks[0].choices[0].finish_reason, null);
+    assert.equal(chunks[1].choices[0].text, "completion-ok");
+    assert.equal(chunks[1].choices[0].finish_reason, "stop");
+    assert.deepEqual(chunks[1].usage, { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 });
   });
 });
 

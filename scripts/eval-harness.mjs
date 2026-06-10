@@ -282,6 +282,17 @@ function buildSuites(defaultModel) {
         check: ({ text }) => /chat-ok/i.test(text),
       },
       {
+        id: "completions-legacy",
+        mode: "completions",
+        request: {
+          model: defaultModel,
+          prompt: "Return the exact string completion-ok.",
+          max_tokens: 64,
+          temperature: 0,
+        },
+        check: ({ json, text }) => json?.object === "text_completion" && /completion-ok/i.test(text),
+      },
+      {
         id: "chat-lifecycle",
         mode: "chat-lifecycle",
         updateMetadata: { suite: "chat-life-updated", audit: "bridge-regression" },
@@ -1040,6 +1051,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
+    }
+    if (testCase.mode === "completions") {
+      return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
     }
     return await runJsonCase(testCase, context, started, "/v1/responses", responseOutputText, responseUsage);
   } catch (error) {
@@ -2118,6 +2132,12 @@ function chatOutputText(response) {
     .join("");
 }
 
+function completionOutputText(response) {
+  return (response.choices || [])
+    .map((choice) => choice.text || "")
+    .join("");
+}
+
 function responseUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -2128,6 +2148,15 @@ function responseUsage(response) {
 }
 
 function chatUsage(response) {
+  const usage = response?.usage || {};
+  return {
+    input_tokens: usage.prompt_tokens || 0,
+    output_tokens: usage.completion_tokens || 0,
+    total_tokens: usage.total_tokens || 0,
+  };
+}
+
+function completionUsage(response) {
   const usage = response?.usage || {};
   return {
     input_tokens: usage.prompt_tokens || 0,
