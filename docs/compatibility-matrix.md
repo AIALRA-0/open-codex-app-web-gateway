@@ -8,6 +8,7 @@ Primary sources:
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
+- OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
 - OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
 - OpenAI Containers reference: https://platform.openai.com/docs/api-reference/containers
@@ -40,7 +41,7 @@ implementations for those tools.
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
 | `input_image` | chat `image_url` content part | Provider-dependent |
-| `input_file` | explicit text marker | Lossy until a file extraction layer is added |
+| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted |
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
@@ -89,6 +90,7 @@ behavior.
 | `finish_reason=length` | `status=incomplete` | Direct |
 | other finish reasons | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
+| local input file context | compatibility metadata `local_input_files` | Emulated before upstream Chat calls for Responses create, background, streaming, `/input_tokens`, and local compaction |
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
@@ -223,6 +225,33 @@ This is a bridge compatibility layer, not native OpenAI web search. Full parity
 still requires a production-grade web index/provider, citation policy, and page
 open/find support.
 
+## Local Input File Adapter
+
+The bridge can emulate Responses `input_file` items for Chat-only providers by
+extracting text from bounded file inputs and injecting that text into the
+upstream Chat prompt. It supports the three official Responses input styles:
+
+- `file_id` from the local Files API;
+- inline base64 `file_data`, including `data:<media>;base64,...` URLs;
+- HTTP(S) `file_url` when URL fetching is enabled.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_INPUT_FILE_PROVIDER` | `local` | Use `disabled` to leave `input_file` as a marker-only compatibility fallback |
+| `CODEXCOMPAT_INPUT_FILE_MAX_FILES` | `8` | Maximum input files extracted per request |
+| `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` | `4194304` | Maximum bytes read from each local, inline, or remote input file; the loader caps this at OpenAI's documented 50 MB per-file ceiling |
+| `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS` | `200000` | Maximum extracted text injected per file |
+| `CODEXCOMPAT_INPUT_FILE_FETCH_URLS` | `true` | Allows HTTP(S) `file_url` fetching with size and timeout caps |
+| `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote input file fetches |
+
+This is a text extraction compatibility layer, not native OpenAI file input
+processing. Text and code files, CSV/TSV, JSON, Markdown, HTML, XML, and similar
+formats are injected directly. Inline `file_data` must be valid base64. Binary
+PDFs and rich Office documents are reported with metadata unless a future parser
+extracts text safely. For large files, prefer the local `file_search` adapter.
+
 ## Local File Search Adapter
 
 The bridge can emulate the Responses `file_search` hosted tool for Chat-only
@@ -297,6 +326,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
+| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, but not PDF page images, spreadsheet augmentation, or rich Office document parsing | Add PDF text extraction, optional rendered-page context, spreadsheet summarization, Office parsers, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

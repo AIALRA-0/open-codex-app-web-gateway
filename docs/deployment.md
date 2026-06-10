@@ -82,6 +82,12 @@ Useful bridge flags:
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content`; keep outside Git and mode `0600` |
+| `CODEXCOMPAT_INPUT_FILE_PROVIDER` | `local` | Local Responses `input_file` adapter provider. Use `disabled` to leave file inputs as marker-only metadata |
+| `CODEXCOMPAT_INPUT_FILE_MAX_FILES` | `8` | Maximum `input_file` items extracted per Responses request |
+| `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` | `4194304` | Maximum bytes read from each local, inline, or remote file input; loader caps this at 50 MB |
+| `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS` | `200000` | Maximum extracted text injected into Chat context per file |
+| `CODEXCOMPAT_INPUT_FILE_FETCH_URLS` | `true` | Enables bounded HTTP(S) fetches for `input_file.file_url` |
+| `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote `input_file.file_url` fetches |
 | `CODEXCOMPAT_WEB_SEARCH_PROVIDER` | `wikipedia` | Local `web_search_preview` adapter provider. Use `disabled`, `static`, or `wikipedia` |
 | `CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS` | `5` | Maximum local web-search results injected into Chat context and citation output |
 | `CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS` | `10000` | Timeout for local web-search provider requests |
@@ -140,6 +146,7 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

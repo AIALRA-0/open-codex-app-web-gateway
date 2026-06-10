@@ -496,3 +496,55 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7r8xft` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Local Input File Adapter
+
+- Used the current OpenAI file-input documentation to confirm Responses accepts
+  `input_file` from local file IDs, inline base64 `file_data`, and HTTP(S)
+  `file_url`, with native OpenAI support for richer PDF, document, and
+  spreadsheet extraction.
+- Added a local `input_file` compatibility layer for Chat-only providers:
+  - extracts bounded text from local Files API `file_id` records;
+  - decodes strict inline base64 `file_data`, including
+    `data:<media>;base64,...` URLs;
+  - fetches HTTP(S) `file_url` inputs when enabled, with timeout and byte caps;
+  - injects extracted text into upstream Chat Completion messages;
+  - reports `metadata.compatibility.local_input_files` with provider, status,
+    file counts, resolved/failed counts, and truncation counts;
+  - runs before upstream Chat calls for non-streaming Responses, streaming
+    Responses, background jobs, `/v1/responses/input_tokens`, and local
+    `/v1/responses/compact`.
+- Added local provider configuration:
+  - `CODEXCOMPAT_INPUT_FILE_PROVIDER=local|disabled`;
+  - `CODEXCOMPAT_INPUT_FILE_MAX_FILES`;
+  - `CODEXCOMPAT_INPUT_FILE_MAX_BYTES`;
+  - `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS`;
+  - `CODEXCOMPAT_INPUT_FILE_FETCH_URLS`;
+  - `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS`.
+- Caveat: this is not native OpenAI file processing. Text/code/CSV/JSON/Markdown
+  and similar inputs are extracted directly; binary PDFs, Office documents,
+  spreadsheet augmentation, OCR, and rendered page-image context remain planned
+  parity gaps.
+- Added regression coverage for:
+  - local Files API `file_id` extraction;
+  - inline `file_data` extraction;
+  - upstream Chat prompt injection;
+  - Responses compatibility metadata counts;
+  - live `responses-input-file` in `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/input_files.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 28/28 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live input-file result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose`
+  passed 1/1, latency 2248 ms, output `input-file-ok`, total usage 202 tokens.
+- Full live `bridge-regression` passed 15/15, pass rate 1.0, average latency
+  1962 ms, P95 latency 4168 ms, total usage 2199 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7rpme2` appeared before reload and after reload, console errors
+  0, warnings 0.

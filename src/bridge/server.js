@@ -6,6 +6,11 @@ const http = require("node:http");
 const path = require("node:path");
 const { FileResponseStore } = require("./store");
 const {
+  injectInputFileMessages,
+  inputFileCompatibility,
+  prepareInputFileContext,
+} = require("./input_files");
+const {
   annotateFileSearchResponse,
   attachFileSearchOutput,
   fileSearchCompatibility,
@@ -81,6 +86,12 @@ function loadConfig(overrides = {}) {
     compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
     compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
     compactionSecretFile,
+    inputFileProvider: process.env.CODEXCOMPAT_INPUT_FILE_PROVIDER || "local",
+    inputFileMaxFiles: numberFromEnv("CODEXCOMPAT_INPUT_FILE_MAX_FILES", 8, 1, 32),
+    inputFileMaxBytes: numberFromEnv("CODEXCOMPAT_INPUT_FILE_MAX_BYTES", 4 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    inputFileMaxTextChars: numberFromEnv("CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS", 200000, 1024, 2 * 1024 * 1024),
+    inputFileFetchUrls: parseBoolean(process.env.CODEXCOMPAT_INPUT_FILE_FETCH_URLS, true),
+    inputFileFetchTimeoutMs: numberFromEnv("CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     webSearchProvider: process.env.CODEXCOMPAT_WEB_SEARCH_PROVIDER || "wikipedia",
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -254,6 +265,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     return;
   }
 
+  const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
+  if (localInputFiles) {
+    applyInputFilesToChat(chat, compatibility, localInputFiles);
+  }
   const localShell = await prepareShellContext(request, config, containerStore);
   if (localShell) {
     applyLocalShellToChat(chat, compatibility, localShell, config);
@@ -363,10 +378,14 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
 
 async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore }) {
   try {
-    const localShell = await prepareShellContext(request, config, containerStore);
+    const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
+    if (localInputFiles) {
+      finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles);
+    }
+    const localShell = await prepareShellContext(request, config, containerStore);
     if (localShell) {
-      finalCompatibility = applyLocalShellToChat(chat, { ...compatibility }, localShell, config);
+      finalCompatibility = applyLocalShellToChat(chat, { ...finalCompatibility }, localShell, config);
     }
     const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal });
     if (localWebSearch) {
@@ -509,11 +528,19 @@ function applyLocalShellToChat(chat, compatibility, localShell, config) {
   return compatibility;
 }
 
-async function handleResponseInputTokens(req, res, config, store) {
+function applyInputFilesToChat(chat, compatibility, localInputFiles) {
+  injectInputFileMessages(chat, localInputFiles);
+  Object.assign(compatibility, inputFileCompatibility(localInputFiles));
+  return compatibility;
+}
+
+async function handleResponseInputTokens(req, res, config, store, fileSearchStore) {
   const request = await readJson(req);
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
   const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
+  const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
+  if (localInputFiles) injectInputFileMessages(chat, localInputFiles);
   chat.stream = false;
   delete chat.store;
   chat[config.maxTokensField || "max_tokens"] = 1;
@@ -542,11 +569,13 @@ async function handleResponseInputTokens(req, res, config, store) {
   });
 }
 
-async function handleResponseCompact(req, res, config, store) {
+async function handleResponseCompact(req, res, config, store, fileSearchStore) {
   const request = await readJson(req);
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
   const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
+  const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
+  if (localInputFiles) injectInputFileMessages(chat, localInputFiles);
 
   const upstream = await fetchProvider(config, config.chatCompletionsPath, makeCompactionChatRequest(request, chat, config), req.headers);
   const upstreamText = await upstream.text();
@@ -1890,12 +1919,12 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses/compact") {
-        await handleResponseCompact(req, res, config, store);
+        await handleResponseCompact(req, res, config, store, fileSearchStore);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses/input_tokens") {
-        await handleResponseInputTokens(req, res, config, store);
+        await handleResponseInputTokens(req, res, config, store, fileSearchStore);
         return;
       }
 

@@ -163,6 +163,30 @@ function buildSuites(defaultModel) {
           && json.input_tokens > 0,
       },
       {
+        id: "responses-input-file",
+        mode: "responses-input-file",
+        file: {
+          filename: "bridge-input-file.txt",
+          purpose: "user_data",
+          content: "Bridge input file fixture. The exact answer is input-file-ok.",
+        },
+        request: ({ fileId }) => ({
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_file", file_id: fileId },
+              { type: "input_text", text: "Using the input file content, return exactly this text and nothing else: input-file-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text }) => /input-file-ok/i.test(text)
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
+      },
+      {
         id: "responses-background",
         mode: "responses-background",
         request: {
@@ -390,6 +414,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-input-tokens") {
       return await runInputTokensCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-input-file") {
+      return await runInputFileCase(testCase, context, started);
     }
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
@@ -630,6 +657,46 @@ async function runFileSearchCase(testCase, context, started) {
     });
   } finally {
     if (vectorStore?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
+  }
+}
+
+async function runInputFileCase(testCase, context, started) {
+  let file = null;
+  try {
+    const fileResponse = await postJson(`${baseUrl}/v1/files`, testCase.file);
+    const fileBody = await fileResponse.text();
+    if (!fileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fileResponse.status,
+        error: truncate(fileBody),
+      });
+    }
+    file = JSON.parse(fileBody);
+
+    const request = resolveRequest(testCase.request, { ...context, fileId: file.id });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const ok = !!testCase.check({ json, text, fileId: file.id });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      file_id: file.id,
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
     if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
   }
 }

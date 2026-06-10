@@ -372,6 +372,66 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
   });
 });
 
+test("Responses input_file file_id and file_data are extracted for Chat compatibility", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.ok(call.body.messages.some((message) => /Local Responses input_file compatibility extracted file inputs/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /File ID fixture says input-file-ok/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /Inline fixture also says inline-ok/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_file",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "input-file-ok inline-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdFile = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "input-file-fixture.txt",
+        purpose: "user_data",
+        content: "File ID fixture says input-file-ok.",
+      }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+
+    const inline = Buffer.from("Inline fixture also says inline-ok.", "utf8").toString("base64");
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_file", file_id: file.id },
+            { type: "input_file", filename: "inline.txt", file_data: `data:text/plain;base64,${inline}` },
+            { type: "input_text", text: "Return input-file-ok inline-ok." },
+          ],
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "input-file-ok inline-ok");
+    assert.equal(json.metadata.compatibility.local_input_files.provider, "local");
+    assert.equal(json.metadata.compatibility.local_input_files.status, "completed");
+    assert.equal(json.metadata.compatibility.local_input_files.file_count, 2);
+    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 2);
+    assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+  });
+});
+
 test("local Containers back Responses shell compatibility and artifacts", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
