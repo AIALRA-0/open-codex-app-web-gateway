@@ -15,12 +15,12 @@ Codex/OpenAI Responses behavior.
 2. UI and workflow correctness
 
 - Browser smoke test for `opencodexapp.aialra.online`.
-- `npm run smoke:ui -- --session default --timeout-ms 180000` covers app load,
-  authenticated session reuse, sidebar/search/settings controls, prompt send,
-  model response visibility, console errors, screenshot capture, and reload
-  persistence.
-- Expand coverage for login from a clean browser, project open, stop/retry,
-  file upload, generated image/file display, and complete page switching.
+- `npm run smoke:ui -- --timeout-ms 180000` covers app load from a clean
+  browser context, optional login-page authentication from local environment
+  variables, sidebar/search/settings controls, prompt send, model response
+  visibility, console errors, screenshot capture, and reload persistence.
+- Expand coverage for project open, stop/retry, file upload, generated
+  image/file display, and complete page switching.
 - Record screenshots and console logs under ignored `output/playwright/`.
 
 3. Agent task quality
@@ -49,6 +49,7 @@ npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
+npm run smoke:ui -- --timeout-ms 180000
 ```
 
 4. Resource and stability

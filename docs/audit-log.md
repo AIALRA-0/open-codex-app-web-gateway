@@ -108,8 +108,8 @@ Open follow-ups:
 ## 2026-06-10 UI Workflow Smoke Automation
 
 - Added `scripts/ui-smoke.mjs` and `npm run smoke:ui`.
-- The script uses the local Playwright CLI wrapper instead of adding Playwright
-  as a repository dependency.
+- The first version used the local Playwright CLI wrapper and an authenticated
+  session.
 - It verifies:
   - app load with an authenticated Playwright session
   - sidebar/search/settings controls
@@ -121,4 +121,24 @@ Open follow-ups:
 - Live result against `https://opencodexapp.aialra.online`:
   `smoke:ui -- --session default --timeout-ms 180000` passed, marker
   `ui-smoke-mq7mzhmo` appeared twice before reload and once after reload,
+  console errors 0, warnings 0.
+
+## 2026-06-10 Clean Browser UI Smoke Upgrade
+
+- Added `playwright` as a dev dependency with browser download skipped during
+  install on the deployment host.
+- Reworked `scripts/ui-smoke.mjs` to launch a fresh Playwright browser context
+  directly from Node instead of relying on a pre-authenticated CLI session.
+- Added login-page support that reads credentials only from local environment
+  variables (`UI_SMOKE_USERNAME`/`UI_SMOKE_PASSWORD` or
+  `CODEXAPP_USERNAME`/`CODEXAPP_PASSWORD`); no credentials are written to the
+  repository or command-line arguments.
+- Verified current deployment topology:
+  - `aialra-opencodexapp-login.service` is inactive.
+  - nginx proxies `opencodexapp.aialra.online` directly to `127.0.0.1:12920`.
+  - The clean browser run therefore recorded `auth_mode:
+    existing_session_or_public` rather than `clean_login`.
+- Live result against `https://opencodexapp.aialra.online`:
+  `npm run smoke:ui -- --timeout-ms 180000` passed, marker
+  `ui-smoke-mq7n5dx9` appeared twice before reload and once after reload,
   console errors 0, warnings 0.

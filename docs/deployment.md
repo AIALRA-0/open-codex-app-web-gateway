@@ -117,13 +117,33 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
-npm run smoke:ui -- --session default --timeout-ms 180000
+npm run smoke:ui -- --timeout-ms 180000
 curl http://127.0.0.1:12920/
 curl http://127.0.0.1:12923/login
 ```
 
-`smoke:ui` uses the local Playwright CLI wrapper and expects the selected
-Playwright session to already be authenticated. It writes screenshots under the
-ignored `output/playwright/` directory. Broader manual/automated UI coverage
-still needs upload, interrupt/resume, generated artifact display, and full page
-switching checks.
+`smoke:ui` uses Playwright directly and creates a clean browser context for each
+run. If the login page is visible, it reads credentials from
+`UI_SMOKE_USERNAME`/`UI_SMOKE_PASSWORD` or `CODEXAPP_USERNAME`/`CODEXAPP_PASSWORD`
+in the local environment. It writes screenshots under the ignored
+`output/playwright/` directory. The current `opencodexapp.aialra.online` nginx
+template proxies directly to the web service; the optional login proxy service is
+not in the public request path unless nginx is changed to target port `12923`.
+Broader automated UI coverage still needs upload, interrupt/resume, generated
+artifact display, and full page switching checks.
+
+## Playwright Storage Note
+
+`playwright` is a dev dependency for browser smoke tests. On hosts that already
+have a usable Playwright browser cache, install without downloading browsers:
+
+```bash
+PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --include=dev
+```
+
+On a fresh host, install only Chromium for the UI smoke path and keep the browser
+cache outside the repository:
+
+```bash
+npx playwright install chromium
+```
