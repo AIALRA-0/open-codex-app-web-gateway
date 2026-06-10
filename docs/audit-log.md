@@ -3804,3 +3804,57 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 41 GB available;
     repository checkout is 40 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Reasoning None DeepSeek Adapter
+
+- Re-checked official API behavior before changing code:
+  - the current OpenAI Chat Completions OpenAPI/docs surface accepts
+    reasoning effort values including `none`, `minimal`, `low`, `medium`,
+    `high`, and `xhigh`;
+  - current DeepSeek Chat Completion and Thinking Mode docs only accept
+    `reasoning_effort:"high"` / `"max"` and document compatibility mappings
+    for `low`/`medium` to `high` and `xhigh` to `max`.
+- Fixed the Responses-to-Chat translator so `reasoning:{effort:"none"}` with
+  DeepSeek effort compatibility no longer forwards unsupported
+  `reasoning_effort:"none"`. The bridge now sends
+  `thinking:{type:"disabled"}` and records:
+  - `metadata.compatibility.deepseek_thinking =
+    "disabled_for_reasoning_none"`;
+  - `metadata.compatibility.reasoning_effort` with source, target, original
+    value, mapped value `null`, `forwarded:false`, and reason
+    `deepseek_thinking_disabled`.
+- Added translator and server mock-provider coverage proving the upstream Chat
+  request omits `reasoning_effort`, sends DeepSeek non-thinking mode, and
+  returns the compatibility metadata.
+- Added a live `bridge-regression` case `responses-reasoning-none` so future
+  DeepSeek evals continuously check this mapping.
+- Tightened the `responses-computer` live eval to assert the screenshot-first
+  `computer_call` protocol item and local metadata instead of requiring a
+  model text marker before any `computer_call_output` evidence exists.
+- Verification:
+  - `node --check src/bridge/translator.js scripts/eval-harness.mjs test/translator.test.js test/server.test.js`: passed.
+  - `node --test test/translator.test.js`: 34/34 passing tests.
+  - `node --test test/server.test.js`: 81/81 passing tests.
+  - `npm test`: 118/118 passing tests.
+  - Pre-restart live control check for `responses-reasoning-none` failed 0/1
+    with DeepSeek HTTP 400 because the old running service still sent
+    `reasoning_effort:"none"`; after restarting the bridge with this patch, the
+    same case passed 1/1, latency 1827 ms, total usage 18 tokens.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1629 ms, P95 latency 1814 ms, and total usage 166 tokens.
+  - Targeted `responses-computer` live eval passed 1/1 after the protocol-level
+    assertion fix, latency 2450 ms, total usage 252 tokens.
+  - Full live `bridge-regression` passed 41/41 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1328 ms, P95 latency 3149 ms, and total usage
+    9200 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8ga8a0`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 41 GB available;
+    repository checkout is 41 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.

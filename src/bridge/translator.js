@@ -400,16 +400,44 @@ function mapTextFormat(text, options = {}) {
 function mapReasoning(reasoning, options = {}) {
   if (!isPlainObject(reasoning)) return {};
   const mapped = {};
-  if (reasoning.effort) mapped.reasoning_effort = normalizeReasoningEffort(reasoning.effort, options);
+  if (reasoning.effort) {
+    const effort = normalizeReasoningEffort(reasoning.effort, options);
+    if (effort) mapped.reasoning_effort = effort;
+  }
   if (reasoning.summary && options.forwardReasoningSummary) mapped.reasoning_summary = reasoning.summary;
   return mapped;
 }
 
 function normalizeReasoningEffort(effort, options = {}) {
   if (!options.deepseekReasoningEffortCompat) return effort;
+  if (effort === "none") return undefined;
   if (effort === "xhigh") return "max";
   if (effort === "minimal" || effort === "low" || effort === "medium") return "high";
   return effort;
+}
+
+function mapReasoningEffortCompatibility(reasoning, options = {}) {
+  if (!isPlainObject(reasoning) || !reasoning.effort || !options.deepseekReasoningEffortCompat) return null;
+  const mapped = normalizeReasoningEffort(reasoning.effort, options);
+  if (mapped === reasoning.effort) return null;
+  return {
+    source: "reasoning.effort",
+    target: "reasoning_effort",
+    value: reasoning.effort,
+    mapped_value: mapped || null,
+    forwarded: !!mapped,
+    reason: reasoning.effort === "none"
+      ? "deepseek_thinking_disabled"
+      : "deepseek_effort_compat",
+  };
+}
+
+function shouldDisableDeepSeekThinkingForReasoningNone(reasoning, options = {}) {
+  return !!(
+    options.deepseekReasoningEffortCompat
+    && isPlainObject(reasoning)
+    && reasoning.effort === "none"
+  );
 }
 
 function makeCompatibilityMessage(unsupportedTools) {
@@ -483,14 +511,16 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   if (responseFormat) chat.response_format = responseFormat;
 
   Object.assign(chat, mapReasoning(request.reasoning, options));
+  const reasoningEffortCompatibility = mapReasoningEffortCompatibility(request.reasoning, options);
+  const disableThinkingForReasoningNone = shouldDisableDeepSeekThinkingForReasoningNone(request.reasoning, options);
   const disableThinkingForToolChoice = !!(
     options.deepseekDisableThinkingForToolChoice
     && tools.length
     && toolChoice !== undefined
     && !options.deepseekThinkingMode
   );
-  if (disableThinkingForToolChoice) chat.thinking = { type: "disabled" };
-  if (options.deepseekThinkingMode && request.reasoning?.effort) chat.thinking = { type: "enabled" };
+  if (disableThinkingForReasoningNone || disableThinkingForToolChoice) chat.thinking = { type: "disabled" };
+  if (options.deepseekThinkingMode && request.reasoning?.effort && !disableThinkingForReasoningNone) chat.thinking = { type: "enabled" };
 
   return {
     chat,
@@ -499,7 +529,12 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(toolChoice !== undefined && !tools.length && hasLocalHostedToolRequest(request.tools, options)
         ? { local_tool_choice: "handled_by_bridge" }
         : {}),
-      ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
+      ...(disableThinkingForReasoningNone
+        ? { deepseek_thinking: "disabled_for_reasoning_none" }
+        : disableThinkingForToolChoice
+          ? { deepseek_thinking: "disabled_for_tool_choice" }
+          : {}),
+      ...(reasoningEffortCompatibility ? { reasoning_effort: reasoningEffortCompatibility } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),

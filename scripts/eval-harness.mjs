@@ -347,6 +347,21 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.prompt_template?.source === "inline_template",
       },
       {
+        id: "responses-reasoning-none",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Return the exact string reasoning-none-ok.",
+          reasoning: { effort: "none" },
+          max_output_tokens: 64,
+          store: false,
+        },
+        check: ({ json, text }) => /reasoning-none-ok/i.test(text)
+          && json.metadata?.compatibility?.deepseek_thinking === "disabled_for_reasoning_none"
+          && json.metadata?.compatibility?.reasoning_effort?.forwarded === false
+          && json.metadata?.compatibility?.reasoning_effort?.reason === "deepseek_thinking_disabled",
+      },
+      {
         id: "batch-embeddings-local",
         mode: "batch-local",
         endpoint: "/v1/embeddings",
@@ -952,7 +967,7 @@ function buildSuites(defaultModel) {
         mode: "responses",
         request: {
           model: defaultModel,
-          input: "Use the local computer compatibility bridge if needed. After the bridge emits the computer_call item, return the exact string computer-ok.",
+          input: "Use the local computer compatibility bridge to request a screenshot. Do not invent browser state before computer_call_output is returned.",
           tools: [{
             type: "computer",
             environment: "browser",
@@ -964,7 +979,7 @@ function buildSuites(defaultModel) {
           max_output_tokens: 128,
           store: false,
         },
-        check: ({ json, text }) => {
+        check: ({ json }) => {
           const call = (json.output || []).find((item) => item.type === "computer_call");
           const computer = json.metadata?.compatibility?.local_computer || {};
           const budget = json.metadata?.compatibility?.local_tool_budget || {};
@@ -974,8 +989,8 @@ function buildSuites(defaultModel) {
             && call.actions?.some((action) => action.type === "screenshot")
             && computer.call_count === 1
             && computer.requested_action_count === 1
-            && budget.used === 1
-            && /computer-ok/i.test(text);
+            && computer.deepseek_thinking === "disabled_for_local_computer"
+            && budget.used === 1;
         },
       },
       {

@@ -98,13 +98,15 @@ implementations for those tools.
 | `include:["computer_call_output.output.image_url"]` | local computer-loop compatibility metadata | Accepted and recorded in `metadata.compatibility.local_computer.include_output_image_url`; returned `computer_call_output` input items with `output.image_url` are translated into Chat-visible context |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
-| `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
+| `reasoning.effort` | `reasoning_effort` / DeepSeek `thinking` | DeepSeek-compatible mapping enabled by default; `none` disables DeepSeek thinking and omits unsupported `reasoning_effort:"none"`, while `minimal`/`low`/`medium` map to `high` and `xhigh` maps to `max` |
 | `user_id`, `safety_identifier`, `prompt_cache_key`, `user` | DeepSeek `user_id` | DeepSeek-specific compatibility; direct when already `[A-Za-z0-9_-]`, otherwise stable SHA-256 normalized |
 
-DeepSeek effort compatibility maps `minimal`, `low`, and `medium` to `high`, and
-`xhigh` to `max`, matching current DeepSeek docs. The DeepSeek default upstream
-path is `/chat/completions`, not `/v1/chat/completions`; OpenAI-style `/v1`
-paths remain configurable for other providers.
+DeepSeek effort compatibility maps OpenAI `reasoning.effort:"none"` to
+`thinking:{type:"disabled"}` without forwarding `reasoning_effort`, maps
+`minimal`, `low`, and `medium` to `high`, and maps `xhigh` to `max`, matching
+current OpenAI and DeepSeek docs. The DeepSeek default upstream path is
+`/chat/completions`, not `/v1/chat/completions`; OpenAI-style `/v1` paths remain
+configurable for other providers.
 
 DeepSeek thinking mode defaults to enabled in current DeepSeek docs. The bridge
 therefore disables thinking only for requests that include function tools and a

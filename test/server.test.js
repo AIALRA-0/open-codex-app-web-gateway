@@ -392,6 +392,49 @@ test("POST /v1/responses forwards service_tier and preserves provider tier", asy
   });
 });
 
+test("POST /v1/responses maps reasoning effort none to DeepSeek non-thinking mode", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning_effort, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_reasoning_none",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "reasoning none ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 3, total_tokens: 6 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check reasoning none.",
+        reasoning: { effort: "none" },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "reasoning none ok");
+    assert.equal(json.metadata.compatibility.deepseek_thinking, "disabled_for_reasoning_none");
+    assert.deepEqual(json.metadata.compatibility.reasoning_effort, {
+      source: "reasoning.effort",
+      target: "reasoning_effort",
+      value: "none",
+      mapped_value: null,
+      forwarded: false,
+      reason: "deepseek_thinking_disabled",
+    });
+  });
+});
+
 test("POST /v1/responses maps Chat max_completion_tokens alias", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.max_tokens, 7);

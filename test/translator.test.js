@@ -265,6 +265,26 @@ test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
   assert.equal(compatibility.deepseek_thinking, "disabled_for_tool_choice");
 });
 
+test("maps reasoning effort none to DeepSeek non-thinking mode", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Answer without reasoning.",
+    reasoning: { effort: "none" },
+  }, [], { deepseekReasoningEffortCompat: true });
+
+  assert.equal(chat.reasoning_effort, undefined);
+  assert.deepEqual(chat.thinking, { type: "disabled" });
+  assert.equal(compatibility.deepseek_thinking, "disabled_for_reasoning_none");
+  assert.deepEqual(compatibility.reasoning_effort, {
+    source: "reasoning.effort",
+    target: "reasoning_effort",
+    value: "none",
+    mapped_value: null,
+    forwarded: false,
+    reason: "deepseek_thinking_disabled",
+  });
+});
+
 test("maps Responses output logprobs request to Chat logprobs parameters", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",
