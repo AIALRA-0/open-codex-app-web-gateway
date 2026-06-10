@@ -834,3 +834,36 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7txna0` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Non-Streaming Refusal Logprobs Preservation
+
+- Used the current OpenAI Chat Completions schema to confirm non-streaming
+  `choices[].logprobs` can contain both `content[]` and `refusal[]` token
+  probability arrays.
+- Reused the Responses refusal schema boundary from the streaming refusal pass:
+  refusal content parts only expose `type` and `refusal`, not `logprobs`.
+- Added non-streaming Chat-to-Responses preservation for
+  `choices[].logprobs.refusal[]` under
+  `metadata.compatibility.chat_refusal_logprobs[]`.
+- Tightened non-streaming text-logprob normalization so refusal-only logprob
+  objects are not accidentally attached to `output_text` content parts.
+- Updated server metadata merging so translator-level compatibility metadata is
+  not overwritten when the bridge appends local adapter compatibility metadata.
+- Added regression coverage for:
+  - direct translator refusal-logprobs preservation;
+  - `/v1/responses` non-streaming refusal output shape;
+  - preservation of `chat_refusal_logprobs` alongside request compatibility
+    metadata such as `logprobs:"chat_logprobs"`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 41/41 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Full live `bridge-regression` against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+  2092 ms, P95 latency 5020 ms, total usage 2334 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7u4c2c` appeared before reload and after reload, console errors
+  0, warnings 0.

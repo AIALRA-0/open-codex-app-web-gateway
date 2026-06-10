@@ -170,6 +170,50 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
   });
 });
 
+test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, true);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_refusal_logprobs",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: null, refusal: "I cannot comply." },
+        logprobs: {
+          content: null,
+          refusal: [{
+            token: "I cannot",
+            logprob: -0.04,
+            bytes: [73],
+            top_logprobs: [{ token: "I cannot", logprob: -0.04, bytes: [73] }],
+          }],
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Refuse.",
+        include: ["message.output_text.logprobs"],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.deepEqual(json.output[0].content, [{ type: "refusal", refusal: "I cannot comply." }]);
+    assert.equal(json.metadata.compatibility.logprobs, "chat_logprobs");
+    assert.equal(json.metadata.compatibility.chat_refusal_logprobs[0].logprobs[0].token, "I cannot");
+  });
+});
+
 test("POST /v1/responses replays legacy Chat function_call outputs with stable call ids", async () => {
   await withMockProvider(async (_req, res, _call) => {
     res.writeHead(200, { "content-type": "application/json" });

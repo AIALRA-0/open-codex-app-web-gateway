@@ -485,6 +485,17 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
     appendLegacyFunctionCallOutput(response, message.function_call, legacyFunctionCallId(chat, choice));
   }
 
+  const refusalLogprobs = chatRefusalLogprobs(choices);
+  if (refusalLogprobs.length) {
+    response.metadata = {
+      ...(response.metadata || {}),
+      compatibility: {
+        ...(isPlainObject(response.metadata?.compatibility) ? response.metadata.compatibility : {}),
+        chat_refusal_logprobs: refusalLogprobs,
+      },
+    };
+  }
+
   const finishReasons = choices.map((choice) => choice.finish_reason).filter(Boolean);
   const terminal = responseTerminalStateFromFinishReasons(finishReasons);
   response.status = terminal.status;
@@ -556,7 +567,7 @@ function appendMessageOutput(response, message, choiceLogprobs = null) {
 
   const content = [];
   if (hasText) {
-    const logprobs = normalizeOutputTextLogprobs(choiceLogprobs ?? message.logprobs);
+    const logprobs = normalizeChatTextLogprobs(choiceLogprobs ?? message.logprobs);
     content.push({
       type: "output_text",
       text: normalizeAssistantText(message.content),
@@ -575,6 +586,23 @@ function appendMessageOutput(response, message, choiceLogprobs = null) {
     role: "assistant",
     content,
   });
+}
+
+function chatRefusalLogprobs(choices) {
+  return choices
+    .map((choice) => ({
+      choice_index: choice.index ?? 0,
+      logprobs: normalizeOutputTextLogprobs(choice.logprobs?.refusal),
+    }))
+    .filter((entry) => Array.isArray(entry.logprobs) && entry.logprobs.length);
+}
+
+function normalizeChatTextLogprobs(logprobs) {
+  if (Array.isArray(logprobs)) return normalizeOutputTextLogprobs(logprobs);
+  if (Array.isArray(logprobs?.content) || Array.isArray(logprobs?.output_text)) {
+    return normalizeOutputTextLogprobs(logprobs);
+  }
+  return undefined;
 }
 
 function normalizeOutputTextLogprobs(logprobs) {

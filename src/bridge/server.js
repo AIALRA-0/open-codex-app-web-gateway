@@ -323,7 +323,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachFileSearchOutput(response, localFileSearch);
   response.metadata = {
     ...(response.metadata || {}),
-    compatibility,
+    compatibility: mergeCompatibility(response.metadata?.compatibility, compatibility),
     upstream_object: upstreamJson.object || null,
   };
 
@@ -438,7 +438,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     response.background = true;
     response.metadata = {
       ...(response.metadata || {}),
-      compatibility: finalCompatibility,
+      compatibility: mergeCompatibility(response.metadata?.compatibility, finalCompatibility),
       upstream_object: upstreamJson?.object || null,
     };
 
@@ -548,6 +548,15 @@ function applyInputFilesToChat(chat, compatibility, localInputFiles) {
   injectInputFileMessages(chat, localInputFiles);
   Object.assign(compatibility, inputFileCompatibility(localInputFiles));
   return compatibility;
+}
+
+function mergeCompatibility(existing, next, extra = {}) {
+  const current = existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
+  return {
+    ...current,
+    ...(next || {}),
+    ...extra,
+  };
 }
 
 async function handleResponseInputTokens(req, res, config, store, fileSearchStore) {

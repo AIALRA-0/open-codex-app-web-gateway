@@ -390,6 +390,35 @@ test("maps Chat finish reasons to Responses terminal status", () => {
   assert.match(resourceInterrupted.error.message, /insufficient_system_resource/);
 });
 
+test("preserves non-streaming Chat refusal logprobs in compatibility metadata", () => {
+  const response = chatCompletionToResponse({
+    id: "chatcmpl_refusal_logprobs",
+    created: 446,
+    model: "deepseek-chat",
+    choices: [{
+      index: 2,
+      message: { role: "assistant", content: null, refusal: "I cannot help with that." },
+      logprobs: {
+        content: null,
+        refusal: [{
+          token: "I cannot",
+          logprob: -0.03,
+          bytes: [73],
+          top_logprobs: [{ token: "I cannot", logprob: -0.03, bytes: [73] }],
+        }],
+      },
+      finish_reason: "stop",
+    }],
+  }, { model: "deepseek-chat" }, { responseId: "resp_refusal_logprobs" });
+
+  assert.deepEqual(response.output[0].content, [{
+    type: "refusal",
+    refusal: "I cannot help with that.",
+  }]);
+  assert.equal(response.metadata.compatibility.chat_refusal_logprobs[0].choice_index, 2);
+  assert.equal(response.metadata.compatibility.chat_refusal_logprobs[0].logprobs[0].token, "I cannot");
+});
+
 test("keeps DeepSeek reasoning_content in replay messages", () => {
   const messages = chatCompletionToReplayMessages({
     choices: [{
