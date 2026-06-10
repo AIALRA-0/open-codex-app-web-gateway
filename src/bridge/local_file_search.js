@@ -12,6 +12,8 @@ const DEFAULT_CHUNKING_STRATEGY = Object.freeze({
     chunk_overlap_tokens: 400,
   }),
 });
+const MAX_SEARCH_QUERIES = 4;
+const MAX_SEARCH_QUERY_CHARS = 240;
 
 function isFileSearchTool(tool) {
   return !!tool && typeof tool === "object" && FILE_SEARCH_TOOL_TYPES.has(tool.type);
@@ -302,7 +304,8 @@ class LocalFileSearchStore {
 
   searchVectorStore(storeId, body = {}) {
     if (!this.getVectorStore(storeId)) return null;
-    const query = stringifyContent(body.query || "");
+    const queries = normalizeSearchQueries(body.query || "");
+    const query = queries[0] || "";
     const maxResults = Math.max(1, Math.min(Number(body.max_num_results || body.limit || 5), 20));
     const filters = body.filters || body.filter || null;
     const rankingOptions = normalizeRankingOptions(body.ranking_options || body.rankingOptions);
@@ -321,12 +324,14 @@ class LocalFileSearchStore {
       };
       if (!matchesMetadataFilter(filters, attributes)) continue;
       for (const chunk of chunkText(record.content, item.chunking_strategy)) {
-        const score = scoreText(query, chunk.text, record.file.filename);
+        const scoredQueries = scoreQueries(queries, chunk.text, record.file.filename);
+        const score = scoredQueries[0]?.score || 0;
         if (score <= 0 || score < rankingOptions.score_threshold) continue;
         results.push({
           file_id: record.file.id,
           filename: record.file.filename,
           score,
+          matched_queries: scoredQueries.map((item) => item.query),
           attributes: item.attributes || {},
           ...chunkMetadata(chunk),
           chunking_strategy: effectiveChunkingStrategy(item.chunking_strategy),
@@ -340,6 +345,7 @@ class LocalFileSearchStore {
     return {
       object: "vector_store.search_results.page",
       search_query: query,
+      search_queries: queries,
       ranking_options: rankingOptions,
       data: page,
       has_more: results.length > page.length,
@@ -448,7 +454,8 @@ class LocalFileSearchStore {
 async function prepareFileSearchContext(request = {}, config = {}, store) {
   const tools = (request.tools || []).filter(isFileSearchTool);
   if (!tools.length || !canUseLocalFileSearch(config) || !store) return null;
-  const query = extractSearchQuery(request.input) || stringifyContent(request.input).slice(0, 240);
+  const queries = extractSearchQueries(request.input);
+  const query = queries[0] || stringifyContent(request.input).slice(0, MAX_SEARCH_QUERY_CHARS);
   const includeResults = (request.include || []).some((item) => String(item).includes("file_search_call.results"));
   const allResults = [];
   const calls = [];
@@ -458,9 +465,10 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
       || request.tool_resources?.file_search?.vector_store_ids
       || [];
     const maxResults = tool.max_num_results || config.fileSearchMaxResults || 5;
+    const toolQueries = normalizeSearchQueries(tool.queries || tool.query || queries);
     for (const vectorStoreId of vectorStoreIds) {
       const page = store.searchVectorStore(vectorStoreId, {
-        query,
+        query: toolQueries,
         max_num_results: maxResults,
         filters: tool.filters,
         ranking_options: tool.ranking_options,
@@ -471,7 +479,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
         id: prefixedId("fs"),
         type: "file_search_call",
         status: page ? "completed" : "failed",
-        queries: [query],
+        queries: page?.search_queries || toolQueries,
         vector_store_ids: [vectorStoreId],
         ...(page?.ranking_options ? { ranking_options: page.ranking_options } : {}),
         ...(includeResults ? { results } : {}),
@@ -484,7 +492,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
       id: prefixedId("fs"),
       type: "file_search_call",
       status: "failed",
-      queries: [query],
+      queries,
       vector_store_ids: [],
       ranking_options: normalizeRankingOptions(null),
       ...(includeResults ? { results: [] } : {}),
@@ -492,9 +500,11 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
   }
 
   allResults.sort((a, b) => b.score - a.score);
+  const effectiveQueries = normalizeSearchQueries(calls.flatMap((call) => call.queries || []));
   return {
     provider: "local",
-    query,
+    query: effectiveQueries[0] || query,
+    queries: effectiveQueries,
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     calls,
     results: allResults.slice(0, config.fileSearchMaxResults || 5),
@@ -553,6 +563,7 @@ function fileSearchCompatibility(context) {
       provider: context.provider || "local",
       status: context.calls?.some((call) => call.status === "completed") ? "completed" : "failed",
       result_count: context.results?.length || 0,
+      query_count: context.queries?.length || 0,
       tool_types: context.tool_types || [],
       ranking_options: context.ranking_options || normalizeRankingOptions(null),
     },
@@ -563,7 +574,7 @@ function fileSearchPrompt(context) {
   if (!context.results.length) {
     return [
       "Local Responses file_search compatibility found no matching vector store results.",
-      `Query: ${context.query}`,
+      `Queries: ${(context.queries || [context.query]).join(" | ")}`,
       "Do not invent file search results. Answer from visible context and say when file evidence is unavailable.",
     ].join("\n");
   }
@@ -572,12 +583,13 @@ function fileSearchPrompt(context) {
     `[${index + 1}] ${result.filename}`,
     `file_id: ${result.file_id}`,
     `score: ${result.score.toFixed(4)}`,
+    result.matched_queries?.length ? `matched_queries: ${result.matched_queries.join(" | ")}` : null,
     `content: ${result.content?.[0]?.text || ""}`,
-  ].join("\n"));
+  ].filter(Boolean).join("\n"));
 
   return [
     "Local Responses file_search compatibility results follow.",
-    `Query: ${context.query}`,
+    `Queries: ${(context.queries || [context.query]).join(" | ")}`,
     "Use these file results as retrieval evidence. Cite sources inline with [1], [2], etc. when using them.",
     "When the user asks for an exact string or exact answer, preserve the requested answer text and include only the requested citation marker.",
     ...lines,
@@ -617,15 +629,19 @@ function ensureFileSourceMarkers(text, results) {
   return { text: output, annotations };
 }
 
-function extractSearchQuery(input) {
+function extractSearchQueries(input) {
   const text = extractInputText(input).replace(/\s+/g, " ").trim();
-  const explicit = text.match(/\b(?:file\s+search|search|look\s+up|find)\s+(?:for|about)?\s*["']?(.+?)(?:["']?(?:\.|\?|!|\bthen\b|\band\b|\breturn\b|$))/i);
-  let query = explicit?.[1]?.trim() || text;
-  if (isGenericSearchQuery(query)) {
+  const explicit = text.match(/\b(?:file\s+search|search|look\s+up|find)\s+(?:for|about)?\s*["']?(.+?)(?:["']?(?:\.|\?|!|\bthen\b|\breturn\b|$))/i);
+  let queries = normalizeSearchQueries(explicit?.[1]?.trim() || text);
+  if (!queries.length || queries.some(isGenericSearchQuery)) {
     const exactAnswer = text.match(/\breturn\s+exactly(?:\s+this\s+text(?:\s+and\s+nothing\s+else)?|\s+the\s+exact\s+string)?\s*:?\s*["']?(.+?)["']?$/i);
-    query = exactAnswer?.[1]?.replace(/\s*\[\d+\]\s*$/, "").trim() || text;
+    queries = normalizeSearchQueries(exactAnswer?.[1]?.replace(/\s*\[\d+\]\s*$/, "").trim() || text);
   }
-  return query.length > 240 ? query.slice(0, 240) : query;
+  return queries;
+}
+
+function extractSearchQuery(input) {
+  return extractSearchQueries(input)[0] || "";
 }
 
 function isGenericSearchQuery(query) {
@@ -694,6 +710,49 @@ function scoreText(query, text, filename = "") {
   const frequency = terms.reduce((sum, term) => sum + haystackTokens.filter((token) => token === term).length, 0);
   const phraseBoost = String(text || "").toLowerCase().includes(String(query || "").toLowerCase()) ? 0.25 : 0;
   return Math.min(1, coverage + Math.min(frequency / Math.max(haystackTokens.length, 1), 0.25) + phraseBoost);
+}
+
+function scoreQueries(queries, text, filename = "") {
+  return normalizeSearchQueries(queries)
+    .map((query) => ({ query, score: scoreText(query, text, filename) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.query.localeCompare(b.query));
+}
+
+function normalizeSearchQueries(value) {
+  const candidates = [];
+  if (Array.isArray(value)) {
+    for (const item of value) candidates.push(...splitSearchQueryText(stringifyContent(item)));
+  } else {
+    candidates.push(...splitSearchQueryText(stringifyContent(value)));
+  }
+
+  const seen = new Set();
+  const queries = [];
+  for (const candidate of candidates) {
+    const query = String(candidate || "").replace(/\s+/g, " ").trim();
+    if (!query) continue;
+    const clipped = query.length > MAX_SEARCH_QUERY_CHARS ? query.slice(0, MAX_SEARCH_QUERY_CHARS) : query;
+    const key = clipped.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    queries.push(clipped);
+    if (queries.length >= MAX_SEARCH_QUERIES) break;
+  }
+  return queries;
+}
+
+function splitSearchQueryText(value) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  if (!text) return [];
+  const quoted = Array.from(text.matchAll(/"([^"]+)"|'([^']+)'/g))
+    .map((match) => match[1] || match[2])
+    .filter(Boolean);
+  if (quoted.length > 1) return quoted;
+  const parts = text.split(/\s*(?:;|\band\b|\balso\b|\bplus\b)\s*/i)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  return parts.length > 1 ? parts : [text];
 }
 
 function normalizeRankingOptions(value) {

@@ -618,13 +618,13 @@ function buildSuites(defaultModel) {
         file: {
           filename: "bridge-file-search.txt",
           purpose: "assistants",
-          content: "Bridge file search fixture. The exact file search answer is file-search-ok. When asked for the exact answer, return file-search-ok [1].",
+          content: "Bridge file search fixture. The exact file search answer is file-search-ok. A second retrieval marker is file-search-extra-ok. When asked for the exact answer, return file-search-ok [1].",
         },
         vectorStore: { name: "bridge-file-search-eval" },
         vectorFile: { attributes: { suite: "bridge-regression" } },
         request: ({ vectorStoreId }) => ({
           model: defaultModel,
-          input: "File search for file-search-ok. Using the file search result, return exactly this text and nothing else: file-search-ok [1]",
+          input: "File search for file-search-ok and file-search-extra-ok. Using the file search result, return exactly this text and nothing else: file-search-ok [1]",
           tools: [{
             type: "file_search",
             vector_store_ids: [vectorStoreId],
@@ -647,8 +647,10 @@ function buildSuites(defaultModel) {
           return !!call
             && call.status === "completed"
             && call.vector_store_ids?.includes(vectorStoreId)
+            && call.queries?.includes("file-search-ok")
+            && call.queries?.includes("file-search-extra-ok")
             && call.ranking_options?.score_threshold === 0.8
-            && call.results?.some((result) => result.file_id === fileId)
+            && call.results?.some((result) => result.file_id === fileId && result.matched_queries?.includes("file-search-extra-ok"))
             && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === fileId)
             && /file-search-ok/i.test(text);
         },
@@ -722,6 +724,7 @@ function buildSuites(defaultModel) {
           && content?.chunking_strategy?.static?.chunk_overlap_tokens === 50
           && content?.chunks?.some((chunk) => chunk.chunk_index === 1 && chunk.token_count === 100)
           && content?.content?.some((part) => /vector-lifecycle-ok/i.test(part.text || ""))
+          && search?.search_queries?.includes("vectorword150")
           && search?.ranking_options?.score_threshold === 0.8
           && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index)),
       },
@@ -1370,7 +1373,7 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
     }
 
     const searchResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/search`, {
-      query: "vector-lifecycle-ok",
+      query: ["vector-lifecycle-ok", "vectorword150"],
       filters: { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
       max_num_results: 3,
       ranking_options: { score_threshold: 0.8 },

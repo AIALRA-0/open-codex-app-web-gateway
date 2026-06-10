@@ -1300,7 +1300,7 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       body: JSON.stringify({
         filename: "fixture.txt",
         purpose: "assistants",
-        content: "File Search Fixture says the exact marker is file-search-ok.",
+        content: "File Search Fixture says the exact marker is file-search-ok. A second marker is secondary-ok.",
       }),
     });
     assert.equal(createdFile.status, 200);
@@ -1344,8 +1344,24 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const searchJson = await search.json();
     assert.equal(searchJson.object, "vector_store.search_results.page");
     assert.deepEqual(searchJson.ranking_options, { ranker: "auto", score_threshold: 0 });
+    assert.deepEqual(searchJson.search_queries, ["file-search-ok"]);
     assert.equal(searchJson.data[0].file_id, file.id);
     assert.ok(searchJson.data[0].score <= 1);
+
+    const multiQuerySearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: ["file-search-ok", "secondary-ok"],
+        max_num_results: 3,
+        filters: { type: "eq", key: "suite", value: "server-test" },
+      }),
+    });
+    assert.equal(multiQuerySearch.status, 200);
+    const multiQueryJson = await multiQuerySearch.json();
+    assert.deepEqual(multiQueryJson.search_queries, ["file-search-ok", "secondary-ok"]);
+    assert.equal(multiQueryJson.data[0].file_id, file.id);
+    assert.deepEqual(multiQueryJson.data[0].matched_queries, ["file-search-ok", "secondary-ok"]);
 
     const looseRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",
@@ -1399,7 +1415,7 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock-model",
-        input: "File search for file-search-ok and return file-search-ok [1].",
+        input: "File search for file-search-ok and secondary-ok. Return file-search-ok [1].",
         tools: [{
           type: "file_search",
           vector_store_ids: [vectorStore.id],
@@ -1418,13 +1434,14 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const json = await response.json();
     assert.equal(json.output[0].type, "file_search_call");
     assert.equal(json.output[0].status, "completed");
-    assert.equal(json.output[0].queries[0], "file-search-ok");
+    assert.deepEqual(json.output[0].queries, ["file-search-ok", "secondary-ok"]);
     assert.deepEqual(json.output[0].vector_store_ids, [vectorStore.id]);
     assert.deepEqual(json.output[0].ranking_options, {
       ranker: "default_2024_08_21",
       score_threshold: 0.8,
     });
     assert.equal(json.output[0].results[0].file_id, file.id);
+    assert.deepEqual(json.output[0].results[0].matched_queries, ["file-search-ok", "secondary-ok"]);
     assert.equal(json.output[1].type, "message");
     assert.equal(json.output[1].content[0].text, "file-search-ok [1]");
     assert.deepEqual(json.output[1].content[0].annotations, [{
@@ -1435,6 +1452,7 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     }]);
     assert.equal(json.metadata.compatibility.local_file_search.provider, "local");
     assert.equal(json.metadata.compatibility.local_file_search.result_count, 1);
+    assert.equal(json.metadata.compatibility.local_file_search.query_count, 2);
     assert.deepEqual(json.metadata.compatibility.local_file_search.ranking_options, {
       ranker: "default_2024_08_21",
       score_threshold: 0.8,

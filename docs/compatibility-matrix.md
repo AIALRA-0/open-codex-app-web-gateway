@@ -228,7 +228,7 @@ under the configured bridge state directory, not in Git.
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with pagination and `filter` by file status |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns the completed batch unless a future async batch is still `in_progress`, in which case it is marked `cancelled` |
-| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, chunk metadata, static chunk overlap, and simple metadata `filters` |
+| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with string or array `query`, `search_queries`, `matched_queries`, `max_num_results`, chunk metadata, static chunk overlap, ranking options, and simple metadata `filters` |
 
 ## Containers Endpoint Coverage
 
@@ -388,6 +388,9 @@ lexical search over uploaded text. The adapter:
 
 - reserves `file_search` so it is not forwarded as an unsupported Chat tool;
 - searches `vector_store_ids` from the tool or `tool_resources.file_search`;
+- accepts direct `query` arrays on vector-store search and performs bounded
+  deterministic multi-query decomposition for Responses prompts such as
+  `file search for alpha and beta`;
 - injects retrieved chunks into the upstream Chat prompt as source material;
 - emits `file_search_call` output items with queries, vector store IDs, and
   optional results when `include:["file_search_call.results"]` is requested;
@@ -420,7 +423,8 @@ overlapping static chunks but is not yet an embedding-based vector index and
 does not process binary PDFs, OCR, image files, asynchronous batch indexing, or
 OpenAI's managed semantic ranking behavior. Local `hybrid_search` metadata is
 reported as `local_mode:"text_only"` because embedding similarity is not
-available yet.
+available yet. Multi-query decomposition is deterministic and bounded; it is
+not equivalent to OpenAI's hosted query rewriting.
 
 ## Local Shell and Code Interpreter Adapter
 
@@ -467,7 +471,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
-| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search or reranker | Add embedding/vector indexing, file parsers, async batches, richer filters, managed-style reranking, and larger eval sets |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, bounded multi-query decomposition, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search or reranker | Add embedding/vector indexing, file parsers, async batches, richer filters, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |

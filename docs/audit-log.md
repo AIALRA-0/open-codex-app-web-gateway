@@ -2097,3 +2097,61 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq82w599`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local File Search Multi-Query Decomposition
+
+- Closed another local `file_search` gap against OpenAI hosted retrieval
+  behavior: hosted file search can rewrite and break complex user queries into
+  multiple searches, while the local adapter previously emitted exactly one
+  query.
+- Local vector-store search now:
+  - accepts `query` as either a string or an array;
+  - returns both legacy `search_query` and auditable `search_queries`;
+  - scores each chunk against every bounded query and uses the best normalized
+    lexical score for ranking;
+  - records per-result `matched_queries` so callers can inspect which query
+    caused each chunk to be selected.
+- Responses `file_search` emulation now:
+  - performs bounded deterministic decomposition for prompts such as
+    `file search for alpha and beta`;
+  - preserves multiple queries in `file_search_call.queries`;
+  - reports `metadata.compatibility.local_file_search.query_count`;
+  - injects the query list and per-result `matched_queries` into the local
+    file-search context prompt.
+- Kept the split deliberately conservative and bounded to four queries, 240
+  characters each, to avoid prompt/context growth and to stay aligned with the
+  bridge's disk- and token-bounded adapter model.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/assistants/tools/file-search#how-it-works`,
+  which documents that hosted `file_search` rewrites user queries and breaks
+  complex queries into multiple searches it can run in parallel.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Remaining known gap: this is deterministic local decomposition, not OpenAI's
+  hosted query rewriting, semantic search, parallel remote retrieval, or managed
+  reranking.
+- Verified:
+  - `node --check src/bridge/local_file_search.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Targeted local file-search/vector-store tests passed 3/3, covering direct
+    query arrays, `search_queries`, `matched_queries`, natural-language
+    multi-query Responses prompts, and compatibility metadata `query_count`.
+  - `npm test`: 69/69 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-file-search` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1837 ms, output `file-search-ok [1]`, and total
+    usage 219 tokens, verifying multi-query `file_search_call.queries` and
+    `matched_queries`.
+  - Targeted live `vector-store-lifecycle` passed 1/1, elapsed 157 ms, with
+    `content_parts:4` and multi-query `search_results:3`.
+  - Full live `bridge-regression` passed 24/24 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 2087 ms, P95 latency 4234 ms, and total usage
+    7283 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq836bza`, reload persistence
+    confirmed, console errors 0, warnings 0.
