@@ -975,14 +975,20 @@ function buildSuites(defaultModel) {
           tools: [{ type: "web_search_preview" }],
           include: ["web_search_call.action.sources"],
           max_output_tokens: 128,
-          store: false,
+          store: true,
         },
-        check: ({ json, text }) => {
+        retrieveResponseInclude: "web_search_call.action.sources",
+        check: ({ json, text, hiddenResponse, includedResponse }) => {
           const calls = (json.output || []).filter((item) => item.type === "web_search_call");
           const searchCall = calls.find((item) => item.action?.type === "search");
           const openPageCall = calls.find((item) => item.action?.type === "open_page");
           const findInPageCall = calls.find((item) => item.action?.type === "find_in_page");
+          const hiddenCalls = (hiddenResponse?.output || []).filter((item) => item.type === "web_search_call");
+          const includedCalls = (includedResponse?.output || []).filter((item) => item.type === "web_search_call");
+          const hiddenSearchCall = hiddenCalls.find((item) => item.action?.type === "search");
+          const includedSearchCall = includedCalls.find((item) => item.action?.type === "search");
           const actionSources = searchCall?.action?.sources || [];
+          const includedSources = includedSearchCall?.action?.sources || [];
           const annotations = (json.output || [])
             .flatMap((item) => item.content || [])
             .flatMap((part) => part.annotations || []);
@@ -994,6 +1000,9 @@ function buildSuites(defaultModel) {
           return !!searchCall
             && searchCall.status === "completed"
             && actionSources.some((source) => source.type === "url" && /^https?:\/\//.test(source.url || ""))
+            && hiddenSearchCall?.action?.sources === undefined
+            && !hiddenCalls.some((call) => Array.isArray(call.action?.sources))
+            && includedSources.some((source) => source.type === "url" && /^https?:\/\//.test(source.url || ""))
             && !!openPageCall
             && ["completed", "failed"].includes(openPageCall.status)
             && (openedCount === 0 || (!!findInPageCall && findInPageCall.status === "completed" && findAttemptCount >= 1))
@@ -1533,25 +1542,51 @@ async function withTimeout(promise, ms, message, fallback) {
 }
 
 async function runJsonCase(testCase, context, started, path, textSelector, usageSelector) {
-  const response = await postJson(`${baseUrl}${path}`, resolveRequest(testCase.request, {}));
-  const body = await response.text();
-  if (!response.ok) {
-    return finishResult(testCase, context, started, {
-      ok: false,
-      status: response.status,
-      error: truncate(body),
-    });
-  }
+  const request = resolveRequest(testCase.request, {});
+  let responseId = null;
+  try {
+    const response = await postJson(`${baseUrl}${path}`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        error: truncate(body),
+      });
+    }
 
-  const json = JSON.parse(body);
-  const text = textSelector(json);
-  const ok = !!testCase.check({ json, text, ok: response.ok });
-  return finishResult(testCase, context, started, {
-    ok,
-    status: response.status,
-    usage: usageSelector(json),
-    output_text: truncate(text),
-  });
+    const json = JSON.parse(body);
+    if (path === "/v1/responses" && testCase.retrieveResponseInclude && request.store !== false) {
+      responseId = json.id || null;
+    }
+    let hiddenResponse = { ok: false, status: 0, json: null };
+    let includedResponse = { ok: false, status: 0, json: null };
+    if (testCase.retrieveResponseInclude && json.id) {
+      hiddenResponse = await getJson(`${baseUrl}/v1/responses/${json.id}`);
+      const include = encodeURIComponent(testCase.retrieveResponseInclude);
+      includedResponse = await getJson(`${baseUrl}/v1/responses/${json.id}?include[]=${include}`);
+    }
+    const text = textSelector(json);
+    const ok = !!testCase.check({
+      json,
+      text,
+      ok: response.ok,
+      hiddenResponse: hiddenResponse.json,
+      includedResponse: includedResponse.json,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      ...(testCase.retrieveResponseInclude ? {
+        hidden_response_status: hiddenResponse.status,
+        included_response_status: includedResponse.status,
+      } : {}),
+      usage: usageSelector(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
+  }
 }
 
 async function runStreamingResponsesCase(testCase, context, started) {

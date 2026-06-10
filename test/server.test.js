@@ -1422,6 +1422,41 @@ test("POST /v1/responses includes local web_search action sources when requested
       status: "included",
       source_count: 1,
     });
+
+    const storedWithoutInclude = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for bridge source result and return bridge-source-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        store: true,
+      }),
+    });
+    assert.equal(storedWithoutInclude.status, 200);
+    const storedWithoutIncludeJson = await storedWithoutInclude.json();
+    assert.equal(storedWithoutIncludeJson.output[0].type, "web_search_call");
+    assert.equal(storedWithoutIncludeJson.output[0].action.type, "search");
+    assert.equal(storedWithoutIncludeJson.output[0].action.sources, undefined);
+
+    const hiddenStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${storedWithoutIncludeJson.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].type, "web_search_call");
+    assert.equal(hiddenStoredJson.output[0].action.type, "search");
+    assert.equal(hiddenStoredJson.output[0].action.sources, undefined);
+
+    const includedStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${storedWithoutIncludeJson.id}?include[]=web_search_call.action.sources`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].type, "web_search_call");
+    assert.deepEqual(includedStoredJson.output[0].action.sources, [{
+      type: "url",
+      url: "https://example.test/bridge-source",
+      title: "Bridge Source Result",
+      index: 1,
+      snippet: "The bridge can expose web search sources on action items.",
+    }]);
   }, {
     webSearchProvider: "static",
     webSearchStaticResults: [{

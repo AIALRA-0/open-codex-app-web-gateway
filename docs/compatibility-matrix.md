@@ -94,7 +94,7 @@ implementations for those tools.
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
-| `include:["web_search_call.action.sources"]` | local `web_search_call.action.sources` | Emulated locally for the Responses web-search adapter. Search calls include URL sources from local results; `open_page` and `find_in_page` calls include the matching URL source. The bridge records `metadata.compatibility.local_web_search.action_sources` when requested |
+| `include:["web_search_call.action.sources"]` | local output projection | Emulated locally for the Responses web-search adapter. `action.sources` is hidden by default on `web_search_call` items and returned when this include value is requested on create or on `GET /v1/responses/{id}`; the create request include is recorded in `metadata.compatibility.local_web_search.action_sources` |
 | `include:["code_interpreter_call.outputs"]` | local output projection | Emulated locally for the Responses code-interpreter adapter. Local stdout/stderr logs are hidden by default on `code_interpreter_call` items and returned when this include value is requested on create or on `GET /v1/responses/{id}`; the create request include is recorded in `metadata.compatibility.local_shell.include_code_interpreter_outputs` |
 | `include:["file_search_call.results"]` | local output projection | Emulated locally for the Responses file-search adapter. Search results are hidden by default on `file_search_call` items and returned when this include value is requested on create or on `GET /v1/responses/{id}` |
 | `include:["message.input_image.image_url"]` | local input-item projection | Emulated for `GET /v1/responses/{id}/input_items`, `GET /v1/conversations/{id}/items`, and `GET /v1/conversations/{id}/items/{item_id}`. Stored input image URLs are hidden by default and returned only when this include value is requested |
@@ -163,7 +163,7 @@ behavior.
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately, persists a local background job snapshot, completes asynchronously through local storage, resumes safe `preparing` checkpoints and `provider_pending` snapshots after restart, and fails unsafe interrupted snapshots explicitly; `conversation` replays and appends local Conversation items |
-| `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object; local `code_interpreter_call.outputs` and `file_search_call.results` are hidden unless their matching include values are requested |
+| `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object; local `web_search_call.action.sources`, `code_interpreter_call.outputs`, and `file_search_call.results` are hidden unless their matching include values are requested |
 | `POST /v1/responses/{response_id}` | Implemented for local `store:true` and local background records | Updates only the stored response `metadata` field; local compatibility metadata is preserved so bridge-emulated behavior remains inspectable, and metadata updates made while a background response is `in_progress` are retained when the final completed response is stored |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
@@ -529,8 +529,12 @@ When a request includes `include:["web_search_call.action.sources"]`, the local
 adapter adds `action.sources` to emitted `web_search_call` items. Search actions
 carry the local result URLs with titles, snippets, and source indexes; local
 `open_page` and `find_in_page` actions carry the matching URL source plus bounded
-open/find status metadata. Without this include value, the bridge omits
-`action.sources` to preserve the default Responses projection.
+open/find status metadata. The bridge stores local web-search sources internally
+for `store:true` responses so
+`GET /v1/responses/{response_id}?include[]=web_search_call.action.sources` can
+project the sources later while ordinary response retrieval keeps them hidden.
+Without this include value, the bridge omits `action.sources` to preserve the
+default Responses projection.
 
 Current providers:
 

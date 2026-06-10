@@ -495,7 +495,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
-  attachWebSearchOutput(response, localWebSearch);
+  attachWebSearchOutput(response, localWebSearch, { includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
@@ -834,7 +834,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
   return [
     ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
-    ...webSearchOutputItems(contexts.web_search),
+    ...webSearchOutputItems(contexts.web_search, { includeSources: true }),
     ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
   ];
 }
@@ -913,6 +913,7 @@ function prependLocalOutputItems(response, items = []) {
 function responseWithFullLocalOutputs(response, contexts = {}) {
   const full = clone(response);
   if (contexts.localShell) mergeFullShellOutputs(full, contexts.localShell);
+  if (contexts.localWebSearch) mergeFullWebSearchOutputs(full, contexts.localWebSearch);
   if (contexts.localFileSearch) mergeFullFileSearchOutputs(full, contexts.localFileSearch);
   return full;
 }
@@ -941,6 +942,20 @@ function mergeFullFileSearchOutputs(response, localFileSearch) {
   response.output = response.output.map((item) => {
     if (item?.type !== "file_search_call" || !item.id) return item;
     return fullFileSearchCalls.get(item.id) || item;
+  });
+  return response;
+}
+
+function mergeFullWebSearchOutputs(response, localWebSearch) {
+  if (!Array.isArray(response?.output)) return response;
+  const fullWebSearchItems = webSearchOutputItems(localWebSearch, { includeSources: true });
+  const fullWebSearchCalls = new Map(fullWebSearchItems
+    .filter((item) => item?.type === "web_search_call" && item.id)
+    .map((item) => [item.id, item]));
+  if (!fullWebSearchCalls.size) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "web_search_call" || !item.id) return item;
+    return fullWebSearchCalls.get(item.id) || item;
   });
   return response;
 }
@@ -2651,7 +2666,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     writeSse(res, terminalEvent, sequence(state, { type: terminalEvent, response: clone(response) }));
 
     if (request.store !== false) {
-      const storedResponse = responseWithFullLocalOutputs(response, { localShell, localFileSearch });
+      const storedResponse = responseWithFullLocalOutputs(response, { localShell, localWebSearch, localFileSearch });
       store.put(response.id, {
         response: storedResponse,
         input_items: normalizeStoredInputItems(request.input),
@@ -5391,6 +5406,9 @@ function projectResponseForIncludeSet(response, includes = new Set()) {
   if (!includes.has("code_interpreter_call.outputs")) {
     projected = redactCodeInterpreterCallOutputs(projected);
   }
+  if (!includes.has("web_search_call.action.sources")) {
+    projected = redactWebSearchActionSources(projected);
+  }
   if (!includes.has("file_search_call.results")) {
     projected = redactFileSearchCallResults(projected);
   }
@@ -5414,6 +5432,17 @@ function redactFileSearchCallResults(response) {
     if (item?.type !== "file_search_call") return item;
     const cloned = { ...item };
     delete cloned.results;
+    return cloned;
+  });
+  return response;
+}
+
+function redactWebSearchActionSources(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "web_search_call" || !isPlainObject(item.action)) return item;
+    const cloned = { ...item, action: { ...item.action } };
+    delete cloned.action.sources;
     return cloned;
   });
   return response;

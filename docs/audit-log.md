@@ -4040,6 +4040,68 @@ Open follow-ups:
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
 
+## 2026-06-10 Web Search Action Sources Stored-Response Projection
+
+- Re-checked the current OpenAI Responses create reference through the official
+  OpenAI developer docs MCP. The supported `include` values list includes
+  `web_search_call.action.sources`, defined as exposing sources for the web
+  search tool call.
+- Extended the local web-search adapter from create-time source inclusion to
+  stored-response projection:
+  - local web-search `action.sources` are stored internally on
+    `web_search_call` output items for `store:true` responses;
+  - create responses hide `web_search_call.action.sources` unless the request
+    includes `include:["web_search_call.action.sources"]`;
+  - `GET /v1/responses/{response_id}` hides web-search action sources by
+    default;
+  - `GET /v1/responses/{response_id}?include[]=web_search_call.action.sources`
+    returns the stored sources.
+- Kept final text citation annotations unchanged: `url_citation` annotations
+  remain visible on generated output text, while nested `action.sources` are
+  controlled by the include projection.
+- Preserved streaming terminal response behavior for clients while storing a
+  full internal response after completion so later retrieve calls can project
+  web-search sources with the include query.
+- Updated background local-output preparation so background responses also keep
+  full internal web-search sources before retrieve-time projection.
+- Updated the live `responses-web-search` regression case to create a stored
+  response, verify immediate include output, verify default retrieve redaction,
+  verify include retrieve recovery, and delete the stored response after the
+  case to control runtime state growth.
+- Updated compatibility and evaluation docs to record the stored-response
+  projection behavior.
+- Secret handling: no provider API key or credential value was written to the
+  repository; the verification path used the existing systemd environment.
+- Verification:
+  - `node --check src/bridge/server.js && node --check scripts/eval-harness.mjs && node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-web-search` passed 1/1 against
+    `deepseek-v4-pro`, latency 1785 ms, total usage 4040 tokens, visible text
+    `web-search-ok [1].`, and both hidden/included stored-response retrieves
+    returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1216 ms, P95 latency 1473 ms, and total usage 179 tokens.
+  - Full live `bridge-regression` passed 44/44 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1156 ms, P95 latency 2748 ms, and total usage
+    9615 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8ij8w8`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 415 runtime candidates,
+    selected 35 old UI screenshots by retention policy, deleted 0, selected
+    2665509 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 38 GB available;
+    repository checkout is 43 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.
+
 ## 2026-06-10 File Search Results Stored-Response Projection
 
 - Re-checked the current OpenAI Responses reference through the official OpenAI
