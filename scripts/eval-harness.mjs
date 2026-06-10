@@ -187,6 +187,22 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
       },
       {
+        id: "responses-logprobs",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Return exactly this text and nothing else: logprobs-ok",
+          include: ["message.output_text.logprobs"],
+          top_logprobs: 2,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => /logprobs-ok/i.test(text)
+          && json.metadata?.compatibility?.logprobs === "chat_logprobs"
+          && (json.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0)),
+      },
+      {
         id: "responses-background",
         mode: "responses-background",
         request: {

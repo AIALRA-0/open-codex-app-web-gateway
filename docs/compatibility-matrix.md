@@ -7,6 +7,7 @@ Primary sources:
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
+- OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
@@ -61,6 +62,8 @@ implementations for those tools.
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
+| `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
+| `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
 
 DeepSeek effort compatibility maps `minimal`, `low`, and `medium` to `high`, and
@@ -83,6 +86,7 @@ behavior.
 | `choices[0].message.content` | output `message.content[].output_text` | Direct |
 | `choices[0].message.refusal` | output refusal content part | Direct when present |
 | `choices[0].message.tool_calls[]` | output `function_call` items | Direct |
+| `choices[0].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming Responses when provider returns Chat logprobs |
 | `choices[0].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
@@ -196,6 +200,8 @@ Chat stream chunks with `delta.content` become text deltas. Chunks with
 `delta.tool_calls` become function-call item events and argument deltas. Chunks
 with DeepSeek `delta.reasoning_content` become reasoning summary deltas and are
 kept in the replay store so later tool turns can pass the reasoning content back.
+Chat stream chunks with `choice.logprobs.content[]` are accumulated and attached
+to the final `output_text` content part and completed response.
 When `web_search_preview` is handled by the local adapter, the bridge emits a
 `web_search_call` output item and applies URL citation annotations to the final
 message content.

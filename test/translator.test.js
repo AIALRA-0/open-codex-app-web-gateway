@@ -130,6 +130,19 @@ test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
   assert.equal(compatibility.deepseek_thinking, "disabled_for_tool_choice");
 });
 
+test("maps Responses output logprobs request to Chat logprobs parameters", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Return token probabilities.",
+    include: ["message.output_text.logprobs"],
+    top_logprobs: 2,
+  });
+
+  assert.equal(chat.logprobs, true);
+  assert.equal(chat.top_logprobs, 2);
+  assert.equal(compatibility.logprobs, "chat_logprobs");
+});
+
 test("maps Responses structured output text.format to chat response_format", () => {
   const format = mapTextFormat({
     format: {
@@ -209,6 +222,14 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
         }],
       },
       finish_reason: "tool_calls",
+      logprobs: {
+        content: [{
+          token: "Done",
+          logprob: -0.01,
+          bytes: [68, 111, 110, 101],
+          top_logprobs: [{ token: "Done", logprob: -0.01, bytes: [68, 111, 110, 101] }],
+        }],
+      },
     }],
     usage: {
       prompt_tokens: 10,
@@ -224,6 +245,8 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.output[0].type, "reasoning");
   assert.equal(response.output[1].type, "message");
   assert.equal(response.output[1].content[0].text, "Done");
+  assert.equal(response.output[1].content[0].logprobs[0].token, "Done");
+  assert.equal(response.output[1].content[0].logprobs[0].top_logprobs[0].logprob, -0.01);
   assert.equal(response.output[2].type, "function_call");
   assert.equal(response.output[2].call_id, "call_1");
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);

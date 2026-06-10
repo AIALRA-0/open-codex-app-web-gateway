@@ -34,6 +34,7 @@ const {
   chatCompletionToResponse,
   createResponseSkeleton,
   mapUsage,
+  normalizeOutputTextLogprobs,
   prefixedId,
   responsesToChatRequest,
   stringifyContent,
@@ -1113,6 +1114,7 @@ function createStreamState(response, compatibility) {
     text: "",
     reasoningItem: null,
     reasoningText: "",
+    outputTextLogprobs: [],
     toolCalls: new Map(),
     outputDone: new Set(),
     usage: null,
@@ -1164,6 +1166,7 @@ function syncStreamTextFromResponse(state) {
   const message = state.response.output.find((item) => item.type === "message");
   const textPart = message?.content?.find((part) => part.type === "output_text");
   if (typeof textPart?.text === "string") state.text = textPart.text;
+  if (state.outputTextLogprobs.length && textPart) textPart.logprobs = clone(state.outputTextLogprobs);
 }
 
 function ensureMessageItem(state) {
@@ -1277,6 +1280,18 @@ function applyChatStreamChunk(state, chunk) {
         content_index: 0,
         delta: delta.content,
       });
+    }
+
+    const logprobs = normalizeOutputTextLogprobs(choice.logprobs);
+    if (Array.isArray(logprobs) && logprobs.length) {
+      events.push(...ensureTextPart(state));
+      const item = state.messageItem;
+      state.outputTextLogprobs.push(...logprobs);
+      item.content[0].logprobs = clone(state.outputTextLogprobs);
+    } else if (logprobs && !Array.isArray(logprobs)) {
+      events.push(...ensureTextPart(state));
+      const item = state.messageItem;
+      item.content[0].logprobs = logprobs;
     }
 
     for (const deltaToolCall of delta.tool_calls || []) {

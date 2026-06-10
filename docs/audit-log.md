@@ -548,3 +548,47 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7rpme2` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Responses Output Logprobs Mapping
+
+- Used current OpenAI Responses and Chat Completions reference data to confirm:
+  - Responses `include` supports `message.output_text.logprobs`;
+  - Responses `top_logprobs` accepts 0-20 likely tokens;
+  - Chat Completions uses `logprobs:true` plus optional `top_logprobs`;
+  - Chat responses return token probability data under
+    `choices[].logprobs.content[]`.
+- Used current DeepSeek Chat Completion docs to confirm DeepSeek supports
+  `logprobs` and `top_logprobs` on Chat Completion requests, with
+  `top_logprobs` requiring `logprobs:true`.
+- Added Responses-to-Chat request mapping:
+  - `include:["message.output_text.logprobs"]` sets upstream `logprobs:true`;
+  - `top_logprobs` is forwarded and also sets `logprobs:true`;
+  - compatibility metadata records `logprobs:"chat_logprobs"` when the bridge
+    requests Chat log probabilities.
+- Added Chat-to-Responses response mapping:
+  - non-streaming `choices[0].logprobs.content[]` is preserved as
+    `output[].content[].logprobs`;
+  - streaming `choice.logprobs.content[]` chunks are accumulated onto the final
+    `output_text` content part and final completed response.
+- Added regression coverage for:
+  - request parameter mapping to upstream Chat;
+  - non-streaming output logprobs preservation;
+  - streaming logprobs accumulation;
+  - live `responses-logprobs` in `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 30/30 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live logprobs result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-logprobs --timeout-ms 90000 --verbose`
+  passed 1/1, latency 2361 ms, output `logprobs-ok`, total usage 67 tokens.
+- Full live `bridge-regression` passed 16/16, pass rate 1.0, average latency
+  1819 ms, P95 latency 3893 ms, total usage 2186 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7ryfn9` appeared before reload and after reload, console errors
+  0, warnings 0.

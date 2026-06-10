@@ -101,6 +101,58 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("POST /v1/responses maps output logprobs include to Chat and back", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, true);
+    assert.equal(call.body.top_logprobs, 2);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_logprobs",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "yes" },
+        logprobs: {
+          content: [{
+            token: "yes",
+            logprob: -0.02,
+            bytes: [121, 101, 115],
+            top_logprobs: [
+              { token: "yes", logprob: -0.02, bytes: [121, 101, 115] },
+              { token: "no", logprob: -4.5, bytes: [110, 111] },
+            ],
+          }],
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 1, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Answer yes.",
+        include: ["message.output_text.logprobs"],
+        top_logprobs: 2,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    const part = json.output[0].content[0];
+    assert.equal(part.text, "yes");
+    assert.equal(part.logprobs[0].token, "yes");
+    assert.equal(part.logprobs[0].top_logprobs[1].token, "no");
+    assert.equal(json.top_logprobs, 2);
+    assert.equal(json.metadata.compatibility.logprobs, "chat_logprobs");
+  });
+});
+
 test("POST /v1/responses executes local web_search_preview compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
@@ -161,17 +213,29 @@ test("POST /v1/responses executes local web_search_preview compatibility", async
 });
 
 test("POST /v1/responses streams Chat chunks as typed Responses events", async () => {
-  await withMockProvider(async (_req, res) => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, true);
+    assert.equal(call.body.top_logprobs, 2);
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream",
       object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { role: "assistant", content: "hel" }, finish_reason: null }],
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: "hel" },
+        logprobs: { content: [{ token: "hel", logprob: -0.1, bytes: [104, 101, 108], top_logprobs: [] }] },
+        finish_reason: null,
+      }],
     })}\n\n`);
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream",
       object: "chat.completion.chunk",
-      choices: [{ index: 0, delta: { content: "lo" }, finish_reason: "stop" }],
+      choices: [{
+        index: 0,
+        delta: { content: "lo" },
+        logprobs: { content: [{ token: "lo", logprob: -0.2, bytes: [108, 111], top_logprobs: [] }] },
+        finish_reason: "stop",
+      }],
       usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
     })}\n\n`);
     res.write("data: [DONE]\n\n");
@@ -180,7 +244,13 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "mock-model", input: "stream", stream: true }),
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream",
+        stream: true,
+        include: ["message.output_text.logprobs"],
+        top_logprobs: 2,
+      }),
     });
 
     assert.equal(response.status, 200);
@@ -190,6 +260,8 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"delta":"hel"/);
     assert.match(text, /event: response\.completed/);
     assert.match(text, /"text":"hello"/);
+    assert.match(text, /"logprobs":\[\{"token":"hel","logprob":-0\.1/);
+    assert.match(text, /\{"token":"lo","logprob":-0\.2/);
   });
 });
 

@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle, Responses input-token counting, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle, Responses input-token counting, Responses output logprobs mapping, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
@@ -51,6 +51,7 @@ npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-logprobs --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-input-file --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
@@ -115,6 +116,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - At least 95% of native baseline task success on the chosen task suite.
 - No critical UI workflow regressions.
 - Tool-call replay works across multi-turn tasks.
+- Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content.
 - Background response polling and cancellation remain stable for in-process jobs.
 - Responses `input_file` text extraction works for local file IDs, inline base64 payloads, and bounded HTTP(S) file URLs, with failed/unsupported files surfaced in compatibility metadata.
 - Hosted-tool emulation returns auditable call items and citations for web search.

@@ -305,8 +305,10 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "metadata");
   copyIfPresent(request, chat, "store");
   copyIfPresent(request, chat, "parallel_tool_calls");
-  copyIfPresent(request, chat, "logprobs");
   copyIfPresent(request, chat, "top_logprobs");
+
+  const logprobsRequested = shouldRequestChatLogprobs(request);
+  if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
 
   const maxTokensField = options.maxTokensField || "max_tokens";
   if (request.max_output_tokens != null) chat[maxTokensField] = request.max_output_tokens;
@@ -338,8 +340,16 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
         ? { local_tool_choice: "handled_by_bridge" }
         : {}),
       ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
+      ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
     },
   };
+}
+
+function shouldRequestChatLogprobs(request = {}) {
+  if (request.top_logprobs != null) return true;
+  if ((request.include || []).some((item) => item === "message.output_text.logprobs")) return true;
+  if (request.logprobs !== undefined) return !!request.logprobs;
+  return undefined;
 }
 
 function hasLocalHostedToolRequest(tools = [], options = {}) {
@@ -432,7 +442,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   const message = choice.message || {};
 
   appendReasoningOutput(response, message.reasoning_content);
-  appendMessageOutput(response, message);
+  appendMessageOutput(response, message, choice.logprobs);
   appendToolCallOutputs(response, message.tool_calls || []);
 
   const finishReason = choice.finish_reason;
@@ -454,7 +464,7 @@ function appendReasoningOutput(response, reasoningContent) {
   });
 }
 
-function appendMessageOutput(response, message) {
+function appendMessageOutput(response, message, choiceLogprobs = null) {
   const hasText = message.content != null && message.content !== "";
   const hasRefusal = message.refusal != null && message.refusal !== "";
   if (!hasText && !hasRefusal && Array.isArray(message.tool_calls) && message.tool_calls.length) return;
@@ -462,11 +472,12 @@ function appendMessageOutput(response, message) {
 
   const content = [];
   if (hasText) {
+    const logprobs = normalizeOutputTextLogprobs(choiceLogprobs ?? message.logprobs);
     content.push({
       type: "output_text",
       text: normalizeAssistantText(message.content),
       annotations: Array.isArray(message.annotations) ? message.annotations : [],
-      ...(message.logprobs ? { logprobs: message.logprobs } : {}),
+      ...(logprobs !== undefined ? { logprobs } : {}),
     });
   }
   if (hasRefusal) {
@@ -480,6 +491,14 @@ function appendMessageOutput(response, message) {
     role: "assistant",
     content,
   });
+}
+
+function normalizeOutputTextLogprobs(logprobs) {
+  if (logprobs == null) return undefined;
+  if (Array.isArray(logprobs)) return clone(logprobs);
+  if (Array.isArray(logprobs.content)) return clone(logprobs.content);
+  if (Array.isArray(logprobs.output_text)) return clone(logprobs.output_text);
+  return clone(logprobs);
 }
 
 function normalizeAssistantText(content) {
@@ -541,6 +560,7 @@ module.exports = {
   mapTextFormat,
   mapToolChoice,
   mapUsage,
+  normalizeOutputTextLogprobs,
   normalizeReasoningEffort,
   prefixedId,
   responseInputToChatMessages,
