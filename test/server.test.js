@@ -1769,19 +1769,112 @@ test("Responses conversation references return 404 when the local conversation i
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
   }, async ({ bridgeAddress, requests }) => {
-    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+    for (const endpoint of ["/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"]) {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}${endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          conversation: "conv_missing",
+          input: "hello",
+        }),
+      });
+      assert.equal(response.status, 404, endpoint);
+      const json = await response.json();
+      assert.equal(json.error.code, "conversation_not_found", endpoint);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("Responses auxiliary endpoints replay local conversation state", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (call.body.messages?.[0]?.content.includes("compact long-running agent conversations")) {
+      assert.match(call.body.messages[1].content, /aux-99/);
+      assert.match(call.body.messages[1].content, /Summarize with the auxiliary marker/);
+      res.end(JSON.stringify({
+        id: "chatcmpl_conversation_compact",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "Aux marker aux-99 preserved." },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 90, completion_tokens: 6, total_tokens: 96 },
+      }));
+      return;
+    }
+
+    assert.equal(call.body.stream, false);
+    assert.equal(call.body.max_tokens, 1);
+    assert.match(call.body.messages.map((message) => message.content).join("\n"), /aux-99/);
+    assert.match(call.body.messages.at(-1).content, /Count this with conversation/);
+    res.end(JSON.stringify({
+      id: "chatcmpl_conversation_tokens",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 77, completion_tokens: 1, total_tokens: 78 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const conversationResponse = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{ type: "message", role: "user", content: "Remember auxiliary marker aux-99." }],
+      }),
+    });
+    assert.equal(conversationResponse.status, 200);
+    const conversation = await conversationResponse.json();
+
+    const inputTokens = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock-model",
-        conversation: "conv_missing",
-        input: "hello",
+        conversation: conversation.id,
+        input: "Count this with conversation.",
+        stream: true,
+        store: true,
       }),
     });
-    assert.equal(response.status, 404);
-    assert.equal(requests.length, 0);
-    const json = await response.json();
-    assert.equal(json.error.code, "conversation_not_found");
+    assert.equal(inputTokens.status, 200);
+    assert.deepEqual(await inputTokens.json(), {
+      object: "response.input_tokens",
+      input_tokens: 77,
+    });
+
+    const compact = await fetch(`${baseUrl}/v1/responses/compact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: { id: conversation.id },
+        input: "Summarize with the auxiliary marker.",
+        max_output_tokens: 88,
+        store: false,
+      }),
+    });
+    assert.equal(compact.status, 200);
+    const compactJson = await compact.json();
+    assert.equal(compactJson.conversation, conversation.id);
+    assert.equal(compactJson.metadata.compatibility.local_conversation.id, conversation.id);
+    assert.equal(compactJson.metadata.compatibility.local_conversation.replayed_item_count, 1);
+    assert.equal(compactJson.metadata.upstream_object, "chat.completion");
+
+    const items = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`);
+    assert.equal(items.status, 200);
+    assert.equal((await items.json()).data.length, 1);
+    assert.equal(requests.length, 2);
   });
 });
 

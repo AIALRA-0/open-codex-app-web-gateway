@@ -318,7 +318,26 @@ function buildSuites(defaultModel) {
           max_output_tokens: 128,
           store: false,
         }),
-        check: ({ conversation, response, text, items, deleted, afterDelete }) => conversation?.object === "conversation"
+        inputTokens: ({ conversationId }) => ({
+          model: defaultModel,
+          conversation: conversationId,
+          input: "Count this conversation marker probe: conversation-ok",
+          max_output_tokens: 16,
+          store: false,
+        }),
+        compact: ({ conversationId }) => ({
+          model: defaultModel,
+          conversation: conversationId,
+          input: "Compact this conversation while preserving the exact marker conversation-ok.",
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ conversation, response, text, items, inputTokens, compact, deleted, afterDelete }) => conversation?.object === "conversation"
+          && inputTokens?.object === "response.input_tokens"
+          && inputTokens.input_tokens > 0
+          && compact?.object === "response.compaction"
+          && compact?.conversation === conversation.id
+          && compact?.metadata?.compatibility?.local_conversation?.id === conversation.id
           && response?.conversation === conversation.id
           && response?.metadata?.compatibility?.local_conversation?.id === conversation.id
           && /conversation-ok/i.test(text)
@@ -849,6 +868,34 @@ async function runConversationCase(testCase, context, started) {
     }
     conversation = JSON.parse(conversationBody);
 
+    const stepResults = [];
+    let inputTokensJson = null;
+    if (testCase.inputTokens) {
+      const tokenRequest = resolveRequest(testCase.inputTokens, { ...context, conversationId: conversation.id });
+      const tokenResponse = await postJson(`${baseUrl}/v1/responses/input_tokens`, tokenRequest);
+      const tokenBody = await tokenResponse.text();
+      if (!tokenResponse.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: tokenResponse.status,
+          conversation_id: conversation.id,
+          error: `input_tokens: ${truncate(tokenBody)}`,
+          steps: stepResults,
+        });
+      }
+      inputTokensJson = JSON.parse(tokenBody);
+      stepResults.push({
+        step: "input_tokens",
+        ok: inputTokensJson.input_tokens > 0,
+        input_tokens: inputTokensJson.input_tokens || 0,
+        usage: {
+          input_tokens: inputTokensJson.input_tokens || 0,
+          output_tokens: 0,
+          total_tokens: inputTokensJson.input_tokens || 0,
+        },
+      });
+    }
+
     const request = resolveRequest(testCase.request, { ...context, conversationId: conversation.id });
     const response = await postJson(`${baseUrl}/v1/responses`, request);
     const body = await response.text();
@@ -863,6 +910,37 @@ async function runConversationCase(testCase, context, started) {
 
     const json = JSON.parse(body);
     const text = responseOutputText(json);
+    stepResults.push({
+      step: "response",
+      ok: response.ok,
+      response_id: json.id,
+      output_text: truncate(text),
+      usage: responseUsage(json),
+    });
+
+    let compactJson = null;
+    if (testCase.compact) {
+      const compactRequest = resolveRequest(testCase.compact, { ...context, conversationId: conversation.id, response: json });
+      const compactResponse = await postJson(`${baseUrl}/v1/responses/compact`, compactRequest);
+      const compactBody = await compactResponse.text();
+      if (!compactResponse.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: compactResponse.status,
+          conversation_id: conversation.id,
+          error: `compact: ${truncate(compactBody)}`,
+          steps: stepResults,
+        });
+      }
+      compactJson = JSON.parse(compactBody);
+      stepResults.push({
+        step: "compact",
+        ok: compactJson.object === "response.compaction",
+        output_items: Array.isArray(compactJson.output) ? compactJson.output.length : 0,
+        usage: responseUsage(compactJson),
+      });
+    }
+
     const createdConversation = conversation;
     const items = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20`);
     const deletion = await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
@@ -874,17 +952,20 @@ async function runConversationCase(testCase, context, started) {
       response: json,
       text,
       items: items.json,
+      inputTokens: inputTokensJson,
+      compact: compactJson,
       deleted,
       afterDelete,
     });
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
+      steps: stepResults,
       conversation_id: json.conversation || null,
       item_count: Array.isArray(items.json?.data) ? items.json.data.length : 0,
       delete_status: deletion.status,
       post_delete_get_status: afterDelete.status,
-      usage: responseUsage(json),
+      usage: sumUsage(stepResults.map((step) => step.usage).filter(Boolean)),
       output_text: truncate(text),
     });
   } finally {

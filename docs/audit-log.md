@@ -1650,3 +1650,51 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq8001kz` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Conversation Replay for Auxiliary Responses Endpoints
+
+- Extended local Conversation replay beyond `POST /v1/responses`:
+  - `POST /v1/responses/input_tokens` now replays local Conversation items
+    before probing upstream Chat Completions usage;
+  - `POST /v1/responses/compact` now summarizes request,
+    `previous_response_id`, and local Conversation state together;
+  - both auxiliary endpoints now return 404 `conversation_not_found` without
+    calling upstream when a referenced local Conversation is missing.
+- Added `response.conversation` and
+  `metadata.compatibility.local_conversation` to local compaction responses when
+  compaction is attached to a Conversation.
+- Kept auxiliary endpoint behavior replay-only: `/input_tokens` and `/compact`
+  do not append items back to the Conversation item list.
+- Updated `responses-conversation-lifecycle` in the live bridge regression
+  harness so it exercises:
+  - Conversation creation;
+  - `/v1/responses/input_tokens` with Conversation replay;
+  - `/v1/responses` with Conversation replay and append;
+  - `/v1/responses/compact` with Conversation replay;
+  - item listing, delete, and post-delete 404.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted server tests for conversation, compact, and input token paths:
+    34/34 passed.
+  - `npm test`: 61/61 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live `responses-conversation-lifecycle` passed 1/1, elapsed 5237 ms,
+    with three successful steps: input-token probe 22 tokens, main response
+    output `conversation-ok`, and compaction with 2 output items. The case
+    ended with item count 4, delete status 200, post-delete GET 404, and total
+    usage 429 tokens.
+  - Full live `bridge-regression` passed 21/21 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1711 ms, P95 latency 3676 ms, and total
+    usage 2910 tokens.
+  - Public HTTPS returned HTTP/2 200 from `https://opencodexapp.aialra.online`.
+  - UI smoke passed with marker `ui-smoke-mq80dhxa`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - Local Conversation JSON files after live cleanup: 0.

@@ -688,9 +688,17 @@ function conversationOutputItems(output) {
     });
 }
 
-async function handleResponseInputTokens(req, res, config, store, fileSearchStore) {
+async function handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore) {
   const request = await readJson(req);
-  const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
+  const conversation = prepareConversationContext(request, conversationStore, config);
+  if (conversation?.missing) {
+    sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
+    return;
+  }
+  const previousMessages = [
+    ...(conversation?.messages || []),
+    ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
+  ];
   const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
@@ -723,13 +731,21 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   });
 }
 
-async function handleResponseCompact(req, res, config, store, fileSearchStore) {
+async function handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore) {
   const request = await readJson(req);
-  const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
-  const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
+  const conversation = prepareConversationContext(request, conversationStore, config);
+  if (conversation?.missing) {
+    sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
+    return;
+  }
+  const previousMessages = [
+    ...(conversation?.messages || []),
+    ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
+  ];
+  const { chat, compatibility } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
-  if (localInputFiles) injectInputFileMessages(chat, localInputFiles);
+  if (localInputFiles) applyInputFilesToChat(chat, compatibility, localInputFiles, config);
 
   const upstream = await fetchProvider(config, config.chatCompletionsPath, makeCompactionChatRequest(request, chat, config), req.headers);
   const upstreamText = await upstream.text();
@@ -750,6 +766,12 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore) {
   }
 
   const response = createCompactionResource(request, upstreamJson, summary, config);
+  attachConversationToResponse(response, conversation);
+  response.metadata = {
+    ...(response.metadata || {}),
+    compatibility: mergeCompatibility(response.metadata?.compatibility, compatibility),
+    upstream_object: upstreamJson?.object || null,
+  };
   if (request.store !== false) {
     store.put(response.id, {
       response,
@@ -2591,12 +2613,12 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses/compact") {
-        await handleResponseCompact(req, res, config, store, fileSearchStore);
+        await handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore);
         return;
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses/input_tokens") {
-        await handleResponseInputTokens(req, res, config, store, fileSearchStore);
+        await handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore);
         return;
       }
 

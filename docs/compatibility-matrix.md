@@ -123,7 +123,7 @@ behavior.
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
-| local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation |
+| local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation; replay-only for `/input_tokens` and local compaction probes |
 
 ## Responses Endpoint Coverage
 
@@ -134,8 +134,8 @@ behavior.
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
 | `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |
-| `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize conversation state, returns `response.compaction`, encrypts local compaction content with an AES-GCM key stored outside Git, and disables DeepSeek thinking for compaction replay follow-ups by default |
-| `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request to Chat Completions, forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` |
+| `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize request, `previous_response_id`, and local `conversation` state; returns `response.compaction`, attaches `response.conversation` when present, encrypts local compaction content with an AES-GCM key stored outside Git, and disables DeepSeek thinking for compaction replay follow-ups by default |
+| `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request, `previous_response_id`, and local `conversation` state to Chat Completions; forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` without appending Conversation items |
 
 ## Chat Completions Endpoint Coverage
 
@@ -183,8 +183,13 @@ existing conversation items into the upstream Chat prompt, returns
 `response.conversation`, and appends the new input plus output items back to the
 conversation. This append happens even when the Responses request sets
 `store:false`, matching the OpenAI conversation-state guide's distinction
-between response storage and durable Conversation items. The local store is
-bounded by record count, not by the 30-day Responses TTL.
+between response storage and durable Conversation items. The auxiliary
+`/v1/responses/input_tokens` and `/v1/responses/compact` endpoints also replay
+the local Conversation items before calling upstream Chat Completions, but they
+do not mutate the Conversation item list; compaction returns
+`response.conversation` and `metadata.compatibility.local_conversation` for
+traceability. The local store is bounded by record count, not by the 30-day
+Responses TTL.
 
 ## Models Endpoint Coverage
 
