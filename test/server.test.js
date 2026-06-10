@@ -3613,6 +3613,236 @@ test("server startup resumes provider-pending background responses", async () =>
   }
 });
 
+test("server startup skips background responses with active foreign leases", async () => {
+  const requests = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_unexpected_active_lease",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "unexpected active lease" },
+        finish_reason: "stop",
+      }],
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-active-lease-background-"));
+  const responseId = "resp_active_lease_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  const now = Date.now();
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+        },
+      },
+    },
+    input_items: [{ id: "item_active_lease", type: "message", role: "user", content: "active lease background" }],
+    messages: [{ role: "user", content: "active lease background" }],
+    background_job: {
+      version: 1,
+      stage: "provider_pending",
+      created_at: now,
+      updated_at: now,
+      request: {
+        model: "mock-model",
+        input: "active lease background",
+        background: true,
+        stream: false,
+        store: true,
+      },
+      chat: {
+        model: "mock-model",
+        messages: [{ role: "user", content: "active lease background" }],
+        stream: false,
+        store: true,
+      },
+      compatibility: { background: "local_async" },
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [],
+      lease: {
+        owner: "other-bridge",
+        token: "other-token",
+        acquired_at: now - 1000,
+        renewed_at: now - 1000,
+        expires_at: now + 60 * 1000,
+      },
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+    backgroundLeaseOwner: "this-bridge",
+    backgroundLeaseTtlMs: 60 * 1000,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    await sleep(60);
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+    assert.equal(fetched.status, 200);
+    const json = await fetched.json();
+    assert.equal(json.status, "in_progress");
+    assert.equal(json.metadata.compatibility.background, "local_async");
+    assert.equal(json.metadata.compatibility.background_restart, undefined);
+    assert.equal(requests.length, 0);
+    const persisted = store.get(responseId);
+    assert.equal(persisted.background_job.lease.owner, "other-bridge");
+    assert.equal(persisted.background_job.lease.token, "other-token");
+  } finally {
+    await close(bridge);
+    await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("server startup claims expired background leases before resuming", async () => {
+  const requests = [];
+  let releaseProvider;
+  const providerRelease = new Promise((resolve) => {
+    releaseProvider = resolve;
+  });
+  let released = false;
+  const releaseOnce = () => {
+    if (released) return;
+    released = true;
+    releaseProvider();
+  };
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    await providerRelease;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_expired_lease_resume",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "expired lease resumed" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 5, total_tokens: 9 },
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-expired-lease-background-"));
+  const responseId = "resp_expired_lease_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  const now = Date.now();
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+        },
+      },
+    },
+    input_items: [{ id: "item_expired_lease", type: "message", role: "user", content: "expired lease background" }],
+    messages: [{ role: "user", content: "expired lease background" }],
+    background_job: {
+      version: 1,
+      stage: "provider_pending",
+      created_at: now,
+      updated_at: now,
+      request: {
+        model: "mock-model",
+        input: "expired lease background",
+        background: true,
+        stream: false,
+        store: true,
+      },
+      chat: {
+        model: "mock-model",
+        messages: [{ role: "user", content: "expired lease background" }],
+        stream: false,
+        store: true,
+      },
+      compatibility: { background: "local_async" },
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [],
+      lease: {
+        owner: "old-bridge",
+        token: "old-token",
+        acquired_at: now - 120 * 1000,
+        renewed_at: now - 120 * 1000,
+        expires_at: now - 60 * 1000,
+      },
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+    backgroundLeaseOwner: "new-bridge",
+    backgroundLeaseTtlMs: 60 * 1000,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    const claimed = store.get(responseId).background_job.lease;
+    assert.equal(claimed.owner, "new-bridge");
+    assert.notEqual(claimed.token, "old-token");
+    assert.ok(claimed.expires_at > Date.now());
+
+    releaseOnce();
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+      assert.equal(fetched.status, 200);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.output[0].content[0].text, "expired lease resumed");
+    assert.equal(finalJson.usage.total_tokens, 9);
+    assert.equal(finalJson.metadata.compatibility.background_restart, "resumed_provider_call");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.messages[0].content, "expired lease background");
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    releaseOnce();
+    await close(bridge);
+    await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
 test("server startup resumes ready local-preparation background checkpoints", async () => {
   const requests = [];
   const provider = http.createServer(async (req, res) => {

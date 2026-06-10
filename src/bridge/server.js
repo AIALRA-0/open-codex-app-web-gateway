@@ -142,6 +142,8 @@ function loadConfig(overrides = {}) {
     1024,
     OFFICIAL_UPLOAD_PART_MAX_BYTES,
   );
+  const requestTimeoutMs = overrides.requestTimeoutMs
+    || numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000);
   return {
     host: process.env.CODEXCOMPAT_HOST || "127.0.0.1",
     port: Number(process.env.CODEXCOMPAT_PORT || 12912),
@@ -160,7 +162,13 @@ function loadConfig(overrides = {}) {
     localPromptTemplates: loadLocalPromptTemplates(),
     stateDir,
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
-    requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
+    requestTimeoutMs,
+    backgroundLeaseTtlMs: numberFromEnv(
+      "CODEXCOMPAT_BACKGROUND_LEASE_TTL_MS",
+      Math.max(15 * 60 * 1000, requestTimeoutMs + 60 * 1000),
+      5000,
+      2 * 60 * 60 * 1000,
+    ),
     truncationMaxInputChars: numberFromEnv("CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS", 400000, 1000, 2 * 1024 * 1024),
     compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
     compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
@@ -546,6 +554,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
       compatibility: backgroundCompatibility,
       previousMessages,
       conversation,
+      lease: createBackgroundJobLease(config.backgroundLeaseOwner, config.backgroundLeaseTtlMs),
     }),
   });
 
@@ -577,6 +586,8 @@ function startBackgroundJob(params) {
     created_at: Date.now(),
     deleted: false,
     resumed: !!params.resumed,
+    lease_owner: params.config?.backgroundLeaseOwner || null,
+    lease_ttl_ms: normalizeBackgroundLeaseTtlMs(params.config),
   };
   params.backgroundJobs.set(params.responseId, job);
   runBackgroundResponse({
@@ -637,7 +648,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       compatibility: preparedRequest.compatibility,
       local_output_items: preparedRequest.localOutputItems,
       conversation,
-    });
+    }, job);
 
     await runPreparedBackgroundProviderResponse({
       config,
@@ -679,14 +690,14 @@ async function prepareBackgroundProviderRequest({ config, store, job, request, c
   persistBackgroundPrepareState(store, responseId, runtime, {
     status: "ready",
     current_step: null,
-  });
+  }, job);
 
   while (runtime.nextStep) {
     const step = runtime.nextStep;
     persistBackgroundPrepareState(store, responseId, runtime, {
       status: "running",
       current_step: step,
-    });
+    }, job);
 
     const result = await runBackgroundPrepareStep(step, {
       config,
@@ -709,7 +720,7 @@ async function prepareBackgroundProviderRequest({ config, store, job, request, c
     persistBackgroundPrepareState(store, responseId, runtime, {
       status: "ready",
       current_step: null,
-    });
+    }, job);
   }
 
   return {
@@ -790,7 +801,7 @@ function backgroundPreparationRuntime({ preparationState = null, chat, compatibi
   };
 }
 
-function persistBackgroundPrepareState(store, responseId, runtime, patch = {}) {
+function persistBackgroundPrepareState(store, responseId, runtime, patch = {}, job = null) {
   return persistBackgroundJobState(store, responseId, {
     stage: "preparing",
     prepare: {
@@ -804,7 +815,7 @@ function persistBackgroundPrepareState(store, responseId, runtime, patch = {}) {
       contexts: clone(runtime.contexts || {}),
       tool_budget: cloneToolCallBudget(runtime.toolBudget),
     },
-  });
+  }, job);
 }
 
 function backgroundPreparationOutputItems(contexts = {}) {
@@ -895,6 +906,7 @@ function backgroundJobState({
   previousMessages = [],
   conversation = null,
   local_output_items = [],
+  lease = null,
 } = {}) {
   return {
     version: 1,
@@ -907,10 +919,11 @@ function backgroundJobState({
     previous_messages: clone(previousMessages || []),
     conversation: conversation ? clone(conversation) : null,
     local_output_items: clone(local_output_items || []),
+    ...(isPlainObject(lease) ? { lease: clone(lease) } : {}),
   };
 }
 
-function persistBackgroundJobState(store, responseId, patch = {}) {
+function persistBackgroundJobState(store, responseId, patch = {}, job = null) {
   const record = store.get(responseId);
   if (!record?.response || record.response.status !== "in_progress") return null;
   const existing = isPlainObject(record.background_job) ? record.background_job : {};
@@ -920,6 +933,9 @@ function persistBackgroundJobState(store, responseId, patch = {}) {
     version: existing.version || 1,
     updated_at: Date.now(),
   };
+  if (job?.lease_owner) {
+    next.lease = createBackgroundJobLease(job.lease_owner, job.lease_ttl_ms, existing.lease);
+  }
   store.put(responseId, {
     ...record,
     background_job: next,
@@ -956,19 +972,31 @@ function storeCancelledBackgroundResponse(store, responseId, reason) {
 
 function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore }) {
   if (typeof store?.list !== "function" || typeof store?.put !== "function") {
-    return { resumed: 0, reconciled: 0 };
+    return { resumed: 0, reconciled: 0, skipped: 0 };
   }
-  const summary = { resumed: 0, reconciled: 0 };
+  const summary = { resumed: 0, reconciled: 0, skipped: 0 };
+  const leaseOwner = config.backgroundLeaseOwner || createBackgroundLeaseOwner();
+  const leaseTtlMs = normalizeBackgroundLeaseTtlMs(config);
   for (const record of store.list()) {
     const response = record?.response;
     if (!response || response.status !== "in_progress" || response.background !== true) continue;
     const responseId = response.id || record.id;
     if (!responseId) continue;
-    const jobState = isPlainObject(record.background_job) ? record.background_job : null;
+    const leaseClaim = claimBackgroundJobLease(store, responseId, {
+      owner: leaseOwner,
+      ttlMs: leaseTtlMs,
+    });
+    if (!leaseClaim.claimed) {
+      summary.skipped += 1;
+      continue;
+    }
+    const claimedRecord = leaseClaim.record || record;
+    const claimedResponse = claimedRecord?.response || response;
+    const jobState = isPlainObject(claimedRecord.background_job) ? claimedRecord.background_job : null;
     if (canResumePreparedBackgroundJob(jobState)) {
       const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls);
       if (toolBudget.error) {
-        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        markInterruptedBackgroundResponseFailed(store, responseId, claimedRecord, claimedResponse, backgroundJobValidationFailureReason(toolBudget.error));
         summary.reconciled += 1;
         continue;
       }
@@ -980,7 +1008,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         request: jobState.request,
         chat: jobState.chat,
         responseId,
-        compatibility: jobState.compatibility || response.metadata?.compatibility || {},
+        compatibility: jobState.compatibility || claimedResponse.metadata?.compatibility || {},
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
@@ -1000,7 +1028,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
     if (canResumePreparingBackgroundJob(jobState)) {
       const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls, jobState.prepare?.tool_budget);
       if (toolBudget.error) {
-        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        markInterruptedBackgroundResponseFailed(store, responseId, claimedRecord, claimedResponse, backgroundJobValidationFailureReason(toolBudget.error));
         summary.reconciled += 1;
         continue;
       }
@@ -1012,7 +1040,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         request: jobState.request,
         chat: jobState.prepare.chat,
         responseId,
-        compatibility: jobState.prepare.compatibility || jobState.compatibility || response.metadata?.compatibility || {},
+        compatibility: jobState.prepare.compatibility || jobState.compatibility || claimedResponse.metadata?.compatibility || {},
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
@@ -1031,7 +1059,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
     if (canResumeQueuedBackgroundJob(jobState)) {
       const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls);
       if (toolBudget.error) {
-        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        markInterruptedBackgroundResponseFailed(store, responseId, claimedRecord, claimedResponse, backgroundJobValidationFailureReason(toolBudget.error));
         summary.reconciled += 1;
         continue;
       }
@@ -1043,7 +1071,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         request: jobState.request,
         chat: jobState.chat,
         responseId,
-        compatibility: jobState.compatibility || response.metadata?.compatibility || {},
+        compatibility: jobState.compatibility || claimedResponse.metadata?.compatibility || {},
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
@@ -1058,10 +1086,145 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
       continue;
     }
 
-    markInterruptedBackgroundResponseFailed(store, responseId, record, response, restartFailureReason(jobState));
+    markInterruptedBackgroundResponseFailed(store, responseId, claimedRecord, claimedResponse, restartFailureReason(jobState));
     summary.reconciled += 1;
   }
   return summary;
+}
+
+function createBackgroundLeaseOwner() {
+  return `bridge-${process.pid}-${crypto.randomBytes(8).toString("hex")}`;
+}
+
+function normalizeBackgroundLeaseTtlMs(config = {}) {
+  const fallback = Math.max(15 * 60 * 1000, Number(config.requestTimeoutMs || 0) + 60 * 1000);
+  const value = Number(config.backgroundLeaseTtlMs || fallback);
+  if (!Number.isFinite(value)) return fallback;
+  return Math.max(5000, Math.min(Math.trunc(value), 2 * 60 * 60 * 1000));
+}
+
+function createBackgroundJobLease(owner, ttlMs, existing = null) {
+  if (!owner) return null;
+  const now = Date.now();
+  const previousAcquiredAt = Number(existing?.acquired_at || 0);
+  return {
+    owner,
+    token: crypto.randomBytes(12).toString("hex"),
+    acquired_at: previousAcquiredAt > 0 && existing?.owner === owner ? previousAcquiredAt : now,
+    renewed_at: now,
+    expires_at: now + normalizeBackgroundLeaseTtlMs({ backgroundLeaseTtlMs: ttlMs }),
+  };
+}
+
+function claimBackgroundJobLease(store, responseId, { owner, ttlMs } = {}) {
+  const lock = acquireBackgroundJobClaimLock(store, responseId, ttlMs);
+  if (!lock.acquired) return { claimed: false, reason: lock.reason || "claim_lock_active" };
+  try {
+    const record = store.get(responseId);
+    const response = record?.response;
+    if (!response || response.status !== "in_progress" || response.background !== true) {
+      return { claimed: false, reason: "not_in_progress_background" };
+    }
+    const jobState = isPlainObject(record.background_job) ? record.background_job : null;
+    if (!jobState) {
+      return { claimed: true, record, response, jobState: null };
+    }
+    if (hasActiveForeignBackgroundLease(jobState.lease, owner)) {
+      return { claimed: false, reason: "active_foreign_lease", record, response, jobState };
+    }
+    const lease = createBackgroundJobLease(owner, ttlMs, jobState.lease);
+    const nextJobState = {
+      ...jobState,
+      lease,
+      updated_at: Date.now(),
+    };
+    store.put(responseId, {
+      ...record,
+      background_job: nextJobState,
+    });
+    const claimedRecord = store.get(responseId);
+    const claimedLease = claimedRecord?.background_job?.lease;
+    if (!isPlainObject(claimedLease) || claimedLease.owner !== lease.owner || claimedLease.token !== lease.token) {
+      return { claimed: false, reason: "lease_claim_lost", record: claimedRecord || record };
+    }
+    return {
+      claimed: true,
+      record: claimedRecord,
+      response: claimedRecord.response,
+      jobState: claimedRecord.background_job,
+      lease,
+    };
+  } finally {
+    lock.release?.();
+  }
+}
+
+function hasActiveForeignBackgroundLease(lease, owner, now = Date.now()) {
+  if (!isPlainObject(lease)) return false;
+  const leaseOwner = typeof lease.owner === "string" ? lease.owner : "";
+  const expiresAt = Number(lease.expires_at || 0);
+  return !!leaseOwner && leaseOwner !== owner && Number.isFinite(expiresAt) && expiresAt > now;
+}
+
+function acquireBackgroundJobClaimLock(store, responseId, ttlMs) {
+  const lockPath = backgroundJobClaimLockPath(store, responseId);
+  if (!lockPath) {
+    return { acquired: true, release: () => {} };
+  }
+  const staleMs = Math.max(5000, Math.min(normalizeBackgroundLeaseTtlMs({ backgroundLeaseTtlMs: ttlMs }), 30000));
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    let fd = null;
+    let createdLock = false;
+    try {
+      fd = fs.openSync(lockPath, "wx", 0o600);
+      createdLock = true;
+      try {
+        fs.writeFileSync(fd, JSON.stringify({ pid: process.pid, created_at: Date.now() }));
+      } finally {
+        fs.closeSync(fd);
+        fd = null;
+      }
+      return {
+        acquired: true,
+        release: () => {
+          try { fs.unlinkSync(lockPath); } catch {}
+        },
+      };
+    } catch (error) {
+      if (fd !== null) {
+        try { fs.closeSync(fd); } catch {}
+      }
+      if (createdLock) {
+        try { fs.unlinkSync(lockPath); } catch {}
+      }
+      if (error.code !== "EEXIST") return { acquired: false, reason: "claim_lock_error" };
+      if (!removeStaleBackgroundJobClaimLock(lockPath, staleMs)) {
+        return { acquired: false, reason: "claim_lock_active" };
+      }
+    }
+  }
+  return { acquired: false, reason: "claim_lock_active" };
+}
+
+function backgroundJobClaimLockPath(store, responseId) {
+  if (typeof store?.filePath !== "function") return null;
+  try {
+    const filePath = store.filePath(responseId);
+    return filePath ? `${filePath}.bgclaim.lock` : null;
+  } catch {
+    return null;
+  }
+}
+
+function removeStaleBackgroundJobClaimLock(lockPath, staleMs) {
+  try {
+    const stat = fs.statSync(lockPath);
+    if (Date.now() - stat.mtimeMs <= staleMs) return false;
+    fs.unlinkSync(lockPath);
+    return true;
+  } catch (error) {
+    return error.code === "ENOENT";
+  }
 }
 
 function createResumedToolCallBudget(maxToolCalls, persistedBudget = null) {
@@ -5141,6 +5304,11 @@ function parseLimit(value, fallback, max) {
 }
 
 function createServer(config = loadConfig()) {
+  config = {
+    ...config,
+    backgroundLeaseOwner: config.backgroundLeaseOwner || createBackgroundLeaseOwner(),
+    backgroundLeaseTtlMs: normalizeBackgroundLeaseTtlMs(config),
+  };
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
   const conversationStore = config.conversationStore || new FileConversationStore({ dir: config.conversationStateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
@@ -5157,7 +5325,7 @@ function createServer(config = loadConfig()) {
     conversationStore,
     skillStore,
   });
-  if (backgroundRestart.resumed || backgroundRestart.reconciled) {
+  if (backgroundRestart.resumed || backgroundRestart.reconciled || backgroundRestart.skipped) {
     log("processed stale background responses after startup", backgroundRestart);
   }
 

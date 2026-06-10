@@ -3476,3 +3476,55 @@ Open follow-ups:
     193 GB filesystem with 37 GB available; repository checkout is 38 MB,
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 11 MB.
+
+## 2026-06-10 Background Lease Ownership
+
+- Added persistent lease ownership for local `background:true` jobs:
+  - each bridge process gets a runtime `backgroundLeaseOwner`;
+  - newly created background job snapshots store `background_job.lease` with
+    owner, random token, acquisition/renewal timestamps, and expiry;
+  - preparation checkpoints and `provider_pending` transitions renew the lease
+    while the owning process advances the job.
+- Hardened startup recovery for multi-process/restart races:
+  - before resuming or reconciling an in-progress background response, startup
+    acquires a short-lived per-response claim lock next to the response JSON;
+  - startup skips records with an unexpired lease owned by another bridge
+    process instead of calling the provider or marking the response failed;
+  - expired or missing leases can be claimed, re-read, and verified by token
+    before safe resume/reconcile behavior continues.
+- Added server tests for:
+  - skipping an active foreign lease without touching response metadata or
+    calling the upstream provider;
+  - claiming an expired lease, exposing the new owner in the store while the
+    resumed provider call is pending, then completing and clearing
+    `background_job`;
+  - preserving prior provider-pending and preparation-checkpoint resume
+    behavior.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 75/75 passing tests.
+  - `npm test`: 108/108 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Targeted live `responses-background` passed 1/1 after the deploy, elapsed
+    2072 ms, status history `in_progress`, `in_progress`, `completed`, and
+    total usage 49 tokens.
+  - `protocol-smoke` passed 2/2, pass rate 1.0, average latency 1701 ms, P95
+    latency 1744 ms, and total usage 188 tokens.
+  - Full live `bridge-regression` passed 38/38 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1314 ms, P95 latency 3606 ms, and total usage
+    8793 tokens.
+  - UI smoke passed with marker `ui-smoke-bgleases-final-20260610`, reload
+    persistence confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 325 runtime candidates,
+    selected 23 old UI screenshots by retention policy, deleted 0, selected
+    1638231 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
+    repository checkout is 38 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 11 MB.
