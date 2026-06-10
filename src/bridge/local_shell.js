@@ -351,19 +351,32 @@ function injectShellMessages(chat, context) {
   });
 }
 
-function attachShellOutput(response, context) {
+function attachShellOutput(response, context, options = {}) {
   if (!context) return response;
   response.output = [
-    ...shellOutputItems(context),
+    ...shellOutputItems(context, options),
     ...(response.output || []),
   ];
   return response;
 }
 
-function shellOutputItems(context) {
+function shellOutputItems(context, options = {}) {
   const items = [];
+  const includeCodeInterpreterOutputs = options.includeCodeInterpreterOutputs
+    ?? !!context?.include_code_interpreter_outputs;
   for (let index = 0; index < (context?.calls || []).length; index += 1) {
-    items.push(context.calls[index]);
+    const call = clone(context.calls[index]);
+    if (call.type === "code_interpreter_call") {
+      if (includeCodeInterpreterOutputs) {
+        const execution = context.executions?.[index];
+        if (!Array.isArray(call.outputs) && execution?.result) {
+          call.outputs = codeInterpreterOutputs(execution.result, context.artifacts || []);
+        }
+      } else {
+        delete call.outputs;
+      }
+    }
+    items.push(call);
     if (context.outputs[index]) items.push(context.outputs[index]);
   }
   return items;
@@ -708,6 +721,10 @@ function parseLimit(value, fallback, max) {
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
+}
+
+function clone(value) {
+  return JSON.parse(JSON.stringify(value));
 }
 
 function isPlainObject(value) {

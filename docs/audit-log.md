@@ -4039,3 +4039,60 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
+
+## 2026-06-10 Code Interpreter Outputs Stored-Response Projection
+
+- Re-checked the current OpenAI Responses reference through the official OpenAI
+  developer docs MCP. The supported `include` values list includes
+  `code_interpreter_call.outputs`, defined as exposing outputs of Python code
+  execution in code-interpreter tool-call items.
+- Extended the local code-interpreter adapter from create-time output inclusion
+  to stored-response projection:
+  - local code-interpreter stdout/stderr logs are stored internally on the
+    response output item for `store:true` responses;
+  - create responses still hide nested `code_interpreter_call.outputs` unless
+    the request includes `include:["code_interpreter_call.outputs"]`;
+  - `GET /v1/responses/{response_id}` hides nested outputs by default;
+  - `GET /v1/responses/{response_id}?include[]=code_interpreter_call.outputs`
+    returns the stored nested logs.
+- Kept Conversation append behavior aligned with the public response projection
+  so hidden code-interpreter logs are not copied into Conversation items unless
+  the originating public response included them.
+- Preserved streaming terminal response behavior for clients while storing a
+  full internal response after completion so later retrieve calls can project
+  code-interpreter outputs with the include query.
+- Updated the live `responses-code-interpreter` regression case to create a
+  stored response, verify immediate include output, verify default retrieve
+  redaction, verify include retrieve recovery, and delete the stored response
+  after the case to control runtime state growth.
+- Updated compatibility and evaluation docs to record the stored-response
+  projection behavior.
+- Verification:
+  - `node --check src/bridge/server.js src/bridge/local_shell.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-code-interpreter` passed 1/1 against
+    `deepseek-v4-pro`, latency 1831 ms, total usage 372 tokens, artifact text
+    `code-interpreter-ok`, and both hidden/included stored-response retrieves
+    returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1697 ms, P95 latency 1701 ms, and total usage 158 tokens.
+  - Full live `bridge-regression` passed 44/44 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1744 ms, P95 latency 4226 ms, and total usage
+    9638 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8hsn1f`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 401 runtime candidates,
+    selected 33 old UI screenshots by retention policy, deleted 0, selected
+    2493382 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
+    repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.

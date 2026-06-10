@@ -3707,7 +3707,7 @@ test("local code_interpreter emits Responses code_interpreter_call outputs", asy
           type: "code_interpreter",
           container: { type: "container_reference", container_id: container.id },
         }],
-        store: false,
+        store: true,
       }),
     });
     assert.equal(responseWithoutInclude.status, 200);
@@ -3715,6 +3715,19 @@ test("local code_interpreter emits Responses code_interpreter_call outputs", asy
     assert.equal(jsonWithoutInclude.output[0].type, "code_interpreter_call");
     assert.equal(jsonWithoutInclude.output[0].outputs, undefined);
     assert.equal(jsonWithoutInclude.metadata.compatibility.local_shell.include_code_interpreter_outputs, false);
+
+    const hiddenStoredResponse = await fetch(`${baseUrl}/v1/responses/${jsonWithoutInclude.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].type, "code_interpreter_call");
+    assert.equal(hiddenStoredJson.output[0].outputs, undefined);
+
+    const includedStoredResponse = await fetch(`${baseUrl}/v1/responses/${jsonWithoutInclude.id}?include[]=code_interpreter_call.outputs`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].type, "code_interpreter_call");
+    assert.equal(includedStoredJson.output[0].outputs[0].type, "logs");
+    assert.match(includedStoredJson.output[0].outputs[0].logs, /ci-ok/);
 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);

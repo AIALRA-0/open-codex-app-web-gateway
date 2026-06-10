@@ -1113,15 +1113,20 @@ function buildSuites(defaultModel) {
           }],
           include: ["code_interpreter_call.outputs"],
           max_output_tokens: 128,
-          store: false,
+          store: true,
         }),
-        check: ({ json, text, containerId, artifactText }) => {
+        retrieveResponseInclude: "code_interpreter_call.outputs",
+        check: ({ json, text, containerId, artifactText, hiddenResponse, includedResponse }) => {
           const codeCall = (json.output || []).find((item) => item.type === "code_interpreter_call");
+          const hiddenCodeCall = (hiddenResponse?.output || []).find((item) => item.type === "code_interpreter_call");
+          const includedCodeCall = (includedResponse?.output || []).find((item) => item.type === "code_interpreter_call");
           const localShell = json.metadata?.compatibility?.local_shell || {};
           return !!codeCall
             && codeCall.status === "completed"
             && codeCall.container_id === containerId
             && /code-interpreter-ok/i.test(codeCall.outputs?.[0]?.logs || "")
+            && hiddenCodeCall?.outputs === undefined
+            && /code-interpreter-ok/i.test(includedCodeCall?.outputs?.[0]?.logs || "")
             && !(json.output || []).some((item) => item.type === "shell_call" || item.type === "shell_call_output")
             && localShell.include_code_interpreter_outputs === true
             && localShell.deepseek_thinking === "disabled_for_local_shell"
@@ -2541,6 +2546,7 @@ async function runInputFileUrlCase(testCase, context, started) {
 async function runShellCase(testCase, context, started) {
   let container = null;
   let skill = null;
+  let responseId = null;
   try {
     if (testCase.skill) {
       const skillResponse = await postJson(`${baseUrl}/v1/skills`, testCase.skill);
@@ -2578,6 +2584,14 @@ async function runShellCase(testCase, context, started) {
     }
 
     const json = JSON.parse(body);
+    responseId = request.store !== false ? json.id || null : null;
+    let hiddenResponse = { ok: false, status: 0, json: null };
+    let includedResponse = { ok: false, status: 0, json: null };
+    if (testCase.retrieveResponseInclude && json.id) {
+      hiddenResponse = await getJson(`${baseUrl}/v1/responses/${json.id}`);
+      const include = encodeURIComponent(testCase.retrieveResponseInclude);
+      includedResponse = await getJson(`${baseUrl}/v1/responses/${json.id}?include[]=${include}`);
+    }
     const files = await getJson(`${baseUrl}/v1/containers/${container.id}/files`);
     const artifact = files.ok
       ? files.json.data?.find((file) => file.path === "/shell.txt")
@@ -2588,17 +2602,30 @@ async function runShellCase(testCase, context, started) {
       if (contentResponse.ok) artifactText = await contentResponse.text();
     }
     const text = responseOutputText(json);
-    const ok = !!testCase.check({ json, text, containerId: container.id, skillId: skill?.id, artifactText });
+    const ok = !!testCase.check({
+      json,
+      text,
+      containerId: container.id,
+      skillId: skill?.id,
+      artifactText,
+      hiddenResponse: hiddenResponse.json,
+      includedResponse: includedResponse.json,
+    });
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
       container_id: container.id,
       ...(skill ? { skill_id: skill.id } : {}),
       artifact_text: truncate(artifactText),
+      ...(testCase.retrieveResponseInclude ? {
+        hidden_response_status: hiddenResponse.status,
+        included_response_status: includedResponse.status,
+      } : {}),
       usage: responseUsage(json),
       output_text: truncate(text),
     });
   } finally {
+    if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
     if (container?.id) await deleteJson(`${baseUrl}/v1/containers/${container.id}`);
     if (skill?.id) await deleteJson(`${baseUrl}/v1/skills/${skill.id}`);
   }

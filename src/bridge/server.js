@@ -493,7 +493,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
   attachConversationToResponse(response, conversation);
-  attachShellOutput(response, localShell);
+  attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
@@ -522,9 +522,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ],
     });
   }
-  appendResponseToConversation(conversationStore, conversation, request, response);
+  const publicResponse = projectResponseForRequestIncludes(response, request);
+  appendResponseToConversation(conversationStore, conversation, request, publicResponse);
 
-  sendJson(res, 200, response);
+  sendJson(res, 200, publicResponse);
 }
 
 function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, previousMessages, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
@@ -831,7 +832,7 @@ function persistBackgroundPrepareState(store, responseId, runtime, patch = {}, j
 
 function backgroundPreparationOutputItems(contexts = {}) {
   return [
-    ...shellOutputItems(contexts.shell),
+    ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
     ...webSearchOutputItems(contexts.web_search),
     ...fileSearchOutputItems(contexts.file_search),
@@ -896,7 +897,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
       ...chatCompletionToReplayMessages(upstreamJson),
     ],
   });
-  appendResponseToConversation(conversationStore, conversation, request, response);
+  appendResponseToConversation(conversationStore, conversation, request, projectResponseForRequestIncludes(response, request));
 }
 
 function prependLocalOutputItems(response, items = []) {
@@ -906,6 +907,26 @@ function prependLocalOutputItems(response, items = []) {
     ...localItems,
     ...(response.output || []),
   ];
+  return response;
+}
+
+function responseWithFullLocalOutputs(response, contexts = {}) {
+  const full = clone(response);
+  if (contexts.localShell) mergeFullShellOutputs(full, contexts.localShell);
+  return full;
+}
+
+function mergeFullShellOutputs(response, localShell) {
+  if (!Array.isArray(response?.output)) return response;
+  const fullShellItems = shellOutputItems(localShell, { includeCodeInterpreterOutputs: true });
+  const fullCodeCalls = new Map(fullShellItems
+    .filter((item) => item?.type === "code_interpreter_call" && item.id)
+    .map((item) => [item.id, item]));
+  if (!fullCodeCalls.size) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "code_interpreter_call" || !item.id) return item;
+    return fullCodeCalls.get(item.id) || item;
+  });
   return response;
 }
 
@@ -2615,8 +2636,9 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     writeSse(res, terminalEvent, sequence(state, { type: terminalEvent, response: clone(response) }));
 
     if (request.store !== false) {
+      const storedResponse = responseWithFullLocalOutputs(response, { localShell });
       store.put(response.id, {
-        response,
+        response: storedResponse,
         input_items: normalizeStoredInputItems(request.input),
         messages: [
           ...chat.messages,
@@ -4983,14 +5005,14 @@ function handleBatchCancel(res, store, batchId) {
   sendJson(res, 200, batch);
 }
 
-function handleResponseGet(res, store, responseId) {
+function handleResponseGet(res, store, responseId, url) {
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
     return;
   }
 
-  sendJson(res, 200, record.response);
+  sendJson(res, 200, projectResponseForIncludes(record.response, url));
 }
 
 async function handleResponseUpdate(req, res, store, responseId) {
@@ -5341,6 +5363,33 @@ function normalizeStoredInputItem(item, index) {
   return stored;
 }
 
+function projectResponseForRequestIncludes(response, request = {}) {
+  return projectResponseForIncludeSet(response, includeValuesFromRequest(request));
+}
+
+function projectResponseForIncludes(response, url) {
+  return projectResponseForIncludeSet(response, includeValuesFromUrl(url));
+}
+
+function projectResponseForIncludeSet(response, includes = new Set()) {
+  let projected = clone(response);
+  if (!includes.has("code_interpreter_call.outputs")) {
+    projected = redactCodeInterpreterCallOutputs(projected);
+  }
+  return projected;
+}
+
+function redactCodeInterpreterCallOutputs(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "code_interpreter_call") return item;
+    const cloned = { ...item };
+    delete cloned.outputs;
+    return cloned;
+  });
+  return response;
+}
+
 function projectInputItemsForIncludes(items, url) {
   const includes = includeValuesFromUrl(url);
   const includeInputImageUrls = includes.has("message.input_image.image_url");
@@ -5410,6 +5459,18 @@ function includeValuesFromUrl(url) {
     }
   }
   return new Set(values);
+}
+
+function includeValuesFromRequest(request = {}) {
+  const raw = Array.isArray(request.include)
+    ? request.include
+    : request.include == null
+      ? []
+      : [request.include];
+  return new Set(raw
+    .flatMap((value) => String(value || "").split(","))
+    .map((item) => item.trim())
+    .filter(Boolean));
 }
 
 function isInputImageItem(value) {
@@ -5865,7 +5926,7 @@ function createServer(config = loadConfig()) {
         const responseId = decodeURIComponent(responseRoute[1]);
         const action = responseRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleResponseGet(res, store, responseId);
+          handleResponseGet(res, store, responseId, url);
           return;
         }
         if (!action && req.method === "POST") {
