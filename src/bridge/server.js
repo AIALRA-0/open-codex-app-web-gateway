@@ -1086,9 +1086,13 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     response.incomplete_details = terminal.incomplete_details;
     response.error = terminal.error;
     response.usage = state.usage;
+    const refusalLogprobs = streamRefusalLogprobs(state);
     response.metadata = {
       ...(response.metadata || {}),
-      compatibility,
+      compatibility: {
+        ...compatibility,
+        ...(refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {}),
+      },
       upstream_object: "chat.completion.chunk",
     };
     const terminalEvent = terminalEventForResponseStatus(response.status);
@@ -1146,6 +1150,8 @@ function getChoiceStreamState(state, choiceIndex = 0) {
       reasoningItem: null,
       reasoningText: "",
       outputTextLogprobs: [],
+      outputRefusalLogprobs: [],
+      refusalText: "",
       toolCalls: new Map(),
     });
   }
@@ -1230,7 +1236,7 @@ function ensureMessageItem(state, choiceState) {
 
 function ensureTextPart(state, choiceState) {
   const events = ensureMessageItem(state, choiceState);
-  if (choiceState.messageItem.content.length) return events;
+  if (choiceState.messageItem.content.some((part) => part.type === "output_text")) return events;
   const part = { type: "output_text", text: "", annotations: [] };
   choiceState.messageItem.content.push(part);
   events.push({
@@ -1239,6 +1245,22 @@ function ensureTextPart(state, choiceState) {
     item_id: choiceState.messageItem.id,
     output_index: state.response.output.indexOf(choiceState.messageItem),
     content_index: 0,
+    part: clone(part),
+  });
+  return events;
+}
+
+function ensureRefusalPart(state, choiceState) {
+  const events = ensureMessageItem(state, choiceState);
+  if (choiceState.messageItem.content.some((part) => part.type === "refusal")) return events;
+  const part = { type: "refusal", refusal: "" };
+  choiceState.messageItem.content.push(part);
+  events.push({
+    type: "response.content_part.added",
+    response_id: state.response.id,
+    item_id: choiceState.messageItem.id,
+    output_index: state.response.output.indexOf(choiceState.messageItem),
+    content_index: choiceState.messageItem.content.indexOf(part),
     part: clone(part),
   });
   return events;
@@ -1312,28 +1334,53 @@ function applyChatStreamChunk(state, chunk) {
       events.push(...ensureTextPart(state, choiceState));
       const item = choiceState.messageItem;
       const outputIndex = state.response.output.indexOf(item);
-      item.content[0].text += delta.content;
+      const contentIndex = item.content.findIndex((part) => part.type === "output_text");
+      item.content[contentIndex].text += delta.content;
       choiceState.text += delta.content;
       events.push({
         type: "response.output_text.delta",
         response_id: state.response.id,
         item_id: item.id,
         output_index: outputIndex,
-        content_index: 0,
+        content_index: contentIndex,
         delta: delta.content,
       });
     }
 
-    const logprobs = normalizeOutputTextLogprobs(choice.logprobs);
+    const logprobs = normalizeStreamTextLogprobs(choice.logprobs);
     if (Array.isArray(logprobs) && logprobs.length) {
       events.push(...ensureTextPart(state, choiceState));
       const item = choiceState.messageItem;
+      const contentIndex = item.content.findIndex((part) => part.type === "output_text");
       choiceState.outputTextLogprobs.push(...logprobs);
-      item.content[0].logprobs = clone(choiceState.outputTextLogprobs);
+      item.content[contentIndex].logprobs = clone(choiceState.outputTextLogprobs);
     } else if (logprobs && !Array.isArray(logprobs)) {
       events.push(...ensureTextPart(state, choiceState));
       const item = choiceState.messageItem;
-      item.content[0].logprobs = logprobs;
+      const contentIndex = item.content.findIndex((part) => part.type === "output_text");
+      item.content[contentIndex].logprobs = logprobs;
+    }
+
+    if (delta.refusal) {
+      events.push(...ensureRefusalPart(state, choiceState));
+      const item = choiceState.messageItem;
+      const outputIndex = state.response.output.indexOf(item);
+      const contentIndex = item.content.findIndex((part) => part.type === "refusal");
+      item.content[contentIndex].refusal += delta.refusal;
+      choiceState.refusalText += delta.refusal;
+      events.push({
+        type: "response.refusal.delta",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: contentIndex,
+        delta: delta.refusal,
+      });
+    }
+
+    const refusalLogprobs = normalizeOutputTextLogprobs(choice.logprobs?.refusal);
+    if (Array.isArray(refusalLogprobs) && refusalLogprobs.length) {
+      choiceState.outputRefusalLogprobs.push(...refusalLogprobs);
     }
 
     for (const deltaToolCall of delta.tool_calls || []) {
@@ -1365,23 +1412,37 @@ function finishStreamState(state) {
     const outputIndex = state.response.output.indexOf(item);
     if (item.type === "message") {
       item.status = "completed";
-      if (item.content[0] && !state.outputDone.has(`${item.id}:text`)) {
-        events.push({
-          type: "response.output_text.done",
-          response_id: state.response.id,
-          item_id: item.id,
-          output_index: outputIndex,
-          content_index: 0,
-          text: item.content[0].text,
-        });
+      for (const [contentIndex, part] of item.content.entries()) {
+        const doneKey = `${item.id}:${contentIndex}:${part.type}`;
+        if (state.outputDone.has(doneKey)) continue;
+        if (part.type === "output_text") {
+          events.push({
+            type: "response.output_text.done",
+            response_id: state.response.id,
+            item_id: item.id,
+            output_index: outputIndex,
+            content_index: contentIndex,
+            text: part.text,
+          });
+        } else if (part.type === "refusal") {
+          events.push({
+            type: "response.refusal.done",
+            response_id: state.response.id,
+            item_id: item.id,
+            output_index: outputIndex,
+            content_index: contentIndex,
+            refusal: part.refusal,
+          });
+        }
         events.push({
           type: "response.content_part.done",
           response_id: state.response.id,
           item_id: item.id,
           output_index: outputIndex,
-          content_index: 0,
-          part: clone(item.content[0]),
+          content_index: contentIndex,
+          part: clone(part),
         });
+        state.outputDone.add(doneKey);
       }
     } else if (item.type === "reasoning") {
       item.status = "completed";
@@ -1415,18 +1476,29 @@ function finishStreamState(state) {
   return events;
 }
 
+function normalizeStreamTextLogprobs(logprobs) {
+  if (Array.isArray(logprobs)) return normalizeOutputTextLogprobs(logprobs);
+  if (Array.isArray(logprobs?.content) || Array.isArray(logprobs?.output_text)) {
+    return normalizeOutputTextLogprobs(logprobs);
+  }
+  return undefined;
+}
+
 function streamStateToReplayMessages(state) {
   const messages = [];
   for (const choiceState of sortedChoiceStates(state)) {
     const assistant = { role: "assistant", content: choiceState.text || null };
     if (choiceState.reasoningText) assistant.reasoning_content = choiceState.reasoningText;
+    if (choiceState.refusalText) assistant.refusal = choiceState.refusalText;
     const toolCalls = Array.from(choiceState.toolCalls.values()).map((item) => ({
       id: item.call_id,
       type: "function",
       function: { name: item.name, arguments: item.arguments },
     }));
     if (toolCalls.length) assistant.tool_calls = toolCalls;
-    if (assistant.content !== null || assistant.tool_calls || assistant.reasoning_content) messages.push(assistant);
+    if (assistant.content !== null || assistant.tool_calls || assistant.reasoning_content || assistant.refusal) {
+      messages.push(assistant);
+    }
   }
   return messages;
 }
@@ -1438,6 +1510,15 @@ function sortedChoiceStates(state) {
     if (Number.isFinite(aIndex) && Number.isFinite(bIndex)) return aIndex - bIndex;
     return String(a.index).localeCompare(String(b.index));
   });
+}
+
+function streamRefusalLogprobs(state) {
+  return sortedChoiceStates(state)
+    .filter((choiceState) => choiceState.outputRefusalLogprobs.length)
+    .map((choiceState) => ({
+      choice_index: choiceState.index,
+      logprobs: clone(choiceState.outputRefusalLogprobs),
+    }));
 }
 
 async function* iterateSseJson(stream) {

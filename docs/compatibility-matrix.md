@@ -86,10 +86,11 @@ behavior.
 | Chat response field | Responses field | Status |
 | --- | --- | --- |
 | `choices[].message.content` / streaming `choices[].delta.content` | output `message.content[].output_text` | Direct for each Chat choice returned by the provider |
-| `choices[].message.refusal` | output refusal content part | Direct when present |
+| `choices[].message.refusal` / streaming `choices[].delta.refusal` | output refusal content part | Direct when present |
 | `choices[].message.tool_calls[]` | output `function_call` items | Direct |
 | `choices[].message.function_call` | output `function_call` item | Legacy Chat function-call compatibility |
-| `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming Responses when provider returns Chat logprobs |
+| `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming and streaming Responses when provider returns Chat logprobs |
+| `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
 | `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
@@ -200,6 +201,8 @@ The bridge emits:
 - `response.function_call_arguments.done`
 - `response.reasoning_summary_text.delta`
 - `response.reasoning_summary_text.done`
+- `response.refusal.delta`
+- `response.refusal.done`
 - `response.output_item.done`
 - `response.completed`
 - `response.incomplete`
@@ -207,11 +210,15 @@ The bridge emits:
 - `error`
 
 Chat stream chunks with `delta.content` become text deltas. Chunks with
-`delta.tool_calls` become function-call item events and argument deltas. Chunks
+`delta.refusal` become refusal content-part deltas. Chunks with `delta.tool_calls`
+become function-call item events and argument deltas. Chunks
 with DeepSeek `delta.reasoning_content` become reasoning summary deltas and are
 kept in the replay store so later tool turns can pass the reasoning content back.
 Chat stream chunks with `choice.logprobs.content[]` are accumulated and attached
-to the final `output_text` content part and terminal response.
+to the final `output_text` content part and terminal response. Chat stream
+chunks with `choice.logprobs.refusal[]` are preserved under
+`metadata.compatibility.chat_refusal_logprobs[]`, because Responses refusal
+content parts only support `type` and `refusal`.
 Terminal `choice.finish_reason` values are aggregated across chunks. `length`
 and `content_filter` end the stream with `response.incomplete`; DeepSeek
 `insufficient_system_resource` ends the stream with `response.failed`.

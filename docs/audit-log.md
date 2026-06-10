@@ -795,3 +795,42 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7toti0` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Streaming Refusal Content Mapping
+
+- Used the current OpenAI Chat Completions streaming schema to confirm Chat
+  stream deltas can include `delta.refusal`, and Chat stream logprobs can
+  include `logprobs.refusal[]`.
+- Used the current OpenAI Responses streaming schema to confirm Responses emits
+  `response.refusal.delta` and `response.refusal.done` events, and that
+  refusal output content parts only contain `type` and `refusal`.
+- Added streaming Chat-to-Responses refusal mapping:
+  - `choices[].delta.refusal` creates a Responses `refusal` content part;
+  - refusal text streams as `response.refusal.delta` and finalizes as
+    `response.refusal.done`;
+  - pure refusal messages no longer emit fake `response.output_text.done`
+    events;
+  - refusal history is stored as Chat assistant `refusal` when a later request
+    uses `previous_response_id`.
+- Preserved Chat `logprobs.refusal[]` under
+  `metadata.compatibility.chat_refusal_logprobs[]` instead of attaching it to
+  refusal content parts, because the Responses refusal schema has no logprobs
+  field.
+- Added regression coverage for:
+  - streamed refusal deltas and done events;
+  - final Responses refusal content shape;
+  - refusal logprobs compatibility metadata;
+  - follow-up replay through `previous_response_id`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `npm test`: 39/39 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Full live `bridge-regression` against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+  1987 ms, P95 latency 4179 ms, total usage 2345 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7txna0` appeared before reload and after reload, console errors
+  0, warnings 0.

@@ -448,6 +448,92 @@ test("POST /v1/responses preserves multiple streaming Chat choices", async () =>
   });
 });
 
+test("POST /v1/responses streams Chat refusal deltas and replays refusal history", async () => {
+  let callCount = 0;
+  await withMockProvider(async (_req, res, call) => {
+    callCount += 1;
+    if (callCount === 1) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_refusal",
+        object: "chat.completion.chunk",
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", refusal: "I can" },
+          logprobs: { refusal: [{ token: "I can", logprob: -0.1, bytes: [73], top_logprobs: [] }] },
+          finish_reason: null,
+        }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_refusal",
+        object: "chat.completion.chunk",
+        choices: [{
+          index: 0,
+          delta: { refusal: "not" },
+          logprobs: { refusal: [{ token: "not", logprob: -0.2, bytes: [110], top_logprobs: [] }] },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    const assistantMessages = call.body.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => ({ content: message.content, refusal: message.refusal }));
+    assert.deepEqual(assistantMessages, [{ content: null, refusal: "I cannot" }]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_after_stream_refusal",
+      object: "chat.completion",
+      created: 457,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "after-refusal" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream refusal",
+        stream: true,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.filter((event) => event.event === "response.refusal.delta").length, 2);
+    const refusalDone = events.find((event) => event.event === "response.refusal.done").data;
+    assert.equal(refusalDone.refusal, "I cannot");
+    assert.ok(!events.some((event) => event.event === "response.output_text.done"));
+
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.deepEqual(completed.output[0].content, [{ type: "refusal", refusal: "I cannot" }]);
+    assert.equal(completed.metadata.compatibility.chat_refusal_logprobs[0].logprobs[1].token, "not");
+
+    const followUp = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        previous_response_id: completed.id,
+        input: "continue",
+      }),
+    });
+    assert.equal(followUp.status, 200);
+    const json = await followUp.json();
+    assert.equal(json.output[0].content[0].text, "after-refusal");
+  });
+});
+
 test("POST /v1/responses streams incomplete terminal events from Chat finish reasons", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
