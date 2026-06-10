@@ -501,6 +501,9 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     }]);
     assert.equal(completed.metadata.compatibility.chat_completion_id, "chatcmpl_stream");
     assert.equal(completed.metadata.compatibility.chat_system_fingerprint, "fp_stream");
+    assert.deepEqual(completed.metadata.compatibility.chat_choices, [
+      { choice_index: 0, finish_reason: "stop" },
+    ]);
     assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
   });
 });

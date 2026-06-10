@@ -1134,7 +1134,10 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
       ...(response.metadata || {}),
       compatibility: mergeCompatibility(
         compatibility,
-        state.chatCompatibility,
+        {
+          ...state.chatCompatibility,
+          ...streamChoiceCompatibilityMetadata(state),
+        },
         refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {},
       ),
       upstream_object: "chat.completion.chunk",
@@ -1191,6 +1194,8 @@ function getChoiceStreamState(state, choiceIndex = 0) {
   if (!state.choices.has(index)) {
     state.choices.set(index, {
       index,
+      finishReason: null,
+      hasFinishReason: false,
       messageItem: null,
       text: "",
       reasoningItem: null,
@@ -1362,8 +1367,12 @@ function applyChatStreamChunk(state, chunk) {
   Object.assign(state.chatCompatibility, chatCompatibilityMetadata(chunk));
 
   for (const choice of chunk.choices || []) {
-    if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);
     const choiceState = getChoiceStreamState(state, choice.index);
+    if (Object.prototype.hasOwnProperty.call(choice, "finish_reason")) {
+      choiceState.finishReason = choice.finish_reason;
+      choiceState.hasFinishReason = true;
+    }
+    if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);
     const delta = choice.delta || {};
 
     if (delta.reasoning_content) {
@@ -1589,6 +1598,17 @@ function streamRefusalLogprobs(state) {
       choice_index: choiceState.index,
       logprobs: clone(choiceState.outputRefusalLogprobs),
     }));
+}
+
+function streamChoiceCompatibilityMetadata(state) {
+  const choices = sortedChoiceStates(state);
+  if (!choices.length) return {};
+  return {
+    chat_choices: choices.map((choiceState) => ({
+      choice_index: choiceState.index,
+      ...(choiceState.hasFinishReason ? { finish_reason: choiceState.finishReason } : {}),
+    })),
+  };
 }
 
 async function* iterateSseJson(stream) {

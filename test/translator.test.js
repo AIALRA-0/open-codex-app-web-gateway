@@ -420,6 +420,12 @@ test("preserves multiple Chat choices as Responses output items", () => {
   assert.equal(calls[0].name, "modern_tool");
   assert.equal(calls[1].name, "legacy_tool");
   assert.equal(calls[1].call_id, "call_chatcmpl_multi_3");
+  assert.deepEqual(response.metadata.compatibility.chat_choices, [
+    { choice_index: 0, finish_reason: "stop" },
+    { choice_index: 1, finish_reason: "length" },
+    { choice_index: 2, finish_reason: "tool_calls" },
+    { choice_index: 3, finish_reason: "function_call" },
+  ]);
 
   const replay = chatCompletionToReplayMessages(completion);
   assert.equal(replay.length, 4);

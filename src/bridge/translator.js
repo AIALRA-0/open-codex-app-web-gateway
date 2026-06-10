@@ -545,6 +545,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   }
 
   const compatibilityMetadata = chatCompatibilityMetadata(chat);
+  Object.assign(compatibilityMetadata, chatChoicesCompatibilityMetadata(chat.choices));
   const refusalLogprobs = chatRefusalLogprobs(choices);
   if (refusalLogprobs.length) compatibilityMetadata.chat_refusal_logprobs = refusalLogprobs;
   attachResponseCompatibilityMetadata(response, compatibilityMetadata);
@@ -574,6 +575,19 @@ function chatCompatibilityMetadata(chat) {
     if (Object.prototype.hasOwnProperty.call(chat, source)) metadata[target] = chat[source];
   }
   return metadata;
+}
+
+function chatChoicesCompatibilityMetadata(choices) {
+  if (!Array.isArray(choices) || !choices.length) return {};
+  return {
+    chat_choices: choices.map((choice, ordinal) => {
+      const entry = { choice_index: choice?.index ?? ordinal };
+      if (choice && Object.prototype.hasOwnProperty.call(choice, "finish_reason")) {
+        entry.finish_reason = choice.finish_reason;
+      }
+      return entry;
+    }),
+  };
 }
 
 function attachResponseCompatibilityMetadata(response, compatibilityMetadata) {

@@ -95,6 +95,7 @@ behavior.
 | `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming and streaming Responses when provider returns Chat logprobs |
 | `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
 | `choices[].message.annotations[]` / streaming `choices[].delta.annotations[]` | `message.content[].output_text.annotations[]` | Direct when a Chat provider returns citation annotations |
+| `choices[].index`, `choices[].finish_reason` | `metadata.compatibility.chat_choices[]` | Preserves original Chat choice metadata while Responses output items carry the generated content |
 | `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |

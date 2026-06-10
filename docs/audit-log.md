@@ -1035,3 +1035,37 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7vm1ky` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Chat Choice Metadata Preservation
+
+- Used the current OpenAI migration guidance to confirm the structural mismatch:
+  Chat Completions returns an array of `choices`, while Responses returns
+  typed `output` items:
+  https://developers.openai.com/api/docs/guides/migrate-to-responses#messages-vs-items
+- Added original Chat choice metadata preservation:
+  - non-streaming Chat `choices[].index` and `choices[].finish_reason` are
+    recorded in `metadata.compatibility.chat_choices[]`;
+  - streaming Chat choice states record the latest `finish_reason` per
+    `choice.index` and expose the final values in terminal Responses metadata;
+  - the existing terminal status mapping remains unchanged, so
+    `length`, `content_filter`, and DeepSeek `insufficient_system_resource`
+    still map to Responses incomplete/failed states while the raw Chat value is
+    also retained.
+- Updated `docs/compatibility-matrix.md` with the new `chat_choices[]` row.
+- Added regression coverage for:
+  - non-streaming multi-choice raw index and finish reason preservation;
+  - streaming terminal `response.completed` raw choice metadata preservation.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1731 ms, P95 latency 3501 ms, total usage 2173 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7vqg7y` appeared before reload and after reload, console errors
+    0, warnings 0.
