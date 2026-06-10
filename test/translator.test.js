@@ -143,6 +143,38 @@ test("maps Responses output logprobs request to Chat logprobs parameters", () =>
   assert.equal(compatibility.logprobs, "chat_logprobs");
 });
 
+test("passes stop sequences and maps DeepSeek user identity aliases", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Return a stopped phrase.",
+    stop: ["<cut>"],
+    user: "legacy-user",
+    safety_identifier: "user@example.test",
+  }, [], { deepseekUserIdCompat: true });
+
+  assert.deepEqual(chat.stop, ["<cut>"]);
+  assert.equal(chat.user, undefined);
+  assert.match(chat.user_id, /^sha256_[a-f0-9]{64}$/);
+  assert.deepEqual(compatibility.deepseek_user_id, {
+    source: "safety_identifier",
+    normalized: "sha256",
+  });
+});
+
+test("keeps already-compatible DeepSeek user_id values direct", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Hello",
+    user_id: "tenant_42-user",
+  }, [], { deepseekUserIdCompat: true });
+
+  assert.equal(chat.user_id, "tenant_42-user");
+  assert.deepEqual(compatibility.deepseek_user_id, {
+    source: "user_id",
+    normalized: "direct",
+  });
+});
+
 test("maps Responses structured output text.format to chat response_format", () => {
   const format = mapTextFormat({
     format: {
@@ -209,6 +241,7 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
     object: "chat.completion",
     created: 123,
     model: "deepseek-chat",
+    service_tier: "priority",
     choices: [{
       index: 0,
       message: {
@@ -233,6 +266,8 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
     }],
     usage: {
       prompt_tokens: 10,
+      prompt_cache_hit_tokens: 6,
+      prompt_cache_miss_tokens: 4,
       completion_tokens: 4,
       total_tokens: 14,
       completion_tokens_details: { reasoning_tokens: 2 },
@@ -249,6 +284,8 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.output[1].content[0].logprobs[0].top_logprobs[0].logprob, -0.01);
   assert.equal(response.output[2].type, "function_call");
   assert.equal(response.output[2].call_id, "call_1");
+  assert.equal(response.service_tier, "priority");
+  assert.equal(response.usage.input_tokens_details.cached_tokens, 6);
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });
 

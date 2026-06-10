@@ -306,6 +306,9 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "store");
   copyIfPresent(request, chat, "parallel_tool_calls");
   copyIfPresent(request, chat, "top_logprobs");
+  copyIfPresent(request, chat, "stop");
+
+  const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
 
   const logprobsRequested = shouldRequestChatLogprobs(request);
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
@@ -341,7 +344,37 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
         : {}),
       ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
+      ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
     },
+  };
+}
+
+function mapDeepSeekUserId(request, chat, options = {}) {
+  if (!options.deepseekUserIdCompat) return null;
+  const candidates = [
+    ["user_id", request.user_id],
+    ["safety_identifier", request.safety_identifier],
+    ["prompt_cache_key", request.prompt_cache_key],
+    ["user", request.user],
+  ];
+  const found = candidates.find(([, value]) => value != null && value !== "");
+  if (!found) return null;
+
+  const [source, value] = found;
+  const { userId, normalized } = normalizeDeepSeekUserId(value);
+  chat.user_id = userId;
+  delete chat.user;
+  return { source, normalized };
+}
+
+function normalizeDeepSeekUserId(value) {
+  const raw = stringifyContent(value);
+  if (/^[A-Za-z0-9_-]{1,512}$/.test(raw)) {
+    return { userId: raw, normalized: "direct" };
+  }
+  return {
+    userId: `sha256_${crypto.createHash("sha256").update(raw).digest("hex")}`,
+    normalized: "sha256",
   };
 }
 
@@ -385,11 +418,16 @@ function mapUsage(usage) {
     usage.completion_tokens_details?.reasoning_tokens ??
     usage.output_tokens_details?.reasoning_tokens ??
     0;
+  const cachedTokens =
+    usage.prompt_tokens_details?.cached_tokens ??
+    usage.input_tokens_details?.cached_tokens ??
+    usage.prompt_cache_hit_tokens ??
+    0;
 
   return {
     input_tokens: inputTokens,
     input_tokens_details: {
-      cached_tokens: usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? 0,
+      cached_tokens: cachedTokens,
     },
     output_tokens: outputTokens,
     output_tokens_details: { reasoning_tokens: reasoningTokens },
@@ -450,6 +488,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   response.completed_at = nowSeconds();
   response.incomplete_details = finishReason === "length" ? { reason: "max_output_tokens" } : null;
   response.usage = mapUsage(chat.usage);
+  if (chat.service_tier != null) response.service_tier = chat.service_tier;
 
   return response;
 }

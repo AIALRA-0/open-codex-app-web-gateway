@@ -62,9 +62,11 @@ implementations for those tools.
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
+| `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
+| `user_id`, `safety_identifier`, `prompt_cache_key`, `user` | DeepSeek `user_id` | DeepSeek-specific compatibility; direct when already `[A-Za-z0-9_-]`, otherwise stable SHA-256 normalized |
 
 DeepSeek effort compatibility maps `minimal`, `low`, and `medium` to `high`, and
 `xhigh` to `max`, matching current DeepSeek docs. The DeepSeek default upstream
@@ -89,8 +91,10 @@ behavior.
 | `choices[0].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming Responses when provider returns Chat logprobs |
 | `choices[0].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
+| `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
+| `service_tier` | `service_tier` | Direct when a Chat provider echoes the actual tier used |
 | `finish_reason=length` | `status=incomplete` | Direct |
 | other finish reasons | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |

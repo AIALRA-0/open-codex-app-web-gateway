@@ -68,13 +68,14 @@ function numberFromEnv(name, fallback, min, max) {
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
   const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
+  const providerBaseUrl = trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL);
   const compactionSecretFile = overrides.compactionSecretFile
     || process.env.CODEXCOMPAT_COMPACTION_SECRET_FILE
     || path.join(stateDir, "compaction.key");
   return {
     host: process.env.CODEXCOMPAT_HOST || "127.0.0.1",
     port: Number(process.env.CODEXCOMPAT_PORT || 12912),
-    providerBaseUrl: trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL),
+    providerBaseUrl,
     chatCompletionsPath: normalizeRoute(process.env.CODEXCOMPAT_CHAT_COMPLETIONS_PATH || "/chat/completions"),
     modelsPath: normalizeRoute(process.env.CODEXCOMPAT_MODELS_PATH || "/models"),
     providerApiKey: process.env[apiKeyEnv] || process.env.CODEXCOMPAT_PROVIDER_API_KEY || "",
@@ -118,6 +119,10 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalWebSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH, true),
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
+    deepseekUserIdCompat: parseBoolean(
+      process.env.CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT,
+      isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl),
+    ),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };
@@ -131,6 +136,15 @@ function normalizeRoute(value) {
   const route = String(value || "").trim();
   if (!route) return "/";
   return route.startsWith("/") ? route : `/${route}`;
+}
+
+function isDeepSeekProvider(value) {
+  try {
+    const host = new URL(String(value)).hostname.toLowerCase();
+    return host === "deepseek.com" || host.endsWith(".deepseek.com");
+  } catch {
+    return /\bdeepseek\b/i.test(String(value || ""));
+  }
 }
 
 function log(...args) {

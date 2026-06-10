@@ -631,3 +631,55 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7s9mln` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Chat-Native Stop and DeepSeek Identity/Usage Mapping
+
+- Used current OpenAI Chat Completions reference data to confirm Chat supports:
+  - `stop` sequences;
+  - `service_tier` request/response metadata;
+  - replacement identity/cache fields such as `safety_identifier` and
+    `prompt_cache_key`.
+- Used current DeepSeek Chat Completion docs to confirm DeepSeek supports:
+  - `stop` on Chat Completion requests;
+  - `user_id` for content-safety review, KVCache isolation, and scheduling
+    isolation;
+  - `prompt_cache_hit_tokens` and `prompt_cache_miss_tokens` in usage.
+- Added Responses-to-Chat compatibility mapping:
+  - `stop` is forwarded to upstream Chat providers;
+  - DeepSeek mode maps `user_id`, `safety_identifier`, `prompt_cache_key`, or
+    legacy `user` to DeepSeek `user_id`;
+  - `user_id` values that already match DeepSeek's allowed character set are
+    passed directly; values with unsupported characters are converted to a
+    stable SHA-256 identifier before forwarding.
+- Added Chat-to-Responses response mapping:
+  - DeepSeek `prompt_cache_hit_tokens` fills
+    `usage.input_tokens_details.cached_tokens`;
+  - upstream Chat `service_tier` overwrites the local skeleton tier when
+    present.
+- Added regression coverage for:
+  - local translator `stop` passthrough and DeepSeek `user_id` aliasing;
+  - local prompt-cache usage and service-tier response mapping;
+  - mock server `stop` passthrough from `/v1/responses`;
+  - live `responses-stop-sequence` in `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 32/32 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live stop result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-stop-sequence --timeout-ms 90000 --verbose`
+  passed 1/1, latency 2068 ms, output `stop-ok`, total usage 76 tokens.
+- First full live `bridge-regression` attempt passed 16/17. The new stop case
+  returned an empty visible string after consuming a 64-token output budget,
+  consistent with DeepSeek spending the budget on hidden thinking tokens before
+  visible output. The eval case was adjusted to a 256-token output budget and
+  rerun.
+- Full live `bridge-regression` passed 17/17, pass rate 1.0, average latency
+  2019 ms, P95 latency 4612 ms, total usage 2375 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7snjqg` appeared before reload and after reload, console errors
+  0, warnings 0.

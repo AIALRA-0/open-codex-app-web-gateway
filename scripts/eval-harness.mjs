@@ -205,6 +205,21 @@ function buildSuites(defaultModel) {
             .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0)),
       },
       {
+        id: "responses-stop-sequence",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Return exactly: stop-ok<cut-here>after-cut",
+          stop: ["<cut-here>"],
+          temperature: 0,
+          max_output_tokens: 256,
+          store: false,
+        },
+        check: ({ text }) => /stop-ok/i.test(text)
+          && !/cut-here/i.test(text)
+          && !/after-cut/i.test(text),
+      },
+      {
         id: "responses-background",
         mode: "responses-background",
         request: {

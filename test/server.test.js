@@ -75,6 +75,7 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
         model: "mock-model",
         instructions: "short",
         input: "say hi",
+        stop: ["<END>"],
         store: true,
       }),
     });
@@ -82,6 +83,7 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
     const json = await response.json();
     assert.equal(json.output[0].content[0].text, "hello from chat");
     assert.equal(requests[0].req.url, "/chat/completions");
+    assert.deepEqual(requests[0].body.stop, ["<END>"]);
     assert.deepEqual(requests[0].body.messages.slice(0, 2), [
       { role: "system", content: "short" },
       { role: "user", content: "say hi" },
