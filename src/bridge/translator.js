@@ -138,7 +138,30 @@ function inputItemToChatMessages(item, options = {}) {
     return [{ role: "assistant", content: "", reasoning_content: text }];
   }
 
+  if (item.type === "compaction") {
+    const summary = decodeCompactionItem(item, options);
+    return [{
+      role: options.compactionRole || "system",
+      content: summary
+        ? `Compacted conversation context:\n${summary}`
+        : "A compacted conversation context item was provided, but this bridge could not decode its opaque content. Continue using any other visible input items.",
+    }];
+  }
+
   return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+function decodeCompactionItem(item, options = {}) {
+  if (!isPlainObject(item)) return "";
+  if (typeof item.summary === "string") return item.summary;
+  if (typeof options.decodeCompaction === "function") {
+    try {
+      return stringifyContent(options.decodeCompaction(item.encrypted_content || ""));
+    } catch {
+      return "";
+    }
+  }
+  return "";
 }
 
 function reasoningItemToText(item) {

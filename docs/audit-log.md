@@ -191,9 +191,9 @@ Open follow-ups:
   `previous_response_id` replay, forces a non-streaming upstream Chat
   Completion probe with `max_tokens:1`, removes upstream `store`, and returns
   the provider's `usage.prompt_tokens` as `input_tokens`.
-- Kept `POST /v1/responses/compact` as an explicit 501 because native
-  compaction requires summarization/compaction semantics, not just field
-  translation.
+- At this stage, kept `POST /v1/responses/compact` as an explicit 501 because
+  native compaction requires summarization/compaction semantics, not just field
+  translation. This was superseded by the local compaction implementation below.
 - Added mock-provider coverage for the token probe request shape and response.
 - Added `responses-input-tokens` to the live `bridge-regression` suite.
 - Live result against `deepseek-v4-pro` through
@@ -202,3 +202,37 @@ Open follow-ups:
   passed 1/1, latency 888 ms, input tokens 10.
 - Full live `bridge-regression` passed 8/8, pass rate 1.0, average latency
   1843 ms, P95 latency 3891 ms, total usage 847 tokens.
+
+## 2026-06-10 Local Responses Compaction
+
+- Implemented `POST /v1/responses/compact` as local bridge compaction.
+- The handler translates Responses input to Chat messages, asks the upstream
+  Chat provider for a continuation summary, returns `object:
+  "response.compaction"`, and emits a `type:"compaction"` output item.
+- Local compaction content is encrypted with AES-256-GCM. The key is read from
+  `CODEXCOMPAT_COMPACTION_SECRET`, or generated into
+  `CODEXCOMPAT_COMPACTION_SECRET_FILE`, defaulting to
+  `$CODEXCOMPAT_STATE_DIR/compaction.key`.
+- Verified the generated key file is mode `0600` under ignored `state/`; no
+  compaction key or generated state was staged.
+- Added translator support so local compaction output can be passed directly as
+  the next `/v1/responses` input. If a compaction item cannot be decoded, the
+  bridge inserts a safe notice instead of forwarding opaque ciphertext.
+- Added mock-provider tests for compaction creation, local key generation,
+  encrypted content shape, and follow-up replay through decrypted summary
+  context.
+- Added `responses-compact-continuation` to the live `bridge-regression` suite.
+- Caveat: this is not OpenAI native ZDR encrypted compaction. It is local to the
+  bridge deployment and key; portability requires explicitly preserving or
+  rotating the local key outside Git.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-compact-continuation --timeout-ms 90000`
+  passed 1/1, latency 6739 ms, total usage 462 tokens, and follow-up output
+  recovered `atlas-77`.
+- Full live `bridge-regression` passed 9/9, pass rate 1.0, average latency
+  3160 ms, P95 latency 9271 ms, total usage 1538 tokens.
+- Post-compaction live soak still passed:
+  `npm run soak:bridge -- --iterations 5 --timeout-ms 180000` passed 5/5,
+  cleanup failures 0, average latency 1815 ms, P95 latency 1982 ms, and zero
+  residual state file or byte growth after cleanup.

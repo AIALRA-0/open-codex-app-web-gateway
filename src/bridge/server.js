@@ -1,5 +1,7 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
 const { FileResponseStore } = require("./store");
@@ -7,6 +9,7 @@ const {
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
   createResponseSkeleton,
+  mapUsage,
   prefixedId,
   responsesToChatRequest,
   stringifyContent,
@@ -30,6 +33,10 @@ function numberFromEnv(name, fallback, min, max) {
 
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
+  const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
+  const compactionSecretFile = overrides.compactionSecretFile
+    || process.env.CODEXCOMPAT_COMPACTION_SECRET_FILE
+    || path.join(stateDir, "compaction.key");
   return {
     host: process.env.CODEXCOMPAT_HOST || "127.0.0.1",
     port: Number(process.env.CODEXCOMPAT_PORT || 12912),
@@ -41,8 +48,11 @@ function loadConfig(overrides = {}) {
     defaultModel: process.env.CODEXCOMPAT_DEFAULT_MODEL || "deepseek-v4-pro",
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
-    stateDir: process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge"),
+    stateDir,
     requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
+    compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
+    compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
+    compactionSecretFile,
     deepseekReasoningEffortCompat: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT, true),
     deepseekThinkingMode: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_THINKING_MODE, false),
     deepseekDisableThinkingForToolChoice: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE, true),
@@ -111,6 +121,13 @@ function providerHeaders(config, incomingHeaders = {}) {
   return headers;
 }
 
+function translatorOptions(config) {
+  return {
+    ...config,
+    decodeCompaction: (encryptedContent) => decodeLocalCompaction(encryptedContent, config),
+  };
+}
+
 async function fetchProvider(config, route, body, incomingHeaders = {}, options = {}) {
   if (!config.providerApiKey && !options.allowMissingKey) {
     const error = new Error(`${config.providerApiKeyEnv} is required for upstream provider calls`);
@@ -136,7 +153,7 @@ async function handleResponses(req, res, config, store) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
-  const { chat, compatibility } = responsesToChatRequest(request, previousMessages, config);
+  const { chat, compatibility } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
 
   if (chat.stream) {
@@ -182,7 +199,7 @@ async function handleResponses(req, res, config, store) {
 async function handleResponseInputTokens(req, res, config, store) {
   const request = await readJson(req);
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
-  const { chat } = responsesToChatRequest(request, previousMessages, config);
+  const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
   chat.stream = false;
   delete chat.store;
@@ -210,6 +227,174 @@ async function handleResponseInputTokens(req, res, config, store) {
     object: "response.input_tokens",
     input_tokens: inputTokens,
   });
+}
+
+async function handleResponseCompact(req, res, config, store) {
+  const request = await readJson(req);
+  const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
+  const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
+  chat.model = chat.model || config.defaultModel;
+
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, makeCompactionChatRequest(request, chat, config), req.headers);
+  const upstreamText = await upstream.text();
+  const upstreamJson = parseJsonOrNull(upstreamText);
+
+  if (!upstream.ok) {
+    sendJson(res, upstream.status, upstreamJson || { error: { message: upstreamText } });
+    return;
+  }
+
+  const summary = extractChatCompletionText(upstreamJson).trim();
+  if (!summary) {
+    sendError(res, 502, "upstream provider did not return compaction content", {
+      type: "upstream_provider_error",
+      code: "missing_compaction",
+    });
+    return;
+  }
+
+  const response = createCompactionResource(request, upstreamJson, summary, config);
+  if (request.store !== false) {
+    store.put(response.id, {
+      response,
+      input_items: normalizeStoredInputItems(request.input),
+      messages: [compactionSummaryMessage(summary)],
+      compaction_summary: summary,
+    });
+  }
+
+  sendJson(res, 200, response);
+}
+
+function makeCompactionChatRequest(request, chat, config) {
+  const maxTokensField = config.maxTokensField || "max_tokens";
+  const compactChat = {
+    model: chat.model || request.model || config.defaultModel,
+    stream: false,
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content: [
+          "You compact long-running agent conversations for continuation.",
+          "Write a concise but complete state summary preserving durable facts, user requirements, unresolved tasks, tool results, file paths, constraints, and next actions.",
+          "Do not invent facts. Prefer bullet-like plain text. Include exact IDs, filenames, commands, and code words when present.",
+        ].join("\n"),
+      },
+      {
+        role: "user",
+        content: `Compact this conversation state for a future turn:\n\n${serializeChatMessages(chat.messages)}`,
+      },
+    ],
+  };
+  compactChat[maxTokensField] = request.max_output_tokens || config.compactionMaxOutputTokens;
+  return compactChat;
+}
+
+function createCompactionResource(request, upstreamJson, summary, config) {
+  return {
+    id: prefixedId("resp"),
+    object: "response.compaction",
+    created_at: upstreamJson?.created || nowSeconds(),
+    output: [
+      ...normalizeStoredInputItems(request.input),
+      {
+        id: prefixedId("cmp"),
+        type: "compaction",
+        encrypted_content: encryptLocalCompaction(summary, config),
+      },
+    ],
+    usage: mapUsage(upstreamJson?.usage),
+  };
+}
+
+function compactionSummaryMessage(summary) {
+  return {
+    role: "system",
+    content: `Compacted conversation context:\n${summary}`,
+  };
+}
+
+function serializeChatMessages(messages) {
+  return (messages || [])
+    .map((message, index) => {
+      const lines = [`[${index + 1}] role=${message.role || "unknown"}`];
+      if (message.name) lines.push(`name=${message.name}`);
+      if (message.tool_call_id) lines.push(`tool_call_id=${message.tool_call_id}`);
+      if (message.content != null) lines.push(`content=${stringifyContent(message.content)}`);
+      if (message.reasoning_content) lines.push(`reasoning=${stringifyContent(message.reasoning_content)}`);
+      if (message.tool_calls) lines.push(`tool_calls=${JSON.stringify(message.tool_calls)}`);
+      return lines.join("\n");
+    })
+    .join("\n\n");
+}
+
+function extractChatCompletionText(chat) {
+  return (chat?.choices || [])
+    .map((choice) => choice.message?.content || "")
+    .map((content) => Array.isArray(content) ? content.map((part) => stringifyContent(part.text ?? part.content ?? part)).join("") : stringifyContent(content))
+    .join("\n")
+    .trim();
+}
+
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function encryptLocalCompaction(summary, config) {
+  const key = getCompactionKey(config);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from("open-codex-compaction-v1"));
+  const plaintext = Buffer.from(JSON.stringify({
+    summary,
+    created_at: nowSeconds(),
+    source: "open-codex-responses-bridge",
+  }));
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `occomp1.${base64url(iv)}.${base64url(tag)}.${base64url(encrypted)}`;
+}
+
+function decodeLocalCompaction(encryptedContent, config) {
+  const value = String(encryptedContent || "");
+  if (!value.startsWith("occomp1.")) return "";
+  const parts = value.split(".");
+  if (parts.length !== 4) return "";
+  try {
+    const [, iv, tag, encrypted] = parts;
+    const decipher = crypto.createDecipheriv("aes-256-gcm", getCompactionKey(config), Buffer.from(iv, "base64url"));
+    decipher.setAAD(Buffer.from("open-codex-compaction-v1"));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(encrypted, "base64url")),
+      decipher.final(),
+    ]);
+    const payload = JSON.parse(plaintext.toString("utf8"));
+    return typeof payload.summary === "string" ? payload.summary : "";
+  } catch {
+    return "";
+  }
+}
+
+function getCompactionKey(config) {
+  if (config.compactionSecret) return crypto.createHash("sha256").update(String(config.compactionSecret)).digest();
+  const filePath = path.resolve(config.compactionSecretFile || path.join(config.stateDir, "compaction.key"));
+  try {
+    const existing = Buffer.from(fs.readFileSync(filePath, "utf8").trim(), "base64");
+    if (existing.length === 32) return existing;
+  } catch {
+    // Generate below when the key file is absent or unreadable.
+  }
+
+  const key = crypto.randomBytes(32);
+  fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(filePath, `${key.toString("base64")}\n`, { mode: 0o600 });
+  return key;
+}
+
+function base64url(buffer) {
+  return Buffer.from(buffer).toString("base64url");
 }
 
 async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility) {
@@ -701,13 +886,6 @@ function handleResponseInputItems(res, store, responseId, url) {
   sendJson(res, 200, paginateInputItems(items, url));
 }
 
-function handleUnsupportedResponseEndpoint(res, name) {
-  sendError(res, 501, `${name} requires native Responses API semantics and is not emulated by this chat provider bridge yet`, {
-    type: "unsupported_compatibility_feature",
-    code: "unsupported_endpoint",
-  });
-}
-
 function handleChatCompletionGet(res, store, completionId) {
   const record = store.get(completionId);
   if (!record?.chat_completion) {
@@ -835,8 +1013,8 @@ function createServer(config = loadConfig()) {
         return;
       }
 
-      if (url.pathname === "/v1/responses/compact") {
-        handleUnsupportedResponseEndpoint(res, "response compaction");
+      if (req.method === "POST" && url.pathname === "/v1/responses/compact") {
+        await handleResponseCompact(req, res, config, store);
         return;
       }
 

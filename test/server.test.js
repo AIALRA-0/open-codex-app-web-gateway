@@ -201,14 +201,85 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
   });
 });
 
-test("Response compaction returns an explicit compatibility error", async () => {
-  await withMockProvider(async (_req, res) => {
-    res.writeHead(500).end();
-  }, async ({ bridgeAddress }) => {
-    const compact = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/compact`, { method: "POST" });
-    assert.equal(compact.status, 501);
+test("POST /v1/responses/compact returns local compaction and replays it", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (call.body.messages?.[0]?.content.includes("compact long-running agent conversations")) {
+      res.end(JSON.stringify({
+        id: "chatcmpl_compact",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "Project code word atlas-77. Next action: answer the follow-up." },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 50, completion_tokens: 12, total_tokens: 62 },
+      }));
+      return;
+    }
+
+    res.end(JSON.stringify({
+      id: "chatcmpl_after_compact",
+      object: "chat.completion",
+      created: 101,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "continued from compact" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 },
+    }));
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const compact = await fetch(`${baseUrl}/v1/responses/compact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          { role: "user", content: "Project code word is atlas-77." },
+          {
+            type: "message",
+            role: "assistant",
+            status: "completed",
+            content: [{ type: "output_text", text: "Acknowledged." }],
+          },
+        ],
+      }),
+    });
+    assert.equal(compact.status, 200);
     const compactJson = await compact.json();
-    assert.equal(compactJson.error.code, "unsupported_endpoint");
+    assert.equal(compactJson.object, "response.compaction");
+    assert.equal(compactJson.output.length, 3);
+    assert.equal(compactJson.output[2].type, "compaction");
+    assert.match(compactJson.output[2].encrypted_content, /^occomp1\./);
+    assert.equal(compactJson.usage.input_tokens, 50);
+    assert.equal(fs.existsSync(path.join(stateDir, "compaction.key")), true);
+
+    const continued = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          ...compactJson.output,
+          { role: "user", content: "What is the code word?" },
+        ],
+        store: false,
+      }),
+    });
+    assert.equal(continued.status, 200);
+    const continuedJson = await continued.json();
+    assert.equal(continuedJson.output[0].content[0].text, "continued from compact");
+
+    assert.match(requests[0].body.messages[1].content, /atlas-77/);
+    assert.equal(requests[0].body.max_tokens, 512);
+    assert.equal(requests[1].body.messages.at(-2).role, "system");
+    assert.match(requests[1].body.messages.at(-2).content, /Compacted conversation context:\nProject code word atlas-77/);
+    assert.equal(requests[1].body.messages.at(-1).content, "What is the code word?");
   });
 });
 

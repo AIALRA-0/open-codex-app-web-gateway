@@ -87,7 +87,7 @@ behavior.
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
 | `POST /v1/responses/{response_id}/cancel` | Compatibility no-op for completed records | The bridge only stores terminal responses today; completed records are returned unchanged with metadata explaining the no-op |
-| `POST /v1/responses/compact` | Explicit 501 | Requires native Responses compaction semantics or a local summarization policy |
+| `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize conversation state, returns `response.compaction`, and encrypts local compaction content with an AES-GCM key stored outside Git |
 | `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request to Chat Completions, forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` |
 
 ## Chat Completions Endpoint Coverage
@@ -140,6 +140,7 @@ kept in the replay store so later tool turns can pass the reasoning content back
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |
+| Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one output | Run multiple requests at caller layer |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve when present, synthesize only from local tools |
 

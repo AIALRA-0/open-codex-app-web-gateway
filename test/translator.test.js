@@ -122,6 +122,32 @@ test("can downgrade json_schema to json_object with an explicit schema instructi
   assert.equal(chat.messages[1].role, "user");
 });
 
+test("maps compaction items to continuation system context", () => {
+  const messages = responseInputToChatMessages([
+    {
+      type: "compaction",
+      encrypted_content: "local-token",
+    },
+    {
+      type: "compaction",
+      encrypted_content: "foreign-token",
+    },
+  ], {
+    decodeCompaction: (value) => value === "local-token" ? "Remember code word atlas-77." : "",
+  });
+
+  assert.deepEqual(messages, [
+    {
+      role: "system",
+      content: "Compacted conversation context:\nRemember code word atlas-77.",
+    },
+    {
+      role: "system",
+      content: "A compacted conversation context item was provided, but this bridge could not decode its opaque content. Continue using any other visible input items.",
+    },
+  ]);
+});
+
 test("maps chat completion content, tool calls, reasoning and usage back to Responses", () => {
   const response = chatCompletionToResponse({
     id: "chatcmpl_1",

@@ -157,6 +157,42 @@ function buildSuites(defaultModel) {
           && json.input_tokens > 0,
       },
       {
+        id: "responses-compact-continuation",
+        mode: "responses-compact",
+        request: {
+          model: defaultModel,
+          input: [
+            {
+              role: "user",
+              content: "For a compaction regression, remember the exact code word atlas-77.",
+            },
+            {
+              type: "message",
+              role: "assistant",
+              status: "completed",
+              content: [{ type: "output_text", text: "I will preserve atlas-77 for the next turn." }],
+            },
+          ],
+          max_output_tokens: 256,
+          store: false,
+        },
+        followUp: ({ compactionOutput }) => ({
+          model: defaultModel,
+          input: [
+            ...compactionOutput,
+            {
+              role: "user",
+              content: "Using only the compacted context, return the exact code word.",
+            },
+          ],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json }) => json?.object === "response.compaction"
+          && json.output?.some((item) => item.type === "compaction" && /^occomp1\./.test(item.encrypted_content || "")),
+        followCheck: ({ text }) => /atlas-77/i.test(text),
+      },
+      {
         id: "responses-stream-events",
         mode: "responses-stream",
         request: {
@@ -248,6 +284,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-input-tokens") {
       return await runInputTokensCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-compact") {
+      return await runCompactionCase(testCase, context, started);
     }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
@@ -353,6 +392,63 @@ async function runChatLifecycleCase(testCase, context, started) {
     fetched_status: fetched.status,
     messages_status: messages.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+  });
+}
+
+async function runCompactionCase(testCase, context, started) {
+  const compactResponse = await postJson(`${baseUrl}/v1/responses/compact`, testCase.request);
+  const compactBody = await compactResponse.text();
+  if (!compactResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: compactResponse.status,
+      error: truncate(compactBody),
+    });
+  }
+
+  const compactJson = JSON.parse(compactBody);
+  const compactOk = !!testCase.check({ json: compactJson, ok: compactResponse.ok });
+  const stepResults = [{
+    step: "compact",
+    ok: compactOk,
+    output_items: Array.isArray(compactJson.output) ? compactJson.output.length : 0,
+    usage: responseUsage(compactJson),
+  }];
+  if (!compactOk || !testCase.followUp) {
+    return finishResult(testCase, context, started, {
+      ok: compactOk,
+      status: compactResponse.status,
+      steps: stepResults,
+      usage: sumUsage(stepResults.map((step) => step.usage)),
+    });
+  }
+
+  const followResponse = await postJson(`${baseUrl}/v1/responses`, testCase.followUp({ compactionOutput: compactJson.output || [] }));
+  const followBody = await followResponse.text();
+  if (!followResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: followResponse.status,
+      error: truncate(followBody),
+      steps: stepResults,
+    });
+  }
+
+  const followJson = JSON.parse(followBody);
+  const text = responseOutputText(followJson);
+  const followOk = !!testCase.followCheck({ json: followJson, text, ok: followResponse.ok });
+  stepResults.push({
+    step: "follow-up",
+    ok: followOk,
+    output_text: truncate(text),
+    usage: responseUsage(followJson),
+  });
+  return finishResult(testCase, context, started, {
+    ok: followOk,
+    status: followResponse.status,
+    steps: stepResults,
+    usage: sumUsage(stepResults.map((step) => step.usage)),
+    output_text: truncate(text),
   });
 }
 
