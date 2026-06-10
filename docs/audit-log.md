@@ -1698,3 +1698,44 @@ Open follow-ups:
   - UI smoke passed with marker `ui-smoke-mq80dhxa`, reload persistence
     confirmed, console errors 0, warnings 0.
   - Local Conversation JSON files after live cleanup: 0.
+
+## 2026-06-10 Office OOXML Input File Extraction
+
+- Closed another local `input_file` compatibility gap by adding dependency-free
+  Office OOXML text extraction for inline/base64, local file-id, and fetched
+  file inputs:
+  - `.docx` extracts text from Word document/header/footer/comment-style XML
+    parts;
+  - `.xlsx` extracts shared strings and worksheet rows as tab-separated text;
+  - `.pptx` extracts slide text from presentation slide XML.
+- Implemented a small bounded ZIP reader in `src/bridge/input_files.js` for
+  stored and deflated entries, with entry count and inflated-size guards. No new
+  npm package was added.
+- Added `metadata.compatibility.local_input_files.office_extracted_count` so
+  tests and audit reports can distinguish Office extraction from plain text and
+  PDF extraction.
+- Extended the live bridge regression harness with
+  `responses-input-file-office`, using generated minimal `.docx`, `.xlsx`, and
+  `.pptx` fixtures.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Verified:
+  - `node --check src/bridge/input_files.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted `input_file` server tests: passed, including the new Office
+    extraction case.
+  - `npm test`: 62/62 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live `responses-input-file-office` passed 1/1, elapsed 1615 ms, output
+    `office-input-ok`, total usage 309 tokens.
+  - Full live `bridge-regression` passed 22/22 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1987 ms, P95 latency 4032 ms, and total
+    usage 3218 tokens.
+  - Public HTTPS returned HTTP/2 200 from `https://opencodexapp.aialra.online`.
+  - UI smoke passed with marker `ui-smoke-mq80pdf1`, reload persistence
+    confirmed, console errors 0, warnings 0.

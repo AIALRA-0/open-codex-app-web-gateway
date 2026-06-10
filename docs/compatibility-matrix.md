@@ -44,7 +44,7 @@ implementations for those tools.
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
 | `input_image` | chat `image_url` content part | Provider-dependent |
-| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled |
+| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
@@ -343,10 +343,14 @@ Configuration:
 This is a text extraction compatibility layer, not native OpenAI file input
 processing. Text and code files, CSV/TSV, JSON, Markdown, HTML, XML, and similar
 formats are injected directly. Inline `file_data` must be valid base64. Binary
-PDF text layers are extracted with Poppler `pdftotext` when available; scanned
-PDF images, OCR, PDF page rendering, and rich Office documents are still
-reported with metadata unless a future parser extracts text safely. For large
-files, prefer the local `file_search` adapter.
+PDF text layers are extracted with Poppler `pdftotext` when available. Modern
+Office OOXML files are parsed without new runtime dependencies: `.docx` text is
+read from Word XML parts, `.xlsx` shared strings and worksheet rows are rendered
+as tab-separated text, and `.pptx` slide text is extracted from slide XML. Scanned
+PDF images, OCR, PDF page rendering, legacy binary Office formats, embedded
+Office media, and complex workbook formulas/macros are still reported with
+metadata unless a future parser extracts text safely. For large files, prefer
+the local `file_search` adapter.
 
 ## Local File Search Adapter
 
@@ -422,7 +426,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
-| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs and PDF text-layer extraction, but not PDF page images/OCR, spreadsheet augmentation, or rich Office document parsing | Add optional rendered-page context, OCR, spreadsheet summarization, Office parsers, and stronger file-type detection |
+| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, and basic `.docx`/`.xlsx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

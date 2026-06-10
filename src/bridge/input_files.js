@@ -4,6 +4,7 @@ const childProcess = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
+const zlib = require("node:zlib");
 const { stringifyContent } = require("./translator");
 
 function hasInputFiles(input) {
@@ -50,6 +51,7 @@ function inputFileCompatibility(context) {
       failed_count: context.files?.filter((file) => file.status !== "completed").length || 0,
       truncated_count: context.files?.filter((file) => file.truncated).length || 0,
       pdf_extracted_count: context.files?.filter((file) => file.extraction_method === "pdftotext").length || 0,
+      office_extracted_count: context.files?.filter((file) => String(file.extraction_method || "").startsWith("ooxml_")).length || 0,
     },
   };
 }
@@ -259,6 +261,9 @@ function extractText(buffer, filename, mediaType, config = {}) {
   if (isPdfFile(media, extension, buffer)) {
     return extractPdfText(buffer, config);
   }
+  if (isOfficeFile(media, extension)) {
+    return extractOfficeText(buffer, extension, media, config);
+  }
   if (!isTextLike(media, extension, buffer)) {
     return {
       content: "",
@@ -346,10 +351,277 @@ function extractPdfText(buffer, config = {}) {
   }
 }
 
+function extractOfficeText(buffer, extension, mediaType, config = {}) {
+  const kind = officeKind(extension, mediaType);
+  if (!kind) {
+    return {
+      content: "",
+      truncated: false,
+      error: "local Office extraction is not configured for this file type",
+    };
+  }
+
+  let zip;
+  try {
+    zip = readZipEntries(buffer, {
+      maxEntries: 2000,
+      maxInflatedBytes: Math.min(
+        Math.max(Number(config.inputFileMaxTextChars || 200000) * 8, 1024 * 1024),
+        16 * 1024 * 1024,
+      ),
+    });
+  } catch (error) {
+    return {
+      content: "",
+      truncated: false,
+      error: `local Office extraction failed: ${error.message}`,
+    };
+  }
+
+  let text = "";
+  try {
+    if (kind === "docx") text = extractDocxText(zip);
+    else if (kind === "xlsx") text = extractXlsxText(zip);
+    else if (kind === "pptx") text = extractPptxText(zip);
+  } catch (error) {
+    return {
+      content: "",
+      truncated: false,
+      error: `local Office extraction failed: ${error.message}`,
+    };
+  }
+
+  text = text.replace(/\u0000/g, "").trim();
+  const maxChars = config.inputFileMaxTextChars || 200000;
+  const truncated = text.length > maxChars;
+  if (truncated) text = text.slice(0, maxChars);
+  if (!text) {
+    return {
+      content: "",
+      truncated: false,
+      error: `local Office extraction returned no extractable text for ${kind}`,
+    };
+  }
+  return { content: text, truncated, method: `ooxml_${kind}` };
+}
+
+function extractDocxText(zip) {
+  const names = zip.names()
+    .filter((name) => /^word\/(?:document|header\d+|footer\d+|footnotes|endnotes|comments)\.xml$/i.test(name))
+    .sort((a, b) => docxPartRank(a) - docxPartRank(b) || a.localeCompare(b));
+  return names
+    .map((name) => extractTextNodes(zip.text(name), "t").join(" "))
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function docxPartRank(name) {
+  if (/^word\/document\.xml$/i.test(name)) return 0;
+  if (/^word\/header/i.test(name)) return 1;
+  if (/^word\/footer/i.test(name)) return 2;
+  return 3;
+}
+
+function extractPptxText(zip) {
+  return zip.names()
+    .filter((name) => /^ppt\/slides\/slide\d+\.xml$/i.test(name))
+    .sort(naturalCompare)
+    .map((name, index) => {
+      const text = extractTextNodes(zip.text(name), "t").join(" ");
+      return text ? `Slide ${index + 1}: ${text}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function extractXlsxText(zip) {
+  const sharedStrings = parseSharedStrings(zip.has("xl/sharedStrings.xml") ? zip.text("xl/sharedStrings.xml") : "");
+  return zip.names()
+    .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
+    .sort(naturalCompare)
+    .map((name, index) => {
+      const rows = extractWorksheetRows(zip.text(name), sharedStrings);
+      return rows.length ? `Sheet ${index + 1}:\n${rows.join("\n")}` : "";
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
+
+function parseSharedStrings(xml) {
+  return extractXmlBlocks(xml, "si").map((block) => extractTextNodes(block, "t").join(""));
+}
+
+function extractWorksheetRows(xml, sharedStrings) {
+  return extractXmlBlocks(xml, "row").map((row) => {
+    const cells = [];
+    const cellPattern = /<(?:(?:[A-Za-z_][\w.-]*):)?c\b([^>]*)>([\s\S]*?)<\/(?:(?:[A-Za-z_][\w.-]*):)?c>/gi;
+    let match;
+    while ((match = cellPattern.exec(row)) !== null) {
+      const attrs = match[1] || "";
+      const body = match[2] || "";
+      const type = xmlAttr(attrs, "t");
+      let value = "";
+      if (type === "s") {
+        const index = Number(extractTextNodes(body, "v")[0]);
+        value = Number.isInteger(index) ? sharedStrings[index] || "" : "";
+      } else if (type === "inlineStr") {
+        value = extractTextNodes(body, "t").join("");
+      } else {
+        value = extractTextNodes(body, "v")[0] || extractTextNodes(body, "t").join("");
+      }
+      cells.push(value);
+    }
+    return cells.join("\t").trim();
+  }).filter(Boolean);
+}
+
+function readZipEntries(buffer, options = {}) {
+  const eocdOffset = findEndOfCentralDirectory(buffer);
+  if (eocdOffset === -1) throw new Error("not a ZIP archive");
+  const entryCount = buffer.readUInt16LE(eocdOffset + 10);
+  const centralSize = buffer.readUInt32LE(eocdOffset + 12);
+  const centralOffset = buffer.readUInt32LE(eocdOffset + 16);
+  if (entryCount > (options.maxEntries || 2000)) throw new Error(`ZIP entry count exceeds ${options.maxEntries || 2000}`);
+  if (centralOffset + centralSize > buffer.length) throw new Error("ZIP central directory is out of bounds");
+
+  const entries = new Map();
+  let offset = centralOffset;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (buffer.readUInt32LE(offset) !== 0x02014b50) throw new Error("invalid ZIP central directory");
+    const method = buffer.readUInt16LE(offset + 10);
+    const compressedSize = buffer.readUInt32LE(offset + 20);
+    const uncompressedSize = buffer.readUInt32LE(offset + 24);
+    const nameLength = buffer.readUInt16LE(offset + 28);
+    const extraLength = buffer.readUInt16LE(offset + 30);
+    const commentLength = buffer.readUInt16LE(offset + 32);
+    const localOffset = buffer.readUInt32LE(offset + 42);
+    const nameStart = offset + 46;
+    const nameEnd = nameStart + nameLength;
+    if (nameEnd > buffer.length) throw new Error("ZIP entry name is out of bounds");
+    const name = buffer.subarray(nameStart, nameEnd).toString("utf8");
+    if (!name.endsWith("/")) {
+      entries.set(name, {
+        name,
+        method,
+        compressedSize,
+        uncompressedSize,
+        localOffset,
+        read: () => readZipEntryBuffer(buffer, {
+          name,
+          method,
+          compressedSize,
+          uncompressedSize,
+          localOffset,
+        }, options),
+      });
+    }
+    offset = nameEnd + extraLength + commentLength;
+  }
+
+  return {
+    has: (name) => entries.has(name),
+    names: () => Array.from(entries.keys()),
+    text: (name) => {
+      const entry = entries.get(name);
+      if (!entry) return "";
+      return entry.read().toString("utf8");
+    },
+  };
+}
+
+function readZipEntryBuffer(buffer, entry, options = {}) {
+  if (entry.uncompressedSize > (options.maxInflatedBytes || 16 * 1024 * 1024)) {
+    throw new Error(`ZIP entry ${entry.name} exceeds local extraction limit`);
+  }
+  if (buffer.readUInt32LE(entry.localOffset) !== 0x04034b50) {
+    throw new Error(`invalid ZIP local header for ${entry.name}`);
+  }
+  const nameLength = buffer.readUInt16LE(entry.localOffset + 26);
+  const extraLength = buffer.readUInt16LE(entry.localOffset + 28);
+  const dataStart = entry.localOffset + 30 + nameLength + extraLength;
+  const dataEnd = dataStart + entry.compressedSize;
+  if (dataEnd > buffer.length) throw new Error(`ZIP entry ${entry.name} data is out of bounds`);
+  const compressed = buffer.subarray(dataStart, dataEnd);
+  if (entry.method === 0) return Buffer.from(compressed);
+  if (entry.method === 8) {
+    const inflated = zlib.inflateRawSync(compressed);
+    if (inflated.length > (options.maxInflatedBytes || 16 * 1024 * 1024)) {
+      throw new Error(`ZIP entry ${entry.name} exceeds local extraction limit`);
+    }
+    return inflated;
+  }
+  throw new Error(`ZIP entry ${entry.name} uses unsupported compression method ${entry.method}`);
+}
+
+function findEndOfCentralDirectory(buffer) {
+  if (buffer.length < 22) return -1;
+  const minOffset = Math.max(0, buffer.length - 65557);
+  for (let offset = buffer.length - 22; offset >= minOffset; offset -= 1) {
+    if (buffer.readUInt32LE(offset) === 0x06054b50) return offset;
+  }
+  return -1;
+}
+
+function extractXmlBlocks(xml, localName) {
+  const escaped = escapeRegExp(localName);
+  const pattern = new RegExp(`<(?:(?:[A-Za-z_][\\w.-]*):)?${escaped}\\b[^>]*>([\\s\\S]*?)<\\/(?:(?:[A-Za-z_][\\w.-]*):)?${escaped}>`, "gi");
+  const values = [];
+  let match;
+  while ((match = pattern.exec(xml || "")) !== null) values.push(match[1] || "");
+  return values;
+}
+
+function extractTextNodes(xml, localName) {
+  return extractXmlBlocks(xml, localName)
+    .map((value) => decodeXmlEntities(value.replace(/<[^>]+>/g, "")))
+    .filter((value) => value.length > 0);
+}
+
+function xmlAttr(attrs, name) {
+  const pattern = new RegExp(`\\b${escapeRegExp(name)}=(["'])(.*?)\\1`, "i");
+  return decodeXmlEntities(attrs.match(pattern)?.[2] || "");
+}
+
+function decodeXmlEntities(value) {
+  return String(value || "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/&#(\d+);/g, (match, code) => safeCodePoint(Number(code), match))
+    .replace(/&#x([0-9a-f]+);/gi, (match, code) => safeCodePoint(parseInt(code, 16), match));
+}
+
+function safeCodePoint(value, fallback) {
+  if (!Number.isInteger(value) || value < 0 || value > 0x10ffff) return fallback;
+  return String.fromCodePoint(value);
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function naturalCompare(a, b) {
+  return String(a).localeCompare(String(b), undefined, { numeric: true });
+}
+
 function isPdfFile(mediaType, extension, buffer) {
   return mediaType.split(";")[0].trim() === "application/pdf"
     || extension === ".pdf"
     || buffer.subarray(0, 5).toString("ascii") === "%PDF-";
+}
+
+function isOfficeFile(mediaType, extension) {
+  return !!officeKind(extension, mediaType);
+}
+
+function officeKind(extension, mediaType = "") {
+  const media = String(mediaType || "").split(";")[0].trim().toLowerCase();
+  if (extension === ".docx" || media === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
+  if (extension === ".xlsx" || media === "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet") return "xlsx";
+  if (extension === ".pptx" || media === "application/vnd.openxmlformats-officedocument.presentationml.presentation") return "pptx";
+  return "";
 }
 
 function isTextLike(mediaType, extension, buffer) {
@@ -433,6 +705,9 @@ function guessMediaType(filename = "") {
   if (extension === ".ts" || extension === ".tsx") return "text/x-typescript";
   if (extension === ".py") return "text/x-python";
   if (extension === ".pdf") return "application/pdf";
+  if (extension === ".docx") return "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  if (extension === ".xlsx") return "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
+  if (extension === ".pptx") return "application/vnd.openxmlformats-officedocument.presentationml.presentation";
   return extension ? "text/plain" : "";
 }
 

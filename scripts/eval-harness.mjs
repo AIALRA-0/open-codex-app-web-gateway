@@ -11,6 +11,7 @@ const outputPath = args.get("output");
 const timeoutMs = parsePositiveInt(args.get("timeout-ms"), 10 * 60 * 1000);
 const caseFilter = args.get("case");
 const verbose = !!args.get("verbose");
+let cachedCrcTable = null;
 
 const suites = buildSuites(model);
 const selected = caseFilter
@@ -103,6 +104,115 @@ function tinyPdfBase64(text) {
   }
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
   return Buffer.from(pdf, "ascii").toString("base64");
+}
+
+function tinyZipBase64(entries) {
+  const locals = [];
+  const centrals = [];
+  let offset = 0;
+  for (const [name, content] of Object.entries(entries)) {
+    const nameBuffer = Buffer.from(name, "utf8");
+    const data = Buffer.from(String(content), "utf8");
+    const crc = crc32(data);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(0, 10);
+    local.writeUInt16LE(0, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(nameBuffer.length, 26);
+    local.writeUInt16LE(0, 28);
+    locals.push(local, nameBuffer, data);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt16LE(0, 12);
+    central.writeUInt16LE(0, 14);
+    central.writeUInt32LE(crc, 16);
+    central.writeUInt32LE(data.length, 20);
+    central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuffer.length, 28);
+    central.writeUInt16LE(0, 30);
+    central.writeUInt16LE(0, 32);
+    central.writeUInt16LE(0, 34);
+    central.writeUInt16LE(0, 36);
+    central.writeUInt32LE(0, 38);
+    central.writeUInt32LE(offset, 42);
+    centrals.push(central, nameBuffer);
+
+    offset += local.length + nameBuffer.length + data.length;
+  }
+
+  const centralDir = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  const count = Object.keys(entries).length;
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(count, 8);
+  end.writeUInt16LE(count, 10);
+  end.writeUInt32LE(centralDir.length, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...locals, centralDir, end]).toString("base64");
+}
+
+function crc32(buffer) {
+  let value = 0xffffffff;
+  for (const byte of buffer) value = (value >>> 8) ^ crcTable()[(value ^ byte) & 0xff];
+  return (value ^ 0xffffffff) >>> 0;
+}
+
+function crcTable() {
+  if (cachedCrcTable) return cachedCrcTable;
+  cachedCrcTable = Array.from({ length: 256 }, (_unused, index) => {
+    let value = index;
+    for (let bit = 0; bit < 8; bit += 1) value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1;
+    return value >>> 0;
+  });
+  return cachedCrcTable;
+}
+
+function tinyDocxBase64(text) {
+  return tinyZipBase64({
+    "word/document.xml": `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>${xmlEscape(text)}</w:t></w:r></w:p></w:body></w:document>`,
+  });
+}
+
+function tinyXlsxBase64(rows) {
+  const shared = rows.flat().map((value) => `<si><t>${xmlEscape(value)}</t></si>`).join("");
+  let index = 0;
+  const rowXml = rows.map((row, rowIndex) => `<row r="${rowIndex + 1}">${
+    row.map((_value, columnIndex) => `<c r="${String.fromCharCode(65 + columnIndex)}${rowIndex + 1}" t="s"><v>${index++}</v></c>`).join("")
+  }</row>`).join("");
+  return tinyZipBase64({
+    "xl/sharedStrings.xml": `<sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${shared}</sst>`,
+    "xl/worksheets/sheet1.xml": `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowXml}</sheetData></worksheet>`,
+  });
+}
+
+function tinyPptxBase64(text) {
+  return tinyZipBase64({
+    "ppt/slides/slide1.xml": `<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>${xmlEscape(text)}</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>`,
+  });
+}
+
+function xmlEscape(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
 }
 
 function buildSuites(defaultModel) {
@@ -254,6 +364,40 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0
           && json.metadata?.compatibility?.local_input_files?.pdf_extracted_count === 1,
+      },
+      {
+        id: "responses-input-file-office",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "bridge-input-file.docx",
+                file_data: `data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,${tinyDocxBase64("Bridge DOCX input fixture. The exact answer is office-input-ok.")}`,
+              },
+              {
+                type: "input_file",
+                filename: "bridge-input-file.xlsx",
+                file_data: `data:application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;base64,${tinyXlsxBase64([["Bridge XLSX input fixture", "office-input-ok"]])}`,
+              },
+              {
+                type: "input_file",
+                filename: "bridge-input-file.pptx",
+                file_data: `data:application/vnd.openxmlformats-officedocument.presentationml.presentation;base64,${tinyPptxBase64("Bridge PPTX input fixture. The exact answer is office-input-ok.")}`,
+              },
+              { type: "input_text", text: "Using the Office input files, return exactly this text and nothing else: office-input-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => /office-input-ok/i.test(text)
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 3
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0
+          && json.metadata?.compatibility?.local_input_files?.office_extracted_count === 3,
       },
       {
         id: "responses-logprobs",
