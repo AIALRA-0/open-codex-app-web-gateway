@@ -1503,3 +1503,47 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7ypehb` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Disk-Bounded SWE-bench Prediction Runner
+
+- Reviewed current SWE-bench public evaluation guidance:
+  - evaluation guide:
+    https://www.swebench.com/SWE-bench/guides/evaluation/
+  - harness reference:
+    https://www.swebench.com/SWE-bench/reference/harness/
+  - Docker setup guide:
+    https://www.swebench.com/SWE-bench/guides/docker_setup/
+  - Verified dataset card:
+    https://huggingface.co/datasets/SWE-bench/SWE-bench_Verified
+- Added `scripts/swebench-runner.mjs` and `npm run bench:swe`.
+- The runner is intentionally disk-bounded:
+  - it accepts a local JSONL/JSON subset instead of downloading datasets into
+    the repository;
+  - it defaults reports and predictions to
+    `/srv/aialra/data/opencodexapp/eval/swebench/`;
+  - it writes SWE-bench-compatible predictions JSONL with `instance_id`,
+    `model_name_or_path`, and `model_patch`;
+  - it records compact task metadata, patch hashes, latency, token usage, and
+    an official `swebench.harness.run_evaluation` follow-up command;
+  - it omits gold `patch` and `test_patch` contents from prompts and compact
+    reports to avoid benchmark leakage;
+  - it includes `--dry-run` for dataset/report validation without model spend
+    and `--write-sample` for a synthetic smoke fixture only.
+- Added unit coverage for dry-run report and prediction generation, including
+  checks that gold patch strings do not appear in stdout.
+- Updated `docs/evaluation-plan.md` and `docs/deployment.md`.
+- Verified:
+  - `node --check scripts/swebench-runner.mjs`: passed.
+  - targeted `node --test test/swebench_runner.test.js`: passed.
+  - `npm test`: 57/57 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Synthetic dry-run smoke:
+    `npm run bench:swe -- --dataset-jsonl /srv/aialra/data/opencodexapp/eval/swebench/synthetic-smoke.jsonl --write-sample --dry-run --limit 1 --output /srv/aialra/data/opencodexapp/eval/swebench/synthetic-smoke-report.json --predictions /srv/aialra/data/opencodexapp/eval/swebench/synthetic-smoke-predictions.jsonl`
+    passed, wrote 1 empty official prediction without model usage, and recorded
+    zero transport errors.
+  - Synthetic live bridge smoke:
+    `npm run bench:swe -- --dataset-jsonl /srv/aialra/data/opencodexapp/eval/swebench/synthetic-smoke.jsonl --limit 1 --timeout-ms 90000 --output /srv/aialra/data/opencodexapp/eval/swebench/synthetic-live-report.json --predictions /srv/aialra/data/opencodexapp/eval/swebench/synthetic-live-predictions.jsonl`
+    passed through `http://127.0.0.1:12912`, generated 1 diff-like patch,
+    latency 25068 ms, total usage 1611 tokens, and recorded zero transport
+    errors or secret rejections.

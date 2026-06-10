@@ -42,6 +42,7 @@ larger agent evaluations.
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
 | `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including PDF text-layer extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
+| `swebench-runner` | Disk-bounded SWE-bench prediction generator for local JSONL subsets; writes official predictions JSONL and compact audit reports outside the repo |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
 Useful commands:
@@ -62,6 +63,8 @@ node scripts/eval-harness.mjs --suite bridge-regression --case vector-store-life
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
 npm run bench:code -- --timeout-ms 180000
+npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl --limit 3 --dry-run
+npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl --limit 3 --timeout-ms 180000
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 ```
 
@@ -81,6 +84,51 @@ The current `micro` suite covers:
 This is not a substitute for SWE-bench. It is a cheap pass/fail sentinel for the
 same broad loop: issue text plus code context, generated patch, test execution,
 and structured scoring.
+
+## Current SWE-bench Prediction Runner
+
+`scripts/swebench-runner.mjs` is the bounded SWE-bench entry point for this
+deployment. It does not download datasets and does not run the Docker scorer.
+Instead, it reads a local JSONL or JSON subset, sends issue-only prompts through
+the Responses bridge, and writes:
+
+- a compact JSON report with task IDs, latency, usage, patch hashes, and
+  metadata about whether gold patches/test patches were present in the source
+  dataset;
+- a SWE-bench-compatible predictions JSONL containing `instance_id`,
+  `model_name_or_path`, and `model_patch`.
+
+Default artifacts are written outside the repository under
+`/srv/aialra/data/opencodexapp/eval/swebench/`. Use `--dry-run` to validate
+dataset parsing and report generation without a model call. Use `--write-sample`
+only for a synthetic smoke fixture, not for benchmark claims.
+
+Example local subset export:
+
+```bash
+python - <<'PY'
+from datasets import load_dataset
+path = "/srv/aialra/data/swebench/verified-smoke.jsonl"
+ds = load_dataset("SWE-bench/SWE-bench_Verified", split="test")
+ds.select(range(5)).to_json(path, orient="records", lines=True)
+print(path)
+PY
+```
+
+Example prediction run:
+
+```bash
+npm run bench:swe -- \
+  --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl \
+  --dataset-name SWE-bench/SWE-bench_Verified \
+  --split test \
+  --limit 5 \
+  --timeout-ms 180000
+```
+
+The report prints the follow-up official scoring command. Run that command only
+on a host with enough Docker capacity, for example with `--max_workers 1`,
+`--cache_level env`, and `--clean True` for disk-limited machines.
 
 ## Current Stability Soak
 
@@ -150,7 +198,9 @@ Current public SWE-bench references to track:
 
 The next evaluation milestone is a disk-bounded runner that samples
 SWE-bench Verified or SWE-bench Lite into `/srv/aialra/data`, executes inside
-Docker, and writes only compact JSON/Markdown reports back to this repo.
+Docker, and writes only compact JSON/Markdown reports back to this repo. The
+prediction-generation half now exists as `npm run bench:swe`; the remaining
+milestone is the Docker scorer wrapper and result parser.
 
 ## Initial Command Skeleton
 
