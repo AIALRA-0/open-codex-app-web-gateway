@@ -365,12 +365,14 @@ function buildSuites(defaultModel) {
           max_output_tokens: 256,
           store: false,
         },
-        check: ({ text, events }) => {
+        check: ({ text, events, json }) => {
           const types = new Set(events.map((event) => event.event));
           return /stream-ok/i.test(text)
             && types.has("response.created")
             && types.has("response.output_text.delta")
-            && types.has("response.completed");
+            && types.has("response.completed")
+            && json?.metadata?.compatibility?.stream_options?.reason === "enabled_by_bridge"
+            && (json.usage?.total_tokens || 0) > 0;
         },
       },
       {

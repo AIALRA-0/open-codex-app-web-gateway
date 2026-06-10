@@ -152,6 +152,41 @@ test("POST /v1/responses forwards service_tier and preserves provider tier", asy
   });
 });
 
+test("POST /v1/responses filters stream_options for non-streaming requests", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, false);
+    assert.equal(call.body.stream_options, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_non_stream_options",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "non-stream ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check non-stream options.",
+        stream_options: { include_usage: true },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "non-stream ok");
+    assert.equal(json.metadata.compatibility.stream_options.reason, "stream_required");
+  });
+});
+
 test("POST /v1/responses maps output logprobs include to Chat and back", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -395,6 +430,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.equal(call.body.logprobs, true);
     assert.equal(call.body.top_logprobs, 2);
     assert.equal(call.body.service_tier, "priority");
+    assert.deepEqual(call.body.stream_options, { include_usage: true });
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream",
@@ -446,6 +482,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     const events = parseSseEvents(text);
     const completed = events.find((event) => event.event === "response.completed").data.response;
     assert.equal(completed.service_tier, "flex");
+    assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
   });
 });
 

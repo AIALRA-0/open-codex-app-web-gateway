@@ -63,6 +63,8 @@ implementations for those tools.
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
+| `stream_options` with `stream:true` | `stream_options` | Direct; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage |
+| `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |

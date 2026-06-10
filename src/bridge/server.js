@@ -127,6 +127,8 @@ function loadConfig(overrides = {}) {
       deepseekProvider,
     ),
     forwardServiceTier: parseBoolean(process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER, !deepseekProvider),
+    forwardStreamOptions: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STREAM_OPTIONS, true),
+    streamIncludeUsage: parseBoolean(process.env.CODEXCOMPAT_STREAM_INCLUDE_USAGE, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };

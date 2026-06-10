@@ -914,3 +914,45 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7uoyl8` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Streaming Chat Options and Usage Preservation
+
+- Used the current OpenAI Chat Completions OpenAPI schema to confirm
+  `stream_options` is a Chat request parameter for streaming responses.
+- Used the current DeepSeek Chat Completion docs to confirm DeepSeek documents
+  `stream_options` with `include_usage`, so forwarding this field is safe for
+  the live provider.
+- Added Responses-to-Chat `stream_options` handling:
+  - streaming Responses requests now forward caller-provided `stream_options`;
+  - when the caller omits `stream_options.include_usage`, the bridge sets
+    `include_usage:true` so the terminal Responses stream event can preserve
+    upstream usage;
+  - non-streaming requests that contain `stream_options` filter the field and
+    record `metadata.compatibility.stream_options.reason=stream_required`;
+  - `CODEXCOMPAT_FORWARD_STREAM_OPTIONS` and
+    `CODEXCOMPAT_STREAM_INCLUDE_USAGE` can disable forwarding or bridge-added
+    usage requests.
+- Strengthened the live `responses-stream-events` regression so it now requires
+  terminal `usage.total_tokens > 0` and
+  `metadata.compatibility.stream_options.reason=enabled_by_bridge`.
+- Added regression coverage for:
+  - default streaming `stream_options.include_usage=true`;
+  - caller-specified stream options such as `include_usage:false`;
+  - non-streaming filtering and compatibility metadata;
+  - server-side upstream request shape and final streaming metadata.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - `npm run eval:bridge -- --case responses-stream-events --timeout-ms 90000 --verbose`:
+    passed 1/1, latency 2021 ms, usage 62 tokens, output `stream-ok`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1996 ms, P95 latency 4564 ms, total usage 2406 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7v403h` appeared before reload and after reload, console errors
+    0, warnings 0.

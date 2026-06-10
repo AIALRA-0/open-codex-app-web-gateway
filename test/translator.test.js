@@ -143,6 +143,45 @@ test("maps Responses output logprobs request to Chat logprobs parameters", () =>
   assert.equal(compatibility.logprobs, "chat_logprobs");
 });
 
+test("requests streaming usage from Chat stream options by default", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "mock-model",
+    input: "Stream with usage.",
+    stream: true,
+  });
+
+  assert.deepEqual(chat.stream_options, { include_usage: true });
+  assert.deepEqual(compatibility.stream_options, {
+    source: "stream_options.include_usage",
+    value: true,
+    forwarded: true,
+    reason: "enabled_by_bridge",
+  });
+});
+
+test("preserves caller stream options and filters them outside streaming", () => {
+  const streaming = responsesToChatRequest({
+    model: "mock-model",
+    input: "Stream without bridge-added usage.",
+    stream: true,
+    stream_options: { include_usage: false },
+  });
+  assert.deepEqual(streaming.chat.stream_options, { include_usage: false });
+  assert.equal(streaming.compatibility.stream_options, undefined);
+
+  const nonStreaming = responsesToChatRequest({
+    model: "mock-model",
+    input: "No stream.",
+    stream_options: { include_usage: true },
+  });
+  assert.equal(nonStreaming.chat.stream_options, undefined);
+  assert.deepEqual(nonStreaming.compatibility.stream_options, {
+    source: "stream_options",
+    forwarded: false,
+    reason: "stream_required",
+  });
+});
+
 test("passes stop sequences and maps DeepSeek user identity aliases", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

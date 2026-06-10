@@ -309,6 +309,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "stop");
 
   const serviceTierCompatibility = mapServiceTier(request, chat, options);
+  const streamOptionsCompatibility = mapStreamOptions(request, chat, options);
   const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
 
   const logprobsRequested = shouldRequestChatLogprobs(request);
@@ -346,9 +347,51 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
+      ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
     },
   };
+}
+
+function mapStreamOptions(request, chat, options = {}) {
+  if (request.stream_options !== undefined && !request.stream) {
+    return {
+      source: "stream_options",
+      forwarded: false,
+      reason: "stream_required",
+    };
+  }
+  if (!request.stream) return null;
+
+  if (options.forwardStreamOptions === false) {
+    return {
+      source: "stream_options",
+      forwarded: false,
+      reason: "provider_unsupported",
+    };
+  }
+
+  let compatibility = null;
+  if (request.stream_options !== undefined) {
+    chat.stream_options = isPlainObject(request.stream_options)
+      ? { ...request.stream_options }
+      : request.stream_options;
+  }
+
+  if (options.streamIncludeUsage !== false) {
+    if (!isPlainObject(chat.stream_options)) chat.stream_options = {};
+    if (chat.stream_options.include_usage === undefined) {
+      chat.stream_options.include_usage = true;
+      compatibility = {
+        source: "stream_options.include_usage",
+        value: true,
+        forwarded: true,
+        reason: "enabled_by_bridge",
+      };
+    }
+  }
+
+  return compatibility;
 }
 
 function mapServiceTier(request, chat, options = {}) {
