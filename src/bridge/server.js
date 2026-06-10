@@ -77,6 +77,8 @@ function loadConfig(overrides = {}) {
   const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
   const providerBaseUrl = trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL);
   const deepseekProvider = isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl);
+  const webSearchProvider = overrides.webSearchProvider || process.env.CODEXCOMPAT_WEB_SEARCH_PROVIDER || "wikipedia";
+  const defaultWebSearchOpenPages = String(webSearchProvider).toLowerCase() === "wikipedia" ? 1 : 0;
   const compactionSecretFile = overrides.compactionSecretFile
     || process.env.CODEXCOMPAT_COMPACTION_SECRET_FILE
     || path.join(stateDir, "compaction.key");
@@ -105,9 +107,12 @@ function loadConfig(overrides = {}) {
     inputFileFetchTimeoutMs: numberFromEnv("CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     inputFilePdfExtractor: process.env.CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR || "pdftotext",
     inputFilePdfTimeoutMs: numberFromEnv("CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS", 10 * 1000, 1000, 120 * 1000),
-    webSearchProvider: process.env.CODEXCOMPAT_WEB_SEARCH_PROVIDER || "wikipedia",
+    webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
+    webSearchOpenPages: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_OPEN_PAGES", defaultWebSearchOpenPages, 0, 5),
+    webSearchPageMaxBytes: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_BYTES", 512 * 1024, 4096, 5 * 1024 * 1024),
+    webSearchPageMaxTextChars: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_TEXT_CHARS", 12000, 1000, 200000),
     webSearchStaticResults: process.env.CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS || "",
     webSearchWikipediaEndpoint: process.env.CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT || "",
     webSearchUserAgent: process.env.CODEXCOMPAT_WEB_SEARCH_USER_AGENT || "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)",

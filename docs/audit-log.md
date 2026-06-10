@@ -1784,3 +1784,52 @@ Open follow-ups:
   - Public HTTPS returned HTTP/2 200 from `https://opencodexapp.aialra.online`.
   - UI smoke passed with marker `ui-smoke-mq80ygqx`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local Web Search Open Page Context
+
+- Closed another part of the hosted `web_search_preview` parity gap for
+  Chat-only providers:
+  - local search results can now trigger bounded `open_page` fetches for the
+    top configured results;
+  - HTML/plain text page content is extracted, size-limited, and injected into
+    the upstream Chat prompt;
+  - Responses output includes auditable `web_search_call` items for both
+    `action.type:"search"` and `action.type:"open_page"`;
+  - compatibility metadata records `opened_count` and `open_failed_count`.
+- Implementation follows the official OpenAI web search output shape where
+  searched responses can include `web_search_call` output items whose action is
+  `search`, `open_page`, or `find_in_page`, with final message URL citations.
+  Source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/guides/tools-web-search#output-and-citations`.
+- Added bridge flags:
+  - `CODEXCOMPAT_WEB_SEARCH_OPEN_PAGES`;
+  - `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_BYTES`;
+  - `CODEXCOMPAT_WEB_SEARCH_PAGE_MAX_TEXT_CHARS`.
+- Updated `.env.example`, `docs/deployment.md`,
+  `docs/compatibility-matrix.md`, and `docs/evaluation-plan.md`.
+- Remaining known gap: this is still a local compatibility adapter, not the
+  native OpenAI hosted search product. The default no-key provider remains
+  Wikipedia-only, and `find_in_page` plus production-grade ranking/citation
+  policy are still future work.
+- Verified:
+  - `node --check src/bridge/web_search.js src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`:
+    passed.
+  - `npm test`: 65/65 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-web-search` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 2066 ms, output `web-search-ok [1]`, and total
+    usage 406 tokens. The harness requires a completed search call, an
+    attempted `open_page` call, URL citation annotations, and nonzero open-page
+    attempt metadata.
+  - Full live `bridge-regression` passed 22/22 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1728 ms, P95 latency 3803 ms, and total
+    usage 3228 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq81cn6p`, reload persistence
+    confirmed, console errors 0, warnings 0.

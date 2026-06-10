@@ -748,6 +748,101 @@ test("local web_search falls back to Wikipedia REST when the MediaWiki API is re
   assert.ok(seen.some((item) => item.url.includes("/w/rest.php/v1/search/page")));
 });
 
+test("local web_search can open result pages and inject extracted page text", async () => {
+  const context = await prepareWebSearchContext({
+    input: "Use web search for local page text.",
+    tools: [{ type: "web_search_preview" }],
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Open Page Fixture",
+      url: "https://example.test/open-page",
+      snippet: "Snippet before opening.",
+    }],
+    webSearchOpenPages: 1,
+    webSearchPageMaxTextChars: 2000,
+  }, {
+    fetch: async (url, options) => {
+      assert.equal(String(url), "https://example.test/open-page");
+      assert.equal(options.headers.accept.includes("text/html"), true);
+      return new Response("<html><head><style>.x{}</style><script>bad()</script></head><body><main><h1>Opened fixture</h1><p>Page body says open-page-ok.</p></main></body></html>", {
+        status: 200,
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
+    },
+  });
+
+  assert.equal(context.calls.length, 2);
+  assert.equal(context.calls[0].action.type, "search");
+  assert.equal(context.calls[1].action.type, "open_page");
+  assert.equal(context.calls[1].status, "completed");
+  assert.equal(context.results[0].opened.status, "completed");
+  assert.match(context.results[0].opened.text, /Opened fixture/);
+  assert.match(context.results[0].opened.text, /open-page-ok/);
+  assert.doesNotMatch(context.results[0].opened.text, /bad\(\)/);
+});
+
+test("POST /v1/responses emits local web_search open_page calls", async () => {
+  const pageServer = http.createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+    res.end("<!doctype html><main><h1>Bridge opened page</h1><p>Opened page body says open-page-ok.</p></main>");
+  });
+  const pageAddress = await listen(pageServer);
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      assert.match(prompt, /Bridge Open Page Result/);
+      assert.match(prompt, /Opened page text:/);
+      assert.match(prompt, /Opened page body says open-page-ok/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_web_search_open",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "open-page-ok [1]" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 },
+      }));
+    }, async ({ bridgeAddress }) => {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Search for bridge open page result and return open-page-ok [1].",
+          tools: [{ type: "web_search_preview" }],
+          store: false,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.output[0].type, "web_search_call");
+      assert.equal(json.output[0].action.type, "search");
+      assert.equal(json.output[1].type, "web_search_call");
+      assert.equal(json.output[1].action.type, "open_page");
+      assert.equal(json.output[1].action.url, `http://127.0.0.1:${pageAddress.port}/open-page`);
+      assert.equal(json.output[1].status, "completed");
+      assert.equal(json.output[2].type, "message");
+      assert.equal(json.metadata.compatibility.local_web_search.opened_count, 1);
+      assert.equal(json.metadata.compatibility.local_web_search.open_failed_count, 0);
+    }, {
+      webSearchProvider: "static",
+      webSearchOpenPages: 1,
+      webSearchStaticResults: [{
+        title: "Bridge Open Page Result",
+        url: `http://127.0.0.1:${pageAddress.port}/open-page`,
+        snippet: "The bridge can open this page.",
+      }],
+    });
+  } finally {
+    await close(pageServer);
+  }
+});
+
 test("POST /v1/responses streams Chat chunks as typed Responses events", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);

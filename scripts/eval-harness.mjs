@@ -503,14 +503,20 @@ function buildSuites(defaultModel) {
           store: false,
         },
         check: ({ json, text }) => {
-          const call = (json.output || []).find((item) => item.type === "web_search_call");
+          const calls = (json.output || []).filter((item) => item.type === "web_search_call");
+          const searchCall = calls.find((item) => item.action?.type === "search");
+          const openPageCall = calls.find((item) => item.action?.type === "open_page");
           const annotations = (json.output || [])
             .flatMap((item) => item.content || [])
             .flatMap((part) => part.annotations || []);
-          return !!call
-            && call.status === "completed"
-            && call.action?.type === "search"
+          const openAttemptCount = (json.metadata?.compatibility?.local_web_search?.opened_count || 0)
+            + (json.metadata?.compatibility?.local_web_search?.open_failed_count || 0);
+          return !!searchCall
+            && searchCall.status === "completed"
+            && !!openPageCall
+            && ["completed", "failed"].includes(openPageCall.status)
             && annotations.some((annotation) => annotation.type === "url_citation" && /^https?:\/\//.test(annotation.url || ""))
+            && openAttemptCount >= 1
             && /web-search-ok/i.test(text);
         },
       },

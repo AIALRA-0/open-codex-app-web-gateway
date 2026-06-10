@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including PDF text-layer extraction and `.docx`/`.xlsx`/`.pptx` OOXML text extraction, local background completion, local background startup reconciliation in unit tests, local Conversations lifecycle and Responses `conversation` replay across create, `/input_tokens`, and `/compact`, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including PDF text-layer extraction and `.docx`/`.xlsx`/`.pptx` OOXML text extraction, local background completion, local background startup reconciliation in unit tests, local Conversations lifecycle and Responses `conversation` replay across create, `/input_tokens`, and `/compact`, local web-search search/open-page/citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `swebench-runner` | Disk-bounded SWE-bench prediction generator for local JSONL subsets; writes official predictions JSONL and compact audit reports outside the repo |
 | `swebench-evaluate` | Guarded wrapper around the official SWE-bench Docker harness; parses scorer artifacts into compact JSON/Markdown reports |
@@ -215,7 +215,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Stale in-progress background responses left by a bridge restart are reconciled
   to explicit failed terminal records instead of remaining stuck forever.
 - Responses `input_file` text extraction works for local file IDs, inline base64 payloads, bounded HTTP(S) file URLs, PDF text layers, and basic `.docx`/`.xlsx`/`.pptx` OOXML document text, with failed/unsupported files surfaced in compatibility metadata.
-- Hosted-tool emulation returns auditable call items and citations for web search.
+- Hosted-tool emulation returns auditable search/open-page call items and citations for web search.
 - Hosted-tool emulation returns auditable call items and citations for file search.
 - Local vector-store file batches accept both OpenAI batch request shapes and remain compatible with file-search retrieval.
 - Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.

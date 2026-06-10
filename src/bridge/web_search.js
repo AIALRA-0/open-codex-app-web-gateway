@@ -50,6 +50,7 @@ async function prepareWebSearchContext(request = {}, config = {}, options = {}) 
 
   try {
     context.results = await runSearchProvider(provider, query, maxResults, config, options);
+    await openSearchResultPages(context, config, options);
     return context;
   } catch (error) {
     context.calls[0].status = "failed";
@@ -108,6 +109,8 @@ function webSearchCompatibility(context) {
       provider: context.provider,
       status: context.calls?.[0]?.status || "completed",
       result_count: context.results?.length || 0,
+      opened_count: context.results?.filter((result) => result.opened?.status === "completed").length || 0,
+      open_failed_count: context.results?.filter((result) => result.opened?.status === "failed").length || 0,
       tool_types: context.tool_types || [],
       ...(context.error ? { error: context.error } : {}),
     },
@@ -138,6 +141,8 @@ function webSearchPrompt(context) {
     `[${index + 1}] ${result.title}`,
     `URL: ${result.url}`,
     `Snippet: ${result.snippet || ""}`,
+    result.opened?.status === "completed" ? `Opened page text:\n${result.opened.text}` : null,
+    result.opened?.status === "failed" ? `Open page error: ${result.opened.error}` : null,
   ].join("\n"));
 
   return [
@@ -153,6 +158,119 @@ async function runSearchProvider(provider, query, maxResults, config, options) {
   if (provider === "static") return staticResults(config).slice(0, maxResults);
   if (provider === "wikipedia") return searchWikipedia(query, maxResults, config, options);
   throw new Error(`unsupported local web search provider: ${provider}`);
+}
+
+async function openSearchResultPages(context, config = {}, options = {}) {
+  const openCount = Math.max(0, Math.min(Number(config.webSearchOpenPages || 0), 5));
+  if (!openCount || !context?.results?.length) return;
+  const candidates = context.results.slice(0, openCount);
+  for (const result of candidates) {
+    const call = {
+      id: prefixedId("ws"),
+      type: "web_search_call",
+      status: "completed",
+      action: {
+        type: "open_page",
+        url: result.url,
+      },
+    };
+    try {
+      const opened = await fetchPageText(result.url, config, options);
+      result.opened = {
+        status: "completed",
+        text: opened.text,
+        content_type: opened.content_type,
+        bytes: opened.bytes,
+        truncated: opened.truncated,
+      };
+    } catch (error) {
+      call.status = "failed";
+      call.error = error.message || "local open_page failed";
+      result.opened = {
+        status: "failed",
+        error: call.error,
+      };
+    }
+    context.calls.push(call);
+  }
+}
+
+async function fetchPageText(value, config = {}, options = {}) {
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("open_page URL is invalid");
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    throw new Error("open_page URL must use http or https");
+  }
+
+  const fetchImpl = options.fetch || globalThis.fetch;
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener?.("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => controller.abort(), config.webSearchTimeoutMs || 10000);
+  try {
+    const response = await fetchImpl(url, {
+      headers: {
+        "accept": "text/html, text/plain;q=0.9, */*;q=0.1",
+        "user-agent": config.webSearchUserAgent || DEFAULT_WEB_SEARCH_USER_AGENT,
+      },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`open_page failed with HTTP ${response.status}`);
+    const contentType = response.headers?.get?.("content-type") || "";
+    const buffer = await readResponseLimited(response, config.webSearchPageMaxBytes || 512 * 1024);
+    const rawText = buffer.toString("utf8").replace(/\u0000/g, "");
+    let text = /^text\/html\b|application\/xhtml\+xml\b/i.test(contentType)
+      ? htmlToText(rawText)
+      : rawText;
+    text = text.replace(/\s+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+    const maxChars = config.webSearchPageMaxTextChars || 12000;
+    const truncated = text.length > maxChars;
+    if (truncated) text = text.slice(0, maxChars);
+    if (!text) throw new Error("open_page returned no extractable text");
+    return {
+      text,
+      content_type: contentType,
+      bytes: buffer.length,
+      truncated,
+    };
+  } catch (error) {
+    if (error.name === "AbortError") throw new Error("open_page timed out");
+    throw error;
+  } finally {
+    options.signal?.removeEventListener?.("abort", abortFromParent);
+    clearTimeout(timeout);
+  }
+}
+
+async function readResponseLimited(response, maxBytes) {
+  const chunks = [];
+  let size = 0;
+  for await (const chunk of response.body) {
+    const buffer = Buffer.from(chunk);
+    size += buffer.length;
+    if (size > maxBytes) throw new Error(`open_page exceeds local limit of ${maxBytes} bytes`);
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+}
+
+function htmlToText(value) {
+  return decodeHtml(String(value || "")
+    .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+    .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+    .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<\/(?:p|div|section|article|main|header|footer|li|tr|h[1-6])>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/[ \t\r\f\v]+/g, " ")
+    .replace(/\n[ \t]+/g, "\n"));
 }
 
 function staticResults(config = {}) {
