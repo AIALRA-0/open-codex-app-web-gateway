@@ -1809,6 +1809,60 @@ test("Responses input_file file_url truncates remote files for Chat compatibilit
   }
 });
 
+test("Responses input_file CSV adds spreadsheet augmentation metadata", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /extraction_method: spreadsheet_csv/);
+    assert.match(prompt, /local_spreadsheet_augmentation: true/);
+    assert.match(prompt, /format: csv/);
+    assert.match(prompt, /row_limit: 1000/);
+    assert.match(prompt, /rows_parsed: 3/);
+    assert.match(prompt, /columns_detected: 3/);
+    assert.match(prompt, /header_row_1: Name \| Score \| Note/);
+    assert.match(prompt, /Ada\t95\tcsv-ok, quoted note/);
+    assert.match(prompt, /Grace\t88\tsecond row/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_file_csv",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "csv-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 24, completion_tokens: 2, total_tokens: 26 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const csv = Buffer.from("Name,Score,Note\nAda,95,\"csv-ok, quoted note\"\nGrace,88,second row\n", "utf8").toString("base64");
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_file", filename: "scores.csv", file_data: `data:text/csv;base64,${csv}` },
+            { type: "input_text", text: "Return csv-ok." },
+          ],
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "csv-ok");
+    assert.equal(json.metadata.compatibility.local_input_files.status, "completed");
+    assert.equal(json.metadata.compatibility.local_input_files.file_count, 1);
+    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+    assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+    assert.equal(json.metadata.compatibility.local_input_files.spreadsheet_extracted_count, 1);
+  });
+});
+
 test("Responses input_file Office documents are extracted for Chat compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -1819,6 +1873,8 @@ test("Responses input_file Office documents are extracted for Chat compatibility
     assert.match(prompt, /extraction_method: ooxml_docx/);
     assert.match(prompt, /extraction_method: ooxml_xlsx/);
     assert.match(prompt, /extraction_method: ooxml_pptx/);
+    assert.match(prompt, /local_spreadsheet_augmentation: true/);
+    assert.match(prompt, /header_row_1: XLSX fixture \| xlsx-ok/);
     assert.doesNotMatch(prompt, /PK\u0003\u0004/);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -1876,6 +1932,7 @@ test("Responses input_file Office documents are extracted for Chat compatibility
     assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 3);
     assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
     assert.equal(json.metadata.compatibility.local_input_files.office_extracted_count, 3);
+    assert.equal(json.metadata.compatibility.local_input_files.spreadsheet_extracted_count, 1);
   });
 });
 

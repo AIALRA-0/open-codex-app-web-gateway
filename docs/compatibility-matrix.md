@@ -362,17 +362,21 @@ Configuration:
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES` | `true` | Disables DeepSeek thinking mode for local input-file requests so visible output remains available under small output budgets |
 
 This is a text extraction compatibility layer, not native OpenAI file input
-processing. Text and code files, CSV/TSV, JSON, Markdown, HTML, XML, and similar
-formats are injected directly. Inline `file_data` must be valid base64. Binary
-PDF text layers are extracted with Poppler `pdftotext` when available. Modern
-Office OOXML files are parsed without new runtime dependencies: `.docx` text is
-read from Word XML parts, `.xlsx` shared strings and worksheet rows are rendered
-as tab-separated text, and `.pptx` slide text is extracted from slide XML. Scanned
-PDF images, OCR, PDF page rendering, legacy binary Office formats, embedded
-Office media, and complex workbook formulas/macros are still reported with
-metadata unless a future parser extracts text safely. Remote `file_url` inputs
-that exceed the byte cap keep the prefix that fits in budget, set
-`truncated: true` in the injected prompt, and increment
+processing. Text and code files, JSON, Markdown, HTML, XML, and similar formats
+are injected directly. Inline `file_data` must be valid base64. Spreadsheet-like
+CSV/TSV files and `.xlsx` sheets get a deterministic local augmentation block:
+the first 1,000 rows per sheet are parsed, row/column counts and the first-row
+header are added, and `spreadsheet_extracted_count` records the path in
+compatibility metadata. Binary PDF text layers are extracted with Poppler
+`pdftotext` when available. Modern Office OOXML files are parsed without new
+runtime dependencies: `.docx` text is read from Word XML parts, `.xlsx` shared
+strings and worksheet rows are rendered through the spreadsheet augmentation,
+and `.pptx` slide text is extracted from slide XML. Scanned PDF images, OCR,
+PDF page rendering, legacy binary Office formats, embedded Office media, and
+complex workbook formulas/macros are still reported with metadata unless a
+future parser extracts text safely. Remote `file_url` inputs that exceed the
+byte cap keep the prefix that fits in budget, set `truncated: true` in the
+injected prompt, and increment
 `metadata.compatibility.local_input_files.truncated_count`. For large files,
 prefer the local `file_search` adapter.
 
@@ -456,7 +460,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
-| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, and basic `.docx`/`.xlsx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
+| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed semantic vector search | Add embedding/vector indexing, file parsers, async batches, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

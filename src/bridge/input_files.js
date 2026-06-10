@@ -7,6 +7,8 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const { stringifyContent } = require("./translator");
 
+const SPREADSHEET_ROW_LIMIT = 1000;
+
 function hasInputFiles(input) {
   return collectInputFileParts(input).length > 0;
 }
@@ -52,6 +54,7 @@ function inputFileCompatibility(context) {
       truncated_count: context.files?.filter((file) => file.truncated).length || 0,
       pdf_extracted_count: context.files?.filter((file) => file.extraction_method === "pdftotext").length || 0,
       office_extracted_count: context.files?.filter((file) => String(file.extraction_method || "").startsWith("ooxml_")).length || 0,
+      spreadsheet_extracted_count: context.files?.filter((file) => isSpreadsheetExtractionMethod(file.extraction_method)).length || 0,
     },
   };
 }
@@ -270,6 +273,9 @@ function extractText(buffer, filename, mediaType, config = {}) {
   if (isOfficeFile(media, extension)) {
     return extractOfficeText(buffer, extension, media, config);
   }
+  if (isDelimitedSpreadsheetFile(media, extension)) {
+    return extractDelimitedSpreadsheetText(buffer, extension, media, config);
+  }
   if (!isTextLike(media, extension, buffer)) {
     return {
       content: "",
@@ -385,9 +391,14 @@ function extractOfficeText(buffer, extension, mediaType, config = {}) {
   }
 
   let text = "";
+  let spreadsheetTruncated = false;
   try {
     if (kind === "docx") text = extractDocxText(zip);
-    else if (kind === "xlsx") text = extractXlsxText(zip);
+    else if (kind === "xlsx") {
+      const spreadsheet = extractXlsxText(zip, config);
+      text = spreadsheet.content;
+      spreadsheetTruncated = spreadsheet.truncated;
+    }
     else if (kind === "pptx") text = extractPptxText(zip);
   } catch (error) {
     return {
@@ -399,7 +410,7 @@ function extractOfficeText(buffer, extension, mediaType, config = {}) {
 
   text = text.replace(/\u0000/g, "").trim();
   const maxChars = config.inputFileMaxTextChars || 200000;
-  const truncated = text.length > maxChars;
+  const truncated = spreadsheetTruncated || text.length > maxChars;
   if (truncated) text = text.slice(0, maxChars);
   if (!text) {
     return {
@@ -440,25 +451,30 @@ function extractPptxText(zip) {
     .join("\n");
 }
 
-function extractXlsxText(zip) {
+function extractXlsxText(zip, config = {}) {
   const sharedStrings = parseSharedStrings(zip.has("xl/sharedStrings.xml") ? zip.text("xl/sharedStrings.xml") : "");
-  return zip.names()
+  const sheets = zip.names()
     .filter((name) => /^xl\/worksheets\/sheet\d+\.xml$/i.test(name))
     .sort(naturalCompare)
     .map((name, index) => {
-      const rows = extractWorksheetRows(zip.text(name), sharedStrings);
-      return rows.length ? `Sheet ${index + 1}:\n${rows.join("\n")}` : "";
+      const rows = extractWorksheetRows(zip.text(name), sharedStrings, SPREADSHEET_ROW_LIMIT + 1);
+      return {
+        name: `Sheet ${index + 1}`,
+        rows: rows.slice(0, SPREADSHEET_ROW_LIMIT),
+        truncatedRows: rows.length > SPREADSHEET_ROW_LIMIT,
+      };
     })
-    .filter(Boolean)
-    .join("\n\n");
+    .filter((sheet) => sheet.rows.length);
+  return formatSpreadsheetSheets(sheets, "xlsx", config);
 }
 
 function parseSharedStrings(xml) {
   return extractXmlBlocks(xml, "si").map((block) => extractTextNodes(block, "t").join(""));
 }
 
-function extractWorksheetRows(xml, sharedStrings) {
-  return extractXmlBlocks(xml, "row").map((row) => {
+function extractWorksheetRows(xml, sharedStrings, maxRows = SPREADSHEET_ROW_LIMIT) {
+  const rows = [];
+  for (const row of extractXmlBlocks(xml, "row")) {
     const cells = [];
     const cellPattern = /<(?:(?:[A-Za-z_][\w.-]*):)?c\b([^>]*)>([\s\S]*?)<\/(?:(?:[A-Za-z_][\w.-]*):)?c>/gi;
     let match;
@@ -477,8 +493,115 @@ function extractWorksheetRows(xml, sharedStrings) {
       }
       cells.push(value);
     }
-    return cells.join("\t").trim();
-  }).filter(Boolean);
+    if (cells.some((cell) => String(cell || "").trim())) rows.push(cells);
+    if (rows.length >= maxRows) break;
+  }
+  return rows;
+}
+
+function extractDelimitedSpreadsheetText(buffer, extension, mediaType, config = {}) {
+  const delimiter = spreadsheetDelimiter(extension, mediaType);
+  const format = delimiter === "\t" ? "tsv" : "csv";
+  const text = buffer.toString("utf8").replace(/^\uFEFF/, "").replace(/\u0000/g, "");
+  const rows = parseDelimitedRows(text, delimiter, SPREADSHEET_ROW_LIMIT + 1)
+    .filter((row) => row.some((cell) => String(cell || "").trim()));
+  const spreadsheet = formatSpreadsheetSheets([{
+    name: "Sheet 1",
+    rows: rows.slice(0, SPREADSHEET_ROW_LIMIT),
+    truncatedRows: rows.length > SPREADSHEET_ROW_LIMIT,
+  }], format, config);
+  return {
+    content: spreadsheet.content,
+    truncated: spreadsheet.truncated,
+    method: `spreadsheet_${format}`,
+    ...(spreadsheet.content ? {} : { error: "local spreadsheet extraction returned no rows" }),
+  };
+}
+
+function parseDelimitedRows(text, delimiter, maxRows) {
+  const rows = [];
+  let row = [];
+  let cell = "";
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (quoted) {
+      if (char === "\"") {
+        if (text[index + 1] === "\"") {
+          cell += "\"";
+          index += 1;
+        } else {
+          quoted = false;
+        }
+      } else {
+        cell += char;
+      }
+      continue;
+    }
+    if (char === "\"") {
+      quoted = true;
+      continue;
+    }
+    if (char === delimiter) {
+      row.push(cell);
+      cell = "";
+      continue;
+    }
+    if (char === "\n" || char === "\r") {
+      row.push(cell);
+      cell = "";
+      rows.push(row);
+      row = [];
+      if (char === "\r" && text[index + 1] === "\n") index += 1;
+      if (rows.length >= maxRows) return rows;
+      continue;
+    }
+    cell += char;
+  }
+  if (cell || row.length) {
+    row.push(cell);
+    rows.push(row);
+  }
+  return rows.slice(0, maxRows);
+}
+
+function formatSpreadsheetSheets(sheets, format, config = {}) {
+  const sections = [];
+  let rowTruncated = false;
+  for (const [index, sheet] of sheets.entries()) {
+    const rows = sheet.rows || [];
+    if (!rows.length) continue;
+    rowTruncated = rowTruncated || Boolean(sheet.truncatedRows);
+    const columnCount = rows.reduce((max, row) => Math.max(max, row.length), 0);
+    const header = rows[0] || [];
+    const title = sheet.name || `Sheet ${index + 1}`;
+    sections.push([
+      `${title}:`,
+      "local_spreadsheet_augmentation: true",
+      `format: ${format}`,
+      `row_limit: ${SPREADSHEET_ROW_LIMIT}`,
+      `rows_parsed: ${rows.length}`,
+      `columns_detected: ${columnCount}`,
+      header.length ? `header_row_1: ${header.map(formatSpreadsheetCell).join(" | ")}` : "header_row_1: none",
+      sheet.truncatedRows ? "truncated_rows: true" : null,
+      "rows:",
+      ...rows.map((row, rowIndex) => `${rowIndex + 1}: ${row.map(formatSpreadsheetCell).join("\t")}`),
+    ].filter(Boolean).join("\n"));
+  }
+
+  let content = sections.join("\n\n");
+  const maxChars = config.inputFileMaxTextChars || 200000;
+  const charTruncated = content.length > maxChars;
+  if (charTruncated) content = content.slice(0, maxChars);
+  return {
+    content,
+    truncated: rowTruncated || charTruncated,
+  };
+}
+
+function formatSpreadsheetCell(value) {
+  const text = String(value || "").replace(/[\r\n\t]+/g, " ").trim();
+  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
 }
 
 function readZipEntries(buffer, options = {}) {
@@ -630,6 +753,23 @@ function officeKind(extension, mediaType = "") {
   return "";
 }
 
+function isDelimitedSpreadsheetFile(mediaType, extension) {
+  const media = String(mediaType || "").split(";")[0].trim().toLowerCase();
+  return [".csv", ".tsv", ".iif"].includes(extension)
+    || ["text/csv", "application/csv", "text/tsv", "text/tab-separated-values", "text/x-iif", "application/x-iif"].includes(media);
+}
+
+function spreadsheetDelimiter(extension, mediaType = "") {
+  const media = String(mediaType || "").split(";")[0].trim().toLowerCase();
+  return extension === ".tsv" || extension === ".iif" || media === "text/tsv" || media === "text/tab-separated-values"
+    ? "\t"
+    : ",";
+}
+
+function isSpreadsheetExtractionMethod(method) {
+  return ["ooxml_xlsx", "spreadsheet_csv", "spreadsheet_tsv"].includes(String(method || ""));
+}
+
 function isTextLike(mediaType, extension, buffer) {
   if (mediaType.startsWith("text/")) return true;
   if ([
@@ -637,8 +777,10 @@ function isTextLike(mediaType, extension, buffer) {
     "application/javascript",
     "application/typescript",
     "application/xml",
+    "application/csv",
     "application/x-ndjson",
     "application/x-yaml",
+    "application/x-iif",
     "application/yaml",
     "application/toml",
   ].includes(mediaType)) return true;
@@ -646,7 +788,7 @@ function isTextLike(mediaType, extension, buffer) {
     ".txt", ".md", ".markdown", ".json", ".jsonl", ".ndjson", ".js", ".mjs", ".cjs",
     ".ts", ".tsx", ".jsx", ".css", ".html", ".xml", ".csv", ".tsv", ".py", ".rb",
     ".go", ".rs", ".java", ".c", ".cc", ".cpp", ".h", ".hpp", ".cs", ".php",
-    ".sh", ".bash", ".zsh", ".sql", ".yaml", ".yml", ".toml", ".ini", ".log",
+    ".sh", ".bash", ".zsh", ".sql", ".yaml", ".yml", ".toml", ".ini", ".log", ".iif",
   ].includes(extension)) return true;
   return printableRatio(buffer.subarray(0, Math.min(buffer.length, 4096))) > 0.8;
 }

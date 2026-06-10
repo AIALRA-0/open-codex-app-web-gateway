@@ -166,6 +166,7 @@ npm run eval:bridge -- --case chat-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-logprobs --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-url --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

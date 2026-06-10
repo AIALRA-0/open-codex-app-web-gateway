@@ -435,6 +435,30 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_input_files?.office_extracted_count === 3,
       },
       {
+        id: "responses-input-file-spreadsheet",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "bridge-input-spreadsheet.csv",
+                file_data: `data:text/csv;base64,${Buffer.from("Name,Score,Answer\nAda,95,spreadsheet-input-ok\nGrace,88,other\n", "utf8").toString("base64")}`,
+              },
+              { type: "input_text", text: "Using the spreadsheet input file, return exactly this text and nothing else: spreadsheet-input-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => /spreadsheet-input-ok/i.test(text)
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0
+          && json.metadata?.compatibility?.local_input_files?.spreadsheet_extracted_count === 1,
+      },
+      {
         id: "responses-logprobs",
         mode: "responses",
         request: {

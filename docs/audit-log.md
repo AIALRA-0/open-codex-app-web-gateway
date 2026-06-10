@@ -1985,3 +1985,57 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq82b356`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Deterministic Spreadsheet Input Augmentation
+
+- Closed part of the `input_file` spreadsheet parity gap for Chat-only
+  providers. CSV/TSV inputs and `.xlsx` worksheets now receive deterministic
+  local spreadsheet context instead of only raw text or unannotated worksheet
+  rows.
+- The local adapter now:
+  - parses CSV/TSV/IIF-style delimited files with quoted-cell support;
+  - parses `.xlsx` worksheet rows through the existing bounded OOXML reader;
+  - keeps up to the first 1,000 rows per sheet;
+  - injects row limit, parsed row count, detected column count, first-row
+    header metadata, and normalized row values into the upstream Chat prompt;
+  - sets `truncated_rows: true` and `truncated: true` when row or text caps are
+    reached;
+  - reports `metadata.compatibility.local_input_files.spreadsheet_extracted_count`
+    for CSV/TSV and `.xlsx` extraction paths.
+- Extended the live bridge regression harness with
+  `responses-input-file-spreadsheet`, which sends a CSV `input_file` payload
+  through `/v1/responses` and verifies the running DeepSeek-backed bridge can
+  recover the exact spreadsheet answer.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/guides/file-inputs#how-spreadsheet-augmentation-works`,
+  which documents spreadsheet-specific processing for `.xlsx`, `.xls`, `.csv`,
+  `.tsv`, and `.iif`, including parsing up to the first 1,000 rows per sheet
+  with summary/header metadata.
+- Updated `docs/compatibility-matrix.md`, `docs/evaluation-plan.md`, and
+  `docs/deployment.md`.
+- Remaining known gap: this is deterministic local metadata, not OpenAI's
+  model-generated spreadsheet summaries or full spreadsheet semantics. Legacy
+  binary Excel, formulas/macros, charts, embedded media, merged cells, workbook
+  relationships, and richer semantic summarization still require future work.
+- Verified:
+  - `node --check src/bridge/input_files.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Targeted local `input_file` server tests passed 4/4, including CSV
+    spreadsheet augmentation and `.xlsx` spreadsheet metadata.
+  - `npm test`: 69/69 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-input-file-spreadsheet` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1259 ms, output `spreadsheet-input-ok`, and
+    total usage 202 tokens.
+  - Full live `bridge-regression` passed 24/24 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1715 ms, P95 latency 3794 ms, and total usage
+    7285 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq82ko1e`, reload persistence
+    confirmed, console errors 0, warnings 0.
