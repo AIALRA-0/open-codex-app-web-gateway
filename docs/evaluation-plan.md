@@ -42,6 +42,7 @@ larger agent evaluations.
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
 | `bridge-regression` | Protocol smoke plus Chat passthrough, stored Chat lifecycle, Responses SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
+| `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
 Useful commands:
 
@@ -52,6 +53,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-functio
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
 npm run bench:code -- --timeout-ms 180000
+npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 ```
 
 ## Current Coding Benchmark
@@ -70,6 +72,18 @@ The current `micro` suite covers:
 This is not a substitute for SWE-bench. It is a cheap pass/fail sentinel for the
 same broad loop: issue text plus code context, generated patch, test execution,
 and structured scoring.
+
+## Current Stability Soak
+
+`scripts/soak-test-bridge.mjs` is the bounded stability harness. It repeatedly
+creates stored Responses turns through the live bridge, verifies each response
+can expose `/input_items`, deletes the stored responses, and records state
+directory growth before creation, after creation, and after cleanup.
+
+The current default suite uses short deterministic marker prompts so it can run
+often without large token spend. Longer soak runs should use `--iterations`,
+`--output`, and a state directory outside the repository if they are intended as
+release evidence rather than a quick regression check.
 
 4. Resource and stability
 

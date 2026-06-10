@@ -161,3 +161,22 @@ Open follow-ups:
   `http://127.0.0.1:12912`:
   `npm run bench:code -- --timeout-ms 180000` passed 3/3, pass rate 1.0,
   average latency 27595 ms, P95 latency 30290 ms, total usage 5751 tokens.
+
+## 2026-06-10 Bridge Soak Stability Harness
+
+- Added `scripts/soak-test-bridge.mjs` and `npm run soak:bridge`.
+- The harness repeatedly creates stored Responses turns, checks
+  `/v1/responses/{response_id}/input_items`, deletes stored responses, and
+  compares state directory file and byte counts before creation, after
+  creation, and after cleanup.
+- The report records success rate, cleanup failures, average and P95 latency,
+  token usage, per-turn response IDs, and optional JSON output for release
+  evidence.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run soak:bridge -- --iterations 5 --timeout-ms 180000` passed 5/5,
+  pass rate 1.0, cleanup failures 0, average latency 1593 ms, P95 latency
+  1716 ms, total usage 370 tokens.
+- State directory baseline was 10 files and 23796 bytes. Creation added 5 files
+  and 13151 bytes. Cleanup returned the directory to the same 10 files and
+  23796 bytes, for zero residual file and byte growth after deletion.
