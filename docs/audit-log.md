@@ -5322,3 +5322,54 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 16 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Core UI page-switch smoke coverage
+
+- Extended the default `scripts/ui-smoke.mjs` browser workflow with core
+  sidebar page switching:
+  - restores the sidebar when earlier controls hide it;
+  - opens the Plugins, Automation, and Codex Mobile views;
+  - validates page-specific main-content text instead of generic body text, so
+    sidebar labels cannot produce false positives;
+  - returns to New Chat and verifies the composer is usable before continuing
+    project/upload and model-turn checks.
+- Tightened stop/retry control discovery to short accessible button labels so
+  older conversation titles containing words like `stop` no longer pollute the
+  recorded control list.
+- Updated deployment and evaluation docs:
+  - default UI smoke now documents plugins/automation/mobile page switching and
+    return-to-chat coverage;
+  - remaining UI gaps are saved project open, generated artifact display, and
+    completed-turn retry/regenerate coverage when that action is visible.
+- Verification:
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - `git diff --check`: passed.
+  - Default UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8pcmcg`: core page switches visited `plugins`, `automation`,
+    and `mobile`, `returned_to_new_chat:true`, project dialog open/cancel,
+    browser-upload fixture write and filesystem verification, project
+    writable-root add/clear, prompt submit, reload persistence, short-label
+    stop/retry controls `[]`, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T23-30-59-488Z.png`.
+  - Active UI smoke also passed with marker `ui-smoke-mq8pk1dv`, including the
+    same core page switches plus active stop click with control name `停止`,
+    `stop_cleared:true`, recovery marker occurrences 2, console errors 0,
+    warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T23-36-45-571Z.png`.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1155 ms, P95 latency 1214 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 607 runtime candidates,
+    selected 59 old UI screenshots by retention policy, deleted 0, selected
+    4744738 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 37 GB available; repository checkout
+    is 52 MB, `state/` is 5.3 MB, `output/` is 9.1 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 17 MB.
+  - No API keys, account credentials, or local secret files were committed.

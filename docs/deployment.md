@@ -211,16 +211,17 @@ run. If the login page is visible, it reads credentials from
 in the local environment. It writes screenshots under the ignored
 `output/playwright/` directory. The smoke also opens/cancels the project dialog,
 verifies the host browser-upload bridge by writing a small fixture under
-`state/browser-uploads/`, adds and clears a project writable root, and records
-visible stop/retry controls after a model turn. The current
+`state/browser-uploads/`, adds and clears a project writable root, switches
+through the plugins, automation, and mobile views before returning to new chat,
+and records visible stop/retry controls after a model turn. The current
 `--exercise-active-controls` option runs a longer browser path that actively
 clicks the visible stop control during generation, records whether the
 interrupted turn exposes retry/regenerate/continue, and sends a recovery prompt.
 The `opencodexapp.aialra.online` nginx template proxies directly to the web service;
 the optional login proxy service is not in the public request path unless nginx
 is changed to target port `12923`. Broader automated UI coverage still needs
-saved project open, generated artifact display, full page switching checks, and
-a dedicated completed-turn retry/regenerate path when that UI action is visible.
+saved project open, generated artifact display, and a dedicated completed-turn
+retry/regenerate path when that UI action is visible.
 
 ## Runtime Retention
 

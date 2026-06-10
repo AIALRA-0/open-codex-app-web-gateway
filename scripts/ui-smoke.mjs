@@ -169,6 +169,18 @@ async function runWorkflow(page, config) {
     });
   }
 
+  async function ensureSidebarVisible() {
+    const plugins = page.getByRole("button", { name: /插件|Plugins/i }).first();
+    if (await isVisible(plugins, 500)) return true;
+    const toggle = page.getByRole("button", {
+      name: /显示\/隐藏侧边栏|显示边栏|隐藏边栏|Show\/hide sidebar|Show sidebar|Hide sidebar/i,
+    }).first();
+    if (await clickOptional(toggle, { timeout: 3000, settleMs: 700 })) {
+      return await isVisible(plugins, 3000);
+    }
+    return false;
+  }
+
   async function loginIfNeeded() {
     const loginForm = page.locator('form[action="/login"], input[name="username"], input[name="password"]');
     if (!(await isVisible(loginForm))) {
@@ -200,6 +212,26 @@ async function runWorkflow(page, config) {
     await page.keyboard.press("Control+A");
     await page.keyboard.type(text);
     return editor;
+  }
+
+  async function mainText() {
+    return await page.evaluate(() => {
+      const main = document.querySelector("main") || document.body;
+      return main?.innerText || "";
+    });
+  }
+
+  async function waitForMainText(pattern, timeout = 10000) {
+    await page.waitForFunction((source) => {
+      const regex = new RegExp(source, "i");
+      const main = document.querySelector("main") || document.body;
+      return regex.test(main?.innerText || "");
+    }, pattern.source, { timeout });
+  }
+
+  async function mainSnippet(max = 240) {
+    const text = await mainText();
+    return text.replace(/\s+/g, " ").trim().slice(0, max);
   }
 
   async function markerCount() {
@@ -330,6 +362,7 @@ async function runWorkflow(page, config) {
 
   async function exerciseProjectDialog() {
     await closeTransientOverlays();
+    if (!(await ensureSidebarVisible())) throw new Error("sidebar is not visible before opening project dialog");
     const projectButton = page.getByRole("button", { name: /项目|Projects/i }).first();
     await projectButton.click({ timeout: 5000 });
     const newBlankProject = page.getByRole("menuitem", { name: /新建空白项目|New blank project|New project/i }).first();
@@ -347,6 +380,44 @@ async function runWorkflow(page, config) {
     await closeTransientOverlays();
 
     return { project_dialog_opened: true, existing_folder_menu_visible: existingFolderVisible, project_name: projectName };
+  }
+
+  async function exerciseCorePageNavigation() {
+    if (!(await ensureSidebarVisible())) throw new Error("sidebar is not visible before page navigation");
+    const visited = [];
+    const targets = [
+      {
+        id: "plugins",
+        button: /插件|Plugins/i,
+        expected: /让 Codex 按你的方式工作|搜索插件|更多插件|work.*your way|Search plugins|More plugins/i,
+      },
+      {
+        id: "automation",
+        button: /自动化|Automation/i,
+        expected: /按计划或按需运行聊天|创建首个自动化|每日简报|run chats on a schedule|Create.*automation|Daily brief/i,
+      },
+      {
+        id: "mobile",
+        button: /Codex 移动版|Codex mobile/i,
+        expected: /扫描二维码|ChatGPT 应用|iOS|安卓|Android|Scan.*QR/i,
+      },
+    ];
+
+    for (const target of targets) {
+      await closeTransientOverlays();
+      const control = page.getByRole("button", { name: target.button }).first();
+      await control.waitFor({ state: "visible", timeout: 5000 });
+      await control.click({ timeout: 5000 });
+      await waitForMainText(target.expected, 10000);
+      visited.push({ id: target.id, snippet: await mainSnippet() });
+    }
+
+    await closeTransientOverlays();
+    const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
+    await newChat.click({ timeout: 5000 });
+    await findEditor();
+    await waitForMainText(/我们该做什么|What should we/i, 10000);
+    return { page_switches: visited, returned_to_new_chat: true };
   }
 
   async function exerciseHostProjectAndUploadServices() {
@@ -447,6 +518,8 @@ async function runWorkflow(page, config) {
       await closeTransientOverlays();
     });
 
+    await recordStep("exercise core page navigation", exerciseCorePageNavigation);
+
     await recordStep("exercise project dialog and host upload services", async () => {
       const dialog = await exerciseProjectDialog();
       const hostServices = await exerciseHostProjectAndUploadServices();
@@ -470,7 +543,7 @@ async function runWorkflow(page, config) {
     });
 
     await recordStep("discover stop and retry controls", async () => {
-      const controls = await visibleButtonNames(/停止|Stop|取消|Cancel|重试|Retry|重新生成|Regenerate|继续|Continue/i);
+      const controls = await visibleButtonNames(/停止|Stop|取消|Cancel|重试|Retry|重新生成|Regenerate|继续|Continue/i, { maxNameLength: 80 });
       return { controls };
     });
 
