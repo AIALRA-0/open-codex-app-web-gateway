@@ -152,6 +152,46 @@ test("POST /v1/responses forwards service_tier and preserves provider tier", asy
   });
 });
 
+test("POST /v1/responses maps Chat max_completion_tokens alias", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 7);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_max_completion_alias",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "token alias ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check max token alias.",
+        max_completion_tokens: 7,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "token alias ok");
+    assert.deepEqual(json.metadata.compatibility.max_completion_tokens, {
+      source: "max_completion_tokens",
+      target: "max_tokens",
+      value: 7,
+      forwarded: true,
+      reason: "chat_alias",
+    });
+  });
+});
+
 test("POST /v1/responses filters stream_options for non-streaming requests", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);

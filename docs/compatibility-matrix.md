@@ -61,6 +61,7 @@ implementations for those tools.
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
+| `max_completion_tokens` | configured max token field | Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence and conflicts are recorded in `metadata.compatibility.max_completion_tokens` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
 | `stream_options` with `stream:true` | `stream_options` | Direct; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage |

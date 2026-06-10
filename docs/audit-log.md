@@ -1145,3 +1145,36 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7w0j6g` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Chat Max Completion Token Alias
+
+- Used the current OpenAI Chat Completions OpenAPI schema to confirm
+  `max_completion_tokens` is the current Chat-side token limit parameter while
+  Responses uses `max_output_tokens`:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+- Added `/v1/responses` request compatibility for Chat-native token limits:
+  - when `max_output_tokens` is absent, `max_completion_tokens` is accepted as
+    a Chat-native alias and forwarded to the configured upstream token field
+    (`CODEXCOMPAT_MAX_TOKENS_FIELD`, default `max_tokens`);
+  - when both fields are present and differ, `max_output_tokens` takes
+    precedence and the ignored Chat alias is recorded in
+    `metadata.compatibility.max_completion_tokens`;
+  - alias forwarding is also recorded in compatibility metadata so callers can
+    audit which request field controlled the upstream token limit.
+- Updated `docs/compatibility-matrix.md` with the new request mapping row.
+- Added regression coverage for:
+  - translator alias forwarding and conflict handling;
+  - mock server upstream request shape and final metadata preservation.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `npm test`: 50/50 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1724 ms, P95 latency 3880 ms, total usage 2195 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7wc1mb` appeared before reload and after reload, console errors
+    0, warnings 0.

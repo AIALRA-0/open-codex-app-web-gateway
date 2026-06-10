@@ -143,6 +143,36 @@ test("maps Responses output logprobs request to Chat logprobs parameters", () =>
   assert.equal(compatibility.logprobs, "chat_logprobs");
 });
 
+test("maps Chat max_completion_tokens alias to configured upstream token field", () => {
+  const aliasOnly = responsesToChatRequest({
+    model: "mock-model",
+    input: "Use Chat token alias.",
+    max_completion_tokens: 17,
+  });
+  assert.equal(aliasOnly.chat.max_tokens, 17);
+  assert.deepEqual(aliasOnly.compatibility.max_completion_tokens, {
+    source: "max_completion_tokens",
+    target: "max_tokens",
+    value: 17,
+    forwarded: true,
+    reason: "chat_alias",
+  });
+
+  const conflict = responsesToChatRequest({
+    model: "mock-model",
+    input: "Prefer Responses token limit.",
+    max_output_tokens: 11,
+    max_completion_tokens: 22,
+  }, [], { maxTokensField: "max_completion_tokens" });
+  assert.equal(conflict.chat.max_completion_tokens, 11);
+  assert.deepEqual(conflict.compatibility.max_completion_tokens, {
+    source: "max_completion_tokens",
+    value: 22,
+    forwarded: false,
+    reason: "max_output_tokens_precedence",
+  });
+});
+
 test("requests streaming usage from Chat stream options by default", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "mock-model",

@@ -315,8 +315,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const logprobsRequested = shouldRequestChatLogprobs(request);
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
 
-  const maxTokensField = options.maxTokensField || "max_tokens";
-  if (request.max_output_tokens != null) chat[maxTokensField] = request.max_output_tokens;
+  const maxTokensCompatibility = mapMaxTokens(request, chat, options);
 
   const toolChoice = mapToolChoice(request.tool_choice);
   if (tools.length) {
@@ -349,7 +348,37 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
+      ...(maxTokensCompatibility ? { max_completion_tokens: maxTokensCompatibility } : {}),
     },
+  };
+}
+
+function mapMaxTokens(request, chat, options = {}) {
+  const maxTokensField = options.maxTokensField || "max_tokens";
+  if (request.max_output_tokens != null) {
+    chat[maxTokensField] = request.max_output_tokens;
+    if (
+      request.max_completion_tokens != null
+      && request.max_completion_tokens !== request.max_output_tokens
+    ) {
+      return {
+        source: "max_completion_tokens",
+        value: request.max_completion_tokens,
+        forwarded: false,
+        reason: "max_output_tokens_precedence",
+      };
+    }
+    return null;
+  }
+
+  if (request.max_completion_tokens == null) return null;
+  chat[maxTokensField] = request.max_completion_tokens;
+  return {
+    source: "max_completion_tokens",
+    target: maxTokensField,
+    value: request.max_completion_tokens,
+    forwarded: true,
+    reason: "chat_alias",
   };
 }
 
