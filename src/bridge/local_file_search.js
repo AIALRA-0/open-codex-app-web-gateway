@@ -383,7 +383,8 @@ class LocalFileSearchStore {
   }
 
   searchVectorStore(storeId, body = {}) {
-    if (!this.getVectorStore(storeId)) return null;
+    const store = this.touchVectorStore(storeId);
+    if (!store) return null;
     const queries = normalizeSearchQueries(body.query || "");
     const query = queries[0] || "";
     const maxResults = normalizeSearchMaxResults(body.max_num_results ?? body.limit);
@@ -450,8 +451,10 @@ class LocalFileSearchStore {
       .map((item) => item.vector_store_file)
       .filter(Boolean);
     const bytes = attached.reduce((sum, item) => sum + (item.usage_bytes || 0), 0);
+    const expired = isVectorStoreExpired(store);
     return {
       ...store,
+      status: expired ? "expired" : (store.status || "completed"),
       bytes,
       usage_bytes: bytes,
       file_counts: {
@@ -462,6 +465,22 @@ class LocalFileSearchStore {
         total: attached.length,
       },
     };
+  }
+
+  touchVectorStore(storeId) {
+    const record = this.readJson(this.vectorStoreJsonPath(storeId));
+    const store = record?.vector_store;
+    if (!store) return null;
+    if (isVectorStoreExpired(store)) throw vectorStoreExpiredError(storeId, store);
+    const now = nowSeconds();
+    const updated = {
+      ...store,
+      status: store.status === "expired" ? "completed" : (store.status || "completed"),
+      last_active_at: now,
+    };
+    if (updated.expires_after) updated.expires_at = expiresAtFromPolicy(updated.expires_after, now);
+    this.writeJson(this.vectorStoreJsonPath(storeId), { ...record, vector_store: updated });
+    return this.hydrateVectorStore(storeId);
   }
 
   filesDir() {
@@ -1323,6 +1342,21 @@ function normalizeExpiresAfter(value) {
 function expiresAtFromPolicy(policy, anchorTimestamp) {
   const days = Math.max(1, Math.min(Number(policy?.days || 1), 365));
   return Math.trunc(anchorTimestamp || nowSeconds()) + Math.trunc(days) * 86400;
+}
+
+function isVectorStoreExpired(store, now = nowSeconds()) {
+  return Number.isInteger(store?.expires_at) && store.expires_at <= now;
+}
+
+function vectorStoreExpiredError(storeId, store) {
+  const error = new Error(`vector store expired: ${storeId}`);
+  error.status = 400;
+  error.code = "vector_store_expired";
+  error.param = "vector_store_id";
+  error.type = "invalid_request_error";
+  error.expires_at = store?.expires_at;
+  error.last_active_at = store?.last_active_at;
+  return error;
 }
 
 function normalizeBatchFiles(body = {}) {

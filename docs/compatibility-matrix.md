@@ -216,8 +216,8 @@ under the configured bridge state directory, not in Git.
 | `GET /v1/files/{file_id}/content` | Implemented | Returns stored text content |
 | `DELETE /v1/files/{file_id}` | Implemented | Deletes the file and detaches it from all local vector stores |
 | `POST /v1/vector_stores` | Implemented | Creates a local vector-store record with `file_counts` and metadata |
-| `GET /v1/vector_stores` | Implemented | Lists local vector stores with pagination |
-| `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata and live file counts |
+| `GET /v1/vector_stores` | Implemented | Lists local vector stores with pagination; expired stores are marked `status:"expired"` |
+| `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata, live file counts, and expired status when `expires_at` is in the past |
 | `POST /v1/vector_stores/{vector_store_id}` | Implemented | Updates local vector-store `name`, `metadata`, and `expires_after`; computes `expires_at` from the local `last_active_at` timestamp |
 | `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |
 | `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering and validates `chunking_strategy` |
@@ -230,7 +230,7 @@ under the configured bridge state directory, not in Git.
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with pagination and `filter` by file status |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns the completed batch unless a future async batch is still `in_progress`, in which case it is marked `cancelled` |
-| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Hybrid local keyword + hashed-semantic chunk search with string or array `query`, `search_queries`, `matched_queries`, `max_num_results` default 10 / max 50, chunk metadata, static chunk overlap, ranking options, and OpenAI-style attribute filters |
+| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Hybrid local keyword + hashed-semantic chunk search with string or array `query`, `search_queries`, `matched_queries`, `max_num_results` default 10 / max 50, chunk metadata, static chunk overlap, ranking options, OpenAI-style attribute filters, `last_active_at` refresh, and `400 vector_store_expired` for expired stores |
 
 ## Containers Endpoint Coverage
 
@@ -418,6 +418,9 @@ hybrid keyword plus hashed-semantic search over uploaded text. The adapter:
 - consumes one shared `max_tool_calls` budget slot per vector-store search when
   that Responses field is present;
 - annotates final message text with `file_citation` entries;
+- refreshes `last_active_at` and recomputes `expires_at` whenever a vector store
+  is searched, and fails closed with `vector_store_expired` when a requested
+  store has passed its expiration time;
 - supports OpenAI-style attribute filters over file metadata and
   vector-store-file attributes, including comparison filters such as
   `{type:"eq",key:"suite",value:"x"}`, compound `and`/`or` filters,

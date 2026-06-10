@@ -2347,3 +2347,46 @@ Open follow-ups:
     `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
     `has_provider_key:true`.
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+
+## 2026-06-10 Local Vector Store Expiration Enforcement
+
+- Closed a vector-store lifecycle compatibility gap where local vector stores
+  stored `expires_after` / `expires_at` but searches did not refresh
+  `last_active_at`, and expired stores could still be used.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/assistants/tools/file-search#managing-costs-with-expiration-policies`,
+  which says vector-store expiration policies can be set on create/update,
+  `last_active_at` is the last time a vector store was part of a run, and runs
+  fail when a vector store expires.
+- Local vector-store search now:
+  - refreshes `last_active_at` whenever a direct vector-store search or
+    Responses `file_search` uses the store;
+  - recomputes `expires_at` from the configured `expires_after` policy after
+    each successful search;
+  - marks expired stores as `status:"expired"` on get/list for diagnosis;
+  - fails closed with `400 vector_store_expired` when an expired store is used
+    for direct search or Responses `file_search`.
+- Updated the live vector-store lifecycle eval to re-fetch the store after
+  searches and assert refreshed `last_active_at` / `expires_at`.
+- Updated the compatibility matrix and evaluation plan.
+- Verified:
+  - `node --check` passed for `src/bridge/local_file_search.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Targeted local file-search/vector-store tests passed 3/3, including direct
+    expired search and Responses `file_search` expired-store failure.
+  - `npm test`: 73/73 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `vector-store-lifecycle` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 145 ms, with `search_results:4` and
+    `semantic_search_results:1`.
+  - Full live `bridge-regression` passed 25/25 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1707 ms, P95 latency 4045 ms, and total usage
+    7710 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq854pt9`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run prune:runtime -- --dry-run` scanned 214 runtime candidates,
+    selected 0, deleted 0, and reported 0 errors.

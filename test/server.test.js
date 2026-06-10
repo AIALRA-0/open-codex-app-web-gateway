@@ -25,6 +25,31 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function updateVectorStoreTimestampsForTest(stateDir, storeId, { lastActiveAt, expiresAt }) {
+  const storePath = path.join(stateDir, "local-file-search", "vector_stores", storeId, "store.json");
+  const record = JSON.parse(fs.readFileSync(storePath, "utf8"));
+  record.vector_store.last_active_at = lastActiveAt;
+  record.vector_store.expires_at = expiresAt;
+  fs.writeFileSync(storePath, `${JSON.stringify(record, null, 2)}\n`);
+  return { last_active_at: lastActiveAt, expires_at: expiresAt };
+}
+
+function ageVectorStoreForTest(stateDir, storeId) {
+  const now = Math.floor(Date.now() / 1000);
+  return updateVectorStoreTimestampsForTest(stateDir, storeId, {
+    lastActiveAt: now - 2 * 86400,
+    expiresAt: now + 86400,
+  });
+}
+
+function expireVectorStoreForTest(stateDir, storeId) {
+  const now = Math.floor(Date.now() / 1000);
+  return updateVectorStoreTimestampsForTest(stateDir, storeId, {
+    lastActiveAt: now - 3 * 86400,
+    expiresAt: now - 2 * 86400,
+  });
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -1754,7 +1779,7 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: "provider should not be called" }));
-  }, async ({ bridgeAddress }) => {
+  }, async ({ bridgeAddress, stateDir }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const fileAResponse = await fetch(`${baseUrl}/v1/files`, {
       method: "POST",
@@ -1805,6 +1830,7 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     assert.deepEqual(updatedStore.metadata, { suite: "vector-update" });
     assert.deepEqual(updatedStore.expires_after, { anchor: "last_active_at", days: 3 });
     assert.ok(Number.isInteger(updatedStore.expires_at));
+    const agedStore = ageVectorStoreForTest(stateDir, vectorStore.id);
 
     const globalBatchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
       method: "POST",
@@ -1902,6 +1928,39 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     });
     assert.equal(search.status, 200);
     assert.equal((await search.json()).data[0].file_id, fileB.id);
+
+    const activeAfterSearchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    assert.equal(activeAfterSearchResponse.status, 200);
+    const activeAfterSearch = await activeAfterSearchResponse.json();
+    assert.ok(activeAfterSearch.last_active_at > agedStore.last_active_at);
+    assert.ok(activeAfterSearch.expires_at > agedStore.expires_at);
+
+    expireVectorStoreForTest(stateDir, vectorStore.id);
+    const expiredStoreResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    assert.equal(expiredStoreResponse.status, 200);
+    const expiredStore = await expiredStoreResponse.json();
+    assert.equal(expiredStore.status, "expired");
+
+    const expiredSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ query: "batch-per-file-ok" }),
+    });
+    assert.equal(expiredSearch.status, 400);
+    assert.match(await expiredSearch.text(), /vector_store_expired|expired/);
+
+    const expiredResponse = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use file search for batch-per-file-ok.",
+        tools: [{ type: "file_search", vector_store_ids: [vectorStore.id] }],
+        store: false,
+      }),
+    });
+    assert.equal(expiredResponse.status, 400);
+    assert.match(await expiredResponse.text(), /vector_store_expired|expired/);
 
     const cancel = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/cancel`, {
       method: "POST",

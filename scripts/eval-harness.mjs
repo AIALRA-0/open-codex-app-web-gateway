@@ -742,11 +742,13 @@ function buildSuites(defaultModel) {
             static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
           },
         },
-        check: ({ store, updatedStore, attached, updatedFile, content, search, semanticSearch }) => store?.object === "vector_store"
+        check: ({ store, updatedStore, refreshedStore, attached, updatedFile, content, search, semanticSearch }) => store?.object === "vector_store"
           && updatedStore?.name === "bridge-vector-lifecycle-updated"
           && updatedStore?.metadata?.suite === "vector-lifecycle"
           && updatedStore?.expires_after?.days === 7
           && Number.isInteger(updatedStore?.expires_at)
+          && refreshedStore?.last_active_at >= updatedStore?.last_active_at
+          && refreshedStore?.expires_at >= updatedStore?.expires_at
           && attached?.object === "vector_store.file"
           && attached?.chunking_strategy?.static?.max_chunk_size_tokens === 100
           && updatedFile?.attributes?.suite === "vector-lifecycle-updated"
@@ -1462,10 +1464,20 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
     }
     const semanticSearch = JSON.parse(semanticSearchBody);
 
+    const refreshedStore = await getJson(`${baseUrl}/v1/vector_stores/${store.id}`);
+    if (!refreshedStore.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: refreshedStore.status,
+        error: truncate(refreshedStore.body),
+      });
+    }
+
     const ok = !!testCase.check({
       file,
       store,
       updatedStore,
+      refreshedStore: refreshedStore.json,
       attached,
       updatedFile,
       content: content.json,

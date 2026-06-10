@@ -226,6 +226,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Hosted-tool emulation returns auditable call items and citations for file search.
 - Local vector-store file batches accept both OpenAI batch request shapes and remain compatible with file-search retrieval.
 - Local vector-store files honor static `chunking_strategy` limits and expose chunk metadata through file content and search results.
+- Local vector stores refresh `last_active_at` / `expires_at` when searched and
+  fail closed with `vector_store_expired` once their expiration policy is past.
 - Local file-search honors `ranking_options.score_threshold` and preserves ranker metadata in search/call audit output.
 - Local file-search accepts vector-store search query arrays and emits multiple `file_search_call.queries` with per-result `matched_queries`.
 - Local file-search accepts comparison and compound attribute filters, including
