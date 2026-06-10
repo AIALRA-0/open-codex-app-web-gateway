@@ -3778,6 +3778,8 @@ function proxyResponseHeaders(upstream) {
     "content-type": contentType,
     "cache-control": "no-store",
   };
+  const requestId = upstream.headers.get("x-request-id");
+  if (requestId) headers["x-request-id"] = requestId;
   if (contentType.includes("text/event-stream")) {
     headers.connection = "keep-alive";
     headers["x-accel-buffering"] = "no";
@@ -4880,7 +4882,13 @@ function makeCaptureResponse() {
       this.headersSent = true;
     },
     write(chunk) {
-      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      if (Buffer.isBuffer(chunk)) {
+        chunks.push(chunk);
+      } else if (ArrayBuffer.isView(chunk)) {
+        chunks.push(Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      } else {
+        chunks.push(Buffer.from(String(chunk)));
+      }
       return true;
     },
     end(chunk) {

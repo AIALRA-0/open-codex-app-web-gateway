@@ -401,6 +401,74 @@ function buildSuites(defaultModel) {
           && outputLines[1].response?.body?.results?.[0]?.categories?.violence === true,
       },
       {
+        id: "batch-chat-completions",
+        mode: "batch-local",
+        endpoint: "/v1/chat/completions",
+        usage: "chat",
+        requests: [
+          {
+            custom_id: "batch-chat-one",
+            body: {
+              model: defaultModel,
+              messages: [{ role: "user", content: "Return the exact string batch-chat-one." }],
+              max_tokens: 64,
+              store: false,
+            },
+          },
+          {
+            custom_id: "batch-chat-two",
+            body: {
+              model: defaultModel,
+              messages: [{ role: "user", content: "Return the exact string batch-chat-two." }],
+              max_tokens: 64,
+              store: false,
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => batch?.object === "batch"
+          && batch.status === "completed"
+          && batch.endpoint === "/v1/chat/completions"
+          && batch.request_counts?.total === 2
+          && batch.request_counts?.completed === 2
+          && batch.request_counts?.failed === 0
+          && !batch.error_file_id
+          && !errorText
+          && outputLines.length === 2
+          && outputLines.every((line) => line.response?.status_code === 200 && !line.error)
+          && outputLines.every((line) => line.response?.body?.object === "chat.completion")
+          && /batch-chat-one/i.test(chatOutputText(outputLines[0].response?.body))
+          && /batch-chat-two/i.test(chatOutputText(outputLines[1].response?.body)),
+      },
+      {
+        id: "batch-completions-legacy",
+        mode: "batch-local",
+        endpoint: "/v1/completions",
+        usage: "completions",
+        requests: [
+          {
+            custom_id: "batch-completion-one",
+            body: {
+              model: defaultModel,
+              prompt: "Return the exact string batch-completion-one.",
+              max_tokens: 64,
+              temperature: 0,
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => batch?.object === "batch"
+          && batch.status === "completed"
+          && batch.endpoint === "/v1/completions"
+          && batch.request_counts?.total === 1
+          && batch.request_counts?.completed === 1
+          && batch.request_counts?.failed === 0
+          && !batch.error_file_id
+          && !errorText
+          && outputLines.length === 1
+          && outputLines[0].response?.status_code === 200
+          && outputLines[0].response?.body?.object === "text_completion"
+          && /batch-completion-one/i.test(completionOutputText(outputLines[0].response?.body)),
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -2689,6 +2757,9 @@ function moderationUsage() {
 
 function batchResponseUsage(testCase, response) {
   if (testCase.usage === "embeddings") return embeddingUsage(response);
+  if (testCase.usage === "responses") return responseUsage(response);
+  if (testCase.usage === "chat") return chatUsage(response);
+  if (testCase.usage === "completions") return completionUsage(response);
   return moderationUsage(response);
 }
 

@@ -5584,6 +5584,134 @@ test("local Batch API executes Responses JSONL and exposes output and error file
   });
 });
 
+test("local Batch API executes Chat and legacy Completions JSONL", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    const messageText = JSON.stringify(call.body.messages || []);
+    const marker = messageText.includes("batch-legacy-ok") ? "batch-legacy-ok" : "batch-chat-ok";
+    res.writeHead(200, { "content-type": "application/json", "x-request-id": `req_${marker.replace(/-/g, "_")}` });
+    res.end(JSON.stringify({
+      id: `chatcmpl_${marker.replace(/-/g, "_")}`,
+      object: "chat.completion",
+      created: 1700000555,
+      model: call.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: marker },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const runBatch = async (endpoint, filename, lines) => {
+      const jsonl = `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`;
+      const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          purpose: "batch",
+          content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+          mime_type: "application/jsonl",
+        }),
+      });
+      assert.equal(fileResponse.status, 200);
+      const file = await fileResponse.json();
+
+      const created = await fetch(`${baseUrl}/v1/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input_file_id: file.id,
+          endpoint,
+          completion_window: "24h",
+          metadata: { suite: filename },
+        }),
+      });
+      assert.equal(created.status, 200);
+      const batch = await created.json();
+      const outputText = batch.output_file_id
+        ? await (await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`)).text()
+        : "";
+      const errorText = batch.error_file_id
+        ? await (await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`)).text()
+        : "";
+      return {
+        batch,
+        outputLines: outputText.trim() ? outputText.trim().split(/\n/).map((line) => JSON.parse(line)) : [],
+        errorLines: errorText.trim() ? errorText.trim().split(/\n/).map((line) => JSON.parse(line)) : [],
+      };
+    };
+
+    const chatBatch = await runBatch("/v1/chat/completions", "chat-completions-batch.jsonl", [
+      {
+        custom_id: "chat-ok",
+        method: "POST",
+        url: "/v1/chat/completions",
+        body: {
+          model: "mock-model",
+          messages: [{ role: "user", content: "Return batch-chat-ok." }],
+          max_tokens: 16,
+          store: false,
+        },
+      },
+      {
+        custom_id: "chat-stream-rejected",
+        method: "POST",
+        url: "/v1/chat/completions",
+        body: {
+          model: "mock-model",
+          messages: [{ role: "user", content: "streaming is not allowed in local batches" }],
+          stream: true,
+        },
+      },
+    ]);
+
+    assert.equal(chatBatch.batch.status, "completed");
+    assert.equal(chatBatch.batch.endpoint, "/v1/chat/completions");
+    assert.equal(chatBatch.batch.request_counts.completed, 1);
+    assert.equal(chatBatch.batch.request_counts.failed, 1);
+    assert.equal(chatBatch.batch.metadata.compatibility.supported_endpoints.includes("/v1/chat/completions"), true);
+    assert.equal(chatBatch.outputLines[0].custom_id, "chat-ok");
+    assert.equal(chatBatch.outputLines[0].response.status_code, 200);
+    assert.equal(chatBatch.outputLines[0].response.request_id, "req_batch_chat_ok");
+    assert.equal(chatBatch.outputLines[0].response.body.object, "chat.completion");
+    assert.equal(chatBatch.outputLines[0].response.body.choices[0].message.content, "batch-chat-ok");
+    assert.equal(chatBatch.errorLines[0].custom_id, "chat-stream-rejected");
+    assert.equal(chatBatch.errorLines[0].error.code, "unsupported_batch_stream");
+
+    const legacyBatch = await runBatch("/v1/completions", "legacy-completions-batch.jsonl", [
+      {
+        custom_id: "legacy-ok",
+        method: "POST",
+        url: "/v1/completions",
+        body: {
+          model: "mock-model",
+          prompt: "Return batch-legacy-ok.",
+          max_tokens: 16,
+          temperature: 0,
+        },
+      },
+    ]);
+
+    assert.equal(legacyBatch.batch.status, "completed");
+    assert.equal(legacyBatch.batch.endpoint, "/v1/completions");
+    assert.equal(legacyBatch.batch.request_counts.completed, 1);
+    assert.equal(legacyBatch.batch.request_counts.failed, 0);
+    assert.equal(legacyBatch.batch.metadata.compatibility.supported_endpoints.includes("/v1/completions"), true);
+    assert.equal(legacyBatch.outputLines[0].custom_id, "legacy-ok");
+    assert.equal(legacyBatch.outputLines[0].response.status_code, 200);
+    assert.equal(legacyBatch.outputLines[0].response.body.object, "text_completion");
+    assert.equal(legacyBatch.outputLines[0].response.body.choices[0].text, "batch-legacy-ok");
+    assert.deepEqual(legacyBatch.errorLines, []);
+
+    assert.equal(requests.length, 2);
+    assert.equal(requests[0].body.messages[0].content, "Return batch-chat-ok.");
+    assert.match(requests[1].body.messages[0].content, /Return batch-legacy-ok/);
+  });
+});
+
 test("local Batch API executes local embeddings without provider calls", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

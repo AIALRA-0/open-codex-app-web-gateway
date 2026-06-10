@@ -343,7 +343,10 @@ OpenAI-compatible surfaces without adding a separate job runner.
 
 Local Batch execution currently accepts `/v1/responses`,
 `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, and
-`/v1/moderations`, because those surfaces are implemented by the bridge.
+`/v1/moderations`, because those surfaces are implemented by the bridge. Batch
+output lines preserve upstream JSON response bodies and upstream
+`x-request-id` values when a proxied Chat provider supplies them; otherwise a
+local `req_*` id is generated for auditability.
 Streaming (`stream:true`) and
 background Responses (`background:true`) requests are rejected per JSONL line
 and written to the error file because a completed Batch output file cannot

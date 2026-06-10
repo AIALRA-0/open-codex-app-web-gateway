@@ -3587,3 +3587,63 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
     repository checkout is 39 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Batch Chat and Legacy Completions Coverage
+
+- Checked the current official OpenAI Batch guide through the OpenAI
+  developer-docs MCP. The guide lists `/v1/responses`,
+  `/v1/chat/completions`, `/v1/embeddings`, `/v1/completions`, and
+  `/v1/moderations` among JSONL Batch endpoints, with each line carrying
+  `custom_id`, `method`, `url`, and endpoint-specific `body`.
+- Promoted existing local Batch support for Chat and legacy Completions from
+  implicit code path to tested compatibility surface:
+  - added live `bridge-regression` cases for `/v1/chat/completions` Batch and
+    `/v1/completions` Batch;
+  - added mock-provider server coverage that executes a Chat batch with one
+    success and one rejected `stream:true` line, then executes a legacy
+    Completions batch and verifies the returned `text_completion` output file;
+  - extended eval usage aggregation so Batch output from Responses, Chat, and
+    legacy Completions contributes token usage instead of falling back to
+    zero-use moderation accounting.
+- Fixed a real local Batch capture bug found by the new tests:
+  - direct Chat passthrough writes `Uint8Array` chunks from Node `fetch`;
+  - the internal Batch capture response previously treated non-`Buffer` chunks
+    as strings, corrupting JSON output into comma-separated byte values;
+  - `makeCaptureResponse.write()` now preserves any `ArrayBuffer` view as
+    binary bytes before parsing the captured JSON body.
+- Improved audit fidelity by preserving upstream `x-request-id` headers through
+  `proxyResponseHeaders()`, so Batch output lines use provider request ids when
+  available and only generate local `req_*` ids as a fallback.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` with the
+  Batch Chat/Completions coverage and request-id preservation behavior.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 77/77 passing tests.
+  - `npm test`: 111/111 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Targeted live `batch-chat-completions` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 3306 ms, request counts 2 completed / 0 failed,
+    and total usage 120 tokens.
+  - Targeted live `batch-completions-legacy` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1632 ms, request counts 1 completed / 0 failed,
+    and total usage 55 tokens.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1860 ms, P95 latency 2127 ms, and total usage 174 tokens.
+  - Full live `bridge-regression` passed 40/40 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1362 ms, P95 latency 2965 ms, and total usage
+    9025 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8ewppe`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 339 runtime candidates,
+    selected 25 old UI screenshots by retention policy, deleted 0, selected
+    1807049 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
+    repository checkout is 39 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.
