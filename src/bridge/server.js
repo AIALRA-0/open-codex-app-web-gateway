@@ -1196,6 +1196,7 @@ function getChoiceStreamState(state, choiceIndex = 0) {
       reasoningItem: null,
       reasoningText: "",
       outputTextLogprobs: [],
+      outputTextAnnotations: [],
       outputRefusalLogprobs: [],
       refusalText: "",
       toolCalls: new Map(),
@@ -1257,6 +1258,9 @@ function syncStreamTextFromResponse(state) {
     if (typeof textPart?.text === "string") choiceState.text = textPart.text;
     if (choiceState.outputTextLogprobs.length && textPart) {
       textPart.logprobs = clone(choiceState.outputTextLogprobs);
+    }
+    if (choiceState.outputTextAnnotations.length && textPart) {
+      textPart.annotations = clone(choiceState.outputTextAnnotations);
     }
   }
 }
@@ -1395,6 +1399,18 @@ function applyChatStreamChunk(state, chunk) {
       });
     }
 
+    const annotations = [
+      ...normalizeStreamAnnotations(delta.annotations),
+      ...normalizeStreamAnnotations(choice.annotations),
+    ];
+    if (annotations.length) {
+      events.push(...ensureTextPart(state, choiceState));
+      const item = choiceState.messageItem;
+      const contentIndex = item.content.findIndex((part) => part.type === "output_text");
+      choiceState.outputTextAnnotations.push(...annotations);
+      item.content[contentIndex].annotations = clone(choiceState.outputTextAnnotations);
+    }
+
     const logprobs = normalizeStreamTextLogprobs(choice.logprobs);
     if (Array.isArray(logprobs) && logprobs.length) {
       events.push(...ensureTextPart(state, choiceState));
@@ -1530,6 +1546,12 @@ function normalizeStreamTextLogprobs(logprobs) {
     return normalizeOutputTextLogprobs(logprobs);
   }
   return undefined;
+}
+
+function normalizeStreamAnnotations(annotations) {
+  if (annotations == null) return [];
+  const values = Array.isArray(annotations) ? annotations : [annotations];
+  return values.filter((annotation) => annotation != null).map((annotation) => clone(annotation));
 }
 
 function streamStateToReplayMessages(state) {

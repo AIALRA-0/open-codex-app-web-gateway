@@ -449,7 +449,16 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
       object: "chat.completion.chunk",
       choices: [{
         index: 0,
-        delta: { content: "lo" },
+        delta: {
+          content: "lo",
+          annotations: [{
+            type: "url_citation",
+            start_index: 0,
+            end_index: 5,
+            url: "https://example.test/stream",
+            title: "Stream Citation",
+          }],
+        },
         logprobs: { content: [{ token: "lo", logprob: -0.2, bytes: [108, 111], top_logprobs: [] }] },
         finish_reason: "stop",
       }],
@@ -483,6 +492,13 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     const events = parseSseEvents(text);
     const completed = events.find((event) => event.event === "response.completed").data.response;
     assert.equal(completed.service_tier, "flex");
+    assert.deepEqual(completed.output[0].content[0].annotations, [{
+      type: "url_citation",
+      start_index: 0,
+      end_index: 5,
+      url: "https://example.test/stream",
+      title: "Stream Citation",
+    }]);
     assert.equal(completed.metadata.compatibility.chat_completion_id, "chatcmpl_stream");
     assert.equal(completed.metadata.compatibility.chat_system_fingerprint, "fp_stream");
     assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");

@@ -94,6 +94,7 @@ behavior.
 | `choices[].message.function_call` | output `function_call` item | Legacy Chat function-call compatibility |
 | `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming and streaming Responses when provider returns Chat logprobs |
 | `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
+| `choices[].message.annotations[]` / streaming `choices[].delta.annotations[]` | `message.content[].output_text.annotations[]` | Direct when a Chat provider returns citation annotations |
 | `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
@@ -371,7 +372,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
-| Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve when present, synthesize only from local tools |
+| Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
 
 ## Reference Projects Reviewed
 

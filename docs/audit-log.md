@@ -1002,3 +1002,36 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7vdte4` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Streaming Chat Annotation Preservation
+
+- Used the current OpenAI web search and migration guidance to confirm citation
+  annotations are exposed on message output content and that Chat streaming
+  arrives as incremental `delta` chunks:
+  https://developers.openai.com/api/docs/guides/tools-web-search#output-and-citations
+  and
+  https://developers.openai.com/api/docs/guides/migrate-to-responses#7-update-streaming-consumers
+- Added streaming Chat annotation aggregation:
+  - `choices[].delta.annotations[]` and provider-style `choices[].annotations[]`
+    are accumulated per Chat choice;
+  - terminal Responses message parts expose the accumulated annotations at
+    `output_text.annotations[]`;
+  - no synthetic annotation-specific SSE event is emitted yet because this
+    bridge only emits documented typed events it already models.
+- Updated `docs/compatibility-matrix.md` to document native Chat annotation
+  preservation for non-streaming and streaming responses.
+- Added regression coverage to the typed streaming mock so the final
+  `response.completed` object must include a preserved `url_citation`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1813 ms, P95 latency 3830 ms, total usage 2234 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7vm1ky` appeared before reload and after reload, console errors
+    0, warnings 0.
