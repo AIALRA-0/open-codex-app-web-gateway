@@ -5065,7 +5065,7 @@ function handleResponseGet(res, store, responseId, url) {
   sendJson(res, 200, projectResponseForIncludes(record.response, url));
 }
 
-async function handleResponseUpdate(req, res, store, responseId) {
+async function handleResponseUpdate(req, res, store, responseId, url) {
   const body = await readJson(req);
   const record = store.get(responseId);
   if (!record?.response) {
@@ -5107,7 +5107,7 @@ async function handleResponseUpdate(req, res, store, responseId) {
       : record.request,
   };
   store.put(responseId, updatedRecord);
-  sendJson(res, 200, updatedRecord.response);
+  sendJson(res, 200, projectResponseForIncludes(updatedRecord.response, url));
 }
 
 function handleResponseDelete(res, store, responseId, backgroundJobs) {
@@ -5131,7 +5131,7 @@ function handleResponseDelete(res, store, responseId, backgroundJobs) {
   });
 }
 
-function handleResponseCancel(res, store, responseId, backgroundJobs) {
+function handleResponseCancel(res, store, responseId, backgroundJobs, url) {
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
@@ -5145,7 +5145,7 @@ function handleResponseCancel(res, store, responseId, backgroundJobs) {
       backgroundJobs.delete(responseId);
     }
     const response = storeCancelledBackgroundResponse(store, responseId, job ? "background job aborted" : "background job marked cancelled");
-    sendJson(res, 200, response || store.get(responseId)?.response || record.response);
+    sendJson(res, 200, projectResponseForIncludes(response || store.get(responseId)?.response || record.response, url));
     return;
   }
 
@@ -5154,7 +5154,7 @@ function handleResponseCancel(res, store, responseId, backgroundJobs) {
     ...(response.metadata || {}),
     compatibility_cancel: "local store only contains terminal responses; completed responses are returned as a no-op",
   };
-  sendJson(res, 200, response);
+  sendJson(res, 200, projectResponseForIncludes(response, url));
 }
 
 function handleResponseInputItems(res, store, responseId, url) {
@@ -6040,7 +6040,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!action && req.method === "POST") {
-          await handleResponseUpdate(req, res, store, responseId);
+          await handleResponseUpdate(req, res, store, responseId, url);
           return;
         }
         if (!action && req.method === "DELETE") {
@@ -6048,7 +6048,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (action === "cancel" && req.method === "POST") {
-          handleResponseCancel(res, store, responseId, backgroundJobs);
+          handleResponseCancel(res, store, responseId, backgroundJobs, url);
           return;
         }
         if (action === "input_items" && req.method === "GET") {

@@ -707,6 +707,39 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
     assert.equal(includedStoredJson.output[0].content[0].text, "yes");
     assert.equal(includedStoredJson.output[0].content[0].logprobs[0].token, "yes");
     assert.equal(includedStoredJson.output[0].content[0].logprobs[0].top_logprobs[1].token, "no");
+
+    const updatedHiddenResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "logprobs-update-hidden" } }),
+    });
+    assert.equal(updatedHiddenResponse.status, 200);
+    const updatedHiddenJson = await updatedHiddenResponse.json();
+    assert.equal(updatedHiddenJson.metadata.suite, "logprobs-update-hidden");
+    assert.equal(updatedHiddenJson.output[0].content[0].text, "yes");
+    assert.equal(updatedHiddenJson.output[0].content[0].logprobs, undefined);
+
+    const updatedIncludedResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}?include[]=message.output_text.logprobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "logprobs-update-included" } }),
+    });
+    assert.equal(updatedIncludedResponse.status, 200);
+    const updatedIncludedJson = await updatedIncludedResponse.json();
+    assert.equal(updatedIncludedJson.metadata.suite, "logprobs-update-included");
+    assert.equal(updatedIncludedJson.output[0].content[0].logprobs[0].token, "yes");
+
+    const cancelledHiddenResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}/cancel`, { method: "POST" });
+    assert.equal(cancelledHiddenResponse.status, 200);
+    const cancelledHiddenJson = await cancelledHiddenResponse.json();
+    assert.match(cancelledHiddenJson.metadata.compatibility_cancel, /terminal responses/);
+    assert.equal(cancelledHiddenJson.output[0].content[0].text, "yes");
+    assert.equal(cancelledHiddenJson.output[0].content[0].logprobs, undefined);
+
+    const cancelledIncludedResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}/cancel?include[]=message.output_text.logprobs`, { method: "POST" });
+    assert.equal(cancelledIncludedResponse.status, 200);
+    const cancelledIncludedJson = await cancelledIncludedResponse.json();
+    assert.equal(cancelledIncludedJson.output[0].content[0].logprobs[0].token, "yes");
   });
 });
 

@@ -230,6 +230,7 @@ function buildSuites(defaultModel) {
       request: {
         model: defaultModel,
         input: "Return the exact string ok-text.",
+        reasoning: { effort: "none" },
         max_output_tokens: 64,
         store: false,
       },
@@ -241,6 +242,7 @@ function buildSuites(defaultModel) {
       request: {
         model: defaultModel,
         input: "Return JSON with ok true.",
+        reasoning: { effort: "none" },
         text: {
           format: {
             type: "json_schema",
@@ -449,6 +451,7 @@ function buildSuites(defaultModel) {
             body: {
               model: defaultModel,
               messages: [{ role: "user", content: "Return the exact string batch-chat-one." }],
+              thinking: { type: "disabled" },
               max_tokens: 64,
               store: false,
             },
@@ -458,6 +461,7 @@ function buildSuites(defaultModel) {
             body: {
               model: defaultModel,
               messages: [{ role: "user", content: "Return the exact string batch-chat-two." }],
+              thinking: { type: "disabled" },
               max_tokens: 64,
               store: false,
             },
@@ -512,6 +516,7 @@ function buildSuites(defaultModel) {
         request: {
           model: defaultModel,
           messages: [{ role: "user", content: "Return the exact string chat-ok." }],
+          thinking: { type: "disabled" },
           max_tokens: 64,
         },
         check: ({ text }) => /chat-ok/i.test(text),
@@ -536,6 +541,7 @@ function buildSuites(defaultModel) {
           store: true,
           metadata: { suite: "chat-life-initial" },
           messages: [{ role: "user", content: "Return the exact string chat-life-ok." }],
+          thinking: { type: "disabled" },
           max_tokens: 96,
         },
         check: ({ json, text, fetched, updated, messages, list, oldList, deleted, afterDelete, postDeleteList }) => /chat-life-ok/i.test(text)
@@ -808,18 +814,34 @@ function buildSuites(defaultModel) {
           store: true,
         },
         retrieveResponseInclude: "message.output_text.logprobs",
-        check: ({ json, text, hiddenResponse, includedResponse }) => {
+        exerciseStoredResponseProjection: true,
+        check: ({ json, text, hiddenResponse, includedResponse, projectionUpdateHidden, projectionUpdateIncluded, projectionCancelHidden, projectionCancelIncluded }) => {
           const hasVisibleLogprobs = (json.output || []).some((item) => (item.content || [])
             .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
           const hiddenHasLogprobs = (hiddenResponse?.output || []).some((item) => (item.content || [])
             .some((part) => Array.isArray(part.logprobs)));
           const includedHasLogprobs = (includedResponse?.output || []).some((item) => (item.content || [])
             .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
+          const updateHiddenHasLogprobs = (projectionUpdateHidden?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs)));
+          const updateIncludedHasLogprobs = (projectionUpdateIncluded?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
+          const cancelHiddenHasLogprobs = (projectionCancelHidden?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs)));
+          const cancelIncludedHasLogprobs = (projectionCancelIncluded?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
           return /logprobs-ok/i.test(text)
             && json.metadata?.compatibility?.logprobs === "chat_logprobs"
             && hasVisibleLogprobs
             && !hiddenHasLogprobs
-            && includedHasLogprobs;
+            && includedHasLogprobs
+            && projectionUpdateHidden?.metadata?.suite === "projection-update-hidden"
+            && !updateHiddenHasLogprobs
+            && projectionUpdateIncluded?.metadata?.suite === "projection-update-included"
+            && updateIncludedHasLogprobs
+            && /terminal responses/.test(projectionCancelHidden?.metadata?.compatibility_cancel || "")
+            && !cancelHiddenHasLogprobs
+            && cancelIncludedHasLogprobs;
         },
       },
       {
@@ -897,6 +919,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           conversation: conversationId,
           input: "Using the conversation history, return exactly this text and nothing else: conversation-ok",
+          reasoning: { effort: "none" },
           max_output_tokens: 128,
           store: false,
         }),
@@ -911,6 +934,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           conversation: conversationId,
           input: "Compact this conversation while preserving the exact marker conversation-ok.",
+          reasoning: { effort: "none" },
           max_output_tokens: 128,
           store: false,
         }),
@@ -1599,6 +1623,21 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
       const include = encodeURIComponent(testCase.retrieveResponseInclude);
       includedResponse = await getJson(`${baseUrl}/v1/responses/${json.id}?include[]=${include}`);
     }
+    let projectionUpdateHidden = { ok: false, status: 0, json: null };
+    let projectionUpdateIncluded = { ok: false, status: 0, json: null };
+    let projectionCancelHidden = { ok: false, status: 0, json: null };
+    let projectionCancelIncluded = { ok: false, status: 0, json: null };
+    if (testCase.exerciseStoredResponseProjection && json.id) {
+      const include = encodeURIComponent(testCase.retrieveResponseInclude || "");
+      projectionUpdateHidden = await postJsonCapture(`${baseUrl}/v1/responses/${json.id}`, {
+        metadata: { suite: "projection-update-hidden" },
+      });
+      projectionUpdateIncluded = await postJsonCapture(`${baseUrl}/v1/responses/${json.id}?include[]=${include}`, {
+        metadata: { suite: "projection-update-included" },
+      });
+      projectionCancelHidden = await postJsonCapture(`${baseUrl}/v1/responses/${json.id}/cancel`, {});
+      projectionCancelIncluded = await postJsonCapture(`${baseUrl}/v1/responses/${json.id}/cancel?include[]=${include}`, {});
+    }
     const text = textSelector(json);
     const ok = !!testCase.check({
       json,
@@ -1606,6 +1645,10 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
       ok: response.ok,
       hiddenResponse: hiddenResponse.json,
       includedResponse: includedResponse.json,
+      projectionUpdateHidden: projectionUpdateHidden.json,
+      projectionUpdateIncluded: projectionUpdateIncluded.json,
+      projectionCancelHidden: projectionCancelHidden.json,
+      projectionCancelIncluded: projectionCancelIncluded.json,
     });
     return finishResult(testCase, context, started, {
       ok,
@@ -1613,6 +1656,12 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
       ...(testCase.retrieveResponseInclude ? {
         hidden_response_status: hiddenResponse.status,
         included_response_status: includedResponse.status,
+      } : {}),
+      ...(testCase.exerciseStoredResponseProjection ? {
+        projection_update_hidden_status: projectionUpdateHidden.status,
+        projection_update_included_status: projectionUpdateIncluded.status,
+        projection_cancel_hidden_status: projectionCancelHidden.status,
+        projection_cancel_included_status: projectionCancelIncluded.status,
       } : {}),
       usage: usageSelector(json),
       output_text: truncate(text),
@@ -2864,6 +2913,17 @@ async function postJson(url, body) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postJsonCapture(url, body) {
+  const response = await postJson(url, body);
+  const responseBody = await response.text();
+  return {
+    status: response.status,
+    ok: response.ok,
+    json: parseJsonish(responseBody),
+    body: responseBody,
+  };
 }
 
 async function postRaw(url, body, contentType = "application/octet-stream") {

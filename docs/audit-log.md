@@ -4334,3 +4334,86 @@ Open follow-ups:
     repository checkout is 44 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Stored Response Lifecycle Include Projection
+
+- Re-checked the current OpenAI Responses include list through the official
+  OpenAI developer docs MCP. The supported include-gated response details remain
+  `web_search_call.action.sources`, `code_interpreter_call.outputs`,
+  `computer_call_output.output.image_url`, `file_search_call.results`,
+  `message.input_image.image_url`, `message.output_text.logprobs`, and
+  `reasoning.encrypted_content`.
+- Found and closed a local lifecycle projection bypass:
+  - `GET /v1/responses/{response_id}` already projected stored response bodies
+    through include redaction;
+  - `POST /v1/responses/{response_id}` metadata updates returned the internal
+    stored response object directly;
+  - `POST /v1/responses/{response_id}/cancel` terminal no-op responses also
+    returned the internal stored response object directly.
+- Updated the metadata-update and completed-cancel paths so they return
+  `projectResponseForIncludes(...)`, matching retrieval behavior. Include-gated
+  fields are hidden by default and returned only when the lifecycle request URL
+  includes the matching `include[]` query value.
+- Extended unit coverage on the existing `message.output_text.logprobs` fixture
+  to verify:
+  - update without include hides output-text logprobs;
+  - update with `include[]=message.output_text.logprobs` returns logprobs;
+  - completed cancel without include hides logprobs;
+  - completed cancel with `include[]=message.output_text.logprobs` returns
+    logprobs.
+- Extended the live `responses-logprobs` bridge-regression case to exercise the
+  same stored-response update/cancel projection path against
+  `deepseek-v4-pro`.
+- Hardened deterministic live evals that are meant to test protocol plumbing,
+  not reasoning quality:
+  - `responses-text`, `responses-json-schema`, and
+    `responses-conversation-lifecycle` now set `reasoning.effort:"none"`;
+  - direct Chat exact-string smoke and Batch Chat requests now set DeepSeek
+    `thinking:{type:"disabled"}`.
+- During validation, an earlier full live run exposed flaky exact-string
+  failures from DeepSeek thinking mode: `responses-text` returned no visible
+  text after consuming reasoning tokens, and `batch-chat-completions` missed one
+  exact marker. After the deterministic non-thinking eval updates, targeted
+  retries and the final full run passed.
+- Updated compatibility and evaluation docs to record that stored Responses
+  metadata update and completed cancel/no-op paths share the same include
+  projection contract as response retrieval.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-logprobs` passed 1/1 against
+    `deepseek-v4-pro`, latency 1595 ms, total usage 63 tokens, visible text
+    `logprobs-ok`, hidden/included stored-response retrieves returned 200,
+    hidden/included metadata updates returned 200, and hidden/included
+    completed-cancel no-op requests returned 200.
+  - Targeted live `responses-conversation-lifecycle` passed 1/1 after the
+    deterministic non-thinking update, latency 2890 ms, output
+    `conversation-ok`, and total usage 229 tokens.
+  - Targeted live `responses-text` passed 1/1 after the deterministic
+    non-thinking update, latency 782 ms, output `ok-text`, and total usage
+    13 tokens.
+  - Targeted live `batch-chat-completions` passed 1/1 after the deterministic
+    non-thinking update, latency 1837 ms, and total usage 34 tokens.
+  - Final `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 918 ms, P95 latency 1082 ms, and total usage 99 tokens.
+  - Final full live `bridge-regression` passed 45/45 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1131 ms, P95 latency
+    2450 ms, and total usage 9428 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8jo2b6`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 449 runtime candidates,
+    selected 38 old UI screenshots by retention policy, deleted 0, selected
+    2924128 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 37 GB available;
+    repository checkout is 45 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.
+  - No API keys, account credentials, or local secret files were committed.
