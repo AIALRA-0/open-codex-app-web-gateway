@@ -14,6 +14,15 @@ const {
   responsesToChatRequest,
   stringifyContent,
 } = require("./translator");
+const {
+  annotateWebSearchResponse,
+  attachWebSearchOutput,
+  injectWebSearchMessages,
+  localWebSearchToolTypes,
+  prepareWebSearchContext,
+  webSearchCompatibility,
+  webSearchOutputItems,
+} = require("./web_search");
 
 const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
 
@@ -53,9 +62,16 @@ function loadConfig(overrides = {}) {
     compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
     compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
     compactionSecretFile,
+    webSearchProvider: process.env.CODEXCOMPAT_WEB_SEARCH_PROVIDER || "wikipedia",
+    webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
+    webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
+    webSearchStaticResults: process.env.CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS || "",
+    webSearchWikipediaEndpoint: process.env.CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT || "",
+    webSearchUserAgent: process.env.CODEXCOMPAT_WEB_SEARCH_USER_AGENT || "open-codex-responses-bridge/0.2",
     deepseekReasoningEffortCompat: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT, true),
     deepseekThinkingMode: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_THINKING_MODE, false),
     deepseekDisableThinkingForToolChoice: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE, true),
+    deepseekDisableThinkingForLocalWebSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };
@@ -121,9 +137,10 @@ function providerHeaders(config, incomingHeaders = {}) {
   return headers;
 }
 
-function translatorOptions(config) {
+function translatorOptions(config, extra = {}) {
   return {
     ...config,
+    ...extra,
     decodeCompaction: (encryptedContent) => decodeLocalCompaction(encryptedContent, config),
   };
 }
@@ -179,16 +196,29 @@ async function handleResponses(req, res, config, store, backgroundJobs) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
-  const { chat, compatibility } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
+  const localHostedTools = localWebSearchToolTypes(request.tools || [], config);
+  const { chat, compatibility } = responsesToChatRequest(
+    request,
+    previousMessages,
+    translatorOptions(config, { localHostedTools }),
+  );
   chat.model = chat.model || config.defaultModel;
 
   if (request.background) {
-    handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility);
+    handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, {
+      ...compatibility,
+      ...(localHostedTools.length ? { local_web_search: { status: "pending", tool_types: localHostedTools } } : {}),
+    });
     return;
   }
 
+  const localWebSearch = await prepareWebSearchContext(request, config);
+  if (localWebSearch) {
+    applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config);
+  }
+
   if (chat.stream) {
-    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility);
+    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch);
     return;
   }
 
@@ -207,6 +237,7 @@ async function handleResponses(req, res, config, store, backgroundJobs) {
   }
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  attachWebSearchOutput(response, localWebSearch);
   response.metadata = {
     ...(response.metadata || {}),
     compatibility,
@@ -278,6 +309,12 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
 
 async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders }) {
   try {
+    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal });
+    let finalCompatibility = compatibility;
+    if (localWebSearch) {
+      finalCompatibility = applyLocalWebSearchToChat(chat, { ...compatibility }, localWebSearch, config);
+    }
+
     const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
       controller: job.controller,
       onTimeout: () => {
@@ -298,10 +335,11 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     }
 
     const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+    attachWebSearchOutput(response, localWebSearch);
     response.background = true;
     response.metadata = {
       ...(response.metadata || {}),
-      compatibility,
+      compatibility: finalCompatibility,
       upstream_object: upstreamJson?.object || null,
     };
 
@@ -366,6 +404,19 @@ function updateStoredResponse(store, responseId, updater) {
     response,
   });
   return response;
+}
+
+function applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config) {
+  injectWebSearchMessages(chat, localWebSearch);
+  Object.assign(compatibility, webSearchCompatibility(localWebSearch));
+  if (config.deepseekDisableThinkingForLocalWebSearch && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_web_search = {
+      ...(compatibility.local_web_search || {}),
+      deepseek_thinking: "disabled_for_local_web_search",
+    };
+  }
+  return compatibility;
 }
 
 async function handleResponseInputTokens(req, res, config, store) {
@@ -569,7 +620,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   const state = createStreamState(response, compatibility);
 
@@ -582,6 +633,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
 
   writeSse(res, "response.created", sequence(state, { type: "response.created", response: clone(response) }));
   writeSse(res, "response.in_progress", sequence(state, { type: "response.in_progress", response: clone(response) }));
+  emitWebSearchStreamItems(res, state, localWebSearch);
 
   const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
   if (!upstream.ok) {
@@ -598,6 +650,8 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
       for (const event of events) writeSse(res, event.type, sequence(state, event));
     }
 
+    annotateWebSearchResponse(response, localWebSearch);
+    syncStreamTextFromResponse(state);
     const doneEvents = finishStreamState(state);
     for (const event of doneEvents) writeSse(res, event.type, sequence(state, event));
     response.status = "completed";
@@ -658,6 +712,24 @@ function createStreamState(response, compatibility) {
 function sequence(state, event) {
   state.sequenceNumber += 1;
   return { sequence_number: state.sequenceNumber, ...event };
+}
+
+function emitWebSearchStreamItems(res, state, context) {
+  for (const item of webSearchOutputItems(context)) {
+    state.response.output.push(item);
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: state.response.output.length - 1,
+      item: clone(item),
+    }));
+  }
+}
+
+function syncStreamTextFromResponse(state) {
+  const message = state.response.output.find((item) => item.type === "message");
+  const textPart = message?.content?.find((part) => part.type === "output_text");
+  if (typeof textPart?.text === "string") state.text = textPart.text;
 }
 
 function ensureMessageItem(state) {

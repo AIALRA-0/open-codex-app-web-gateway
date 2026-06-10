@@ -177,6 +177,28 @@ function buildSuites(defaultModel) {
           && /background-ok/i.test(text),
       },
       {
+        id: "responses-web-search",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Use web search for OpenAI. Then return the exact string web-search-ok [1].",
+          tools: [{ type: "web_search_preview" }],
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const call = (json.output || []).find((item) => item.type === "web_search_call");
+          const annotations = (json.output || [])
+            .flatMap((item) => item.content || [])
+            .flatMap((part) => part.annotations || []);
+          return !!call
+            && call.status === "completed"
+            && call.action?.type === "search"
+            && annotations.some((annotation) => annotation.type === "url_citation" && /^https?:\/\//.test(annotation.url || ""))
+            && /web-search-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-compact-continuation",
         mode: "responses-compact",
         request: {

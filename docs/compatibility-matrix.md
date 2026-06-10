@@ -43,7 +43,8 @@ implementations for those tools.
 | `previous_response_id` | local replay store | Emulated locally |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution |
 | `tools[type=function]` | chat function tools | Direct |
-| hosted tools | compatibility system notice | Requires local hosted-tool executor |
+| `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` and `url_citation` annotations |
+| other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
@@ -79,6 +80,7 @@ behavior.
 | `finish_reason=length` | `status=incomplete` | Direct |
 | other finish reasons | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
+| local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 
 ## Responses Endpoint Coverage
 
@@ -141,12 +143,35 @@ Chat stream chunks with `delta.content` become text deltas. Chunks with
 `delta.tool_calls` become function-call item events and argument deltas. Chunks
 with DeepSeek `delta.reasoning_content` become reasoning summary deltas and are
 kept in the replay store so later tool turns can pass the reasoning content back.
+When `web_search_preview` is handled by the local adapter, the bridge emits a
+`web_search_call` output item and applies URL citation annotations to the final
+message content.
+
+## Local Web Search Adapter
+
+The bridge can emulate the Responses `web_search_preview` hosted tool for
+Chat-only providers. It runs a configured local search provider, injects the
+results into the Chat prompt as source material, and then maps the final
+Responses output to the OpenAI-style shape documented for web search:
+`web_search_call` plus `url_citation` annotations.
+
+Current providers:
+
+| Provider | Status | Notes |
+| --- | --- | --- |
+| `wikipedia` | Default no-key fallback | Uses the public MediaWiki search API. This is stable and secret-free, but it is not a full web index. |
+| `static` | Implemented for tests/controlled evals | Reads JSON results from configuration. |
+| `disabled` | Implemented | Leaves web search as an unsupported hosted tool with a compatibility notice. |
+
+This is a bridge compatibility layer, not native OpenAI web search. Full parity
+still requires a production-grade web index/provider, citation policy, and page
+open/find support.
 
 ## Known Gaps
 
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
-| OpenAI hosted `web_search` | Chat Completions providers do not execute OpenAI hosted tools | Add local web-search function executor and map citations |
+| OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
 | `file_search` | Requires vector store semantics absent from generic chat | Add local retrieval service and file citation mapping |
 | `code_interpreter` | Requires sandboxed code runtime and artifact protocol | Add local sandbox executor with artifact storage |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

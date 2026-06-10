@@ -75,9 +75,15 @@ Useful bridge flags:
 | `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` | `true` | Maps OpenAI/Codex effort values to DeepSeek-supported values |
 | `CODEXCOMPAT_DEEPSEEK_THINKING_MODE` | `false` | Forces `thinking:{type:"enabled"}` when a request asks for reasoning effort |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` | `true` | Disables DeepSeek thinking mode for function-tool requests that also set `tool_choice` |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH` | `true` | Disables DeepSeek thinking mode when the bridge injects local web-search context, preventing reasoning-only completions from exhausting the output budget |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content`; keep outside Git and mode `0600` |
+| `CODEXCOMPAT_WEB_SEARCH_PROVIDER` | `wikipedia` | Local `web_search_preview` adapter provider. Use `disabled`, `static`, or `wikipedia` |
+| `CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS` | `5` | Maximum local web-search results injected into Chat context and citation output |
+| `CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS` | `10000` | Timeout for local web-search provider requests |
+| `CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS` | empty | JSON array of `{title,url,snippet}` results for the `static` provider; keep large/private fixtures outside Git |
+| `CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT` | `https://en.wikipedia.org/w/api.php` | Override endpoint for the no-key Wikipedia fallback |
 
 ## Systemd
 

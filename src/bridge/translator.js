@@ -185,9 +185,10 @@ function responseInputToChatMessages(input, options = {}) {
   return input.flatMap((item) => inputItemToChatMessages(item, options));
 }
 
-function mapResponsesTools(tools = []) {
+function mapResponsesTools(tools = [], options = {}) {
   const mapped = [];
   const unsupported = [];
+  const localHostedTools = new Set(options.localHostedTools || []);
 
   for (const tool of tools || []) {
     if (!isPlainObject(tool)) continue;
@@ -201,6 +202,8 @@ function mapResponsesTools(tools = []) {
           ...(tool.strict != null ? { strict: tool.strict } : {}),
         },
       });
+    } else if (localHostedTools.has(tool.type)) {
+      continue;
     } else {
       unsupported.push(tool.type || "unknown");
     }
@@ -283,7 +286,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   messages.push(...responseInputToChatMessages(request.input, options));
 
-  const { mapped: tools, unsupported } = mapResponsesTools(request.tools || []);
+  const { mapped: tools, unsupported } = mapResponsesTools(request.tools || [], options);
   const compatibilityMessage = makeCompatibilityMessage(unsupported);
   if (compatibilityMessage) messages.unshift(compatibilityMessage);
 

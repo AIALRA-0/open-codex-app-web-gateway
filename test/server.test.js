@@ -22,7 +22,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function withMockProvider(handler, run) {
+async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
     let body = "";
@@ -38,6 +38,7 @@ async function withMockProvider(handler, run) {
     providerApiKey: "test-key",
     defaultModel: "mock-model",
     stateDir,
+    ...configOverrides,
   });
   const bridge = createServer(config);
   const bridgeAddress = await listen(bridge);
@@ -100,6 +101,65 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("POST /v1/responses executes local web_search_preview compatibility", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses web_search compatibility results/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /Bridge Search Result/.test(message.content || "")));
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_web_search",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "bridge-web-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for bridge web result and return bridge-web-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "web_search_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].action.type, "search");
+    assert.match(json.output[0].action.query, /bridge web result/);
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "bridge-web-ok [1]");
+    assert.deepEqual(json.output[1].content[0].annotations, [{
+      type: "url_citation",
+      start_index: 14,
+      end_index: 17,
+      url: "https://example.test/bridge-search",
+      title: "Bridge Search Result",
+    }]);
+    assert.equal(json.metadata.compatibility.local_web_search.provider, "static");
+    assert.equal(json.metadata.compatibility.local_web_search.result_count, 1);
+    assert.equal(json.metadata.compatibility.local_web_search.deepseek_thinking, "disabled_for_local_web_search");
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Bridge Search Result",
+      url: "https://example.test/bridge-search",
+      snippet: "The bridge web search adapter found this result.",
+    }],
+  });
+});
+
 test("POST /v1/responses streams Chat chunks as typed Responses events", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "text/event-stream" });
@@ -130,6 +190,50 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"delta":"hel"/);
     assert.match(text, /event: response\.completed/);
     assert.match(text, /"text":"hello"/);
+  });
+});
+
+test("POST /v1/responses streams local web_search_preview call and citations", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Streaming Search Result/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_web",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { role: "assistant", content: "stream-web-ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for streaming result and answer.",
+        tools: [{ type: "web_search_preview" }],
+        stream: true,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: response\.output_item\.added/);
+    assert.match(text, /"type":"web_search_call"/);
+    assert.match(text, /event: response\.output_text\.done/);
+    assert.match(text, /stream-web-ok\\n\\nSources:/);
+    assert.match(text, /"type":"url_citation"/);
+    assert.match(text, /"url":"https:\/\/example\.test\/stream-search"/);
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Streaming Search Result",
+      url: "https://example.test/stream-search",
+      snippet: "The streaming adapter can cite this result.",
+    }],
   });
 });
 

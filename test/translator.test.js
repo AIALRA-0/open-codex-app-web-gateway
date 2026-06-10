@@ -71,6 +71,18 @@ test("maps Responses function tools and tool_choice", () => {
   });
 });
 
+test("can reserve hosted tools for local bridge execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Search locally.",
+    tools: [{ type: "web_search_preview" }],
+  }, [], { localHostedTools: ["web_search_preview"] });
+
+  assert.equal(chat.tools, undefined);
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+});
+
 test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

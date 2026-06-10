@@ -309,3 +309,57 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7p0kr8` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Local Web Search Hosted Tool Adapter
+
+- Used the current OpenAI web-search guide to confirm Responses web-search
+  outputs include:
+  - a `web_search_call` output item with `action.type:"search"` and the query;
+  - a message output item with `output_text.annotations` containing
+    `url_citation` objects.
+- Added a local hosted-tool adapter for `web_search_preview` / `web_search`:
+  - local search results are injected into the upstream Chat Completion prompt;
+  - final Responses output is decorated with a `web_search_call` item;
+  - final message text receives URL citation annotations;
+  - streaming responses emit the local `web_search_call` output item before
+    Chat text deltas and include citations in the final completed response;
+  - background responses run local search inside the background job before the
+    upstream Chat Completion call.
+- Added local provider configuration:
+  - `CODEXCOMPAT_WEB_SEARCH_PROVIDER=disabled|static|wikipedia`;
+  - default no-key provider is `wikipedia`, using the public MediaWiki search
+    API;
+  - `static` provider is available for tests and controlled eval fixtures.
+- Added query extraction for common prompts such as `web search for OpenAI`.
+- Added DeepSeek compatibility behavior that disables thinking mode for local
+  web-search requests by default. This avoids reasoning-only completions
+  exhausting `max_output_tokens` before any visible assistant text is emitted.
+- Caveat: this is not native OpenAI web search and the default provider is not a
+  full web index. Full parity still requires a production web-search backend,
+  page open/find support, citation ranking, and policy controls.
+- Added mock-provider coverage for:
+  - local hosted-tool reservation so `web_search_preview` is not forwarded as
+    an unsupported upstream Chat tool;
+  - injected search context in upstream Chat messages;
+  - `web_search_call` output item shape;
+  - `url_citation` annotations;
+  - DeepSeek `thinking:{type:"disabled"}` for local web-search requests.
+- Added `responses-web-search` to live `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/web_search.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 23/23 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-web-search --timeout-ms 90000 --verbose`
+  passed 1/1, latency 1774 ms, output `web-search-ok [1]`, total usage
+  390 tokens.
+- Full live `bridge-regression` passed 12/12, pass rate 1.0, average latency
+  1918 ms, P95 latency 4098 ms, total usage 1582 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7pjgyb` appeared before reload and after reload, console errors
+  0, warnings 0.
