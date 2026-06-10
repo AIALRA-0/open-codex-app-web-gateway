@@ -106,6 +106,16 @@ The bridge stores Chat completions only when the incoming Chat request sets
 `store:true`. This matches the stored-completion lifecycle intent and avoids
 unbounded state growth for ordinary passthrough Chat traffic.
 
+## Models Endpoint Coverage
+
+OpenAI's current endpoint list includes `GET /v1/models` and
+`GET /v1/models/{model}`.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns the configured default bridge model |
+| `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to the configured default model only when the requested ID matches it |
+
 ## Streaming Mapping
 
 The bridge emits:

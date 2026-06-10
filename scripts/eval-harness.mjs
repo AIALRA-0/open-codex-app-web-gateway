@@ -119,6 +119,12 @@ function buildSuites(defaultModel) {
     "bridge-regression": [
       ...protocolSmoke,
       {
+        id: "models-retrieve",
+        mode: "model-get",
+        model: defaultModel,
+        check: ({ json }) => json?.object === "model" && json.id === defaultModel,
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -288,6 +294,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-compact") {
       return await runCompactionCase(testCase, context, started);
     }
+    if (testCase.mode === "model-get") {
+      return await runModelGetCase(testCase, context, started);
+    }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
     }
@@ -392,6 +401,18 @@ async function runChatLifecycleCase(testCase, context, started) {
     fetched_status: fetched.status,
     messages_status: messages.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+  });
+}
+
+async function runModelGetCase(testCase, context, started) {
+  const modelId = encodeURIComponent(testCase.model || model);
+  const response = await getJson(`${baseUrl}/v1/models/${modelId}`);
+  const ok = response.ok && !!testCase.check({ json: response.json, ok: response.ok });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: response.status,
+    model_id: response.json?.id || null,
+    error: ok ? undefined : truncate(response.body),
   });
 }
 

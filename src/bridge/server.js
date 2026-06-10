@@ -149,6 +149,26 @@ async function fetchProvider(config, route, body, incomingHeaders = {}, options 
   }
 }
 
+async function fetchProviderGet(config, route, incomingHeaders = {}, options = {}) {
+  if (!config.providerApiKey && !options.allowMissingKey) {
+    const error = new Error(`${config.providerApiKeyEnv} is required for upstream provider calls`);
+    error.status = 500;
+    throw error;
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  try {
+    return await fetch(`${config.providerBaseUrl}${route}`, {
+      method: "GET",
+      headers: providerHeaders(config, incomingHeaders),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function handleResponses(req, res, config, store) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
@@ -806,9 +826,7 @@ function addStoredChatMessageId(message, index, direction) {
 async function handleModels(req, res, config) {
   if (config.providerApiKey) {
     try {
-      const upstream = await fetch(`${config.providerBaseUrl}${config.modelsPath}`, {
-        headers: providerHeaders(config, req.headers),
-      });
+      const upstream = await fetchProviderGet(config, config.modelsPath, req.headers);
       if (upstream.ok) {
         const text = await upstream.text();
         res.writeHead(200, {
@@ -825,13 +843,83 @@ async function handleModels(req, res, config) {
 
   sendJson(res, 200, {
     object: "list",
-    data: [{
-      id: config.defaultModel,
-      object: "model",
-      created: 0,
-      owned_by: "compatibility-bridge",
-    }],
+    data: [localModelObject(config.defaultModel)],
   });
+}
+
+async function handleModelGet(req, res, config, modelId) {
+  if (config.providerApiKey) {
+    const direct = await tryFetchModel(config, req.headers, modelId);
+    if (direct) {
+      sendJson(res, 200, direct);
+      return;
+    }
+
+    const listed = await tryFindListedModel(config, req.headers, modelId);
+    if (listed) {
+      sendJson(res, 200, listed);
+      return;
+    }
+  }
+
+  if (modelId === config.defaultModel) {
+    sendJson(res, 200, localModelObject(modelId));
+    return;
+  }
+
+  sendError(res, 404, `model not found: ${modelId}`, {
+    type: "invalid_request_error",
+    code: "model_not_found",
+    param: "model",
+  });
+}
+
+async function tryFetchModel(config, headers, modelId) {
+  try {
+    const route = `${config.modelsPath.replace(/\/+$/, "")}/${encodeURIComponent(modelId)}`;
+    const upstream = await fetchProviderGet(config, route, headers);
+    if (!upstream.ok || !isJsonResponse(upstream)) return null;
+    const text = await upstream.text();
+    const json = parseJsonOrNull(text);
+    return normalizeModelObject(json);
+  } catch {
+    return null;
+  }
+}
+
+async function tryFindListedModel(config, headers, modelId) {
+  try {
+    const upstream = await fetchProviderGet(config, config.modelsPath, headers);
+    if (!upstream.ok || !isJsonResponse(upstream)) return null;
+    const body = parseJsonOrNull(await upstream.text());
+    const found = Array.isArray(body?.data)
+      ? body.data.find((model) => model?.id === modelId)
+      : null;
+    return normalizeModelObject(found);
+  } catch {
+    return null;
+  }
+}
+
+function normalizeModelObject(model) {
+  if (!model?.id) return null;
+  const created = Number(model.created);
+  return {
+    ...model,
+    id: model.id,
+    object: model.object || "model",
+    created: Number.isFinite(created) ? created : 0,
+    owned_by: model.owned_by || model.owned_by_organization || "upstream-provider",
+  };
+}
+
+function localModelObject(modelId) {
+  return {
+    id: modelId,
+    object: "model",
+    created: 0,
+    owned_by: "compatibility-bridge",
+  };
 }
 
 function handleResponseGet(res, store, responseId) {
@@ -1005,6 +1093,12 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "GET" && url.pathname === "/v1/models") {
         await handleModels(req, res, config);
+        return;
+      }
+
+      const modelRoute = url.pathname.match(/^\/v1\/models\/([^/]+)$/);
+      if (modelRoute && req.method === "GET") {
+        await handleModelGet(req, res, config, decodeURIComponent(modelRoute[1]));
         return;
       }
 

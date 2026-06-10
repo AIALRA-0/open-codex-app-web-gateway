@@ -236,3 +236,26 @@ Open follow-ups:
   `npm run soak:bridge -- --iterations 5 --timeout-ms 180000` passed 5/5,
   cleanup failures 0, average latency 1815 ms, P95 latency 1982 ms, and zero
   residual state file or byte growth after cleanup.
+
+## 2026-06-10 Model Retrieval Compatibility
+
+- Used the current OpenAI endpoint list to confirm `GET /v1/models/{model}` is
+  part of the API surface alongside `GET /v1/models`.
+- Added `GET /v1/models/{model}` to the bridge.
+- Retrieval strategy:
+  - first proxy upstream single-model retrieval at
+    `$CODEXCOMPAT_MODELS_PATH/{model}` when the provider supports it;
+  - otherwise fetch upstream model list and return the matching model object;
+  - otherwise return a local fallback only when `{model}` is the configured
+    `CODEXCOMPAT_DEFAULT_MODEL`;
+  - return a structured 404 `model_not_found` error for unknown models.
+- Refactored local model fallback so list and retrieve return the same model
+  object shape.
+- Added mock-provider coverage for direct upstream retrieval and list fallback.
+- Added `models-retrieve` to live `bridge-regression`.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case models-retrieve --timeout-ms 45000` passed
+  1/1, latency 468 ms, retrieved model ID `deepseek-v4-pro`.
+- Full live `bridge-regression` passed 10/10, pass rate 1.0, average latency
+  2304 ms, P95 latency 7773 ms, total usage 1392 tokens.

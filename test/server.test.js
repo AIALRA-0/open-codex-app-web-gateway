@@ -403,3 +403,58 @@ test("GET /healthz does not require a provider key", async () => {
     await close(server);
   }
 });
+
+test("GET /v1/models/{model} proxies direct retrieval and falls back to model list", async () => {
+  await withMockProvider(async (req, res) => {
+    if (req.method === "GET" && req.url === "/models/direct-model") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "direct-model",
+        object: "model",
+        created: 123,
+        owned_by: "provider",
+      }));
+      return;
+    }
+
+    if (req.method === "GET" && req.url === "/models") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        object: "list",
+        data: [{
+          id: "listed-model",
+          object: "model",
+          created: 456,
+          owned_by: "provider-list",
+        }],
+      }));
+      return;
+    }
+
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "not found" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const direct = await fetch(`${baseUrl}/v1/models/direct-model`);
+    assert.equal(direct.status, 200);
+    assert.deepEqual(await direct.json(), {
+      id: "direct-model",
+      object: "model",
+      created: 123,
+      owned_by: "provider",
+    });
+
+    const listed = await fetch(`${baseUrl}/v1/models/listed-model`);
+    assert.equal(listed.status, 200);
+    assert.deepEqual(await listed.json(), {
+      id: "listed-model",
+      object: "model",
+      created: 456,
+      owned_by: "provider-list",
+    });
+
+    assert.equal(requests[0].req.url, "/models/direct-model");
+    assert.equal(requests[1].req.url, "/models/listed-model");
+    assert.equal(requests[2].req.url, "/models");
+  });
+});
