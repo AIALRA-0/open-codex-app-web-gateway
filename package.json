@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node web-server.js",
     "start:bridge": "node src/bridge/server.js",
-    "test": "node --test",
+    "test": "node --test test/*.test.js",
     "eval:protocol": "node scripts/eval-harness.mjs --suite protocol-smoke",
     "eval:bridge": "node scripts/eval-harness.mjs --suite bridge-regression",
+    "bench:code": "node scripts/code-benchmark.mjs",
     "smoke:ui": "node scripts/ui-smoke.mjs",
     "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"

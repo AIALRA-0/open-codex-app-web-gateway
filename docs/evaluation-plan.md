@@ -41,6 +41,7 @@ larger agent evaluations.
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
 | `bridge-regression` | Protocol smoke plus Chat passthrough, stored Chat lifecycle, Responses SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 
 Useful commands:
 
@@ -50,7 +51,25 @@ npm run eval:bridge -- --timeout-ms 45000
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
+npm run bench:code -- --timeout-ms 180000
 ```
+
+## Current Coding Benchmark
+
+`scripts/code-benchmark.mjs` is a disk-bounded coding-quality harness. It creates
+temporary JavaScript repositories under ignored `output/code-benchmark/`, asks
+the bridge model to return JSON file replacements, applies the generated files,
+and runs each task's tests.
+
+The current `micro` suite covers:
+
+- URL-safe slug normalization.
+- Interval range merging without mutating input.
+- Compact duration parsing.
+
+This is not a substitute for SWE-bench. It is a cheap pass/fail sentinel for the
+same broad loop: issue text plus code context, generated patch, test execution,
+and structured scoring.
 
 4. Resource and stability
 
@@ -85,6 +104,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 Do not download full SWE-bench artifacts into this repo. Use an external cache
 under `/srv/aialra/data` or a small sample set. Record exact dataset revision,
 task IDs, model, bridge commit, Codex version, and run command in `docs/audit-log.md`.
+The official SWE-bench repository warns that evaluation is resource intensive
+and recommends about 120GB free storage, 16GB RAM, 8 CPU cores, and Docker-based
+execution; this deployment must therefore start with Lite, Verified subsets, or
+external caches rather than repository-local artifacts.
 
 Current public SWE-bench references to track:
 

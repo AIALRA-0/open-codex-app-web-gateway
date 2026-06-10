@@ -142,3 +142,22 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` passed, marker
   `ui-smoke-mq7n5dx9` appeared twice before reload and once after reload,
   console errors 0, warnings 0.
+
+## 2026-06-10 Code Quality Benchmark Harness
+
+- Added `scripts/code-benchmark.mjs` and `npm run bench:code`.
+- The harness creates temporary JavaScript repositories under ignored
+  `output/code-benchmark/`, asks the bridge model for JSON file replacements,
+  applies generated files, and runs task tests.
+- Added the first `micro` suite:
+  - `slugify-url-safe`
+  - `merge-ranges`
+  - `parse-duration`
+- Reviewed SWE-bench public guidance and recorded that official evaluation is
+  Docker-based and resource intensive, with approximately 120GB free storage
+  recommended for full evaluation. Full SWE-bench artifacts remain out of the
+  repository by policy.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run bench:code -- --timeout-ms 180000` passed 3/3, pass rate 1.0,
+  average latency 27595 ms, P95 latency 30290 ms, total usage 5751 tokens.

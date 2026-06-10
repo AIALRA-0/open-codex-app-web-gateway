@@ -117,6 +117,7 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+npm run bench:code -- --timeout-ms 180000
 npm run smoke:ui -- --timeout-ms 180000
 curl http://127.0.0.1:12920/
 curl http://127.0.0.1:12923/login

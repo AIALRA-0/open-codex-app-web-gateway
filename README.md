@@ -38,6 +38,9 @@ the repository.
 ```bash
 npm test
 npm run secret-scan
+npm run eval:bridge -- --timeout-ms 45000
+npm run bench:code -- --timeout-ms 180000
+npm run smoke:ui -- --timeout-ms 180000
 ```
 
 For a live provider smoke test, start the bridge with a provider key and run:
