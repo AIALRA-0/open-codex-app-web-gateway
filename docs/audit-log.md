@@ -2390,3 +2390,63 @@ Open follow-ups:
     confirmed, console errors 0, warnings 0.
   - `npm run prune:runtime -- --dry-run` scanned 214 runtime candidates,
     selected 0, deleted 0, and reported 0 errors.
+
+## 2026-06-10 Local Skills API and Shell Skill Mounts
+
+- Closed a Codex/Responses compatibility gap where the bridge did not expose
+  OpenAI Skills API endpoints and local shell/code-interpreter requests could
+  not mount `skill_reference` bundles.
+- Official sources checked on 2026-06-10:
+  - OpenAI API endpoint list included `/v1/skills`,
+    `/v1/skills/{skill_id}`, `/v1/skills/{skill_id}/content`,
+    `/v1/skills/{skill_id}/versions`,
+    `/v1/skills/{skill_id}/versions/{version}`, and
+    `/v1/skills/{skill_id}/versions/{version}/content`.
+  - `https://developers.openai.com/api/docs/guides/tools-skills` describes
+    Skills as versioned bundles of files with a `SKILL.md` manifest, directory
+    or zip upload, `skill_reference` mounting in shell environments, default
+    version updates, and delete rules.
+  - `https://developers.openai.com/codex/skills` confirms Codex skills package
+    instructions/resources/scripts, use `name` and `description`, and are
+    available in the Codex app.
+- Added `src/bridge/local_skills.js`, a local file-backed Skills registry under
+  `$CODEXCOMPAT_STATE_DIR/local-skills` that:
+  - validates exactly one `SKILL.md` manifest and extracts `name` /
+    `description`;
+  - accepts JSON, multipart directory-style `files[]`, raw `SKILL.md`, and
+    storage/deflate zip uploads;
+  - exposes skill list/get/update/delete, version create/list/get/delete, and
+    content download as `application/zip`;
+  - keeps skill bundles in ignored runtime state, not in Git.
+- Extended local shell/code-interpreter compatibility so
+  `tools[].environment.skills` entries of type `skill_reference` are
+  materialized under `/mnt/data/.skills/<skill-name>/v<version>/` before the
+  command runs, and recorded under
+  `metadata.compatibility.local_shell.mounted_skills`.
+- Added `responses-shell-skill` to live `bridge-regression`.
+- Updated the compatibility matrix, deployment environment table, and
+  evaluation plan.
+- Verified:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/local_shell.js`, `src/bridge/local_skills.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Targeted local shell/Skills tests passed 2/2, covering Skills API
+    lifecycle, default-version deletion protection, zip content retrieval, and
+    shell `skill_reference` mounting.
+  - `npm test`: 74/74 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-shell-skill` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1305 ms, output `skill-live-ok`, and total usage
+    341 tokens.
+  - Full live `bridge-regression` passed 26/26 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1638 ms, P95 latency 4285 ms, and total usage
+    8093 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq85uxjm`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run prune:runtime -- --dry-run` scanned 217 runtime candidates,
+    selected 1 old UI screenshot by retention policy, deleted 0, and reported
+    0 errors.

@@ -642,6 +642,61 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-shell-skill",
+        mode: "responses-shell",
+        skill: {
+          files: [{
+            path: "SKILL.md",
+            content: [
+              "---",
+              "name: live-skill",
+              "description: Live bridge skill mount regression fixture.",
+              "---",
+              "skill-live-ok",
+            ].join("\n"),
+          }],
+        },
+        container: { name: "bridge-shell-skill-eval" },
+        request: ({ containerId, skillId }) => ({
+          model: defaultModel,
+          input: [
+            {
+              role: "user",
+              content: "Execute: grep skill-live-ok /mnt/data/.skills/live-skill/v1/SKILL.md > /mnt/data/shell.txt && cat /mnt/data/shell.txt",
+            },
+            {
+              role: "user",
+              content: "After the command output, return exactly skill-live-ok.",
+            },
+          ],
+          tools: [{
+            type: "shell",
+            environment: {
+              type: "container_reference",
+              container_id: containerId,
+              skills: [{ type: "skill_reference", skill_id: skillId }],
+            },
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, containerId, skillId, artifactText }) => {
+          const shellCall = (json.output || []).find((item) => item.type === "shell_call");
+          const shellOutput = (json.output || []).find((item) => item.type === "shell_call_output");
+          const mountedSkills = json.metadata?.compatibility?.local_shell?.mounted_skills || [];
+          return !!shellCall
+            && shellCall.status === "completed"
+            && shellCall.container_id === containerId
+            && !!shellOutput
+            && shellOutput.status === "completed"
+            && shellOutput.outcome?.exit_code === 0
+            && mountedSkills.some((skill) => skill.skill_id === skillId && skill.version === 1)
+            && /skill-live-ok/i.test(shellOutput.output?.[0]?.stdout || "")
+            && /skill-live-ok/i.test(artifactText || "")
+            && /skill-live-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-file-search",
         mode: "responses-file-search",
         file: {
@@ -1579,7 +1634,21 @@ async function runInputFileUrlCase(testCase, context, started) {
 
 async function runShellCase(testCase, context, started) {
   let container = null;
+  let skill = null;
   try {
+    if (testCase.skill) {
+      const skillResponse = await postJson(`${baseUrl}/v1/skills`, testCase.skill);
+      const skillBody = await skillResponse.text();
+      if (!skillResponse.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: skillResponse.status,
+          error: truncate(skillBody),
+        });
+      }
+      skill = JSON.parse(skillBody);
+    }
+
     const containerResponse = await postJson(`${baseUrl}/v1/containers`, testCase.container || {});
     const containerBody = await containerResponse.text();
     if (!containerResponse.ok) {
@@ -1591,7 +1660,7 @@ async function runShellCase(testCase, context, started) {
     }
     container = JSON.parse(containerBody);
 
-    const request = resolveRequest(testCase.request, { ...context, containerId: container.id });
+    const request = resolveRequest(testCase.request, { ...context, containerId: container.id, skillId: skill?.id });
     const response = await postJson(`${baseUrl}/v1/responses`, request);
     const body = await response.text();
     if (!response.ok) {
@@ -1613,17 +1682,19 @@ async function runShellCase(testCase, context, started) {
       if (contentResponse.ok) artifactText = await contentResponse.text();
     }
     const text = responseOutputText(json);
-    const ok = !!testCase.check({ json, text, containerId: container.id, artifactText });
+    const ok = !!testCase.check({ json, text, containerId: container.id, skillId: skill?.id, artifactText });
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
       container_id: container.id,
+      ...(skill ? { skill_id: skill.id } : {}),
       artifact_text: truncate(artifactText),
       usage: responseUsage(json),
       output_text: truncate(text),
     });
   } finally {
     if (container?.id) await deleteJson(`${baseUrl}/v1/containers/${container.id}`);
+    if (skill?.id) await deleteJson(`${baseUrl}/v1/skills/${skill.id}`);
   }
 }
 

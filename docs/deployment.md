@@ -121,6 +121,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS` | `4000` | Maximum extracted shell command length |
 | `CODEXCOMPAT_SHELL_MAX_COMMANDS` | `1` | Maximum extracted shell commands executed per response |
 | `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
+| `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload size |
+| `CODEXCOMPAT_SKILL_MAX_FILE_COUNT` | `500` | Maximum files accepted in a local skill bundle |
 
 ## Systemd
 

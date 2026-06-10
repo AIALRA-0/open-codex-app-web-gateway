@@ -9,6 +9,7 @@ const path = require("node:path");
 const zlib = require("node:zlib");
 const { createServer, loadConfig } = require("../src/bridge/server");
 const { FileResponseStore } = require("../src/bridge/store");
+const { unzipFiles } = require("../src/bridge/local_skills");
 const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
 function listen(server) {
@@ -2417,6 +2418,162 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
     assert.equal((await deleted.json()).deleted, true);
+  });
+});
+
+test("local Skills API manages versions and mounts skill references for shell", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.ok(call.body.messages.some((message) => /Mounted skills:\n- portable-math v2/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /skill-mount-v2-ok/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_skill_shell",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "skill-mounted-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createResponse = await fetch(`${baseUrl}/v1/skills`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: { suite: "skills-api" },
+        files: [{
+          path: "SKILL.md",
+          content: [
+            "---",
+            "name: portable-math",
+            "description: Mountable math helper for shell compatibility.",
+            "---",
+            "skill-mount-v1-ok",
+          ].join("\n"),
+        }, {
+          path: "scripts/calc.sh",
+          content: "echo calc-ok\n",
+        }],
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const skill = await createResponse.json();
+    assert.equal(skill.object, "skill");
+    assert.equal(skill.name, "portable-math");
+    assert.equal(skill.default_version, 1);
+    assert.equal(skill.latest_version, 1);
+    assert.equal(skill.version_count, 1);
+
+    const listResponse = await fetch(`${baseUrl}/v1/skills?order=asc`);
+    assert.equal(listResponse.status, 200);
+    const listed = await listResponse.json();
+    assert.equal(listed.data[0].id, skill.id);
+
+    const versionResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        files: [{
+          path: "SKILL.md",
+          content: [
+            "---",
+            "name: portable-math",
+            "description: Mountable math helper for shell compatibility.",
+            "---",
+            "skill-mount-v2-ok",
+          ].join("\n"),
+        }],
+      }),
+    });
+    assert.equal(versionResponse.status, 200);
+    const version = await versionResponse.json();
+    assert.equal(version.object, "skill.version");
+    assert.equal(version.version, 2);
+
+    const defaultDelete = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/1`, { method: "DELETE" });
+    assert.equal(defaultDelete.status, 400);
+
+    const updateResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default_version: 2, metadata: { suite: "skills-api-updated" } }),
+    });
+    assert.equal(updateResponse.status, 200);
+    const updated = await updateResponse.json();
+    assert.equal(updated.default_version, 2);
+    assert.equal(updated.latest_version, 2);
+    assert.deepEqual(updated.metadata, { suite: "skills-api-updated" });
+
+    const versionsResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?order=asc`);
+    assert.equal(versionsResponse.status, 200);
+    const versions = await versionsResponse.json();
+    assert.deepEqual(versions.data.map((item) => item.version), [1, 2]);
+
+    const latestResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/latest`);
+    assert.equal(latestResponse.status, 200);
+    assert.equal((await latestResponse.json()).version, 2);
+
+    const contentResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.match(contentResponse.headers.get("content-type"), /application\/zip/);
+    const files = unzipFiles(Buffer.from(await contentResponse.arrayBuffer()), 500, 50 * 1024 * 1024);
+    const manifest = files.find((file) => file.path === "SKILL.md");
+    assert.ok(manifest);
+    assert.match(manifest.content.toString("utf8"), /skill-mount-v2-ok/);
+
+    const containerResponse = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "skill-shell" }),
+    });
+    assert.equal(containerResponse.status, 200);
+    const container = await containerResponse.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: cat /mnt/data/.skills/portable-math/v2/SKILL.md",
+        tools: [{
+          type: "shell",
+          environment: {
+            type: "container_reference",
+            container_id: container.id,
+            skills: [{ type: "skill_reference", skill_id: skill.id }],
+          },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "shell_call");
+    assert.equal(json.output[1].type, "shell_call_output");
+    assert.match(json.output[1].output[0].stdout, /skill-mount-v2-ok/);
+    assert.equal(json.metadata.compatibility.local_shell.mounted_skill_count, 1);
+    assert.equal(json.metadata.compatibility.local_shell.mounted_skills[0].skill_id, skill.id);
+    assert.equal(json.metadata.compatibility.local_shell.mounted_skills[0].version, 2);
+    assert.equal(json.output[2].content[0].text, "skill-mounted-ok");
+
+    const setDefaultOne = await fetch(`${baseUrl}/v1/skills/${skill.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ default_version: 1 }),
+    });
+    assert.equal(setDefaultOne.status, 200);
+    const deletedVersion = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/2`, { method: "DELETE" });
+    assert.equal(deletedVersion.status, 200);
+    assert.equal((await deletedVersion.json()).deleted, true);
+
+    const deleteSkill = await fetch(`${baseUrl}/v1/skills/${skill.id}`, { method: "DELETE" });
+    assert.equal(deleteSkill.status, 200);
+    assert.equal((await deleteSkill.json()).deleted, true);
   });
 });
 

@@ -13,6 +13,7 @@ Primary sources:
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
+- OpenAI Skills guide: https://developers.openai.com/api/docs/guides/tools-skills
 - OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
 - OpenAI Containers reference: https://platform.openai.com/docs/api-reference/containers
 - OpenAI Files reference: https://platform.openai.com/docs/api-reference/files
@@ -56,7 +57,7 @@ implementations for those tools.
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page/find_in_page items and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
-| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output` |
+| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries under `tools[].environment.skills` are mounted into the local container workspace |
 | `tools[type=code_interpreter]` | local shell/container adapter | Compatibility alias; explicit Python code blocks are executed through `python3` in the local container workspace |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
@@ -249,6 +250,26 @@ not in Git.
 | `GET /v1/containers/{container_id}/files/{file_id}` | Implemented | Returns local container file metadata |
 | `GET /v1/containers/{container_id}/files/{file_id}/content` | Implemented | Downloads local container file content |
 | `DELETE /v1/containers/{container_id}/files/{file_id}` | Implemented | Deletes a local container file |
+
+## Skills Endpoint Coverage
+
+These endpoints back local skill upload, versioning, content retrieval, and
+`skill_reference` mounting for the local shell/code-interpreter adapter. Skill
+bundles are stored under the configured bridge state directory, not in Git.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/skills` | Implemented locally | Accepts JSON, multipart directory-style `files[]`, or raw `SKILL.md`; validates exactly one `SKILL.md` manifest and extracts `name` / `description` |
+| `GET /v1/skills` | Implemented locally | Lists local skill records with `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/skills/{skill_id}` | Implemented locally | Returns local skill metadata, `default_version`, `latest_version`, and `version_count` |
+| `POST /v1/skills/{skill_id}` | Implemented locally | Updates `metadata` and `default_version`; deleting the default version is rejected until another default is selected |
+| `DELETE /v1/skills/{skill_id}` | Implemented locally | Deletes the local skill and all versions |
+| `GET /v1/skills/{skill_id}/content` | Implemented locally | Returns the default version as an `application/zip` bundle |
+| `POST /v1/skills/{skill_id}/versions` | Implemented locally | Creates a new immutable local skill version from JSON, multipart, or raw upload |
+| `GET /v1/skills/{skill_id}/versions` | Implemented locally | Lists local skill versions with pagination |
+| `GET /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Retrieves a numeric version, `latest`, or `default` |
+| `DELETE /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Deletes a non-default version; deleting the last version deletes the skill |
+| `GET /v1/skills/{skill_id}/versions/{version}/content` | Implemented locally | Returns the selected version as an `application/zip` bundle |
 
 ## Streaming Mapping
 
@@ -471,6 +492,10 @@ local container workspace. The adapter:
   code block commands;
 - creates or reuses local container workspaces through `container_auto` and
   `container_reference`-style tool configuration;
+- mounts local Skills API `skill_reference` entries from
+  `tools[].environment.skills` under
+  `/mnt/data/.skills/<skill-name>/v<version>/` and records mounted skill
+  metadata in `metadata.compatibility.local_shell.mounted_skills`;
 - maps `/mnt/data` in commands to the local container workspace;
 - emits paired `shell_call` and `shell_call_output` output items;
 - consumes one shared `max_tool_calls` budget slot before each local shell or
@@ -492,6 +517,9 @@ Configuration:
 | `CODEXCOMPAT_SHELL_MAX_COMMANDS` | `1` | Maximum extracted commands executed per response |
 | `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL` | `true` | Disables DeepSeek thinking mode for local shell requests so final text is visible under small output budgets |
+| `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git |
+| `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload bundle size |
+| `CODEXCOMPAT_SKILL_MAX_FILE_COUNT` | `500` | Maximum files accepted in one local skill bundle |
 
 This is a bridge compatibility layer, not OpenAI hosted shell or a Docker/VM
 sandbox. It uses a local workspace, command timeouts, limited environment
@@ -508,6 +536,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search or reranker | Add provider/model-backed embeddings, ANN vector indexing, file parsers, async batches, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
+| OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |

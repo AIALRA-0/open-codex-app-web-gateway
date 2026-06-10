@@ -33,6 +33,7 @@ const {
   shellCompatibility,
   shellOutputItems,
 } = require("./local_shell");
+const { LocalSkillStore } = require("./local_skills");
 const {
   chatCompatibilityMetadata,
   chatCompletionToReplayMessages,
@@ -135,6 +136,9 @@ function loadConfig(overrides = {}) {
     shellMaxCommandChars: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS", 4000, 32, 20000),
     shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
+    skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
+    skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    skillMaxFileCount: numberFromEnv("CODEXCOMPAT_SKILL_MAX_FILE_COUNT", 500, 1, 500),
     deepseekReasoningEffortCompat: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT, true),
     deepseekThinkingMode: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_THINKING_MODE, false),
     deepseekDisableThinkingForToolChoice: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE, true),
@@ -284,7 +288,7 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore) {
+async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const toolBudget = createToolCallBudget(request.max_tool_calls);
@@ -315,7 +319,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, fileSearchStore, containerStore, conversationStore, conversation, toolBudget);
+    }, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore);
     return;
   }
 
@@ -323,7 +327,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localInputFiles) {
     applyInputFilesToChat(chat, compatibility, localInputFiles, config);
   }
-  const localShell = await prepareShellContext(request, config, containerStore, { toolBudget });
+  const localShell = await prepareShellContext(request, config, containerStore, { toolBudget, skillStore });
   if (localShell) {
     applyLocalShellToChat(chat, compatibility, localShell, config);
   }
@@ -385,7 +389,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   sendJson(res, 200, response);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation, toolBudget) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -436,19 +440,20 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     conversationStore,
     conversation,
     toolBudget,
+    skillStore,
   });
 
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation, toolBudget }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore }) {
   try {
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
     if (localInputFiles) {
       finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles, config);
     }
-    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget });
+    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget, skillStore });
     if (localShell) {
       finalCompatibility = applyLocalShellToChat(chat, { ...finalCompatibility }, localShell, config);
     }
@@ -1022,6 +1027,96 @@ async function handleVectorStoreSearch(req, res, fileSearchStore, storeId) {
   sendJson(res, 200, page);
 }
 
+async function handleSkillCreate(req, res, config, skillStore) {
+  const upload = await readSkillCreateRequest(req, config);
+  sendJson(res, 200, skillStore.createSkill(upload));
+}
+
+function handleSkillsList(res, skillStore, url) {
+  sendJson(res, 200, skillStore.listSkills({ url }));
+}
+
+function handleSkillGet(res, skillStore, skillId) {
+  const skill = skillStore.getSkill(skillId);
+  if (!skill) {
+    sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
+    return;
+  }
+  sendJson(res, 200, skill);
+}
+
+async function handleSkillUpdate(req, res, skillStore, skillId) {
+  const body = await readJson(req);
+  const skill = skillStore.updateSkill(skillId, body);
+  if (!skill) {
+    sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
+    return;
+  }
+  sendJson(res, 200, skill);
+}
+
+function handleSkillDelete(res, skillStore, skillId) {
+  const deleted = skillStore.deleteSkill(skillId);
+  if (!deleted) {
+    sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function handleSkillVersionCreate(req, res, config, skillStore, skillId) {
+  const upload = await readSkillCreateRequest(req, config);
+  const version = skillStore.createSkillVersion(skillId, upload);
+  if (!version) {
+    sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
+    return;
+  }
+  sendJson(res, 200, version);
+}
+
+function handleSkillVersionsList(res, skillStore, skillId, url) {
+  const page = skillStore.listSkillVersions(skillId, { url });
+  if (!page) {
+    sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
+    return;
+  }
+  sendJson(res, 200, page);
+}
+
+function handleSkillVersionGet(res, skillStore, skillId, version) {
+  const resource = skillStore.getSkillVersion(skillId, version);
+  if (!resource) {
+    sendError(res, 404, `skill version not found: ${version}`, { code: "skill_version_not_found" });
+    return;
+  }
+  sendJson(res, 200, resource);
+}
+
+function handleSkillVersionDelete(res, skillStore, skillId, version) {
+  const deleted = skillStore.deleteSkillVersion(skillId, version);
+  if (!deleted) {
+    sendError(res, 404, `skill version not found: ${version}`, { code: "skill_version_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+function handleSkillContent(res, skillStore, skillId, version) {
+  const content = skillStore.getSkillContentZip(skillId, version);
+  if (!content) {
+    sendError(res, 404, `skill content not found: ${skillId}`, { code: "skill_content_not_found" });
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "application/zip",
+    "cache-control": "no-store",
+    "content-disposition": `attachment; filename="${content.skill.name}-v${content.version.version}.zip"`,
+    "x-skill-id": content.skill.id,
+    "x-skill-version": String(content.version.version),
+  });
+  res.end(content.content);
+}
+
 async function handleContainerCreate(req, res, containerStore) {
   const body = await readJson(req);
   sendJson(res, 200, containerStore.createContainer(body));
@@ -1104,6 +1199,36 @@ function handleContainerFileDelete(res, containerStore, containerId, fileId) {
   sendJson(res, 200, deleted);
 }
 
+async function readSkillCreateRequest(req, config) {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("application/json")) {
+    return readJson(req);
+  }
+
+  if (contentType.includes("multipart/form-data")) {
+    const form = parseMultipartFormBinary(await readRawBody(req, config.skillMaxUploadBytes), contentType);
+    return {
+      name: form.fields.name,
+      description: form.fields.description,
+      metadata: parseJsonOrNull(form.fields.metadata) || {},
+      files: form.files.map((file, index) => ({
+        path: file.filename || file.name || (index === 0 ? "SKILL.md" : `file-${index}.txt`),
+        content: file.content,
+      })),
+    };
+  }
+
+  const body = await readRawBody(req, config.skillMaxUploadBytes);
+  return {
+    name: req.headers["x-skill-name"],
+    description: req.headers["x-skill-description"],
+    files: [{
+      path: req.headers["x-filename"] || "SKILL.md",
+      content: body,
+    }],
+  };
+}
+
 async function readContainerFileCreateRequest(req, config) {
   const contentType = req.headers["content-type"] || "";
   if (contentType.includes("application/json")) {
@@ -1182,6 +1307,57 @@ function parseMultipartForm(buffer, contentType) {
     if (filename != null) files.push({ name, filename, content });
     else fields[name] = content;
   }
+  return { fields, files };
+}
+
+function parseMultipartFormBinary(buffer, contentType) {
+  const boundary = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[1]
+    || contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/)?.[2];
+  if (!boundary) {
+    const error = new Error("multipart boundary is required");
+    error.status = 400;
+    throw error;
+  }
+
+  const marker = Buffer.from(`--${boundary}`);
+  const crlfMarker = Buffer.from(`\r\n--${boundary}`);
+  const lfMarker = Buffer.from(`\n--${boundary}`);
+  const fields = {};
+  const files = [];
+  let cursor = 0;
+
+  while (cursor < buffer.length) {
+    let start = buffer.indexOf(marker, cursor);
+    if (start === -1) break;
+    start += marker.length;
+    if (buffer[start] === 45 && buffer[start + 1] === 45) break;
+    if (buffer[start] === 13 && buffer[start + 1] === 10) start += 2;
+    else if (buffer[start] === 10) start += 1;
+
+    let next = buffer.indexOf(crlfMarker, start);
+    if (next === -1) next = buffer.indexOf(lfMarker, start);
+    if (next === -1) break;
+    const part = buffer.subarray(start, next);
+    cursor = next + 1;
+
+    let separator = part.indexOf(Buffer.from("\r\n\r\n"));
+    let separatorLength = 4;
+    if (separator === -1) {
+      separator = part.indexOf(Buffer.from("\n\n"));
+      separatorLength = 2;
+    }
+    if (separator === -1) continue;
+
+    const rawHeaders = part.subarray(0, separator).toString("utf8");
+    const content = part.subarray(separator + separatorLength);
+    const disposition = rawHeaders.split(/\r?\n/).find((line) => /^content-disposition:/i.test(line)) || "";
+    const name = disposition.match(/name="([^"]+)"/)?.[1];
+    const filename = disposition.match(/filename="([^"]*)"/)?.[1];
+    if (!name) continue;
+    if (filename != null) files.push({ name, filename, content });
+    else fields[name] = content.toString("utf8");
+  }
+
   return { fields, files };
 }
 
@@ -2416,6 +2592,7 @@ function createServer(config = loadConfig()) {
   const conversationStore = config.conversationStore || new FileConversationStore({ dir: config.conversationStateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
+  const skillStore = config.skillStore || new LocalSkillStore(config);
   const backgroundJobs = new Map();
   const reconciledBackgroundJobs = reconcileStaleBackgroundResponses(store);
   if (reconciledBackgroundJobs) {
@@ -2448,6 +2625,66 @@ function createServer(config = loadConfig()) {
         }
         if (req.method === "POST") {
           await handleContainerCreate(req, res, containerStore);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/skills") {
+        if (req.method === "GET") {
+          handleSkillsList(res, skillStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleSkillCreate(req, res, config, skillStore);
+          return;
+        }
+      }
+
+      const skillVersionsRoute = url.pathname.match(/^\/v1\/skills\/([^/]+)\/versions(?:\/([^/]+)(?:\/(content))?)?$/);
+      if (skillVersionsRoute) {
+        const skillId = decodeURIComponent(skillVersionsRoute[1]);
+        const version = skillVersionsRoute[2] ? decodeURIComponent(skillVersionsRoute[2]) : "";
+        const action = skillVersionsRoute[3] || "";
+        if (!version && req.method === "GET") {
+          handleSkillVersionsList(res, skillStore, skillId, url);
+          return;
+        }
+        if (!version && req.method === "POST") {
+          await handleSkillVersionCreate(req, res, config, skillStore, skillId);
+          return;
+        }
+        if (version && action === "content" && req.method === "GET") {
+          handleSkillContent(res, skillStore, skillId, version);
+          return;
+        }
+        if (version && !action && req.method === "GET") {
+          handleSkillVersionGet(res, skillStore, skillId, version);
+          return;
+        }
+        if (version && !action && req.method === "DELETE") {
+          handleSkillVersionDelete(res, skillStore, skillId, version);
+          return;
+        }
+      }
+
+      const skillRoute = url.pathname.match(/^\/v1\/skills\/([^/]+)(?:\/(content))?$/);
+      if (skillRoute) {
+        const skillId = decodeURIComponent(skillRoute[1]);
+        const action = skillRoute[2] || "";
+        if (action === "content" && req.method === "GET") {
+          handleSkillContent(res, skillStore, skillId, "default");
+          return;
+        }
+        if (!action && req.method === "GET") {
+          handleSkillGet(res, skillStore, skillId);
+          return;
+        }
+        if (!action && req.method === "POST") {
+          await handleSkillUpdate(req, res, skillStore, skillId);
+          return;
+        }
+        if (!action && req.method === "DELETE") {
+          handleSkillDelete(res, skillStore, skillId);
           return;
         }
       }
@@ -2662,7 +2899,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore);
+        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore);
         return;
       }
 

@@ -246,6 +246,7 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
     outputs: [],
     executions: [],
     artifacts: [],
+    mounted_skills: [],
     skipped_calls: [],
   };
 
@@ -275,6 +276,12 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
       continue;
     }
     const container = containerStore.ensureContainer(tool);
+    const mountedSkills = mountToolSkills(tool, container, containerStore, options.skillStore);
+    for (const skill of mountedSkills) {
+      if (!context.mounted_skills.some((item) => item.skill_id === skill.skill_id && item.version === skill.version)) {
+        context.mounted_skills.push(skill);
+      }
+    }
     const callId = prefixedId("call");
     const call = {
       id: prefixedId("sh"),
@@ -360,6 +367,8 @@ function shellCompatibility(context) {
       command_count: context.calls?.length || 0,
       skipped_count: context.skipped_calls?.length || 0,
       artifact_count: context.artifacts?.length || 0,
+      mounted_skill_count: context.mounted_skills?.length || 0,
+      ...(context.mounted_skills?.length ? { mounted_skills: context.mounted_skills } : {}),
       ...(first ? {
         container_id: first.container.id,
         exit_code: first.result.exit_code,
@@ -395,15 +404,64 @@ function shellPrompt(context) {
   const artifacts = (context.artifacts || [])
     .map((file) => `- /mnt/data${file.path} (${file.bytes} bytes, id ${file.id})`)
     .join("\n");
+  const skills = (context.mounted_skills || [])
+    .map((skill) => `- ${skill.name} v${skill.version}: ${skill.description} (${skill.path})`)
+    .join("\n");
 
   return [
     "Local Responses shell compatibility executed command output follows.",
     "The hosted-container path /mnt/data maps to the local container workspace for this bridge.",
     "Use the command output as tool evidence. Preserve exact stdout when the user asks for exact output.",
     "Do not rename, reinterpret, or invent artifact paths; use only the listed /mnt/data paths.",
+    skills ? `Mounted skills:\n${skills}` : "Mounted skills: none",
     ...sections,
     artifacts ? `Artifacts:\n${artifacts}` : "Artifacts: none",
   ].join("\n\n");
+}
+
+function mountToolSkills(tool, container, containerStore, skillStore) {
+  if (!skillStore) return [];
+  const references = extractSkillReferences(tool);
+  const mounted = [];
+  for (const reference of references) {
+    const materialized = skillStore.materializeSkillVersion(reference.skill_id, reference.version || "default");
+    if (!materialized) {
+      const error = new Error(`skill not found: ${reference.skill_id}`);
+      error.status = 404;
+      error.code = "skill_not_found";
+      error.param = "tools.environment.skills";
+      throw error;
+    }
+    const mountName = sanitizeSkillMountName(materialized.skill.name || materialized.skill.id);
+    const mountRoot = path.posix.join(".skills", mountName, `v${materialized.version.version}`);
+    for (const file of materialized.files) {
+      containerStore.createContainerFile(container.id, {
+        path: path.posix.join(mountRoot, sanitizeRelativePath(file.path)),
+        content: file.content,
+      });
+    }
+    mounted.push({
+      type: "skill_reference",
+      skill_id: materialized.skill.id,
+      version: materialized.version.version,
+      name: materialized.skill.name,
+      description: materialized.skill.description,
+      path: `/mnt/data/${mountRoot}`,
+      file_count: materialized.files.length,
+    });
+  }
+  return mounted;
+}
+
+function extractSkillReferences(tool = {}) {
+  const environment = tool.environment || tool.container || {};
+  const skills = [
+    ...(Array.isArray(environment.skills) ? environment.skills : []),
+    ...(Array.isArray(tool.skills) ? tool.skills : []),
+  ];
+  return skills
+    .filter((skill) => isPlainObject(skill) && skill.type === "skill_reference" && typeof skill.skill_id === "string")
+    .map((skill) => ({ skill_id: skill.skill_id, version: skill.version || "default" }));
 }
 
 async function runShellCommand(command, container, store, config = {}) {
@@ -541,6 +599,14 @@ function sanitizeRelativePath(value) {
     safe.push(part.replace(/[^\w.\- ()[\]]+/g, "_").slice(0, 120) || "file");
   }
   return safe.join("/") || "upload.txt";
+}
+
+function sanitizeSkillMountName(value) {
+  return String(value || "skill")
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 120) || "skill";
 }
 
 function paginateList(items, url) {
