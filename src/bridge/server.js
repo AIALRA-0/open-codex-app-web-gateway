@@ -499,14 +499,42 @@ async function* iterateSseJson(stream) {
   }
 }
 
-async function handleChatPassthrough(req, res, config) {
+async function handleChatPassthrough(req, res, config, store) {
   const body = await readJson(req);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, body, req.headers);
-  res.writeHead(upstream.status, proxyResponseHeaders(upstream));
+  const headers = proxyResponseHeaders(upstream);
+  if (body.store === true && !body.stream && isJsonResponse(upstream)) {
+    const text = await upstream.text();
+    const json = parseJsonOrNull(text);
+    if (upstream.ok && json?.id) {
+      store.put(json.id, {
+        chat_completion: json,
+        chat_messages: normalizeStoredChatMessages(body.messages, json),
+        chat_request: sanitizeChatRequest(body),
+      });
+    }
+    res.writeHead(upstream.status, headers);
+    res.end(text);
+    return;
+  }
+
+  res.writeHead(upstream.status, headers);
   if (upstream.body) {
     for await (const chunk of upstream.body) res.write(chunk);
   }
   res.end();
+}
+
+function isJsonResponse(upstream) {
+  return (upstream.headers.get("content-type") || "").includes("application/json");
+}
+
+function parseJsonOrNull(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
 }
 
 function proxyResponseHeaders(upstream) {
@@ -520,6 +548,41 @@ function proxyResponseHeaders(upstream) {
     headers["x-accel-buffering"] = "no";
   }
   return headers;
+}
+
+function sanitizeChatRequest(request) {
+  const stored = clone(request || {});
+  delete stored.stream;
+  return stored;
+}
+
+function normalizeStoredChatMessages(messages, completion) {
+  const data = [];
+  for (const message of Array.isArray(messages) ? messages : []) {
+    data.push(addStoredChatMessageId(message, data.length, "input"));
+  }
+
+  for (const choice of completion?.choices || []) {
+    if (choice.message) {
+      data.push(addStoredChatMessageId({
+        ...choice.message,
+        finish_reason: choice.finish_reason || null,
+        index: choice.index,
+      }, data.length, "output"));
+    }
+  }
+
+  return data;
+}
+
+function addStoredChatMessageId(message, index, direction) {
+  const stored = message && typeof message === "object" && !Array.isArray(message)
+    ? clone(message)
+    : { role: "user", content: stringifyContent(message) };
+  if (!stored.id) stored.id = `chatmsg_${String(index).padStart(6, "0")}`;
+  if (!stored.object) stored.object = "chat.completion.message";
+  stored.direction = direction;
+  return stored;
 }
 
 async function handleModels(req, res, config) {
@@ -612,6 +675,27 @@ function handleUnsupportedResponseEndpoint(res, name) {
   });
 }
 
+function handleChatCompletionGet(res, store, completionId) {
+  const record = store.get(completionId);
+  if (!record?.chat_completion) {
+    sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+
+  sendJson(res, 200, record.chat_completion);
+}
+
+function handleChatCompletionMessages(res, store, completionId, url) {
+  const record = store.get(completionId);
+  if (!record?.chat_completion) {
+    sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+
+  const messages = Array.isArray(record.chat_messages) ? record.chat_messages : [];
+  sendJson(res, 200, paginateList(messages, url));
+}
+
 function normalizeStoredInputItems(input) {
   if (input == null) return [];
   if (typeof input === "string") {
@@ -654,6 +738,10 @@ function normalizeStoredInputItem(item, index) {
 }
 
 function paginateInputItems(items, url) {
+  return paginateList(items, url);
+}
+
+function paginateList(items, url) {
   const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
   const after = url.searchParams.get("after");
   const before = url.searchParams.get("before");
@@ -747,8 +835,22 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {
-        await handleChatPassthrough(req, res, config);
+        await handleChatPassthrough(req, res, config, store);
         return;
+      }
+
+      const chatRoute = url.pathname.match(/^\/v1\/chat\/completions\/([^/]+)(?:\/([^/]+))?$/);
+      if (chatRoute) {
+        const completionId = decodeURIComponent(chatRoute[1]);
+        const action = chatRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleChatCompletionGet(res, store, completionId);
+          return;
+        }
+        if (action === "messages" && req.method === "GET") {
+          handleChatCompletionMessages(res, store, completionId, url);
+          return;
+        }
       }
 
       sendError(res, 404, "not found");

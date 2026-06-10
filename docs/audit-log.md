@@ -82,3 +82,25 @@ Open follow-ups:
 - Live result against `deepseek-v4-pro` on `http://127.0.0.1:12912`:
   `bridge-regression` passed 6/6, pass rate 1.0, average latency 2303 ms,
   P95 latency 3622 ms, total usage 873 tokens.
+
+## 2026-06-10 Chat Lifecycle Expansion
+
+- Used the current OpenAI endpoint list to confirm Chat lifecycle routes:
+  - `GET /v1/chat/completions/{completion_id}`
+  - `GET /v1/chat/completions/{completion_id}/messages`
+- Added local storage for non-streaming Chat Completions requests when the
+  incoming request sets `store:true`.
+- Added local lifecycle coverage for stored Chat completions:
+  - `GET /v1/chat/completions/{completion_id}`
+  - `GET /v1/chat/completions/{completion_id}/messages`
+- Kept ordinary Chat passthrough requests unstored by default to avoid
+  unbounded state growth.
+- Added mock-provider regression coverage for stored retrieval, stored message
+  pagination, and unstored completion 404 behavior.
+- Added a live `chat-lifecycle` case to `bridge-regression`.
+- Restarted `aialra-opencodexapp-bridge.service` and live-tested against
+  `deepseek-v4-pro` on `http://127.0.0.1:12912`:
+  `chat-lifecycle` passed with completion retrieval 200, messages retrieval
+  200, and 2 stored messages.
+- Full `bridge-regression` passed 7/7, pass rate 1.0, average latency 2013 ms,
+  P95 latency 3636 ms, total usage 913 tokens.

@@ -89,6 +89,22 @@ behavior.
 | `POST /v1/responses/compact` | Explicit 501 | Requires native Responses compaction semantics or a local summarization policy |
 | `POST /v1/responses/input_tokens` | Explicit 501 | Requires provider-specific tokenizer accounting; planned for a tokenizer adapter layer |
 
+## Chat Completions Endpoint Coverage
+
+OpenAI's current endpoint list includes `POST /v1/chat/completions`,
+`GET /v1/chat/completions/{completion_id}`, and
+`GET /v1/chat/completions/{completion_id}/messages`.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers |
+| `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
+| `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with `limit`, `after`, `before`, and `order` pagination |
+
+The bridge stores Chat completions only when the incoming Chat request sets
+`store:true`. This matches the stored-completion lifecycle intent and avoids
+unbounded state growth for ordinary passthrough Chat traffic.
+
 ## Streaming Mapping
 
 The bridge emits:

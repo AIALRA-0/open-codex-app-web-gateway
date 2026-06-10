@@ -36,7 +36,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus Chat passthrough, Responses SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus Chat passthrough, stored Chat lifecycle, Responses SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 
 Useful commands:
 

@@ -129,6 +129,21 @@ function buildSuites(defaultModel) {
         check: ({ text }) => /chat-ok/i.test(text),
       },
       {
+        id: "chat-lifecycle",
+        mode: "chat-lifecycle",
+        request: {
+          model: defaultModel,
+          store: true,
+          messages: [{ role: "user", content: "Return the exact string chat-life-ok." }],
+          max_tokens: 96,
+        },
+        check: ({ text, fetched, messages }) => /chat-life-ok/i.test(text)
+          && fetched?.id
+          && messages?.object === "list"
+          && messages.data?.some((message) => message.role === "user")
+          && messages.data?.some((message) => message.role === "assistant"),
+      },
+      {
         id: "responses-stream-events",
         mode: "responses-stream",
         request: {
@@ -215,6 +230,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-stream") {
       return await runStreamingResponsesCase(testCase, context, started);
     }
+    if (testCase.mode === "chat-lifecycle") {
+      return await runChatLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
     }
@@ -295,6 +313,33 @@ async function runStreamingResponsesCase(testCase, context, started) {
   });
 }
 
+async function runChatLifecycleCase(testCase, context, started) {
+  const createdResponse = await postJson(`${baseUrl}/v1/chat/completions`, testCase.request);
+  const createdBody = await createdResponse.text();
+  if (!createdResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: createdResponse.status,
+      error: truncate(createdBody),
+    });
+  }
+
+  const created = JSON.parse(createdBody);
+  const fetched = await getJson(`${baseUrl}/v1/chat/completions/${created.id}`);
+  const messages = await getJson(`${baseUrl}/v1/chat/completions/${created.id}/messages?limit=20`);
+  const text = chatOutputText(created);
+  const ok = !!testCase.check({ json: created, text, fetched: fetched.json, messages: messages.json });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: createdResponse.status,
+    usage: chatUsage(created),
+    output_text: truncate(text),
+    fetched_status: fetched.status,
+    messages_status: messages.status,
+    message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+  });
+}
+
 async function runSequenceCase(testCase, context, started) {
   const stepResults = [];
   let previousResponseId = null;
@@ -348,6 +393,23 @@ async function postJson(url, body) {
       body: JSON.stringify(body),
       signal: controller.signal,
     });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function getJson(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const body = await response.text();
+    return {
+      status: response.status,
+      ok: response.ok,
+      json: parseJsonish(body),
+      body,
+    };
   } finally {
     clearTimeout(timeout);
   }

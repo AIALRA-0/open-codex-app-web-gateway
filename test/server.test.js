@@ -217,7 +217,7 @@ test("Responses collection endpoints that require native semantics return explic
   });
 });
 
-test("POST /v1/chat/completions proxies chat responses with bridge-safe response headers", async () => {
+test("POST /v1/chat/completions proxies and stores chat responses when requested", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -231,6 +231,7 @@ test("POST /v1/chat/completions proxies chat responses with bridge-safe response
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         model: "mock-model",
+        store: true,
         messages: [{ role: "user", content: "hello" }],
       }),
     });
@@ -238,6 +239,45 @@ test("POST /v1/chat/completions proxies chat responses with bridge-safe response
     assert.equal(response.headers.has("content-length"), false);
     const json = await response.json();
     assert.equal(json.choices[0].message.content, "chat-ok");
+
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.id, json.id);
+
+    const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?limit=1`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.equal(messagesJson.object, "list");
+    assert.equal(messagesJson.data.length, 1);
+    assert.equal(messagesJson.data[0].role, "user");
+    assert.equal(messagesJson.data[0].direction, "input");
+    assert.equal(messagesJson.has_more, true);
+  });
+});
+
+test("Chat completion retrieval only returns explicitly stored chat completions", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_unstored",
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "not stored" }, finish_reason: "stop" }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const created = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+
+    const missing = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${createdJson.id}`);
+    assert.equal(missing.status, 404);
   });
 });
 
