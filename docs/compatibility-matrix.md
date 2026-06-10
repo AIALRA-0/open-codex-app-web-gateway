@@ -74,7 +74,7 @@ implementations for those tools.
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
 | `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries under `tools[].environment.skills` are mounted into the local container workspace |
-| `tools[type=code_interpreter]` | local shell/container adapter | Compatibility alias; explicit Python code blocks are executed through `python3` in the local container workspace |
+| `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
@@ -95,6 +95,7 @@ implementations for those tools.
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `include:["web_search_call.action.sources"]` | local `web_search_call.action.sources` | Emulated locally for the Responses web-search adapter. Search calls include URL sources from local results; `open_page` and `find_in_page` calls include the matching URL source. The bridge records `metadata.compatibility.local_web_search.action_sources` when requested |
+| `include:["code_interpreter_call.outputs"]` | local `code_interpreter_call.outputs` | Emulated locally for the Responses code-interpreter adapter. When requested, local stdout/stderr logs are attached to the `code_interpreter_call.outputs` array and the include request is recorded in `metadata.compatibility.local_shell.include_code_interpreter_outputs` |
 | `include:["computer_call_output.output.image_url"]` | local computer-loop compatibility metadata | Accepted and recorded in `metadata.compatibility.local_computer.include_output_image_url`; returned `computer_call_output` input items with `output.image_url` are translated into Chat-visible context |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
@@ -708,7 +709,10 @@ local container workspace. The adapter:
   `/mnt/data/.skills/<skill-name>/v<version>/` and records mounted skill
   metadata in `metadata.compatibility.local_shell.mounted_skills`;
 - maps `/mnt/data` in commands to the local container workspace;
-- emits paired `shell_call` and `shell_call_output` output items;
+- emits paired `shell_call` and `shell_call_output` output items for `shell`;
+- emits `code_interpreter_call` output items for `code_interpreter`, with
+  nested `outputs` logs when
+  `include:["code_interpreter_call.outputs"]` is requested;
 - consumes one shared `max_tool_calls` budget slot before each local shell or
   code-interpreter command execution when that Responses field is present;
 - injects stdout, stderr, exit code, timeout status, and artifact list into the

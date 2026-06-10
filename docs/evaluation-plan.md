@@ -233,6 +233,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content.
 - Non-streaming Chat responses with multiple `choices[]` map each returned message/tool/function call into Responses output items instead of dropping all but `choices[0]`.
 - Responses compatibility requests that include Chat-native `stop` sequences forward them to upstream Chat providers and verify the stop marker is omitted from visible output.
+- Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested.
 - Background response polling and cancellation remain stable for in-process jobs.
 - Stale in-progress background responses left by a bridge restart either resume
   from a safe persisted `preparing` checkpoint or `provider_pending` snapshot,

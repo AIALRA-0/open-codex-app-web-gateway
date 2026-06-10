@@ -3858,3 +3858,61 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 41 GB available;
     repository checkout is 41 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Code Interpreter Call Output Shape
+
+- Updated the local `code_interpreter` compatibility path so Chat-only
+  providers now receive the same injected command evidence, while Responses
+  clients receive a `code_interpreter_call` output item instead of shell-shaped
+  `shell_call` / `shell_call_output` items.
+- Implemented `include:["code_interpreter_call.outputs"]` for the local
+  adapter. When requested, stdout/stderr logs are attached to
+  `code_interpreter_call.outputs` and the request is recorded in
+  `metadata.compatibility.local_shell.include_code_interpreter_outputs`.
+- Fixed `/mnt/data` path rewriting for Python code blocks: bare shell paths
+  still use shell quoting, while paths inside quoted code strings are rewritten
+  as escaped string content. This prevents Python snippets such as
+  `Path('/mnt/data/file.txt')` from becoming invalid after local workspace
+  substitution.
+- Added mock-provider server coverage for local `code_interpreter`:
+  - the upstream Chat request omits unsupported hosted tools;
+  - DeepSeek thinking mode is disabled for the local tool adapter;
+  - the response output starts with `code_interpreter_call`;
+  - nested `outputs` logs include the executed marker;
+  - nested `outputs` are omitted when the include value is not requested;
+  - no shell-shaped output items are emitted for `code_interpreter`;
+  - generated files are readable through the local Containers file endpoints.
+- Added live `bridge-regression` case `responses-code-interpreter`, which
+  writes `/mnt/data/shell.txt`, checks `code_interpreter_call.outputs`, verifies
+  the container artifact, and asserts the final DeepSeek text marker.
+- Updated the compatibility matrix and parity plan to document the
+  `code_interpreter_call.outputs` include mapping and the remaining hosted
+  runtime boundary.
+- Verification:
+  - `node --check src/bridge/local_shell.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 82/82 passing tests.
+  - `npm test`: 119/119 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-code-interpreter` passed 1/1 against
+    `deepseek-v4-pro`, latency 1906 ms, total usage 370 tokens, and artifact
+    text `code-interpreter-ok`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 2208 ms, P95 latency 2495 ms, and total usage 197 tokens.
+  - Full live `bridge-regression` passed 42/42 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1939 ms, P95 latency 3907 ms, and total usage
+    9779 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8gooux`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 380 runtime candidates,
+    selected 30 old UI screenshots by retention policy, deleted 0, selected
+    2234352 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
+    repository checkout is 41 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.

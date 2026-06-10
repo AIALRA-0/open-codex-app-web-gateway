@@ -242,6 +242,8 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
     provider: "local",
     status: commands.length ? "completed" : "skipped",
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
+    include_code_interpreter_outputs: Array.isArray(request.include)
+      && request.include.includes("code_interpreter_call.outputs"),
     calls: [],
     outputs: [],
     executions: [],
@@ -258,8 +260,9 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
   const maxCommands = Math.max(1, Math.min(Number(config.shellMaxCommands || 1), 5));
   for (const command of commands.slice(0, maxCommands)) {
     const tool = tools[0];
+    const codeInterpreter = tool.type === "code_interpreter";
     if (!reserveToolCall(options.toolBudget, {
-      type: tool.type === "code_interpreter" ? "code_interpreter_call" : "shell_call",
+      type: codeInterpreter ? "code_interpreter_call" : "shell_call",
       tool_type: tool.type || "shell",
       action: "exec",
       command,
@@ -284,17 +287,21 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
     }
     const callId = prefixedId("call");
     const call = {
-      id: prefixedId("sh"),
-      type: "shell_call",
-      call_id: callId,
+      id: prefixedId(codeInterpreter ? "ci" : "sh"),
+      type: codeInterpreter ? "code_interpreter_call" : "shell_call",
       status: "completed",
       container_id: container.id,
-      action: {
-        type: "exec",
-        command,
-        timeout_ms: config.shellCommandTimeoutMs || 10000,
-        max_output_length: config.shellMaxOutputBytes || 20000,
-      },
+      ...(codeInterpreter ? {
+        code: command,
+      } : {
+        call_id: callId,
+        action: {
+          type: "exec",
+          command,
+          timeout_ms: config.shellCommandTimeoutMs || 10000,
+          max_output_length: config.shellMaxOutputBytes || 20000,
+        },
+      }),
     };
 
     const result = await runShellCommand(command, container, containerStore, config);
@@ -303,28 +310,34 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
       context.status = "failed";
     }
 
-    const output = {
-      id: prefixedId("sho"),
-      type: "shell_call_output",
-      status: result.timed_out || result.exit_code !== 0 ? "failed" : "completed",
-      call_id: callId,
-      shell_call_id: call.id,
-      container_id: container.id,
-      output: [{
-        type: "logs",
-        stdout: result.stdout,
-        stderr: result.stderr,
-      }],
-      outcome: {
-        type: result.timed_out ? "timeout" : "exit",
-        exit_code: result.exit_code,
-      },
-    };
+    const artifacts = containerStore.scanContainerFiles(container.id);
+    const output = codeInterpreter
+      ? null
+      : {
+        id: prefixedId("sho"),
+        type: "shell_call_output",
+        status: result.timed_out || result.exit_code !== 0 ? "failed" : "completed",
+        call_id: callId,
+        shell_call_id: call.id,
+        container_id: container.id,
+        output: [{
+          type: "logs",
+          stdout: result.stdout,
+          stderr: result.stderr,
+        }],
+        outcome: {
+          type: result.timed_out ? "timeout" : "exit",
+          exit_code: result.exit_code,
+        },
+      };
+    if (codeInterpreter && context.include_code_interpreter_outputs) {
+      call.outputs = codeInterpreterOutputs(result, artifacts);
+    }
 
     context.calls.push(call);
-    context.outputs.push(output);
+    if (output) context.outputs.push(output);
     context.executions.push({ command, container, result });
-    context.artifacts = containerStore.scanContainerFiles(container.id);
+    context.artifacts = artifacts;
   }
 
   return context;
@@ -368,6 +381,7 @@ function shellCompatibility(context) {
       skipped_count: context.skipped_calls?.length || 0,
       artifact_count: context.artifacts?.length || 0,
       mounted_skill_count: context.mounted_skills?.length || 0,
+      include_code_interpreter_outputs: !!context.include_code_interpreter_outputs,
       ...(context.mounted_skills?.length ? { mounted_skills: context.mounted_skills } : {}),
       ...(first ? {
         container_id: first.container.id,
@@ -377,6 +391,21 @@ function shellCompatibility(context) {
       ...(context.warning ? { warning: context.warning } : {}),
     },
   };
+}
+
+function codeInterpreterOutputs(result = {}, artifacts = []) {
+  const logs = [
+    result.stdout ? result.stdout : "",
+    result.stderr ? `STDERR:\n${result.stderr}` : "",
+  ].filter(Boolean).join("\n").trim();
+  const outputs = [];
+  if (logs || !artifacts.length) {
+    outputs.push({
+      type: "logs",
+      logs,
+    });
+  }
+  return outputs;
 }
 
 function shellPrompt(context) {
@@ -562,7 +591,22 @@ function extractInputText(input) {
 }
 
 function rewriteMountedDataPath(command, workdir) {
-  return String(command || "").replace(/\/mnt\/data/g, shellQuote(workdir));
+  const source = String(command || "");
+  let rewritten = "";
+  let quote = null;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source.startsWith("/mnt/data", index)) {
+      rewritten += quote ? escapeInsideQuote(workdir, quote) : shellQuote(workdir);
+      index += "/mnt/data".length - 1;
+      continue;
+    }
+    const char = source[index];
+    if ((char === "'" || char === "\"") && !isEscaped(source, index)) {
+      quote = quote === char ? null : quote || char;
+    }
+    rewritten += char;
+  }
+  return rewritten;
 }
 
 function minimalShellEnv(workdir) {
@@ -577,6 +621,28 @@ function minimalShellEnv(workdir) {
 
 function shellQuote(value) {
   return `'${String(value).replace(/'/g, "'\\''")}'`;
+}
+
+function escapeInsideQuote(value, quote) {
+  const text = String(value);
+  if (quote === "\"") {
+    return text
+      .replace(/\\/g, "\\\\")
+      .replace(/"/g, "\\\"")
+      .replace(/\$/g, "\\$")
+      .replace(/`/g, "\\`");
+  }
+  return text
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'");
+}
+
+function isEscaped(source, index) {
+  let slashes = 0;
+  for (let cursor = index - 1; cursor >= 0 && source[cursor] === "\\"; cursor -= 1) {
+    slashes += 1;
+  }
+  return slashes % 2 === 1;
 }
 
 function containerFileId(containerId, relativePath) {

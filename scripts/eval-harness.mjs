@@ -1022,6 +1022,45 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-code-interpreter",
+        mode: "responses-shell",
+        container: { name: "bridge-code-interpreter-eval" },
+        request: ({ containerId }) => ({
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              "```python",
+              "from pathlib import Path",
+              "Path('/mnt/data/shell.txt').write_text('code-interpreter-ok')",
+              "print('code-interpreter-ok')",
+              "```",
+              "After the tool evidence, return exactly code-interpreter-ok.",
+            ].join("\n"),
+          }],
+          tools: [{
+            type: "code_interpreter",
+            container: { type: "container_reference", container_id: containerId },
+          }],
+          include: ["code_interpreter_call.outputs"],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, containerId, artifactText }) => {
+          const codeCall = (json.output || []).find((item) => item.type === "code_interpreter_call");
+          const localShell = json.metadata?.compatibility?.local_shell || {};
+          return !!codeCall
+            && codeCall.status === "completed"
+            && codeCall.container_id === containerId
+            && /code-interpreter-ok/i.test(codeCall.outputs?.[0]?.logs || "")
+            && !(json.output || []).some((item) => item.type === "shell_call" || item.type === "shell_call_output")
+            && localShell.include_code_interpreter_outputs === true
+            && localShell.deepseek_thinking === "disabled_for_local_shell"
+            && /code-interpreter-ok/i.test(artifactText || "")
+            && /code-interpreter-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-shell-skill",
         mode: "responses-shell",
         skill: {

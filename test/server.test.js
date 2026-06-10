@@ -3394,6 +3394,116 @@ test("local Containers back Responses shell compatibility and artifacts", async 
   });
 });
 
+test("local code_interpreter emits Responses code_interpreter_call outputs", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses shell compatibility executed command output/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /ci-ok/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_code_interpreter",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "ci-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdContainer = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "code-interpreter-fixture", memory_limit: "1g" }),
+    });
+    assert.equal(createdContainer.status, 200);
+    const container = await createdContainer.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            "```python",
+            "from pathlib import Path",
+            "Path('/mnt/data/ci.txt').write_text('ci-ok')",
+            "print('ci-ok')",
+            "```",
+            "Return ci-ok.",
+          ].join("\n"),
+        }],
+        tools: [{
+          type: "code_interpreter",
+          container: { type: "container_reference", container_id: container.id },
+        }],
+        include: ["code_interpreter_call.outputs"],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    const codeCall = json.output[0];
+    assert.equal(codeCall.type, "code_interpreter_call");
+    assert.equal(codeCall.status, "completed");
+    assert.equal(codeCall.container_id, container.id);
+    assert.match(codeCall.code, /python3 - <<'PY'/);
+    assert.match(codeCall.code, /ci-ok/);
+    assert.equal(codeCall.outputs[0].type, "logs");
+    assert.match(codeCall.outputs[0].logs, /ci-ok/);
+    assert.ok(!json.output.some((item) => item.type === "shell_call"));
+    assert.ok(!json.output.some((item) => item.type === "shell_call_output"));
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "ci-ok");
+    assert.equal(json.metadata.compatibility.local_shell.provider, "local");
+    assert.deepEqual(json.metadata.compatibility.local_shell.tool_types, ["code_interpreter"]);
+    assert.equal(json.metadata.compatibility.local_shell.status, "completed");
+    assert.equal(json.metadata.compatibility.local_shell.command_count, 1);
+    assert.equal(json.metadata.compatibility.local_shell.artifact_count, 1);
+    assert.equal(json.metadata.compatibility.local_shell.include_code_interpreter_outputs, true);
+    assert.equal(json.metadata.compatibility.local_shell.deepseek_thinking, "disabled_for_local_shell");
+
+    const files = await fetch(`${baseUrl}/v1/containers/${container.id}/files`);
+    assert.equal(files.status, 200);
+    const filesJson = await files.json();
+    const artifact = filesJson.data.find((file) => file.path === "/ci.txt");
+    assert.ok(artifact);
+
+    const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${artifact.id}/content`);
+    assert.equal(content.status, 200);
+    assert.equal(await content.text(), "ci-ok");
+
+    const responseWithoutInclude = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "```python\nprint('ci-ok')\n```",
+        tools: [{
+          type: "code_interpreter",
+          container: { type: "container_reference", container_id: container.id },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(responseWithoutInclude.status, 200);
+    const jsonWithoutInclude = await responseWithoutInclude.json();
+    assert.equal(jsonWithoutInclude.output[0].type, "code_interpreter_call");
+    assert.equal(jsonWithoutInclude.output[0].outputs, undefined);
+    assert.equal(jsonWithoutInclude.metadata.compatibility.local_shell.include_code_interpreter_outputs, false);
+
+    const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.equal((await deleted.json()).deleted, true);
+  });
+});
+
 test("local Skills API manages versions and mounts skill references for shell", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
