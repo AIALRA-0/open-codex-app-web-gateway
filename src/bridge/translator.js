@@ -841,6 +841,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   const compatibilityMetadata = chatCompatibilityMetadata(chat);
   Object.assign(compatibilityMetadata, chatChoicesCompatibilityMetadata(chat.choices));
   Object.assign(compatibilityMetadata, chatUsageCompatibilityMetadata(chat.usage));
+  Object.assign(compatibilityMetadata, chatAudioCompatibilityMetadata(choices));
   const refusalLogprobs = chatRefusalLogprobs(choices);
   if (refusalLogprobs.length) compatibilityMetadata.chat_refusal_logprobs = refusalLogprobs;
   attachResponseCompatibilityMetadata(response, compatibilityMetadata);
@@ -891,6 +892,14 @@ function chatCompatibilityMetadata(chat) {
 function chatUsageCompatibilityMetadata(usage) {
   if (usage === undefined) return {};
   return { chat_usage: clone(usage) };
+}
+
+function chatAudioCompatibilityMetadata(choices) {
+  const audio = asArray(choices)
+    .map((choice) => choice?.message?.audio)
+    .filter(isPlainObject);
+  if (!audio.length) return {};
+  return { chat_audio: audio.map(clone) };
 }
 
 function chatChoicesCompatibilityMetadata(choices) {
@@ -971,8 +980,10 @@ function appendReasoningOutput(response, reasoningContent) {
 function appendMessageOutput(response, message, choiceLogprobs = null) {
   const hasText = message.content != null && message.content !== "";
   const hasRefusal = message.refusal != null && message.refusal !== "";
-  if (!hasText && !hasRefusal && Array.isArray(message.tool_calls) && message.tool_calls.length) return;
-  if (!hasText && !hasRefusal) return;
+  const audioPart = normalizeChatAudioPart(message.audio);
+  const hasAudio = !!audioPart;
+  if (!hasText && !hasRefusal && !hasAudio && Array.isArray(message.tool_calls) && message.tool_calls.length) return;
+  if (!hasText && !hasRefusal && !hasAudio) return;
 
   const content = [];
   if (hasText) {
@@ -987,6 +998,9 @@ function appendMessageOutput(response, message, choiceLogprobs = null) {
   if (hasRefusal) {
     content.push({ type: "refusal", refusal: stringifyContent(message.refusal) });
   }
+  if (hasAudio) {
+    content.push(audioPart);
+  }
 
   response.output.push({
     id: prefixedId("msg"),
@@ -995,6 +1009,26 @@ function appendMessageOutput(response, message, choiceLogprobs = null) {
     role: "assistant",
     content,
   });
+}
+
+function normalizeChatAudioPart(audio) {
+  if (!isPlainObject(audio)) return null;
+  const part = {
+    type: "output_audio",
+  };
+  if (audio.data != null) part.data = stringifyContent(audio.data);
+  if (audio.transcript != null) part.transcript = stringifyContent(audio.transcript);
+  if (audio.id != null) part.id = stringifyContent(audio.id);
+  if (audio.expires_at != null) part.expires_at = audio.expires_at;
+  if (audio.format != null) part.format = stringifyContent(audio.format);
+  if (audio.voice != null) part.voice = stringifyContent(audio.voice);
+  const extra = Object.fromEntries(
+    Object.entries(audio)
+      .filter(([key, value]) => !["data", "transcript", "id", "expires_at", "format", "voice"].includes(key) && value !== undefined)
+      .map(([key, value]) => [key, clone(value)]),
+  );
+  if (Object.keys(extra).length) part.audio = extra;
+  return part;
 }
 
 function chatRefusalLogprobs(choices) {
@@ -1091,6 +1125,7 @@ function chatCompletionToReplayMessages(chat) {
     }
     if (message.reasoning_content) replay.reasoning_content = message.reasoning_content;
     if (message.refusal) replay.refusal = message.refusal;
+    if (isPlainObject(message.audio)) replay.audio = clone(message.audio);
     return [replay];
   });
 }
@@ -1114,6 +1149,7 @@ module.exports = {
   mapTextFormat,
   mapToolChoice,
   mapUsage,
+  normalizeChatAudioPart,
   normalizeOutputTextLogprobs,
   normalizeReasoningEffort,
   prefixedId,

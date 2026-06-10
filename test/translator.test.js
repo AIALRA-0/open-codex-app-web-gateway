@@ -667,6 +667,60 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });
 
+test("maps Chat audio output into Responses message content and replay", () => {
+  const completion = {
+    id: "chatcmpl_audio",
+    object: "chat.completion",
+    created: 456,
+    model: "audio-model",
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content: "Spoken answer",
+        audio: {
+          id: "audio_123",
+          data: "UklGRg==",
+          transcript: "Spoken answer",
+          expires_at: 123456,
+          format: "wav",
+          voice: "alloy",
+          provider_extra: { sample_rate: 24000 },
+        },
+      },
+      finish_reason: "stop",
+    }],
+    usage: {
+      prompt_tokens: 3,
+      completion_tokens: 5,
+      total_tokens: 8,
+      completion_tokens_details: { audio_tokens: 2, reasoning_tokens: 0 },
+    },
+  };
+
+  const response = chatCompletionToResponse(completion, { model: "audio-model" }, { responseId: "resp_audio" });
+  assert.equal(response.output[0].type, "message");
+  assert.equal(response.output[0].content[0].type, "output_text");
+  assert.equal(response.output[0].content[0].text, "Spoken answer");
+  assert.deepEqual(response.output[0].content[1], {
+    type: "output_audio",
+    data: "UklGRg==",
+    transcript: "Spoken answer",
+    id: "audio_123",
+    expires_at: 123456,
+    format: "wav",
+    voice: "alloy",
+    audio: { provider_extra: { sample_rate: 24000 } },
+  });
+  assert.deepEqual(response.metadata.compatibility.chat_audio, [completion.choices[0].message.audio]);
+  assert.equal(response.metadata.compatibility.chat_usage.completion_tokens_details.audio_tokens, 2);
+
+  const replay = chatCompletionToReplayMessages(completion);
+  assert.equal(replay.length, 1);
+  assert.equal(replay[0].content, "Spoken answer");
+  assert.deepEqual(replay[0].audio, completion.choices[0].message.audio);
+});
+
 test("preserves multiple Chat choices as Responses output items", () => {
   const completion = {
     id: "chatcmpl_multi",

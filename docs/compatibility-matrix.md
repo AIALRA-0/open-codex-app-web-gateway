@@ -12,6 +12,7 @@ Primary sources:
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
+- OpenAI audio guide: https://developers.openai.com/api/docs/guides/audio
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
 - OpenAI Moderations OpenAPI operation `createModeration`: https://api.openai.com/v1/moderations
@@ -123,6 +124,7 @@ behavior.
 | `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming and streaming Responses when provider returns Chat logprobs |
 | `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
 | `choices[].message.annotations[]` / streaming `choices[].delta.annotations[]` | `message.content[].output_text.annotations[]` | Direct when a Chat provider returns citation annotations |
+| `choices[].message.audio` / streaming `choices[].delta.audio` | `message.content[].output_audio`, replay store, and `metadata.compatibility.chat_audio[]` | Compatibility preservation for audio-capable Chat providers. Known scalar fields `data`, `transcript`, `id`, `expires_at`, `format`, and `voice` are normalized onto the content part; provider-specific fields are preserved under `audio`. Streaming `data` and `transcript` fragments are accumulated. Text-only providers such as DeepSeek do not synthesize audio locally |
 | `choices[].index`, `choices[].finish_reason` | `metadata.compatibility.chat_choices[]` | Preserves original Chat choice metadata while Responses output items carry the generated content |
 | `choices[].message.reasoning_content` / streaming `choices[].delta.reasoning_content` | output `reasoning.summary[]`, optional `reasoning.encrypted_content`, and replay store | DeepSeek-specific reasoning compatibility; encrypted content is local bridge emulation for stateless Responses-style replay |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
@@ -457,7 +459,10 @@ Chat stream chunks with `choice.logprobs.content[]` are accumulated and attached
 to the final `output_text` content part and terminal response. Chat stream
 chunks with `choice.logprobs.refusal[]` are preserved under
 `metadata.compatibility.chat_refusal_logprobs[]`, because Responses refusal
-content parts only support `type` and `refusal`.
+content parts only support `type` and `refusal`. Chat stream chunks with
+`delta.audio` are accumulated into an `output_audio` content part and stored in
+the replay record so `previous_response_id` follow-ups can preserve the original
+Chat audio object.
 Terminal `choice.finish_reason` values are aggregated across chunks. `length`
 and `content_filter` end the stream with `response.incomplete`; DeepSeek
 `insufficient_system_resource` ends the stream with `response.failed`.
@@ -753,6 +758,7 @@ capture, secrets isolation, per-session cleanup, and multi-action loop control.
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |
+| Native audio generation parity on text-only providers | Audio-capable Chat providers can return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; text-only providers such as DeepSeek do not return audio payloads for the bridge to synthesize | Add optional provider/model adapters for audio-capable Chat or Realtime models and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
 

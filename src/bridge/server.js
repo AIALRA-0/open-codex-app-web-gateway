@@ -56,6 +56,7 @@ const {
   chatUsageCompatibilityMetadata,
   createResponseSkeleton,
   mapUsage,
+  normalizeChatAudioPart,
   normalizeOutputTextLogprobs,
   prefixedId,
   responseTerminalStateFromFinishReasons,
@@ -2659,6 +2660,8 @@ function getChoiceStreamState(state, choiceIndex = 0) {
       outputTextAnnotations: [],
       outputRefusalLogprobs: [],
       refusalText: "",
+      audio: null,
+      audioPart: null,
       toolCalls: new Map(),
     });
   }
@@ -2776,6 +2779,23 @@ function ensureRefusalPart(state, choiceState) {
   const events = ensureMessageItem(state, choiceState);
   if (choiceState.messageItem.content.some((part) => part.type === "refusal")) return events;
   const part = { type: "refusal", refusal: "" };
+  choiceState.messageItem.content.push(part);
+  events.push({
+    type: "response.content_part.added",
+    response_id: state.response.id,
+    item_id: choiceState.messageItem.id,
+    output_index: state.response.output.indexOf(choiceState.messageItem),
+    content_index: choiceState.messageItem.content.indexOf(part),
+    part: clone(part),
+  });
+  return events;
+}
+
+function ensureAudioPart(state, choiceState) {
+  const events = ensureMessageItem(state, choiceState);
+  if (choiceState.audioPart) return events;
+  const part = { type: "output_audio" };
+  choiceState.audioPart = part;
   choiceState.messageItem.content.push(part);
   events.push({
     type: "response.content_part.added",
@@ -2921,6 +2941,21 @@ function applyChatStreamChunk(state, chunk) {
       });
     }
 
+    if (isPlainObject(delta.audio)) {
+      choiceState.audio = mergeStreamAudio(choiceState.audio, delta.audio);
+      events.push(...ensureAudioPart(state, choiceState));
+      const audioPart = normalizeChatAudioPart(choiceState.audio);
+      const item = choiceState.messageItem;
+      let contentIndex = item.content.indexOf(choiceState.audioPart);
+      if (contentIndex === -1) contentIndex = item.content.findIndex((part) => part?.type === "output_audio");
+      if (contentIndex === -1) {
+        item.content.push(audioPart);
+      } else {
+        item.content[contentIndex] = audioPart;
+      }
+      choiceState.audioPart = audioPart;
+    }
+
     const refusalLogprobs = normalizeOutputTextLogprobs(choice.logprobs?.refusal);
     if (Array.isArray(refusalLogprobs) && refusalLogprobs.length) {
       choiceState.outputRefusalLogprobs.push(...refusalLogprobs);
@@ -3019,6 +3054,19 @@ function finishStreamState(state) {
   return events;
 }
 
+function mergeStreamAudio(existing, deltaAudio) {
+  const next = isPlainObject(existing) ? clone(existing) : {};
+  for (const [key, value] of Object.entries(deltaAudio)) {
+    if (value === undefined) continue;
+    if ((key === "data" || key === "transcript") && typeof value === "string" && typeof next[key] === "string") {
+      next[key] += value;
+      continue;
+    }
+    next[key] = clone(value);
+  }
+  return next;
+}
+
 function normalizeStreamTextLogprobs(logprobs) {
   if (Array.isArray(logprobs)) return normalizeOutputTextLogprobs(logprobs);
   if (Array.isArray(logprobs?.content) || Array.isArray(logprobs?.output_text)) {
@@ -3039,6 +3087,7 @@ function streamStateToReplayMessages(state) {
     const assistant = { role: "assistant", content: choiceState.text || null };
     if (choiceState.reasoningText) assistant.reasoning_content = choiceState.reasoningText;
     if (choiceState.refusalText) assistant.refusal = choiceState.refusalText;
+    if (isPlainObject(choiceState.audio)) assistant.audio = clone(choiceState.audio);
     const toolCalls = Array.from(choiceState.toolCalls.values()).map((item) => ({
       id: item.call_id,
       type: "function",
@@ -3073,11 +3122,15 @@ function streamRefusalLogprobs(state) {
 function streamChoiceCompatibilityMetadata(state) {
   const choices = sortedChoiceStates(state);
   if (!choices.length) return {};
+  const audio = choices
+    .map((choiceState) => choiceState.audio)
+    .filter(isPlainObject);
   return {
     chat_choices: choices.map((choiceState) => ({
       choice_index: choiceState.index,
       ...(choiceState.hasFinishReason ? { finish_reason: choiceState.finishReason } : {}),
     })),
+    ...(audio.length ? { chat_audio: audio.map(clone) } : {}),
   };
 }
 

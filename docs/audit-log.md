@@ -3528,3 +3528,62 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
     repository checkout is 38 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 11 MB.
+
+## 2026-06-10 Chat Audio Output Mapping
+
+- Checked current official OpenAI docs through the OpenAI developer-docs MCP:
+  Chat Completions exposes audio-capable output through `modalities` plus the
+  `audio` request parameter, while the OpenAI audio guide treats audio output as
+  an audio-capable Chat provider feature rather than something a text-only
+  provider can synthesize.
+- Added Chat-to-Responses preservation for audio-capable Chat providers:
+  - non-streaming `choices[].message.audio` is normalized into a
+    `type:"output_audio"` message content part;
+  - known scalar audio fields `data`, `transcript`, `id`, `expires_at`,
+    `format`, and `voice` are exposed directly on that content part;
+  - provider-specific audio fields are preserved under `content[].audio`;
+  - the original Chat audio object is also copied to
+    `metadata.compatibility.chat_audio[]` and the local replay store.
+- Added streaming `choices[].delta.audio` handling:
+  - string `data` and `transcript` fragments are accumulated across chunks;
+  - other audio fields are merged with the latest provider value;
+  - the final terminal Responses object carries the accumulated
+    `output_audio` part plus `metadata.compatibility.chat_audio[]`;
+  - `previous_response_id` replay preserves the original assistant `audio`
+    object for later Chat requests.
+- Added tests for:
+  - translator mapping of Chat audio output into Responses message content,
+    compatibility metadata, usage audio-token preservation, and replay;
+  - mock `/v1/responses` forwarding of `modalities`/`audio`, Chat audio output
+    mapping, and previous-response replay of assistant audio;
+  - streaming `delta.audio` accumulation alongside text, annotations,
+    logprobs, usage, and terminal Responses events.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` to
+  document audio-object preservation and the remaining text-only-provider
+  boundary for DeepSeek.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/translator.test.js test/server.test.js`: 107/107 passing
+    tests.
+  - `npm test`: 110/110 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1470 ms, P95 latency 1475 ms, and total usage 160 tokens.
+  - Full live `bridge-regression` passed 38/38 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1391 ms, P95 latency 4011 ms, and total usage
+    8959 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8ej041`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 330 runtime candidates,
+    selected 24 old UI screenshots by retention policy, deleted 0, selected
+    1722307 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
+    repository checkout is 39 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.

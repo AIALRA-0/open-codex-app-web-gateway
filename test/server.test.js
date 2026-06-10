@@ -654,6 +654,104 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
   });
 });
 
+test("POST /v1/responses maps Chat audio output and replays it", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    const replayedAudio = call.body.messages.some((message) => message.audio?.id === "audio_123");
+    if (replayedAudio) {
+      res.end(JSON.stringify({
+        id: "chatcmpl_audio_followup",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "audio replay ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+      }));
+      return;
+    }
+
+    assert.deepEqual(call.body.modalities, ["text", "audio"]);
+    assert.deepEqual(call.body.audio, { voice: "alloy", format: "wav" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_audio",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "spoken text",
+          audio: {
+            id: "audio_123",
+            data: "UklGRg==",
+            transcript: "spoken text",
+            expires_at: 123456,
+            format: "wav",
+            voice: "alloy",
+          },
+        },
+        finish_reason: "stop",
+      }],
+      usage: {
+        prompt_tokens: 4,
+        completion_tokens: 5,
+        total_tokens: 9,
+        completion_tokens_details: { audio_tokens: 2, reasoning_tokens: 0 },
+      },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const first = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Speak this answer.",
+        modalities: ["text", "audio"],
+        audio: { voice: "alloy", format: "wav" },
+        store: true,
+      }),
+    });
+
+    assert.equal(first.status, 200);
+    const firstJson = await first.json();
+    assert.equal(firstJson.output[0].content[0].text, "spoken text");
+    assert.deepEqual(firstJson.output[0].content[1], {
+      type: "output_audio",
+      data: "UklGRg==",
+      transcript: "spoken text",
+      id: "audio_123",
+      expires_at: 123456,
+      format: "wav",
+      voice: "alloy",
+    });
+    assert.equal(firstJson.metadata.compatibility.chat_audio[0].id, "audio_123");
+    assert.equal(firstJson.metadata.compatibility.chat_usage.completion_tokens_details.audio_tokens, 2);
+
+    const second = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use the prior audio object.",
+        previous_response_id: firstJson.id,
+        store: false,
+      }),
+    });
+
+    assert.equal(second.status, 200);
+    const secondJson = await second.json();
+    assert.equal(secondJson.output[0].content[0].text, "audio replay ok");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].body.messages.some((message) => message.audio?.id === "audio_123"), true);
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -1087,7 +1185,17 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
       system_fingerprint: "fp_stream",
       choices: [{
         index: 0,
-        delta: { role: "assistant", content: "hel" },
+        delta: {
+          role: "assistant",
+          content: "hel",
+          audio: {
+            id: "audio_stream",
+            data: "AAA",
+            transcript: "he",
+            format: "wav",
+            voice: "alloy",
+          },
+        },
         logprobs: { content: [{ token: "hel", logprob: -0.1, bytes: [104, 101, 108], top_logprobs: [] }] },
         finish_reason: null,
       }],
@@ -1106,6 +1214,11 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
             url: "https://example.test/stream",
             title: "Stream Citation",
           }],
+          audio: {
+            data: "BBB",
+            transcript: "llo",
+            expires_at: 123456,
+          },
         },
         logprobs: { content: [{ token: "lo", logprob: -0.2, bytes: [108, 111], top_logprobs: [] }] },
         finish_reason: "stop",
@@ -1146,6 +1259,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"delta":"hel"/);
     assert.match(text, /event: response\.completed/);
     assert.match(text, /"text":"hello"/);
+    assert.match(text, /"type":"output_audio"/);
     assert.match(text, /"logprobs":\[\{"token":"hel","logprob":-0\.1/);
     assert.match(text, /\{"token":"lo","logprob":-0\.2/);
     const events = parseSseEvents(text);
@@ -1158,6 +1272,15 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
       url: "https://example.test/stream",
       title: "Stream Citation",
     }]);
+    assert.deepEqual(completed.output[0].content[1], {
+      type: "output_audio",
+      data: "AAABBB",
+      transcript: "hello",
+      id: "audio_stream",
+      expires_at: 123456,
+      format: "wav",
+      voice: "alloy",
+    });
     assert.equal(completed.metadata.compatibility.chat_completion_id, "chatcmpl_stream");
     assert.equal(completed.metadata.compatibility.chat_object, "chat.completion.chunk");
     assert.equal(completed.metadata.compatibility.chat_created, 1694268190);
@@ -1168,6 +1291,9 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.deepEqual(completed.metadata.compatibility.chat_choices, [
       { choice_index: 0, finish_reason: "stop" },
     ]);
+    assert.equal(completed.metadata.compatibility.chat_audio[0].id, "audio_stream");
+    assert.equal(completed.metadata.compatibility.chat_audio[0].data, "AAABBB");
+    assert.equal(completed.metadata.compatibility.chat_audio[0].transcript, "hello");
     assert.equal(completed.metadata.compatibility.chat_usage.prompt_tokens_details.cached_tokens, 1);
     assert.equal(completed.metadata.compatibility.chat_usage.completion_tokens_details.accepted_prediction_tokens, 1);
     assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
