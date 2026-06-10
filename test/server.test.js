@@ -5999,6 +5999,8 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.modalities, undefined);
     assert.equal(call.body.moderation, undefined);
     assert.equal(call.body.stream_options, undefined);
+    assert.equal(call.body.max_tokens, 32);
+    assert.equal(call.body.max_completion_tokens, undefined);
 
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -6030,6 +6032,8 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         modalities: ["text"],
         moderation: { input: true },
         stream_options: { include_usage: true },
+        max_completion_tokens: 32,
+        max_tokens: 96,
       }),
     });
     assert.equal(response.status, 200);
@@ -6039,6 +6043,12 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.developer_role.count, 1);
     assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.source, "user");
     assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.normalized, "sha256");
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_completion_tokens.target, "max_tokens");
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_completion_tokens.value, 32);
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_completion_tokens.forwarded, true);
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.value, 96);
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.forwarded, false);
+    assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.reason, "max_completion_tokens_precedence");
     assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
     assert.deepEqual(
@@ -6062,6 +6072,60 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     deepseekUserIdCompat: true,
     forwardChatNativeFields: false,
     forwardServiceTier: false,
+  });
+});
+
+test("POST /v1/chat/completions aliases token limits to configured provider field", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_new_tokens, 21);
+    assert.equal(call.body.max_completion_tokens, undefined);
+    assert.equal(call.body.max_tokens, undefined);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_token_alias",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-token-alias-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-token-alias" },
+        messages: [{ role: "user", content: "Return chat-token-alias-ok." }],
+        max_completion_tokens: 21,
+        max_tokens: 99,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-token-alias-ok");
+    const compatibility = json.metadata.compatibility.chat_passthrough;
+    assert.deepEqual(compatibility.max_completion_tokens, {
+      source: "max_completion_tokens",
+      target: "max_new_tokens",
+      value: 21,
+      forwarded: true,
+      reason: "chat_passthrough_alias",
+    });
+    assert.deepEqual(compatibility.max_tokens, {
+      source: "max_tokens",
+      value: 99,
+      forwarded: false,
+      reason: "max_completion_tokens_precedence",
+    });
+  }, {
+    maxTokensField: "max_new_tokens",
   });
 });
 

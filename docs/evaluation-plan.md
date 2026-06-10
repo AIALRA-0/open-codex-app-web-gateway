@@ -232,6 +232,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Stored Chat completion list/get/messages endpoints preserve local `store:true` lifecycle records with pagination and filters.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
+  mapping `max_completion_tokens` to the configured provider token field,
   filtering unsupported OpenAI-only Chat fields, mapping stable user identity
   into `user_id`, and recording the compatibility action in returned/stored
   metadata.

@@ -4492,3 +4492,84 @@ Open follow-ups:
   - Disk/storage check: the filesystem has 40 GB available; repository checkout
     is 34 MB, `state/` is 4.0 MB, and `output/` is 7.2 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Direct Chat Token Alias Compatibility
+
+- Re-checked official API field direction before changing behavior:
+  - OpenAI developer docs MCP search for Chat Completions create confirmed
+    `max_completion_tokens` is the current Chat-side upper-bound field and that
+    legacy `max_tokens` is deprecated in favor of it for newer model families.
+  - OpenAI OpenAPI metadata was still version `2.3.0` for
+    `POST /v1/chat/completions`.
+  - DeepSeek's official Create Chat Completion reference
+    (`https://api-docs.deepseek.com/api/create-chat-completion`) documents
+    `max_tokens` as the generated-token limit for DeepSeek Chat Completions.
+- Found a direct Chat passthrough gap:
+  - Responses-to-Chat translation already accepted `max_completion_tokens` and
+    legacy `max_tokens` aliases and mapped them to
+    `CODEXCOMPAT_MAX_TOKENS_FIELD`;
+  - direct `POST /v1/chat/completions` passthrough still forwarded the raw
+    OpenAI Chat field surface, so current OpenAI SDK callers using
+    `max_completion_tokens` could send a field that DeepSeek does not document;
+  - custom provider profiles with non-`max_tokens` output-limit fields also
+    needed to avoid leaking both OpenAI aliases upstream.
+- Added provider-aware direct Chat token normalization:
+  - direct Chat `max_completion_tokens` is mapped to the configured
+    `CODEXCOMPAT_MAX_TOKENS_FIELD`, default `max_tokens` for DeepSeek;
+  - when both `max_completion_tokens` and legacy `max_tokens` are present,
+    `max_completion_tokens` wins and the old value is recorded as
+    `metadata.compatibility.chat_passthrough.max_tokens.forwarded=false`;
+  - when a provider uses a custom field such as `max_new_tokens`, OpenAI token
+    aliases are removed before proxying so only the provider field is sent;
+  - non-streaming JSON Chat responses and locally reconstructed stored streaming
+    Chat completions continue to report the action under
+    `metadata.compatibility.chat_passthrough`.
+- Added unit coverage:
+  - DeepSeek-compatible direct Chat passthrough now asserts the upstream mock
+    receives `max_tokens:32`, not `max_completion_tokens`, and that conflicting
+    legacy `max_tokens:96` is audited but not forwarded;
+  - custom provider coverage asserts `max_completion_tokens:21` plus
+    `max_tokens:99` becomes only `max_new_tokens:21` upstream, with conflict
+    metadata preserved.
+- Extended live evaluation:
+  - `chat-developer-compat` now sends direct Chat `max_completion_tokens:64`
+    and requires returned compatibility metadata to show forwarding to
+    DeepSeek `max_tokens`.
+- Hardened the UI smoke script while validating this change:
+  - optional search/sidebar/settings controls now use short-click attempts
+    instead of 30-second default click timeouts;
+  - transient command-menu/dialog overlays are closed before composer input, so
+    the smoke continues to test the real conversation/reload workflow instead of
+    failing on optional UI chrome.
+- Updated compatibility, deployment, and evaluation docs to record direct Chat
+  token alias mapping and the `CODEXCOMPAT_MAX_TOKENS_FIELD` configuration.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "chat/completions.*token|normalizes OpenAI Chat fields"`: 87/87 passing tests, including the two direct Chat token alias cases.
+  - `npm test`: 124/124 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-developer-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 908 ms, total usage 31 tokens, visible text
+    `chat-developer-ok`, and direct Chat token alias metadata checks passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 964 ms, P95 latency 1041 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 46/46 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1108 ms, P95 latency 2068 ms, and total usage
+    9333 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8km2bs`, reload persistence
+    confirmed, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T21-18-22-024Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 469 runtime candidates,
+    selected 42 old UI screenshots by retention policy, deleted 0, selected
+    3268828 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 46 MB, `state/` is 4.1 MB, `output/` is 7.5 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 14 MB.
+  - No API keys, account credentials, or local secret files were committed.

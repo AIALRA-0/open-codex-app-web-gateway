@@ -111,6 +111,30 @@ async function runWorkflow(page, config) {
     }
   }
 
+  async function clickOptional(locator, { timeout = 2500, settleMs = 500 } = {}) {
+    if (!(await isVisible(locator, timeout))) return false;
+    try {
+      await locator.first().click({ timeout });
+      if (settleMs > 0) await page.waitForTimeout(settleMs);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function closeTransientOverlays() {
+    const overlay = page.locator('[role="dialog"][data-state="open"], [cmdk-dialog][data-state="open"]');
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      if (!(await isVisible(overlay, 250))) return;
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+    }
+    if (await isVisible(overlay, 250)) {
+      await page.mouse.click(24, 24);
+      await page.waitForTimeout(300);
+    }
+  }
+
   async function waitForAppShell() {
     await page.getByRole("button", { name: /新对话|New chat/i }).first().waitFor({
       state: "visible",
@@ -169,27 +193,18 @@ async function runWorkflow(page, config) {
 
     await recordStep("exercise sidebar controls", async () => {
       const search = page.getByRole("button", { name: /搜索|Search/i }).first();
-      if (await isVisible(search)) {
-        await search.click();
-        await page.waitForTimeout(500);
-        await page.keyboard.press("Escape");
-      }
+      if (await clickOptional(search)) await closeTransientOverlays();
 
       const hideSidebar = page.getByRole("button", { name: /隐藏边栏|Hide sidebar/i }).first();
-      if (await isVisible(hideSidebar)) {
-        await hideSidebar.click();
-        await page.waitForTimeout(500);
-      }
+      await clickOptional(hideSidebar);
 
       const settings = page.getByRole("button", { name: /设置|Settings/i }).first();
-      if (await isVisible(settings)) {
-        await settings.click();
-        await page.waitForTimeout(700);
-        await page.keyboard.press("Escape");
-      }
+      if (await clickOptional(settings, { settleMs: 700 })) await closeTransientOverlays();
+      await closeTransientOverlays();
     });
 
     await recordStep("create new conversation and submit prompt", async () => {
+      await closeTransientOverlays();
       const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
       if (await isVisible(newChat)) {
         await newChat.click();

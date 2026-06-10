@@ -84,8 +84,8 @@ implementations for those tools.
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
-| `max_completion_tokens` | configured max token field | Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence and conflicts are recorded in `metadata.compatibility.max_completion_tokens` |
-| `max_tokens` | configured max token field | Legacy Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence, then `max_completion_tokens`, and conflicts are recorded in `metadata.compatibility.max_tokens` |
+| `max_completion_tokens` | configured max token field | Chat-native alias accepted on `/v1/responses` and direct `/v1/chat/completions`; `max_output_tokens` takes precedence on Responses requests, and conflicts are recorded in compatibility metadata |
+| `max_tokens` | configured max token field | Legacy Chat-native alias accepted on `/v1/responses` and direct `/v1/chat/completions`; `max_output_tokens` takes precedence on Responses requests, then `max_completion_tokens`, and conflicts are recorded in compatibility metadata |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
 | `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
@@ -230,8 +230,11 @@ ordinary passthrough Chat traffic.
 DeepSeek-compatible Chat passthrough uses provider-aware request normalization
 before proxying: OpenAI Chat `messages[].role:"developer"` entries are mapped to
 `system` by default, `user` / `safety_identifier` / `prompt_cache_key` are
-normalized into DeepSeek `user_id`, `service_tier` is filtered when unsupported,
-`stream_options` are removed on non-streaming requests, and configured
+normalized into DeepSeek `user_id`, OpenAI Chat `max_completion_tokens` is
+mapped to the configured provider max-token field (`max_tokens` for DeepSeek),
+conflicting legacy `max_tokens` values are withheld and audited, `service_tier`
+is filtered when unsupported, `stream_options` are removed on non-streaming
+requests, and configured
 OpenAI-only Chat fields such as `modalities`, `moderation`, `prediction`, and
 legacy `functions` / `function_call` are filtered instead of being sent to the
 provider. Non-streaming JSON responses and stored reconstructed streaming

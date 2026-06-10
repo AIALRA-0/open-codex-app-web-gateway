@@ -3299,6 +3299,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const deepseekUserId = normalizeChatPassthroughDeepSeekUserId(upstreamBody, config);
   if (deepseekUserId) compatibility.deepseek_user_id = deepseekUserId;
 
+  const maxTokens = normalizeChatPassthroughMaxTokens(upstreamBody, config);
+  if (maxTokens) Object.assign(compatibility, maxTokens);
+
   const serviceTier = filterChatPassthroughServiceTier(upstreamBody, config);
   if (serviceTier) compatibility.service_tier = serviceTier;
 
@@ -3354,6 +3357,53 @@ function normalizeChatPassthroughDeepSeekUserId(upstreamBody, config = {}) {
     target: "user_id",
     normalized: upstreamBody.user_id === value ? "direct" : "sha256",
   };
+}
+
+function normalizeChatPassthroughMaxTokens(upstreamBody, config = {}) {
+  const maxTokensField = config.maxTokensField || "max_tokens";
+  const compatibility = {};
+
+  if (upstreamBody.max_completion_tokens != null) {
+    const value = upstreamBody.max_completion_tokens;
+    const previousMaxTokens = upstreamBody.max_tokens;
+    const conflictingMaxTokens = previousMaxTokens != null && previousMaxTokens !== value;
+    upstreamBody[maxTokensField] = value;
+    if (maxTokensField !== "max_completion_tokens") delete upstreamBody.max_completion_tokens;
+    if (maxTokensField !== "max_tokens") delete upstreamBody.max_tokens;
+    compatibility.max_completion_tokens = {
+      source: "max_completion_tokens",
+      target: maxTokensField,
+      value,
+      forwarded: true,
+      reason: "chat_passthrough_alias",
+    };
+    if (conflictingMaxTokens) {
+      compatibility.max_tokens = {
+        source: "max_tokens",
+        value: previousMaxTokens,
+        forwarded: false,
+        reason: "max_completion_tokens_precedence",
+      };
+    }
+    return compatibility;
+  }
+
+  if (upstreamBody.max_tokens != null && maxTokensField !== "max_tokens") {
+    const value = upstreamBody.max_tokens;
+    upstreamBody[maxTokensField] = value;
+    delete upstreamBody.max_tokens;
+    return {
+      max_tokens: {
+        source: "max_tokens",
+        target: maxTokensField,
+        value,
+        forwarded: true,
+        reason: "chat_passthrough_alias",
+      },
+    };
+  }
+
+  return null;
 }
 
 function filterChatPassthroughServiceTier(upstreamBody, config = {}) {
