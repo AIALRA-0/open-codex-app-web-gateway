@@ -206,11 +206,15 @@ curl http://127.0.0.1:12923/login
 run. If the login page is visible, it reads credentials from
 `UI_SMOKE_USERNAME`/`UI_SMOKE_PASSWORD` or `CODEXAPP_USERNAME`/`CODEXAPP_PASSWORD`
 in the local environment. It writes screenshots under the ignored
-`output/playwright/` directory. The current `opencodexapp.aialra.online` nginx
-template proxies directly to the web service; the optional login proxy service is
-not in the public request path unless nginx is changed to target port `12923`.
-Broader automated UI coverage still needs upload, interrupt/resume, generated
-artifact display, and full page switching checks.
+`output/playwright/` directory. The smoke also opens/cancels the project dialog,
+verifies the host browser-upload bridge by writing a small fixture under
+`state/browser-uploads/`, adds and clears a project writable root, and records
+visible stop/retry controls after a model turn. The current
+`opencodexapp.aialra.online` nginx template proxies directly to the web service;
+the optional login proxy service is not in the public request path unless nginx
+is changed to target port `12923`. Broader automated UI coverage still needs
+active interrupt/resume actions, generated artifact display, and full page
+switching checks.
 
 ## Runtime Retention
 

@@ -2165,6 +2165,10 @@ function browserBridgeScript() {
   const noListenerNoisePatterns = [
     "No Listener: tabs:outgoing.message.ready"
   ];
+  const radixDialogNoisePatterns = [
+    "\`DialogContent\` requires a \`DialogTitle\`",
+    "Missing \`Description\` or \`aria-describedby"
+  ];
 
   function compactLogValue(value) {
     if (typeof value === "string") return value;
@@ -2184,20 +2188,26 @@ function browserBridgeScript() {
   const rawConsoleWarn = console.warn.bind(console);
   const rawConsoleError = console.error.bind(console);
   console.warn = (...args) => {
-    if (matchesNoise(args, statsigNoisePatterns)) return;
+    if (matchesNoise(args, statsigNoisePatterns) || matchesNoise(args, radixDialogNoisePatterns)) return;
     rawConsoleWarn(...args);
   };
   console.error = (...args) => {
-    if (matchesNoise(args, statsigNoisePatterns) || matchesNoise(args, noListenerNoisePatterns)) return;
+    if (
+      matchesNoise(args, statsigNoisePatterns)
+      || matchesNoise(args, noListenerNoisePatterns)
+      || matchesNoise(args, radixDialogNoisePatterns)
+    ) return;
     rawConsoleError(...args);
   };
   window.addEventListener("unhandledrejection", (event) => {
     if (matchesNoise([event.reason], noListenerNoisePatterns)) event.preventDefault();
     if (matchesNoise([event.reason], statsigNoisePatterns)) event.preventDefault();
+    if (matchesNoise([event.reason], radixDialogNoisePatterns)) event.preventDefault();
   });
   window.addEventListener("error", (event) => {
     if (matchesNoise([event.message, event.error], noListenerNoisePatterns)) event.preventDefault();
     if (matchesNoise([event.message, event.error], statsigNoisePatterns)) event.preventDefault();
+    if (matchesNoise([event.message, event.error], radixDialogNoisePatterns)) event.preventDefault();
   });
 
   function isStatsigEventUrl(input) {
@@ -2416,6 +2426,9 @@ function browserBridgeScript() {
         if (value instanceof FileList) return value.length;
         return 0;
       },
+    },
+    browserUploads: {
+      uploadFiles: async (params = {}) => requestServer("codexapp-upload-browser-files", params, 120000),
     },
     hotkeyWindowHotkeys: {
       collapseToHome: noopAsync,

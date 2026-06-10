@@ -5109,3 +5109,67 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 15 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Expanded UI workflow smoke coverage
+
+- Found a UI workflow coverage gap in the always-on Playwright smoke:
+  - it loaded the app, exercised sidebar/search/settings, sent one prompt, and
+    verified reload persistence;
+  - it did not yet touch the project menu/dialog, the browser-upload bridge,
+    project writable-root host services, or stop/retry control discovery.
+- Added UI workflow coverage:
+  - `scripts/ui-smoke.mjs` now opens the project menu, verifies both new-project
+    and existing-folder menu entries, opens the new-project dialog, fills a
+    unique smoke project name, and cancels so no project records accumulate;
+  - the smoke calls a new browser host service,
+    `codexappHostServices.browserUploads.uploadFiles`, to upload a tiny text
+    fixture through the same server-side browser-upload path used by file drops;
+  - the smoke verifies the uploaded file exists under `state/browser-uploads/`
+    and its contents match the fixture;
+  - the smoke adds and clears a project writable root through
+    `codexappHostServices.projectWritableRoots`, proving the project host-state
+    channel remains round-trippable;
+  - after the model turn, it records visible stop/retry-style controls for
+    workflow observability.
+- Kept the UI smoke actionable:
+  - Radix dialog title/description development warnings are now treated as
+    known benign console noise in the injected web bridge and in the smoke
+    collector, matching the existing handling for other third-party browser
+    telemetry noise;
+  - non-benign console errors still fail the smoke.
+- Updated documentation:
+  - `docs/evaluation-plan.md` now lists project dialog, upload fixture,
+    project writable-root add/clear, and stop/retry discovery as covered UI
+    smoke behavior;
+  - `docs/deployment.md` now explains the expanded `smoke:ui` behavior and the
+    remaining UI gaps.
+- Verification:
+  - `node --check web-server.js` and `node --check scripts/ui-smoke.mjs`:
+    passed.
+  - `git diff --check`: passed.
+  - `npm test`: 130/130 passing tests.
+  - Restarted `aialra-opencodexapp-web.service`; local web health returned
+    HTTP 200, and public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8o58jj`, page load/authentication, sidebar controls, project
+    dialog open/cancel, existing-folder menu detection, browser-upload fixture
+    write and filesystem verification, project writable-root add/clear, new
+    conversation submit, visible stop control discovery, reload persistence,
+    console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T22-57-15-391Z.png`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 928 ms, P95 latency 952 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 596 runtime candidates,
+    selected 51 old UI screenshots by retention policy, deleted 0, selected
+    4051398 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 50 MB, `state/` is 5.2 MB, `output/` is 8.1 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 15 MB.
+  - No API keys, account credentials, or local secret files were committed.

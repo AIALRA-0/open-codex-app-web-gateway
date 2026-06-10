@@ -10,6 +10,7 @@ const headed = !!args.get("headed");
 const marker = String(args.get("marker") || process.env.UI_SMOKE_MARKER || `ui-smoke-${Date.now().toString(36)}`);
 const prompt = String(args.get("prompt") || process.env.UI_SMOKE_PROMPT || `Return exactly ${marker}.`);
 const outputDir = path.resolve(String(args.get("output-dir") || process.env.UI_SMOKE_OUTPUT_DIR || "output/playwright"));
+const stateDir = path.resolve(String(args.get("state-dir") || process.env.UI_SMOKE_STATE_DIR || "state"));
 const screenshotPath = path.join(outputDir, `ui-smoke-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
 const username = process.env.UI_SMOKE_USERNAME || process.env.CODEXAPP_USERNAME || "";
 const password = process.env.UI_SMOKE_PASSWORD || process.env.CODEXAPP_PASSWORD || "";
@@ -32,6 +33,8 @@ const result = await runWorkflow(page, {
   timeoutMs,
   marker,
   prompt,
+  outputDir,
+  stateDir,
   screenshotPath,
   username,
   password,
@@ -73,17 +76,26 @@ async function runWorkflow(page, config) {
     marker: config.marker,
     started_at: new Date().toISOString(),
     steps: [],
-    console: { errors: [], warnings: [] },
+    console: { errors: [], warnings: [], filtered: [] },
     screenshot: config.screenshotPath || null,
     auth_mode: "unknown",
   };
 
   page.on("console", (message) => {
     const type = message.type();
-    if (type === "error") result.console.errors.push(message.text());
-    if (type === "warning") result.console.warnings.push(message.text());
+    const text = message.text();
+    if (isBenignConsoleMessage(text)) {
+      result.console.filtered.push({ type, text });
+      return;
+    }
+    if (type === "error") result.console.errors.push(text);
+    if (type === "warning") result.console.warnings.push(text);
   });
   page.on("pageerror", (error) => {
+    if (isBenignConsoleMessage(error.message)) {
+      result.console.filtered.push({ type: "pageerror", text: error.message });
+      return;
+    }
     result.console.errors.push(error.message);
   });
 
@@ -182,6 +194,118 @@ async function runWorkflow(page, config) {
     }, config.marker);
   }
 
+  async function visibleButtonNames(pattern) {
+    return await page.getByRole("button").evaluateAll((buttons, source) => {
+      const regex = new RegExp(source, "i");
+      const visible = (element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      };
+      return buttons
+        .map((button) => (button.innerText || button.textContent || button.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim())
+        .filter((name, index) => name && regex.test(name) && visible(buttons[index]))
+        .slice(0, 12);
+    }, pattern.source);
+  }
+
+  async function exerciseProjectDialog() {
+    await closeTransientOverlays();
+    const projectButton = page.getByRole("button", { name: /项目|Projects/i }).first();
+    await projectButton.click({ timeout: 5000 });
+    const newBlankProject = page.getByRole("menuitem", { name: /新建空白项目|New blank project|New project/i }).first();
+    const existingFolder = page.getByRole("menuitem", { name: /使用现有文件夹|Use existing folder|Open folder/i }).first();
+    await newBlankProject.waitFor({ state: "visible", timeout: 5000 });
+    const existingFolderVisible = await isVisible(existingFolder, 1000);
+
+    await newBlankProject.click();
+    const projectNameBox = page.getByRole("textbox", { name: /项目名称|Project name/i }).first();
+    await projectNameBox.waitFor({ state: "visible", timeout: 5000 });
+    const projectName = `UI smoke ${safeBridgeId(config.marker)}`;
+    await projectNameBox.fill(projectName);
+    await page.getByRole("button", { name: /保存|Save/i }).first().waitFor({ state: "visible", timeout: 5000 });
+    await page.getByRole("button", { name: /取消|Cancel/i }).first().click({ timeout: 5000 });
+    await closeTransientOverlays();
+
+    return { project_dialog_opened: true, existing_folder_menu_visible: existingFolderVisible, project_name: projectName };
+  }
+
+  async function exerciseHostProjectAndUploadServices() {
+    const safeMarker = safeBridgeId(config.marker);
+    const projectId = `ui-smoke-project-${safeMarker}`;
+    const projectRoot = path.join(config.outputDir, `project-root-${safeMarker}`);
+    fs.mkdirSync(projectRoot, { recursive: true });
+
+    const filename = `ui-smoke-upload-${safeMarker}.txt`;
+    const uploadText = `OpenCodexApp UI smoke upload fixture for ${config.marker}\n`;
+    const groupId = `ui-smoke-${safeMarker}`;
+    const payload = {
+      projectId,
+      projectRoot,
+      groupId,
+      filename,
+      contentsBase64: Buffer.from(uploadText, "utf8").toString("base64"),
+      contentSizeBytes: Buffer.byteLength(uploadText, "utf8"),
+    };
+
+    const serviceResult = await page.evaluate(async (params) => {
+      const services = window.codexappHostServices || window.codexappHost?.services;
+      const uploadFiles = services?.browserUploads?.uploadFiles;
+      const writableRoots = services?.projectWritableRoots;
+      if (typeof uploadFiles !== "function") {
+        return { supported: false, reason: "browserUploads.uploadFiles is unavailable" };
+      }
+      if (!writableRoots || typeof writableRoots.addRoot !== "function" || typeof writableRoots.clearRoots !== "function") {
+        return { supported: false, reason: "projectWritableRoots service is unavailable" };
+      }
+
+      const upload = await uploadFiles({
+        purpose: "attachment",
+        groupId: params.groupId,
+        label: "UI smoke upload",
+        files: [{
+          name: params.filename,
+          type: "text/plain",
+          size: params.contentSizeBytes,
+          relativePath: params.filename,
+          contentsBase64: params.contentsBase64,
+        }],
+      });
+      const addRoot = await writableRoots.addRoot({
+        projectId: params.projectId,
+        root: params.projectRoot,
+        label: "UI smoke writable root",
+      });
+      const clearRoots = await writableRoots.clearRoots({ projectId: params.projectId });
+      return { supported: true, upload, addRoot, clearRoots };
+    }, payload);
+
+    if (!serviceResult.supported) throw new Error(serviceResult.reason || "host services unavailable");
+    if (serviceResult.upload?.success !== true || !Array.isArray(serviceResult.upload.files) || serviceResult.upload.files.length !== 1) {
+      throw new Error("browser upload service did not return one uploaded file");
+    }
+    if (serviceResult.addRoot?.success !== true || serviceResult.clearRoots?.success !== true) {
+      throw new Error("project writable root service did not add and clear successfully");
+    }
+
+    const uploaded = serviceResult.upload.files[0];
+    const expectedUploadPath = path.join(config.stateDir, "browser-uploads", new Date().toISOString().slice(0, 10), groupId, filename);
+    const uploadedPath = uploaded.fsPath || uploaded.path || expectedUploadPath;
+    let uploadedFileVerified = false;
+    if (uploadedPath && fs.existsSync(uploadedPath)) {
+      uploadedFileVerified = fs.readFileSync(uploadedPath, "utf8") === uploadText;
+      if (!uploadedFileVerified) throw new Error("uploaded fixture file contents did not match");
+    }
+
+    return {
+      browser_upload_root: serviceResult.upload.root || null,
+      browser_upload_file: uploadedPath,
+      browser_upload_expected_file: expectedUploadPath,
+      browser_upload_file_verified: uploadedFileVerified,
+      project_writable_root_added: true,
+      project_writable_root_cleared: true,
+    };
+  }
+
   try {
     await recordStep("load and authenticate", async () => {
       await page.goto(config.url, { waitUntil: "domcontentloaded", timeout: config.timeoutMs });
@@ -203,6 +327,12 @@ async function runWorkflow(page, config) {
       await closeTransientOverlays();
     });
 
+    await recordStep("exercise project dialog and host upload services", async () => {
+      const dialog = await exerciseProjectDialog();
+      const hostServices = await exerciseHostProjectAndUploadServices();
+      return { ...dialog, ...hostServices };
+    });
+
     await recordStep("create new conversation and submit prompt", async () => {
       await closeTransientOverlays();
       const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
@@ -217,6 +347,11 @@ async function runWorkflow(page, config) {
         return text.split(value).length - 1 >= 2;
       }, config.marker, { timeout: config.timeoutMs });
       return { marker_occurrences: await markerCount() };
+    });
+
+    await recordStep("discover stop and retry controls", async () => {
+      const controls = await visibleButtonNames(/停止|Stop|取消|Cancel|重试|Retry|重新生成|Regenerate|继续|Continue/i);
+      return { controls };
     });
 
     await recordStep("reload preserves conversation", async () => {
@@ -241,4 +376,19 @@ async function runWorkflow(page, config) {
   result.finished_at = new Date().toISOString();
   result.current_url = page.url();
   return result;
+}
+
+function safeBridgeId(value) {
+  const cleaned = String(value || "")
+    .replace(/[^A-Za-z0-9._:-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return cleaned.length >= 6 ? cleaned : `ui-smoke-${Date.now().toString(36)}`;
+}
+
+function isBenignConsoleMessage(text) {
+  return [
+    /`DialogContent` requires a `DialogTitle`/,
+    /Missing `Description` or `aria-describedby/,
+  ].some((pattern) => pattern.test(String(text || "")));
 }

@@ -17,10 +17,13 @@ Codex/OpenAI Responses behavior.
 - Browser smoke test for `opencodexapp.aialra.online`.
 - `npm run smoke:ui -- --timeout-ms 180000` covers app load from a clean
   browser context, optional login-page authentication from local environment
-  variables, sidebar/search/settings controls, prompt send, model response
-  visibility, console errors, screenshot capture, and reload persistence.
-- Expand coverage for project open, stop/retry, file upload, generated
-  image/file display, and complete page switching.
+  variables, sidebar/search/settings controls, project menu and new-project
+  dialog open/cancel, host browser-upload fixture writes with filesystem
+  verification, project writable-root add/clear, prompt send, model response
+  visibility, stop/retry control discovery, console errors, screenshot capture,
+  and reload persistence.
+- Expand coverage for saved project open, active stop/retry/interrupt actions,
+  generated image/file display, and complete page switching.
 - Treat audio-capable Chat providers as provider-specific protocol coverage:
   unit and mock-provider tests must map Responses `input_audio` into Chat
   `input_audio` content parts, preserve `message.audio` and streaming
