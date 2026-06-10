@@ -436,6 +436,40 @@ test("maps compaction items to continuation system context", () => {
   ]);
 });
 
+test("maps encrypted reasoning items through the local decoder", () => {
+  const messages = responseInputToChatMessages([
+    {
+      type: "reasoning",
+      encrypted_content: "local-reasoning-token",
+      summary: [{ type: "summary_text", text: "visible summary" }],
+    },
+    {
+      type: "reasoning",
+      encrypted_content: "foreign-reasoning-token",
+      summary: [{ type: "summary_text", text: "foreign visible summary" }],
+    },
+    {
+      type: "reasoning",
+      encrypted_content: "foreign-without-summary",
+    },
+  ], {
+    decodeReasoning: (value) => value === "local-reasoning-token" ? "hidden reasoning state" : "",
+  });
+
+  assert.deepEqual(messages, [
+    {
+      role: "assistant",
+      content: "",
+      reasoning_content: "hidden reasoning state",
+    },
+    {
+      role: "assistant",
+      content: "",
+      reasoning_content: "foreign visible summary",
+    },
+  ]);
+});
+
 test("maps chat completion content, tool calls, reasoning and usage back to Responses", () => {
   const response = chatCompletionToResponse({
     id: "chatcmpl_1",

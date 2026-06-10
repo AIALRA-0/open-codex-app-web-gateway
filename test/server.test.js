@@ -1059,6 +1059,63 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
   });
 });
 
+test("POST /v1/responses streams encrypted reasoning content when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.stream_options, { include_usage: true });
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_reasoning",
+      object: "chat.completion.chunk",
+      created: 1694268191,
+      model: "mock-stream-model",
+      choices: [{
+        index: 0,
+        delta: { reasoning_content: "stream hidden chain" },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_reasoning",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: { content: "stream visible" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream reasoning",
+        stream: true,
+        include: ["reasoning.encrypted_content"],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const text = await response.text();
+    assert.match(text, /event: response\.reasoning_summary_text\.delta/);
+    const events = parseSseEvents(text);
+    const reasoningDone = events
+      .filter((event) => event.event === "response.output_item.done")
+      .map((event) => event.data.item)
+      .find((item) => item.type === "reasoning");
+    assert.match(reasoningDone.encrypted_content, /^ocrsn1\./);
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output[0].type, "reasoning");
+    assert.match(completed.output[0].encrypted_content, /^ocrsn1\./);
+    assert.equal(completed.output[0].summary[0].text, "stream hidden chain");
+    assert.equal(completed.output[1].content[0].text, "stream visible");
+    assert.equal(completed.metadata.compatibility.local_reasoning_encrypted_content.output_count, 1);
+  });
+});
+
 test("POST /v1/responses preserves multiple streaming Chat choices", async () => {
   let callCount = 0;
   await withMockProvider(async (_req, res, call) => {
@@ -3405,6 +3462,85 @@ test("POST /v1/responses/compact returns local compaction and replays it", async
     assert.equal(requests[1].body.messages.at(-2).role, "system");
     assert.match(requests[1].body.messages.at(-2).content, /Compacted conversation context:\nProject code word atlas-77/);
     assert.equal(requests[1].body.messages.at(-1).content, "What is the code word?");
+  });
+});
+
+test("POST /v1/responses returns and replays encrypted reasoning content", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (call.body.messages?.some((message) => message.reasoning_content === "hidden chain atlas-77")) {
+      assert.doesNotMatch(JSON.stringify(call.body.messages), /ocrsn1\./);
+      assert.equal(call.body.messages[0].role, "assistant");
+      assert.equal(call.body.messages[0].content, "");
+      res.end(JSON.stringify({
+        id: "chatcmpl_reasoning_replay",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "continued from encrypted reasoning" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+      }));
+      return;
+    }
+
+    res.end(JSON.stringify({
+      id: "chatcmpl_reasoning_encrypt",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          reasoning_content: "hidden chain atlas-77",
+          content: "visible answer",
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 },
+    }));
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const first = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Return with reasoning.",
+        include: ["reasoning.encrypted_content"],
+        store: false,
+      }),
+    });
+    assert.equal(first.status, 200);
+    const firstJson = await first.json();
+    assert.equal(firstJson.output[0].type, "reasoning");
+    assert.equal(firstJson.output[0].summary[0].text, "hidden chain atlas-77");
+    assert.match(firstJson.output[0].encrypted_content, /^ocrsn1\./);
+    assert.equal(firstJson.output[1].content[0].text, "visible answer");
+    assert.equal(firstJson.metadata.compatibility.local_reasoning_encrypted_content.output_count, 1);
+    assert.equal(firstJson.metadata.compatibility.local_reasoning_encrypted_content.status, "emulated_locally");
+    assert.equal(fs.existsSync(path.join(stateDir, "compaction.key")), true);
+
+    const continued = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          firstJson.output[0],
+          { role: "user", content: "Continue using the reasoning state." },
+        ],
+        store: false,
+      }),
+    });
+    assert.equal(continued.status, 200);
+    const continuedJson = await continued.json();
+    assert.equal(continuedJson.output[0].content[0].text, "continued from encrypted reasoning");
+    assert.equal(requests.length, 2);
   });
 });
 

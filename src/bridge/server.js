@@ -292,6 +292,7 @@ function translatorOptions(config, extra = {}) {
     ...config,
     ...extra,
     decodeCompaction: (encryptedContent) => decodeLocalCompaction(encryptedContent, config),
+    decodeReasoning: (encryptedContent) => decodeLocalReasoning(encryptedContent, config),
   };
 }
 
@@ -422,13 +423,17 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachShellOutput(response, localShell);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
+  const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
   response.metadata = {
     ...(response.metadata || {}),
     compatibility: mergeCompatibility(
       response.metadata?.compatibility,
       compatibility,
-      localModeration ? { local_moderation: localModeration } : {},
+      {
+        ...(localReasoningEncryptedContent ? { local_reasoning_encrypted_content: localReasoningEncryptedContent } : {}),
+        ...(localModeration ? { local_moderation: localModeration } : {}),
+      },
     ),
     upstream_object: upstreamJson.object || null,
   };
@@ -728,6 +733,46 @@ function hasCompactionInput(value) {
   if (!value || typeof value !== "object") return false;
   if (value.type === "compaction") return true;
   return hasCompactionInput(value.content) || hasCompactionInput(value.input);
+}
+
+function attachLocalReasoningEncryptedContent(response, request, config) {
+  if (!reasoningEncryptedContentRequested(request)) return null;
+  const reasoningItems = Array.isArray(response?.output)
+    ? response.output.filter((item) => item?.type === "reasoning")
+    : [];
+  let outputCount = 0;
+
+  for (const item of reasoningItems) {
+    if (typeof item.encrypted_content === "string" && item.encrypted_content) continue;
+    const reasoning = reasoningOutputText(item);
+    if (!reasoning) continue;
+    item.encrypted_content = encryptLocalReasoning(reasoning, config);
+    outputCount += 1;
+  }
+
+  if (!outputCount) return null;
+  return {
+    status: "emulated_locally",
+    output_count: outputCount,
+    source: "chat_reasoning_content",
+  };
+}
+
+function reasoningEncryptedContentRequested(request = {}) {
+  return Array.isArray(request.include) && request.include.includes("reasoning.encrypted_content");
+}
+
+function reasoningOutputText(item) {
+  if (!item || typeof item !== "object") return "";
+  if (typeof item.text === "string") return item.text;
+  if (typeof item.content === "string") return item.content;
+  if (Array.isArray(item.summary)) {
+    return item.summary
+      .map((part) => stringifyContent(part?.text ?? part?.summary_text ?? part))
+      .filter(Boolean)
+      .join("\n");
+  }
+  return "";
 }
 
 function mergeCompatibility(existing, next, extra = {}) {
@@ -1580,6 +1625,21 @@ function encryptLocalCompaction(summary, config) {
   return `occomp1.${base64url(iv)}.${base64url(tag)}.${base64url(encrypted)}`;
 }
 
+function encryptLocalReasoning(reasoning, config) {
+  const key = getCompactionKey(config);
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv("aes-256-gcm", key, iv);
+  cipher.setAAD(Buffer.from("open-codex-reasoning-v1"));
+  const plaintext = Buffer.from(JSON.stringify({
+    reasoning,
+    created_at: nowSeconds(),
+    source: "open-codex-responses-bridge",
+  }));
+  const encrypted = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return `ocrsn1.${base64url(iv)}.${base64url(tag)}.${base64url(encrypted)}`;
+}
+
 function decodeLocalCompaction(encryptedContent, config) {
   const value = String(encryptedContent || "");
   if (!value.startsWith("occomp1.")) return "";
@@ -1596,6 +1656,27 @@ function decodeLocalCompaction(encryptedContent, config) {
     ]);
     const payload = JSON.parse(plaintext.toString("utf8"));
     return typeof payload.summary === "string" ? payload.summary : "";
+  } catch {
+    return "";
+  }
+}
+
+function decodeLocalReasoning(encryptedContent, config) {
+  const value = String(encryptedContent || "");
+  if (!value.startsWith("ocrsn1.")) return "";
+  const parts = value.split(".");
+  if (parts.length !== 4) return "";
+  try {
+    const [, iv, tag, encrypted] = parts;
+    const decipher = crypto.createDecipheriv("aes-256-gcm", getCompactionKey(config), Buffer.from(iv, "base64url"));
+    decipher.setAAD(Buffer.from("open-codex-reasoning-v1"));
+    decipher.setAuthTag(Buffer.from(tag, "base64url"));
+    const plaintext = Buffer.concat([
+      decipher.update(Buffer.from(encrypted, "base64url")),
+      decipher.final(),
+    ]);
+    const payload = JSON.parse(plaintext.toString("utf8"));
+    return typeof payload.reasoning === "string" ? payload.reasoning : "";
   } catch {
     return "";
   }
@@ -1657,6 +1738,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     annotateWebSearchResponse(response, localWebSearch);
     annotateFileSearchResponse(response, localFileSearch);
     syncStreamTextFromResponse(state);
+    const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
     const doneEvents = finishStreamState(state);
     for (const event of doneEvents) writeSse(res, event.type, sequence(state, event));
     const terminal = responseTerminalStateFromFinishReasons(state.finishReasons);
@@ -1679,6 +1761,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
         },
         {
           ...(refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {}),
+          ...(localReasoningEncryptedContent ? { local_reasoning_encrypted_content: localReasoningEncryptedContent } : {}),
           ...(localModeration ? { local_moderation: localModeration } : {}),
         },
       ),

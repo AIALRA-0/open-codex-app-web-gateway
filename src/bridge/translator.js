@@ -148,7 +148,7 @@ function inputItemToChatMessages(item, options = {}) {
   }
 
   if (item.type === "reasoning") {
-    const text = reasoningItemToText(item);
+    const text = reasoningItemToText(item, options);
     if (!text) return [];
     return [{ role: "assistant", content: "", reasoning_content: text }];
   }
@@ -179,18 +179,31 @@ function decodeCompactionItem(item, options = {}) {
   return "";
 }
 
-function reasoningItemToText(item) {
+function reasoningItemToText(item, options = {}) {
   if (!isPlainObject(item)) return "";
+  const decrypted = decodeReasoningItem(item, options);
+  if (decrypted) return decrypted;
   if (typeof item.text === "string") return item.text;
   if (typeof item.content === "string") return item.content;
-  if (typeof item.encrypted_content === "string") return item.encrypted_content;
   if (Array.isArray(item.summary)) {
     return item.summary
       .map((part) => stringifyContent(part?.text ?? part?.summary_text ?? part))
       .filter(Boolean)
       .join("\n");
   }
+  if (typeof item.encrypted_content === "string" && typeof options.decodeReasoning !== "function") {
+    return item.encrypted_content;
+  }
   return "";
+}
+
+function decodeReasoningItem(item, options = {}) {
+  if (!isPlainObject(item) || typeof options.decodeReasoning !== "function") return "";
+  try {
+    return stringifyContent(options.decodeReasoning(item.encrypted_content || ""));
+  } catch {
+    return "";
+  }
 }
 
 function responseInputToChatMessages(input, options = {}) {

@@ -2976,3 +2976,74 @@ Open follow-ups:
   compatibility classifier as `/v1/moderations`; it is not OpenAI's hosted
   moderation model and direct streaming Chat passthrough remains byte-preserving
   instead of appending synthetic moderation events.
+
+## 2026-06-10 Encrypted Reasoning Compatibility
+
+- Added local Responses `include:["reasoning.encrypted_content"]`
+  compatibility for Chat-Completions-only provider deployments.
+- Official source checked on 2026-06-10:
+  - OpenAI migration guidance says stateless reasoning workflows should set
+    `store:false`, add `["reasoning.encrypted_content"]` to `include`, pass
+    encrypted reasoning items back in later requests, and have encrypted content
+    decrypted only in memory for continuation.
+- Implemented local encrypted reasoning emulation:
+  - non-streaming `/v1/responses` adds `encrypted_content` to each output
+    `reasoning` item when the request includes
+    `reasoning.encrypted_content` and the upstream Chat provider returns
+    `message.reasoning_content`;
+  - streaming `/v1/responses` adds the same encrypted content before
+    `response.output_item.done` and terminal `response.completed` events;
+  - returned local reasoning tokens use prefix `ocrsn1.` with AES-256-GCM and a
+    dedicated reasoning AAD, while reusing the existing
+    `CODEXCOMPAT_COMPACTION_SECRET_FILE` key material kept outside Git;
+  - replayed `reasoning` input items with local `encrypted_content` are decoded
+    in memory into upstream Chat `reasoning_content`;
+  - undecodable foreign encrypted reasoning falls back to visible
+    `reasoning.summary[]` text when present;
+  - `metadata.compatibility.local_reasoning_encrypted_content` records local
+    emulation status and output count.
+- Added unit tests for:
+  - translator replay of local encrypted reasoning with summary fallback for
+    foreign tokens;
+  - non-streaming Responses encrypted reasoning output and stateless replay;
+  - streaming Responses encrypted reasoning on `output_item.done` and terminal
+    `response.completed`.
+- Updated the compatibility matrix, deployment docs, and evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 61/61 passing tests.
+  - `node --test test/translator.test.js`: 26/26 passing tests.
+  - `npm test`: 90/90 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Direct live `/v1/responses` encrypted-reasoning probe returned
+    `status:"completed"`, one reasoning item, one `ocrsn1.` encrypted content
+    field, exact visible text `encrypted-reasoning-ok`, and local compatibility
+    metadata with `output_count:1`.
+  - Direct live stateless replay probe returned `ok:true`; both turns
+    completed and the second turn returned exact visible text
+    `encrypted-replay-ok` without printing the encrypted token.
+  - Full live `bridge-regression` passed 35/35 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1447 ms, P95 latency 3724 ms, and total usage
+    8710 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8ac4qi`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 266 runtime candidates,
+    selected 13 old UI screenshots by retention policy, deleted 0, selected
+    789181 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 40 GB available; bridge state is 1.7 MB and output
+    artifacts are 5.1 MB.
+- Remaining known gap: this preserves provider-returned reasoning state for
+  DeepSeek-style Chat compatibility; it cannot reconstruct hidden reasoning
+  tokens when a Chat provider does not expose `reasoning_content`, and local
+  encrypted reasoning tokens are only decryptable by this bridge/key.

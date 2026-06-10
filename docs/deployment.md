@@ -89,7 +89,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
-| `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content`; keep outside Git and mode `0600` |
+| `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content` and local Responses `reasoning.encrypted_content` emulation; keep outside Git and mode `0600` |
 | `CODEXCOMPAT_INPUT_FILE_PROVIDER` | `local` | Local Responses `input_file` adapter provider. Use `disabled` to leave file inputs as marker-only metadata |
 | `CODEXCOMPAT_INPUT_FILE_MAX_FILES` | `8` | Maximum `input_file` items extracted per Responses request |
 | `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local/inline file input and retained from each remote `file_url`; loader caps this at 50 MB |

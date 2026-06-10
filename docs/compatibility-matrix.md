@@ -7,6 +7,7 @@ Primary sources:
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
+- OpenAI encrypted reasoning guidance: https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
@@ -57,7 +58,7 @@ implementations for those tools.
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
-| `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility |
+| `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility; local `encrypted_content` values with prefix `ocrsn1.` are decoded in memory when replayed |
 | `previous_response_id` | local replay store | Emulated locally |
 | `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution; startup reconciliation marks stale in-progress background records failed after a bridge restart |
@@ -84,6 +85,7 @@ implementations for those tools.
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
+| `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
 | `user_id`, `safety_identifier`, `prompt_cache_key`, `user` | DeepSeek `user_id` | DeepSeek-specific compatibility; direct when already `[A-Za-z0-9_-]`, otherwise stable SHA-256 normalized |
@@ -113,7 +115,7 @@ behavior.
 | `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
 | `choices[].message.annotations[]` / streaming `choices[].delta.annotations[]` | `message.content[].output_text.annotations[]` | Direct when a Chat provider returns citation annotations |
 | `choices[].index`, `choices[].finish_reason` | `metadata.compatibility.chat_choices[]` | Preserves original Chat choice metadata while Responses output items carry the generated content |
-| `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
+| `choices[].message.reasoning_content` / streaming `choices[].delta.reasoning_content` | output `reasoning.summary[]`, optional `reasoning.encrypted_content`, and replay store | DeepSeek-specific reasoning compatibility; encrypted content is local bridge emulation for stateless Responses-style replay |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
 | `usage` | `metadata.compatibility.chat_usage` | Full original Chat usage object is preserved for provider-specific token detail fields that Responses usage does not expose |
