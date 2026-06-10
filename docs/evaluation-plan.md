@@ -231,7 +231,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Responses `input_file` text extraction works for local file IDs, completed text/PDF Uploads API files, inline base64 payloads, bounded HTTP(S) file URLs, PDF text layers, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML document text, with failed/unsupported/truncated files surfaced in compatibility metadata.
 - Local Uploads API lifecycle creates pending Upload objects, adds Parts, completes ordered `part_ids` into usable byte-preserving Files, rejects byte-count mismatches, and blocks new Parts after cancellation.
 - Local Batch API accepts `purpose:"batch"` JSONL Files, executes supported endpoints, exposes OpenAI-style Batch objects, and writes output/error JSONL Files that can be read through `/v1/files/{file_id}/content`.
-- Hosted-tool emulation returns auditable search/open-page/find-in-page call items and citations for web search.
+- Hosted-tool emulation returns auditable search/open-page/find-in-page call items, requested `web_search_call.action.sources`, and citations for web search.
 - Responses `max_tool_calls` is enforced across local hosted-tool emulation so
   skipped web/file/shell actions are not executed and are recorded in
   compatibility metadata.

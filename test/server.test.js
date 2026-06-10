@@ -818,6 +818,7 @@ test("POST /v1/responses executes local web_search_preview compatibility", async
     assert.equal(json.output[0].status, "completed");
     assert.equal(json.output[0].action.type, "search");
     assert.match(json.output[0].action.query, /bridge web result/);
+    assert.equal(Object.prototype.hasOwnProperty.call(json.output[0].action, "sources"), false);
     assert.equal(json.output[1].type, "message");
     assert.equal(json.output[1].content[0].text, "bridge-web-ok [1]");
     assert.deepEqual(json.output[1].content[0].annotations, [{
@@ -836,6 +837,60 @@ test("POST /v1/responses executes local web_search_preview compatibility", async
       title: "Bridge Search Result",
       url: "https://example.test/bridge-search",
       snippet: "The bridge web search adapter found this result.",
+    }],
+  });
+});
+
+test("POST /v1/responses includes local web_search action sources when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.ok(call.body.messages.some((message) => /Bridge Source Result/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_web_search_sources",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "bridge-source-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for bridge source result and return bridge-source-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        include: ["web_search_call.action.sources"],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "web_search_call");
+    assert.equal(json.output[0].action.type, "search");
+    assert.deepEqual(json.output[0].action.sources, [{
+      type: "url",
+      url: "https://example.test/bridge-source",
+      title: "Bridge Source Result",
+      index: 1,
+      snippet: "The bridge can expose web search sources on action items.",
+    }]);
+    assert.deepEqual(json.metadata.compatibility.local_web_search.action_sources, {
+      status: "included",
+      source_count: 1,
+    });
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Bridge Source Result",
+      url: "https://example.test/bridge-source",
+      snippet: "The bridge can expose web search sources on action items.",
     }],
   });
 });
@@ -1438,6 +1493,7 @@ test("POST /v1/responses streams local web_search_preview call and citations", a
         model: "mock-model",
         input: "Search for streaming result and answer.",
         tools: [{ type: "web_search_preview" }],
+        include: ["web_search_call.action.sources"],
         stream: true,
         store: false,
       }),
@@ -1447,6 +1503,7 @@ test("POST /v1/responses streams local web_search_preview call and citations", a
     const text = await response.text();
     assert.match(text, /event: response\.output_item\.added/);
     assert.match(text, /"type":"web_search_call"/);
+    assert.match(text, /"sources":\[\{"type":"url","url":"https:\/\/example\.test\/stream-search"/);
     assert.match(text, /event: response\.output_text\.done/);
     assert.match(text, /stream-web-ok\\n\\nSources:/);
     assert.match(text, /"type":"url_citation"/);

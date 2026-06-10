@@ -3115,3 +3115,62 @@ Open follow-ups:
 - Remaining known gap: the bridge cannot fetch OpenAI-hosted dashboard prompt
   templates by id; those references require a local template mirror or are
   preserved as compatibility context for the Chat provider.
+
+## 2026-06-10 Web Search Action Sources Compatibility
+
+- Added local Responses `include:["web_search_call.action.sources"]`
+  compatibility for Chat-Completions-only providers.
+- Official source checked on 2026-06-10:
+  - OpenAI Responses `create` lists `web_search_call.action.sources` as a
+    supported `include` value for exposing web-search tool-call sources.
+- Implemented local source projection:
+  - `prepareWebSearchContext` records whether the request explicitly asked for
+    `web_search_call.action.sources`;
+  - `webSearchOutputItems` now adds `action.sources` only when requested,
+    preserving the default response projection otherwise;
+  - search actions expose local URL sources with title, snippet, and source
+    index;
+  - local `open_page` and `find_in_page` actions expose the matching URL source
+    plus bounded open/find status metadata;
+  - `metadata.compatibility.local_web_search.action_sources` records local
+    inclusion status and source count.
+- Added tests for:
+  - default local web-search output omitting `action.sources`;
+  - non-streaming Responses output including local `action.sources` when
+    requested;
+  - streaming `response.output_item.added` events carrying sources when the
+    include value is present.
+- Updated live `responses-web-search` in `bridge-regression` to request and
+  verify `web_search_call.action.sources`.
+- Updated the compatibility matrix and evaluation plan.
+- Verified:
+  - `node --check src/bridge/web_search.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 64/64 passing tests.
+  - `npm test`: 95/95 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Targeted live `responses-web-search` passed 1/1, elapsed 1784 ms, output
+    `web-search-ok [1]`, and total usage 4040 tokens.
+  - Full live `bridge-regression` passed 36/36 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1257 ms, P95 latency 2805 ms, and total usage
+    8655 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8aya7b`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 276 runtime candidates,
+    selected 15 old UI screenshots by retention policy, deleted 0, selected
+    959516 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 40 GB available; bridge state is 1.8 MB, output
+    artifacts are 5.2 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.
+- Remaining known gap: this exposes sources from the local web-search adapter;
+  it is not OpenAI hosted web-search ranking or policy parity and still depends
+  on the configured local provider.

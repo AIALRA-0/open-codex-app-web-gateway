@@ -790,6 +790,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           input: "Use web search for OpenAI. Then return the exact string web-search-ok [1].",
           tools: [{ type: "web_search_preview" }],
+          include: ["web_search_call.action.sources"],
           max_output_tokens: 128,
           store: false,
         },
@@ -798,6 +799,7 @@ function buildSuites(defaultModel) {
           const searchCall = calls.find((item) => item.action?.type === "search");
           const openPageCall = calls.find((item) => item.action?.type === "open_page");
           const findInPageCall = calls.find((item) => item.action?.type === "find_in_page");
+          const actionSources = searchCall?.action?.sources || [];
           const annotations = (json.output || [])
             .flatMap((item) => item.content || [])
             .flatMap((part) => part.annotations || []);
@@ -808,6 +810,7 @@ function buildSuites(defaultModel) {
           const openedCount = json.metadata?.compatibility?.local_web_search?.opened_count || 0;
           return !!searchCall
             && searchCall.status === "completed"
+            && actionSources.some((source) => source.type === "url" && /^https?:\/\//.test(source.url || ""))
             && !!openPageCall
             && ["completed", "failed"].includes(openPageCall.status)
             && (openedCount === 0 || (!!findInPageCall && findInPageCall.status === "completed" && findAttemptCount >= 1))

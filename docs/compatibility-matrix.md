@@ -87,6 +87,7 @@ implementations for those tools.
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
+| `include:["web_search_call.action.sources"]` | local `web_search_call.action.sources` | Emulated locally for the Responses web-search adapter. Search calls include URL sources from local results; `open_page` and `find_in_page` calls include the matching URL source. The bridge records `metadata.compatibility.local_web_search.action_sources` when requested |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
@@ -497,6 +498,13 @@ extracted text for the request query and injects bounded snippets while emitting
 `action.type:"find_in_page"`. Search, `open_page`, and `find_in_page` each
 consume one shared `max_tool_calls` budget slot when that Responses field is
 present.
+
+When a request includes `include:["web_search_call.action.sources"]`, the local
+adapter adds `action.sources` to emitted `web_search_call` items. Search actions
+carry the local result URLs with titles, snippets, and source indexes; local
+`open_page` and `find_in_page` actions carry the matching URL source plus bounded
+open/find status metadata. Without this include value, the bridge omits
+`action.sources` to preserve the default Responses projection.
 
 Current providers:
 

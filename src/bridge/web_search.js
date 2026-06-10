@@ -8,6 +8,7 @@ const WEB_SEARCH_TOOL_TYPES = new Set([
   "web_search_preview",
   "web_search_preview_2025_03_11",
 ]);
+const WEB_SEARCH_ACTION_SOURCES_INCLUDE = "web_search_call.action.sources";
 const DEFAULT_WIKIPEDIA_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 const DEFAULT_WEB_SEARCH_USER_AGENT = "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)";
 const FIND_IN_PAGE_STOP_WORDS = new Set([
@@ -55,6 +56,7 @@ async function prepareWebSearchContext(request = {}, config = {}, options = {}) 
   const context = {
     provider,
     query,
+    include_action_sources: webSearchActionSourcesRequested(request),
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     status: "completed",
     calls: [],
@@ -104,10 +106,10 @@ function injectWebSearchMessages(chat, context) {
   });
 }
 
-function attachWebSearchOutput(response, context) {
+function attachWebSearchOutput(response, context, options = {}) {
   if (!context) return response;
   response.output = [
-    ...webSearchOutputItems(context),
+    ...webSearchOutputItems(context, options),
     ...(response.output || []),
   ];
   annotateWebSearchResponse(response, context);
@@ -129,14 +131,22 @@ function annotateWebSearchResponse(response, context) {
   return response;
 }
 
-function webSearchOutputItems(context) {
-  return (context?.calls || []).map((call) => ({
-    id: call.id,
-    type: "web_search_call",
-    status: call.status || "completed",
-    action: call.action || { type: "search", query: context.query || "" },
-    ...(call.status === "failed" ? { error: call.error || context.error || "local web search failed" } : {}),
-  }));
+function webSearchOutputItems(context, options = {}) {
+  const includeSources = options.includeSources ?? context?.include_action_sources ?? false;
+  return (context?.calls || []).map((call) => {
+    const action = call.action || { type: "search", query: context.query || "" };
+    const sources = includeSources ? webSearchActionSources(context, action) : [];
+    return {
+      id: call.id,
+      type: "web_search_call",
+      status: call.status || "completed",
+      action: {
+        ...action,
+        ...(sources.length ? { sources } : {}),
+      },
+      ...(call.status === "failed" ? { error: call.error || context.error || "local web search failed" } : {}),
+    };
+  });
 }
 
 function webSearchCompatibility(context) {
@@ -155,9 +165,67 @@ function webSearchCompatibility(context) {
       find_in_page_skipped_count: context.results?.filter((result) => result.find_in_page?.status === "skipped").length || 0,
       skipped_count: context.skipped_calls?.length || 0,
       tool_types: context.tool_types || [],
+      ...(context.include_action_sources ? {
+        action_sources: {
+          status: "included",
+          source_count: context.results?.length || 0,
+        },
+      } : {}),
       ...(context.error ? { error: context.error } : {}),
     },
   };
+}
+
+function webSearchActionSourcesRequested(request = {}) {
+  return Array.isArray(request.include) && request.include.includes(WEB_SEARCH_ACTION_SOURCES_INCLUDE);
+}
+
+function webSearchActionSources(context, action = {}) {
+  const results = Array.isArray(context?.results) ? context.results : [];
+  if (!results.length) return [];
+
+  if (action.type === "search") {
+    return results.map(sourceFromSearchResult).filter(Boolean);
+  }
+
+  const url = String(action.url || "");
+  if (!url) return [];
+  return results
+    .map((result, index) => ({ result, index }))
+    .filter(({ result }) => result.url === url)
+    .map(({ result, index }) => sourceFromSearchResult(result, index))
+    .filter(Boolean);
+}
+
+function sourceFromSearchResult(result, index) {
+  if (!result?.url) return null;
+  const source = {
+    type: "url",
+    url: result.url,
+    title: result.title || result.url,
+    index: index + 1,
+  };
+  if (result.snippet) source.snippet = result.snippet;
+  if (result.opened) {
+    source.opened = {
+      status: result.opened.status || "completed",
+      ...(result.opened.content_type ? { content_type: result.opened.content_type } : {}),
+      ...(Number.isFinite(result.opened.bytes) ? { bytes: result.opened.bytes } : {}),
+      ...(result.opened.truncated ? { truncated: true } : {}),
+      ...(result.opened.error ? { error: result.opened.error } : {}),
+      ...(result.opened.reason ? { reason: result.opened.reason } : {}),
+    };
+  }
+  if (result.find_in_page) {
+    source.find_in_page = {
+      status: result.find_in_page.status || "completed",
+      ...(Number.isFinite(result.find_in_page.match_count) ? { match_count: result.find_in_page.match_count } : {}),
+      ...(result.find_in_page.truncated ? { truncated: true } : {}),
+      ...(result.find_in_page.error ? { error: result.find_in_page.error } : {}),
+      ...(result.find_in_page.reason ? { reason: result.find_in_page.reason } : {}),
+    };
+  }
+  return source;
 }
 
 function webSearchPrompt(context) {
