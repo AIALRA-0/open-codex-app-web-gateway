@@ -4040,6 +4040,60 @@ Open follow-ups:
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
 
+## 2026-06-10 Output Text Logprobs Stored-Response Projection
+
+- Re-checked the current OpenAI Responses create reference through the official
+  OpenAI developer docs MCP. The supported `include` values list includes
+  `message.output_text.logprobs`, defined as including logprobs with assistant
+  messages.
+- Extended output-text logprobs handling from create-time preservation to
+  stored-response projection:
+  - Chat `choices[].logprobs.content[]` remains mapped onto Responses
+    `message.content[].logprobs` when requested;
+  - stored Responses keep output-text token logprobs internally when the Chat
+    provider returns them;
+  - create responses hide `message.output_text.logprobs` unless the request
+    includes `include:["message.output_text.logprobs"]`;
+  - `GET /v1/responses/{response_id}` hides output-text logprobs by default;
+  - `GET /v1/responses/{response_id}?include[]=message.output_text.logprobs`
+    returns the stored token logprob arrays.
+- Updated the live `responses-logprobs` regression case to create a stored
+  response, verify immediate include output, verify default retrieve redaction,
+  verify include retrieve recovery, and delete the stored response after the
+  case to control runtime state growth.
+- Updated compatibility and evaluation docs to record the stored-response
+  projection behavior.
+- Secret handling: no provider API key or credential value was written to the
+  repository; the verification path used the existing systemd environment.
+- Verification:
+  - `node --check src/bridge/server.js && node --check scripts/eval-harness.mjs && node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-logprobs` passed 1/1 against `deepseek-v4-pro`,
+    latency 1840 ms, total usage 69 tokens, visible text `logprobs-ok`, and
+    both hidden/included stored-response retrieves returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1259 ms, P95 latency 1287 ms, and total usage 161 tokens.
+  - Full live `bridge-regression` passed 44/44 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1183 ms, P95 latency 2454 ms, and total usage
+    9693 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8iski1`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 422 runtime candidates,
+    selected 36 old UI screenshots by retention policy, deleted 0, selected
+    2751773 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 37 GB available;
+    repository checkout is 44 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.
+
 ## 2026-06-10 Web Search Action Sources Stored-Response Projection
 
 - Re-checked the current OpenAI Responses create reference through the official

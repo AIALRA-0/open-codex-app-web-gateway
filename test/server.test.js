@@ -682,7 +682,7 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
         input: "Answer yes.",
         include: ["message.output_text.logprobs"],
         top_logprobs: 2,
-        store: false,
+        store: true,
       }),
     });
 
@@ -694,6 +694,19 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
     assert.equal(part.logprobs[0].top_logprobs[1].token, "no");
     assert.equal(json.top_logprobs, 2);
     assert.equal(json.metadata.compatibility.logprobs, "chat_logprobs");
+
+    const hiddenStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].content[0].text, "yes");
+    assert.equal(hiddenStoredJson.output[0].content[0].logprobs, undefined);
+
+    const includedStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}?include[]=message.output_text.logprobs`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].content[0].text, "yes");
+    assert.equal(includedStoredJson.output[0].content[0].logprobs[0].token, "yes");
+    assert.equal(includedStoredJson.output[0].content[0].logprobs[0].top_logprobs[1].token, "no");
   });
 });
 

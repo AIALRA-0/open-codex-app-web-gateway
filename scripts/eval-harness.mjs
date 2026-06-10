@@ -782,12 +782,22 @@ function buildSuites(defaultModel) {
           include: ["message.output_text.logprobs"],
           top_logprobs: 2,
           max_output_tokens: 128,
-          store: false,
+          store: true,
         },
-        check: ({ json, text }) => /logprobs-ok/i.test(text)
-          && json.metadata?.compatibility?.logprobs === "chat_logprobs"
-          && (json.output || []).some((item) => (item.content || [])
-            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0)),
+        retrieveResponseInclude: "message.output_text.logprobs",
+        check: ({ json, text, hiddenResponse, includedResponse }) => {
+          const hasVisibleLogprobs = (json.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
+          const hiddenHasLogprobs = (hiddenResponse?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs)));
+          const includedHasLogprobs = (includedResponse?.output || []).some((item) => (item.content || [])
+            .some((part) => Array.isArray(part.logprobs) && part.logprobs.length > 0));
+          return /logprobs-ok/i.test(text)
+            && json.metadata?.compatibility?.logprobs === "chat_logprobs"
+            && hasVisibleLogprobs
+            && !hiddenHasLogprobs
+            && includedHasLogprobs;
+        },
       },
       {
         id: "responses-stop-sequence",

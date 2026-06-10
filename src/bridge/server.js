@@ -5403,6 +5403,9 @@ function projectResponseForIncludes(response, url) {
 
 function projectResponseForIncludeSet(response, includes = new Set()) {
   let projected = clone(response);
+  if (!includes.has("message.output_text.logprobs")) {
+    projected = redactOutputTextLogprobs(projected);
+  }
   if (!includes.has("code_interpreter_call.outputs")) {
     projected = redactCodeInterpreterCallOutputs(projected);
   }
@@ -5422,6 +5425,21 @@ function redactCodeInterpreterCallOutputs(response) {
     const cloned = { ...item };
     delete cloned.outputs;
     return cloned;
+  });
+  return response;
+}
+
+function redactOutputTextLogprobs(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "message" || !Array.isArray(item.content)) return item;
+    const content = item.content.map((part) => {
+      if (part?.type !== "output_text" || !Object.prototype.hasOwnProperty.call(part, "logprobs")) return part;
+      const cloned = { ...part };
+      delete cloned.logprobs;
+      return cloned;
+    });
+    return { ...item, content };
   });
   return response;
 }
