@@ -2256,3 +2256,56 @@ Open follow-ups:
   - Bridge, web, and app-server services were all active.
   - UI smoke passed with marker `ui-smoke-mq8460h0`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local File Search Hashed Semantic Hybrid Retrieval
+
+- Closed another `file_search` retrieval parity gap by moving the local vector
+  store search path from keyword-only scoring to deterministic hybrid keyword
+  plus hashed-semantic scoring.
+- Official sources checked on 2026-06-10:
+  - `https://developers.openai.com/api/docs/assistants/tools/file-search#how-it-works`,
+    which states that hosted file search rewrites queries, breaks complex
+    queries into multiple searches, runs both keyword and semantic searches,
+    and reranks results.
+  - `https://developers.openai.com/api/docs/assistants/tools/file-search#improve-file-search-result-relevance-with-chunk-ranking`,
+    which documents `hybrid_search.embedding_weight`,
+    `hybrid_search.text_weight`, and `score_threshold`.
+- Added a local, dependency-free 256-dimensional hashed semantic scorer using
+  token stems, character n-grams, and a small deterministic alias map. This
+  improves recall for queries such as `automobile repair` against chunks that
+  mention `car maintenance` without requiring a new external embedding API key
+  or adding persistent vector files.
+- Updated search scoring so:
+  - default local search combines keyword and hashed-semantic signals;
+  - explicit `hybrid_search.embedding_weight` and `hybrid_search.text_weight`
+    control the local blend;
+  - exact keyword matches are not penalized by weaker semantic scores;
+  - semantic-only results must clear a small local minimum before they can
+    satisfy `score_threshold`;
+  - results expose `text_score`, `embedding_score`, and `score_details` with
+    local embedding model/dimension metadata.
+- Updated the eval harness, compatibility matrix, and evaluation plan to cover
+  local hashed-semantic hybrid search.
+- Remaining known gap: this is still a local deterministic compatibility layer,
+  not OpenAI managed embeddings, ANN vector indexing, hosted query rewriting, or
+  hosted reranking. Provider/model-backed embeddings and larger retrieval evals
+  remain future work.
+- Verified:
+  - `node --check` passed for `src/bridge/local_file_search.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Targeted local file-search/vector-store tests passed 3/3, including a
+    semantic-only query with `text_score:0` and `embedding_score >= 0.1`.
+  - `npm test`: 72/72 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `vector-store-lifecycle` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 173 ms, with `search_results:4` and
+    `semantic_search_results:1`.
+  - Full live `bridge-regression` passed 25/25 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1701 ms, P95 latency 3375 ms, and total usage
+    7766 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq84ou0p`, reload persistence
+    confirmed, console errors 0, warnings 0.

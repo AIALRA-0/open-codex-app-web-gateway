@@ -734,7 +734,7 @@ function buildSuites(defaultModel) {
         file: {
           filename: "bridge-vector-lifecycle.txt",
           purpose: "assistants",
-          content: vectorChunkFixture("vector-lifecycle-ok"),
+          content: `${vectorChunkFixture("vector-lifecycle-ok")} A car maintenance note says technicians service sedans.`,
         },
         vectorFile: {
           chunking_strategy: {
@@ -742,7 +742,7 @@ function buildSuites(defaultModel) {
             static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
           },
         },
-        check: ({ store, updatedStore, attached, updatedFile, content, search }) => store?.object === "vector_store"
+        check: ({ store, updatedStore, attached, updatedFile, content, search, semanticSearch }) => store?.object === "vector_store"
           && updatedStore?.name === "bridge-vector-lifecycle-updated"
           && updatedStore?.metadata?.suite === "vector-lifecycle"
           && updatedStore?.expires_after?.days === 7
@@ -757,7 +757,12 @@ function buildSuites(defaultModel) {
           && search?.search_queries?.includes("vectorword150")
           && search?.filters?.type === "and"
           && search?.ranking_options?.score_threshold === 0.8
-          && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index)),
+          && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index))
+          && semanticSearch?.ranking_options?.hybrid_search?.local_mode === "hashed_semantic"
+          && semanticSearch?.data?.some((result) => result.file_id === attached.id
+            && result.text_score === 0
+            && result.embedding_score >= 0.1
+            && result.score_details?.local_embedding_dimensions === 256),
       },
       {
         id: "responses-compact-continuation",
@@ -1438,6 +1443,25 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
     }
     const search = JSON.parse(searchBody);
 
+    const semanticSearchResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/search`, {
+      query: "automobile repair",
+      attribute_filter: { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
+      max_num_results: 3,
+      ranking_options: {
+        score_threshold: 0.1,
+        hybrid_search: { embedding_weight: 1, text_weight: 0 },
+      },
+    });
+    const semanticSearchBody = await semanticSearchResponse.text();
+    if (!semanticSearchResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: semanticSearchResponse.status,
+        error: truncate(semanticSearchBody),
+      });
+    }
+    const semanticSearch = JSON.parse(semanticSearchBody);
+
     const ok = !!testCase.check({
       file,
       store,
@@ -1446,6 +1470,7 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
       updatedFile,
       content: content.json,
       search,
+      semanticSearch,
     });
     return finishResult(testCase, context, started, {
       ok,
@@ -1455,6 +1480,7 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
       vector_store_file_status: updatedFile.status,
       content_parts: content.json.content?.length || 0,
       search_results: search.data?.length || 0,
+      semantic_search_results: semanticSearch.data?.length || 0,
     });
   } finally {
     if (store?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${store.id}`);

@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including HTTP(S) `file_url`, PDF text-layer extraction, deterministic spreadsheet augmentation, and `.docx`/`.xlsx`/`.pptx` OOXML text extraction, local background completion, local background startup reconciliation in unit tests, local Conversations lifecycle and Responses `conversation` replay across create, `/input_tokens`, and `/compact`, local hosted-tool `max_tool_calls` budget enforcement, local web-search search/open-page/find-in-page/citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content, static chunking strategy, ranking options, multi-query search, comparison/compound attribute filters, and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including HTTP(S) `file_url`, PDF text-layer extraction, deterministic spreadsheet augmentation, and `.docx`/`.xlsx`/`.pptx` OOXML text extraction, local background completion, local background startup reconciliation in unit tests, local Conversations lifecycle and Responses `conversation` replay across create, `/input_tokens`, and `/compact`, local hosted-tool `max_tool_calls` budget enforcement, local web-search search/open-page/find-in-page/citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content, static chunking strategy, ranking options, multi-query search, comparison/compound attribute filters, local hashed-semantic hybrid search, and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `swebench-runner` | Disk-bounded SWE-bench prediction generator for local JSONL subsets; writes official predictions JSONL and compact audit reports outside the repo |
 | `swebench-evaluate` | Guarded wrapper around the official SWE-bench Docker harness; parses scorer artifacts into compact JSON/Markdown reports |
@@ -230,6 +230,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Local file-search accepts comparison and compound attribute filters, including
   `attribute_filter` aliases, without silently treating invalid filters as
   matches.
+- Local file-search supports deterministic local hashed-semantic search, exposes
+  `text_score` and `embedding_score`, and honors
+  `hybrid_search.embedding_weight` / `hybrid_search.text_weight`.
 - Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.
 - State/log growth remains bounded under the configured cleanup policy.

@@ -17,9 +17,83 @@ const MAX_SEARCH_QUERIES = 4;
 const MAX_SEARCH_QUERY_CHARS = 240;
 const DEFAULT_VECTOR_SEARCH_RESULTS = 10;
 const MAX_VECTOR_SEARCH_RESULTS = 50;
+const LOCAL_EMBEDDING_DIMENSIONS = 256;
+const MIN_SEMANTIC_SCORE = 0.12;
 const COMPARISON_FILTER_TYPES = new Set(["eq", "ne", "gt", "gte", "lt", "lte"]);
 const ARRAY_FILTER_TYPES = new Set(["in", "nin"]);
 const COMPOUND_FILTER_TYPES = new Set(["and", "or"]);
+const SEMANTIC_ALIASES = Object.freeze({
+  auto: "vehicle",
+  automobile: "vehicle",
+  car: "vehicle",
+  cars: "vehicle",
+  sedan: "vehicle",
+  sedans: "vehicle",
+  truck: "vehicle",
+  trucks: "vehicle",
+  vehicle: "vehicle",
+  vehicles: "vehicle",
+  auth: "authentication",
+  authenticate: "authentication",
+  authenticated: "authentication",
+  authentication: "authentication",
+  login: "authentication",
+  logon: "authentication",
+  signin: "authentication",
+  signup: "authentication",
+  password: "authentication",
+  token: "authentication",
+  buy: "purchase",
+  buying: "purchase",
+  checkout: "purchase",
+  order: "purchase",
+  ordered: "purchase",
+  purchase: "purchase",
+  purchased: "purchase",
+  error: "failure",
+  errors: "failure",
+  exception: "failure",
+  exceptions: "failure",
+  fail: "failure",
+  failed: "failure",
+  failure: "failure",
+  crash: "failure",
+  crashed: "failure",
+  fix: "maintenance",
+  fixed: "maintenance",
+  maintain: "maintenance",
+  maintenance: "maintenance",
+  repair: "maintenance",
+  repairs: "maintenance",
+  service: "maintenance",
+  servicing: "maintenance",
+  database: "database",
+  databases: "database",
+  db: "database",
+  mysql: "database",
+  postgres: "database",
+  postgresql: "database",
+  sqlite: "database",
+  sql: "database",
+  csv: "spreadsheet",
+  spreadsheet: "spreadsheet",
+  spreadsheets: "spreadsheet",
+  tsv: "spreadsheet",
+  workbook: "spreadsheet",
+  workbooks: "spreadsheet",
+  xls: "spreadsheet",
+  xlsx: "spreadsheet",
+  doc: "document",
+  docs: "document",
+  document: "document",
+  documents: "document",
+  pdf: "document",
+  ppt: "presentation",
+  pptx: "presentation",
+  presentation: "presentation",
+  slide: "presentation",
+  slides: "presentation",
+});
 
 function isFileSearchTool(tool) {
   return !!tool && typeof tool === "object" && FILE_SEARCH_TOOL_TYPES.has(tool.type);
@@ -330,13 +404,22 @@ class LocalFileSearchStore {
       };
       if (!matchesMetadataFilter(filters, attributes)) continue;
       for (const chunk of chunkText(record.content, item.chunking_strategy)) {
-        const scoredQueries = scoreQueries(queries, chunk.text, record.file.filename);
+        const scoredQueries = scoreQueries(queries, chunk.text, record.file.filename, rankingOptions);
         const score = scoredQueries[0]?.score || 0;
         if (score <= 0 || score < rankingOptions.score_threshold) continue;
+        const bestQuery = scoredQueries[0] || {};
         results.push({
           file_id: record.file.id,
           filename: record.file.filename,
           score,
+          text_score: bestQuery.text_score || 0,
+          embedding_score: bestQuery.embedding_score || 0,
+          score_details: {
+            text_score: bestQuery.text_score || 0,
+            embedding_score: bestQuery.embedding_score || 0,
+            local_embedding_dimensions: LOCAL_EMBEDDING_DIMENSIONS,
+            local_embedding_model: "hashed-semantic-256",
+          },
           matched_queries: scoredQueries.map((item) => item.query),
           attributes: item.attributes || {},
           ...chunkMetadata(chunk),
@@ -746,11 +829,107 @@ function scoreText(query, text, filename = "") {
   return Math.min(1, coverage + Math.min(frequency / Math.max(haystackTokens.length, 1), 0.25) + phraseBoost);
 }
 
-function scoreQueries(queries, text, filename = "") {
+function scoreQueries(queries, text, filename = "", rankingOptions = normalizeRankingOptions(null)) {
   return normalizeSearchQueries(queries)
-    .map((query) => ({ query, score: scoreText(query, text, filename) }))
+    .map((query) => scoreQuery(query, text, filename, rankingOptions))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score || a.query.localeCompare(b.query));
+}
+
+function scoreQuery(query, text, filename, rankingOptions) {
+  const textScore = scoreText(query, text, filename);
+  const embeddingScore = scoreSemanticText(query, `${filename} ${text}`);
+  const { embeddingWeight, textWeight } = effectiveHybridWeights(rankingOptions);
+  const totalWeight = Math.max(embeddingWeight + textWeight, Number.EPSILON);
+  const semanticScore = embeddingScore >= MIN_SEMANTIC_SCORE ? embeddingScore : 0;
+  const weightedScore = ((textScore * textWeight) + (semanticScore * embeddingWeight)) / totalWeight;
+  const score = Math.min(1, Math.max(
+    weightedScore,
+    textWeight > 0 ? textScore : 0,
+    embeddingWeight > 0 ? semanticScore : 0,
+  ));
+  return {
+    query,
+    score,
+    text_score: textScore,
+    embedding_score: semanticScore,
+  };
+}
+
+function effectiveHybridWeights(rankingOptions = {}) {
+  const hybrid = isPlainObject(rankingOptions.hybrid_search) ? rankingOptions.hybrid_search : null;
+  return {
+    embeddingWeight: Number(hybrid?.embedding_weight ?? 1),
+    textWeight: Number(hybrid?.text_weight ?? 1),
+  };
+}
+
+function scoreSemanticText(query, text) {
+  return cosineSimilarity(semanticVector(query), semanticVector(text));
+}
+
+function semanticVector(value) {
+  const vector = new Array(LOCAL_EMBEDDING_DIMENSIONS).fill(0);
+  for (const feature of semanticFeatures(value)) {
+    const hash = hashFeature(feature);
+    const index = Math.abs(hash) % LOCAL_EMBEDDING_DIMENSIONS;
+    const sign = hash & 1 ? -1 : 1;
+    vector[index] += sign;
+  }
+  return vector;
+}
+
+function semanticFeatures(value) {
+  const terms = tokenize(value);
+  const features = [];
+  for (const term of terms) {
+    const normalized = stemToken(term);
+    features.push(`term:${normalized}`);
+    const alias = SEMANTIC_ALIASES[term] || SEMANTIC_ALIASES[normalized];
+    if (alias) features.push(`concept:${alias}`, `concept:${alias}`);
+    if (normalized.length >= 5) {
+      for (let index = 0; index <= normalized.length - 3; index += 1) {
+        features.push(`tri:${normalized.slice(index, index + 3)}`);
+      }
+    }
+  }
+  for (let index = 0; index < terms.length - 1; index += 1) {
+    features.push(`bigram:${stemToken(terms[index])}_${stemToken(terms[index + 1])}`);
+  }
+  return features;
+}
+
+function stemToken(value) {
+  let term = String(value || "").toLowerCase();
+  if (term.length > 6 && term.endsWith("ies")) term = `${term.slice(0, -3)}y`;
+  else if (term.length > 6 && term.endsWith("ing")) term = term.slice(0, -3);
+  else if (term.length > 5 && term.endsWith("ed")) term = term.slice(0, -2);
+  else if (term.length > 4 && term.endsWith("es")) term = term.slice(0, -2);
+  else if (term.length > 4 && term.endsWith("s")) term = term.slice(0, -1);
+  return term;
+}
+
+function hashFeature(feature) {
+  let hash = 2166136261;
+  const text = String(feature || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash ^= text.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash | 0;
+}
+
+function cosineSimilarity(left, right) {
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    dot += left[index] * right[index];
+    leftNorm += left[index] * left[index];
+    rightNorm += right[index] * right[index];
+  }
+  if (!leftNorm || !rightNorm) return 0;
+  return Math.max(0, dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm)));
 }
 
 function normalizeSearchQueries(value) {
@@ -827,10 +1006,17 @@ function normalizeHybridSearchOptions(value) {
     error.status = 400;
     throw error;
   }
+  const localMode = embeddingWeight <= 0
+    ? "text_only"
+    : (textWeight <= 0 ? "hashed_semantic" : "hybrid_hashed_semantic");
   return {
     embedding_weight: embeddingWeight,
     text_weight: textWeight,
-    local_mode: "text_only",
+    local_mode: localMode,
+    ...(embeddingWeight > 0 ? {
+      local_embedding_model: "hashed-semantic-256",
+      local_embedding_dimensions: LOCAL_EMBEDDING_DIMENSIONS,
+    } : {}),
   };
 }
 

@@ -1446,7 +1446,7 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       body: JSON.stringify({
         filename: "fixture.txt",
         purpose: "assistants",
-        content: "File Search Fixture says the exact marker is file-search-ok. A second marker is secondary-ok.",
+        content: "File Search Fixture says the exact marker is file-search-ok. A second marker is secondary-ok. A car maintenance note says technicians service sedans.",
       }),
     });
     assert.equal(createdFile.status, 200);
@@ -1617,6 +1617,37 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       ranker: "default_2024_08_21",
       score_threshold: 0.5,
       hybrid_search: { embedding_weight: 0, text_weight: 1, local_mode: "text_only" },
+    });
+
+    const semanticRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "automobile repair",
+        max_num_results: 3,
+        filters: { type: "eq", key: "suite", value: "server-test" },
+        ranking_options: {
+          score_threshold: 0.1,
+          hybrid_search: { embedding_weight: 1, text_weight: 0 },
+        },
+      }),
+    });
+    assert.equal(semanticRankingSearch.status, 200);
+    const semanticRankingJson = await semanticRankingSearch.json();
+    assert.equal(semanticRankingJson.data[0].file_id, file.id);
+    assert.equal(semanticRankingJson.data[0].text_score, 0);
+    assert.ok(semanticRankingJson.data[0].embedding_score >= 0.1);
+    assert.equal(semanticRankingJson.data[0].score_details.local_embedding_dimensions, 256);
+    assert.deepEqual(semanticRankingJson.ranking_options, {
+      ranker: "auto",
+      score_threshold: 0.1,
+      hybrid_search: {
+        embedding_weight: 1,
+        text_weight: 0,
+        local_mode: "hashed_semantic",
+        local_embedding_model: "hashed-semantic-256",
+        local_embedding_dimensions: 256,
+      },
     });
 
     const strictRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
