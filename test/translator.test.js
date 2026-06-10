@@ -344,9 +344,15 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
       prompt_tokens: 10,
       prompt_cache_hit_tokens: 6,
       prompt_cache_miss_tokens: 4,
+      prompt_tokens_details: { cached_tokens: 5, audio_tokens: 1 },
       completion_tokens: 4,
       total_tokens: 14,
-      completion_tokens_details: { reasoning_tokens: 2 },
+      completion_tokens_details: {
+        reasoning_tokens: 2,
+        audio_tokens: 1,
+        accepted_prediction_tokens: 3,
+        rejected_prediction_tokens: 4,
+      },
     },
   }, { model: "deepseek-chat" }, { responseId: "resp_test" });
 
@@ -377,7 +383,10 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.metadata.compatibility.chat_presence_penalty, 0.1);
   assert.equal(response.metadata.compatibility.chat_frequency_penalty, 0.3);
   assert.deepEqual(response.metadata.compatibility.chat_metadata, { upstream: "chat-meta" });
-  assert.equal(response.usage.input_tokens_details.cached_tokens, 6);
+  assert.equal(response.metadata.compatibility.chat_usage.prompt_tokens_details.audio_tokens, 1);
+  assert.equal(response.metadata.compatibility.chat_usage.completion_tokens_details.accepted_prediction_tokens, 3);
+  assert.equal(response.metadata.compatibility.chat_usage.completion_tokens_details.rejected_prediction_tokens, 4);
+  assert.equal(response.usage.input_tokens_details.cached_tokens, 5);
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });
 

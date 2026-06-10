@@ -546,6 +546,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
 
   const compatibilityMetadata = chatCompatibilityMetadata(chat);
   Object.assign(compatibilityMetadata, chatChoicesCompatibilityMetadata(chat.choices));
+  Object.assign(compatibilityMetadata, chatUsageCompatibilityMetadata(chat.usage));
   const refusalLogprobs = chatRefusalLogprobs(choices);
   if (refusalLogprobs.length) compatibilityMetadata.chat_refusal_logprobs = refusalLogprobs;
   attachResponseCompatibilityMetadata(response, compatibilityMetadata);
@@ -589,6 +590,11 @@ function chatCompatibilityMetadata(chat) {
     }
   }
   return metadata;
+}
+
+function chatUsageCompatibilityMetadata(usage) {
+  if (usage === undefined) return {};
+  return { chat_usage: clone(usage) };
 }
 
 function chatChoicesCompatibilityMetadata(choices) {
@@ -805,6 +811,7 @@ module.exports = {
   chatCompatibilityMetadata,
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
+  chatUsageCompatibilityMetadata,
   createResponseSkeleton,
   inputItemToChatMessages,
   mapResponsesTools,

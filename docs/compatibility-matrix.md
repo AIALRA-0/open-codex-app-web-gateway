@@ -99,6 +99,7 @@ behavior.
 | `choices[].message.reasoning_content` | output `reasoning.summary[]` and replay store | DeepSeek-specific |
 | `usage.prompt_tokens` | `usage.input_tokens` | Direct |
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
+| `usage` | `metadata.compatibility.chat_usage` | Full original Chat usage object is preserved for provider-specific token detail fields that Responses usage does not expose |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
 | `service_tier` | `service_tier` | Direct for non-streaming responses and streaming chunks when a Chat provider echoes the actual tier used |

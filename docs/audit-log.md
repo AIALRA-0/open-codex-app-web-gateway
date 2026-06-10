@@ -1105,3 +1105,43 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7vw0s8` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Full Chat Usage Preservation
+
+- Used the current OpenAI Chat Completions OpenAPI schema to confirm Chat usage
+  can include provider-specific token details such as
+  `prompt_tokens_details.audio_tokens`,
+  `completion_tokens_details.audio_tokens`,
+  `accepted_prediction_tokens`, and `rejected_prediction_tokens`:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+- Kept the direct Responses usage mapping stable:
+  - `prompt_tokens` / `completion_tokens` continue to map to
+    `input_tokens` / `output_tokens`;
+  - `prompt_tokens_details.cached_tokens` and DeepSeek
+    `prompt_cache_hit_tokens` continue to map to
+    `input_tokens_details.cached_tokens`;
+  - `completion_tokens_details.reasoning_tokens` continues to map to
+    `output_tokens_details.reasoning_tokens`.
+- Added lossless Chat usage preservation:
+  - the full upstream Chat `usage` object is now stored as
+    `metadata.compatibility.chat_usage` for non-streaming Responses;
+  - streaming terminal Responses events preserve the final usage chunk in the
+    same compatibility metadata field.
+- Updated `docs/compatibility-matrix.md` with the `chat_usage` preservation row.
+- Added regression coverage for:
+  - non-streaming Chat audio and prediction token details;
+  - streaming Chat usage detail preservation on `response.completed`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1851 ms, P95 latency 3554 ms, total usage 2306 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7w0j6g` appeared before reload and after reload, console errors
+    0, warnings 0.

@@ -464,7 +464,17 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
         logprobs: { content: [{ token: "lo", logprob: -0.2, bytes: [108, 111], top_logprobs: [] }] },
         finish_reason: "stop",
       }],
-      usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      usage: {
+        prompt_tokens: 1,
+        prompt_tokens_details: { cached_tokens: 1, audio_tokens: 0 },
+        completion_tokens: 1,
+        completion_tokens_details: {
+          reasoning_tokens: 0,
+          accepted_prediction_tokens: 1,
+          rejected_prediction_tokens: 0,
+        },
+        total_tokens: 2,
+      },
     })}\n\n`);
     res.write("data: [DONE]\n\n");
     res.end();
@@ -509,6 +519,8 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.deepEqual(completed.metadata.compatibility.chat_choices, [
       { choice_index: 0, finish_reason: "stop" },
     ]);
+    assert.equal(completed.metadata.compatibility.chat_usage.prompt_tokens_details.cached_tokens, 1);
+    assert.equal(completed.metadata.compatibility.chat_usage.completion_tokens_details.accepted_prediction_tokens, 1);
     assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
   });
 });

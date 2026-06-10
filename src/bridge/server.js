@@ -33,6 +33,7 @@ const {
   chatCompatibilityMetadata,
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
+  chatUsageCompatibilityMetadata,
   createResponseSkeleton,
   mapUsage,
   normalizeOutputTextLogprobs,
@@ -1137,6 +1138,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
         {
           ...state.chatCompatibility,
           ...streamChoiceCompatibilityMetadata(state),
+          ...chatUsageCompatibilityMetadata(state.chatUsage),
         },
         refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {},
       ),
@@ -1185,6 +1187,7 @@ function createStreamState(response, compatibility) {
     outputDone: new Set(),
     serviceTier: response.service_tier,
     chatCompatibility: {},
+    chatUsage: undefined,
     usage: null,
   };
 }
@@ -1362,7 +1365,10 @@ function ensureToolCallItem(state, choiceState, index, deltaToolCall) {
 
 function applyChatStreamChunk(state, chunk) {
   const events = [];
-  if (chunk.usage) state.usage = mapUsage(chunk.usage);
+  if (chunk.usage) {
+    state.chatUsage = chunk.usage;
+    state.usage = mapUsage(chunk.usage);
+  }
   if (chunk.service_tier != null) state.serviceTier = chunk.service_tier;
   Object.assign(state.chatCompatibility, chatCompatibilityMetadata(chunk));
 
