@@ -2766,3 +2766,76 @@ Open follow-ups:
   infrastructure, not a hosted/model-backed OpenAI embedding model. Future
   work should add provider-backed embeddings and ANN indexing while preserving
   this local fallback for no-key and disk-bounded tests.
+
+## 2026-06-10 Local Batch API Compatibility
+
+- Added local OpenAI-compatible Batch API coverage for JSONL workloads over the
+  bridge's already implemented endpoints.
+- Official source checked on 2026-06-10:
+  - OpenAI OpenAPI operation `createBatch` at `/v1/batches` requires
+    `input_file_id`, `endpoint`, and `completion_window`, supports endpoint
+    values including `/v1/responses`, `/v1/chat/completions`,
+    `/v1/embeddings`, and `/v1/completions`, and returns a `batch` object with
+    `request_counts`, `output_file_id`, and `error_file_id`.
+  - OpenAI Batch guide notes that completed output and error JSONL files are
+    retrieved through the Files API and should be joined back to input lines
+    via `custom_id` instead of line order.
+- Implemented a local synchronous adapter:
+  - `POST /v1/batches` validates `purpose:"batch"` Files and JSONL request
+    lines;
+  - supports `/v1/responses`, `/v1/chat/completions`, `/v1/completions`, and
+    `/v1/embeddings`;
+  - reuses the existing local endpoint handlers instead of duplicating
+    protocol mapping logic;
+  - writes successful request records to a local `purpose:"batch_output"`
+    JSONL File and per-line failures to a local `purpose:"batch_error"` JSONL
+    File;
+  - marks the Batch explicitly `failed` if local output/error File creation
+    fails, avoiding orphaned `in_progress` records;
+  - implements `GET /v1/batches`, `GET /v1/batches/{batch_id}`, and
+    `POST /v1/batches/{batch_id}/cancel`;
+  - rejects `stream:true` and `background:true` per JSONL line because local
+    synchronous Batch files cannot represent open streams or still-running
+    background jobs;
+  - adds `CODEXCOMPAT_BATCH_MAX_REQUESTS`, defaulting to 1000 for the test
+    deployment's disk/quota safety.
+- Added unit tests for:
+  - Responses Batch execution with one successful output line and one rejected
+    streaming line in the error file;
+  - retrieve/list/cancel lifecycle shape;
+  - local embeddings Batch execution without upstream provider calls.
+- Added live `batch-embeddings-local` to `bridge-regression`, covering
+  `/v1/files` input upload, `/v1/batches` create/retrieve/list/cancel, output
+  JSONL retrieval through `/v1/files/{file_id}/content`, and cleanup.
+- Updated the compatibility matrix, deployment docs, and evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 55/55 passing tests.
+  - `npm test`: 83/83 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `batch-embeddings-local` passed 1/1, elapsed 145 ms, created
+    a local `batch` with 2 completed requests, no error file, 2 output JSONL
+    lines, retrieve/list/cancel all HTTP 200, and local usage 15 prompt tokens.
+  - Full live `bridge-regression` passed 32/32 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1550 ms, P95 latency 3913 ms, and total usage
+    8706 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq88xrvs`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 250 runtime candidates,
+    selected 10 old UI screenshots by retention policy, deleted 0, and
+    reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 42 GB available; bridge state is 1.4 MB and output
+    artifacts are 4.8 MB.
+- Remaining known gap: this is a local synchronous Batch compatibility layer,
+  not OpenAI's distributed asynchronous 24h job service. Future work should add
+  persisted async workers, restartable queues, larger disk-governed staging
+  profiles, and Batch coverage for moderation/image/video endpoints as those
+  local adapters are implemented.

@@ -3891,6 +3891,179 @@ test("Chat completion retrieval only returns explicitly stored chat completions"
   });
 });
 
+test("local Batch API executes Responses JSONL and exposes output and error files", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_batch_response" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_batch_response",
+      object: "chat.completion",
+      created: 1700000444,
+      model: call.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "batch-response-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "response-ok",
+        method: "POST",
+        url: "/v1/responses",
+        body: {
+          model: "mock-model",
+          input: "Return batch-response-ok.",
+          max_output_tokens: 32,
+          store: false,
+        },
+      }),
+      JSON.stringify({
+        custom_id: "response-stream-rejected",
+        method: "POST",
+        url: "/v1/responses",
+        body: {
+          model: "mock-model",
+          input: "streaming is not allowed in local batches",
+          stream: true,
+        },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "responses-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/responses",
+        completion_window: "24h",
+        metadata: { suite: "batch-responses" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.object, "batch");
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 2);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 1);
+    assert.ok(batch.output_file_id);
+    assert.ok(batch.error_file_id);
+    assert.equal(requests.length, 1);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "response-ok");
+    assert.equal(outputLines[0].response.status_code, 200);
+    assert.match(outputLines[0].response.request_id, /^req_/);
+    assert.equal(outputLines[0].response.body.object, "response");
+    assert.match(JSON.stringify(outputLines[0].response.body), /batch-response-ok/);
+
+    const errorResponse = await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
+    assert.equal(errorResponse.status, 200);
+    const errorLines = (await errorResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(errorLines.length, 1);
+    assert.equal(errorLines[0].custom_id, "response-stream-rejected");
+    assert.equal(errorLines[0].error.code, "unsupported_batch_stream");
+
+    const fetched = await fetch(`${baseUrl}/v1/batches/${batch.id}`);
+    assert.equal(fetched.status, 200);
+    assert.equal((await fetched.json()).id, batch.id);
+
+    const listed = await fetch(`${baseUrl}/v1/batches?limit=1`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.data[0].id, batch.id);
+
+    const cancelled = await fetch(`${baseUrl}/v1/batches/${batch.id}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    const cancelledJson = await cancelled.json();
+    assert.equal(cancelledJson.status, "completed");
+    assert.match(cancelledJson.metadata.compatibility_cancel, /synchronous/);
+  });
+});
+
+test("local Batch API executes local embeddings without provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "embedding-a",
+        method: "POST",
+        url: "/v1/embeddings",
+        body: { model: "text-embedding-3-small", input: "alpha beta", dimensions: 8 },
+      }),
+      JSON.stringify({
+        custom_id: "embedding-b",
+        method: "POST",
+        url: "/v1/embeddings",
+        body: { model: "text-embedding-3-small", input: ["gamma", "delta"], dimensions: 8 },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "embeddings-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/embeddings",
+        completion_window: "24h",
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 2);
+    assert.equal(batch.request_counts.completed, 2);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 2);
+    assert.equal(outputLines[0].response.body.object, "list");
+    assert.equal(outputLines[0].response.body.data[0].embedding.length, 8);
+    assert.equal(outputLines[1].response.body.data.length, 2);
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);

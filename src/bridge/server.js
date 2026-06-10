@@ -65,6 +65,12 @@ const {
 } = require("./web_search");
 
 const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
+const LOCAL_BATCH_ENDPOINTS = new Set([
+  "/v1/responses",
+  "/v1/chat/completions",
+  "/v1/completions",
+  "/v1/embeddings",
+]);
 
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -115,6 +121,7 @@ function loadConfig(overrides = {}) {
     defaultModel: process.env.CODEXCOMPAT_DEFAULT_MODEL || "deepseek-v4-pro",
     embeddingsModel: process.env.CODEXCOMPAT_EMBEDDINGS_MODEL || "hashed-semantic-256",
     embeddingsDimensions: numberFromEnv("CODEXCOMPAT_EMBEDDINGS_DIMENSIONS", LOCAL_EMBEDDING_DIMENSIONS, 1, 3072),
+    batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     stateDir,
@@ -3011,6 +3018,469 @@ function embeddingVectorToBase64(vector) {
   return buffer.toString("base64");
 }
 
+async function handleBatchCreate(req, res, config, store, fileSearchStore, backgroundJobs, containerStore, conversationStore, skillStore) {
+  const body = await readJson(req);
+  const validation = validateBatchCreateRequest(body);
+  if (!validation.ok) {
+    sendError(res, validation.status, validation.message, validation.details);
+    return;
+  }
+
+  if (!LOCAL_BATCH_ENDPOINTS.has(body.endpoint)) {
+    sendError(res, 400, `local Batch API does not yet support endpoint: ${body.endpoint}`, {
+      type: "invalid_request_error",
+      code: "unsupported_batch_endpoint",
+      param: "endpoint",
+    });
+    return;
+  }
+
+  const inputFile = fileSearchStore.getFile(body.input_file_id);
+  const inputBuffer = fileSearchStore.getFileContentBuffer?.(body.input_file_id);
+  if (!inputFile || inputBuffer == null) {
+    sendError(res, 404, `file not found: ${body.input_file_id}`, {
+      type: "invalid_request_error",
+      code: "file_not_found",
+      param: "input_file_id",
+    });
+    return;
+  }
+  if (inputFile.purpose !== "batch") {
+    sendError(res, 400, "Batch input files must be uploaded with purpose=batch", {
+      type: "invalid_request_error",
+      code: "invalid_file_purpose",
+      param: "input_file_id",
+    });
+    return;
+  }
+
+  const parsed = parseBatchInputJsonl(inputBuffer, {
+    endpoint: body.endpoint,
+    maxRequests: config.batchMaxRequests,
+  });
+  if (!parsed.ok) {
+    sendError(res, parsed.status, parsed.message, parsed.details);
+    return;
+  }
+
+  const now = nowSeconds();
+  const batchId = prefixedId("batch");
+  const outputLines = [];
+  const errorLines = [];
+  const batch = {
+    id: batchId,
+    object: "batch",
+    endpoint: body.endpoint,
+    errors: null,
+    input_file_id: body.input_file_id,
+    completion_window: body.completion_window,
+    status: "in_progress",
+    output_file_id: null,
+    error_file_id: null,
+    created_at: now,
+    in_progress_at: now,
+    expires_at: now + 24 * 60 * 60,
+    finalizing_at: null,
+    completed_at: null,
+    failed_at: null,
+    expired_at: null,
+    cancelling_at: null,
+    cancelled_at: null,
+    request_counts: {
+      total: parsed.requests.length,
+      completed: 0,
+      failed: 0,
+    },
+    metadata: isPlainObject(body.metadata) ? clone(body.metadata) : {},
+  };
+  if (isPlainObject(body.output_expires_after)) batch.output_expires_after = clone(body.output_expires_after);
+
+  store.put(batchId, { batch: clone(batch) });
+
+  for (const item of parsed.requests) {
+    if (item.error) {
+      errorLines.push(batchErrorLine(item.custom_id, item.line, item.error.code, item.error.message, item.error.param));
+      continue;
+    }
+
+    const result = await executeLocalBatchRequest({
+      endpoint: body.endpoint,
+      requestBody: item.body,
+      incomingHeaders: req.headers,
+      config,
+      store,
+      backgroundJobs,
+      fileSearchStore,
+      containerStore,
+      conversationStore,
+      skillStore,
+    });
+    if (result.ok) {
+      outputLines.push(batchOutputLine(item.custom_id, result));
+    } else {
+      errorLines.push(batchErrorLine(item.custom_id, item.line, result.code, result.message, result.param, result.body));
+    }
+  }
+
+  const finalizingAt = nowSeconds();
+  let outputFile = null;
+  let errorFile = null;
+  try {
+    outputFile = outputLines.length
+      ? fileSearchStore.createFile({
+        filename: `${batchId}_output.jsonl`,
+        purpose: "batch_output",
+        content: `${outputLines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+        metadata: { batch_id: batchId, endpoint: body.endpoint },
+        mime_type: "application/jsonl",
+      })
+      : null;
+    errorFile = errorLines.length
+      ? fileSearchStore.createFile({
+        filename: `${batchId}_error.jsonl`,
+        purpose: "batch_error",
+        content: `${errorLines.map((line) => JSON.stringify(line)).join("\n")}\n`,
+        metadata: { batch_id: batchId, endpoint: body.endpoint },
+        mime_type: "application/jsonl",
+      })
+      : null;
+  } catch (error) {
+    batch.status = "failed";
+    batch.finalizing_at = finalizingAt;
+    batch.failed_at = nowSeconds();
+    batch.request_counts.completed = outputLines.length;
+    batch.request_counts.failed = errorLines.length;
+    batch.errors = {
+      object: "list",
+      data: [{
+        code: error.code || "batch_output_file_error",
+        message: error.message || "failed to write local batch output file",
+        param: null,
+        line: null,
+      }],
+    };
+    store.put(batchId, { batch });
+    sendJson(res, 200, batch);
+    return;
+  }
+
+  batch.status = "completed";
+  batch.finalizing_at = finalizingAt;
+  batch.completed_at = nowSeconds();
+  batch.output_file_id = outputFile?.id || null;
+  batch.error_file_id = errorFile?.id || null;
+  batch.request_counts.completed = outputLines.length;
+  batch.request_counts.failed = errorLines.length;
+  batch.metadata = {
+    ...(batch.metadata || {}),
+    compatibility: {
+      provider: "local",
+      execution: "synchronous",
+      supported_endpoints: Array.from(LOCAL_BATCH_ENDPOINTS),
+    },
+  };
+  store.put(batchId, {
+    batch,
+    batch_output_file_id: batch.output_file_id,
+    batch_error_file_id: batch.error_file_id,
+  });
+  sendJson(res, 200, batch);
+}
+
+function validateBatchCreateRequest(body) {
+  if (!isPlainObject(body)) {
+    return {
+      ok: false,
+      status: 400,
+      message: "batch request body must be a JSON object",
+      details: { type: "invalid_request_error", code: "invalid_batch_request" },
+    };
+  }
+  for (const field of ["input_file_id", "endpoint", "completion_window"]) {
+    if (!body[field]) {
+      return {
+        ok: false,
+        status: 400,
+        message: `${field} is required`,
+        details: { type: "invalid_request_error", code: "missing_required_parameter", param: field },
+      };
+    }
+  }
+  if (body.completion_window !== "24h") {
+    return {
+      ok: false,
+      status: 400,
+      message: "completion_window must be 24h",
+      details: { type: "invalid_request_error", code: "unsupported_completion_window", param: "completion_window" },
+    };
+  }
+  return { ok: true };
+}
+
+function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf8") : String(buffer || "");
+  const rawLines = text.split(/\r?\n/);
+  const requests = [];
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const raw = rawLines[index].trim();
+    if (!raw) continue;
+    if (requests.length >= maxRequests) {
+      return {
+        ok: false,
+        status: 400,
+        message: `batch input exceeds local limit of ${maxRequests} requests`,
+        details: { type: "invalid_request_error", code: "batch_too_large", param: "input_file_id" },
+      };
+    }
+    requests.push(normalizeBatchRequestLine(raw, index + 1, endpoint));
+  }
+  if (!requests.length) {
+    return {
+      ok: false,
+      status: 400,
+      message: "batch input file must contain at least one JSONL request",
+      details: { type: "invalid_request_error", code: "empty_batch_file", param: "input_file_id" },
+    };
+  }
+  return { ok: true, requests };
+}
+
+function normalizeBatchRequestLine(raw, line, endpoint) {
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    return {
+      line,
+      custom_id: `line-${line}`,
+      error: {
+        code: "invalid_jsonl",
+        message: `line ${line} is not valid JSON: ${error.message}`,
+        param: "input_file_id",
+      },
+    };
+  }
+
+  const customId = parsed?.custom_id ? String(parsed.custom_id) : `line-${line}`;
+  if (!isPlainObject(parsed)) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_line", message: "batch line must be an object", param: "input_file_id" },
+    };
+  }
+  if (!parsed.custom_id) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "missing_custom_id", message: "batch line custom_id is required", param: "custom_id" },
+    };
+  }
+  if (String(parsed.method || "").toUpperCase() !== "POST") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "unsupported_batch_method", message: "only POST batch requests are supported", param: "method" },
+    };
+  }
+  const urlPath = normalizeBatchLineUrl(parsed.url);
+  if (urlPath !== endpoint) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "batch_endpoint_mismatch", message: `line url ${urlPath || "<missing>"} does not match batch endpoint ${endpoint}`, param: "url" },
+    };
+  }
+  if (!isPlainObject(parsed.body)) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_body", message: "batch line body must be a JSON object", param: "body" },
+    };
+  }
+  if (parsed.body.stream === true) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "unsupported_batch_stream", message: "streaming requests are not supported in local Batch execution", param: "body.stream" },
+    };
+  }
+  if (parsed.body.background === true) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "unsupported_batch_background", message: "background Responses requests are not supported in local Batch execution", param: "body.background" },
+    };
+  }
+  return { line, custom_id: customId, body: clone(parsed.body) };
+}
+
+function normalizeBatchLineUrl(value) {
+  if (!value) return "";
+  try {
+    return new URL(String(value), "http://local").pathname;
+  } catch {
+    return "";
+  }
+}
+
+async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore }) {
+  const req = makeInternalJsonRequest(requestBody, incomingHeaders);
+  const res = makeCaptureResponse();
+  try {
+    if (endpoint === "/v1/responses") {
+      await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore);
+    } else if (endpoint === "/v1/chat/completions") {
+      await handleChatPassthrough(req, res, config, store);
+    } else if (endpoint === "/v1/completions") {
+      await handleLegacyCompletions(req, res, config);
+    } else if (endpoint === "/v1/embeddings") {
+      await handleEmbeddings(req, res, config);
+    } else {
+      return {
+        ok: false,
+        status_code: 400,
+        code: "unsupported_batch_endpoint",
+        message: `unsupported local batch endpoint: ${endpoint}`,
+        param: "endpoint",
+      };
+    }
+  } catch (error) {
+    return {
+      ok: false,
+      status_code: error.status || 500,
+      code: error.code || "internal_batch_request_error",
+      message: error.message || "internal batch request failed",
+      param: error.param || null,
+    };
+  }
+
+  const text = res.bodyText();
+  const body = parseJsonOrNull(text) || (text ? { text } : {});
+  const statusCode = res.statusCode || 200;
+  if (statusCode >= 200 && statusCode < 300) {
+    return {
+      ok: true,
+      status_code: statusCode,
+      body,
+      request_id: res.headers["x-request-id"] || prefixedId("req"),
+    };
+  }
+  return {
+    ok: false,
+    status_code: statusCode,
+    code: body?.error?.code || `http_${statusCode}`,
+    message: body?.error?.message || text || `request failed with HTTP ${statusCode}`,
+    param: body?.error?.param || null,
+    body,
+  };
+}
+
+function makeInternalJsonRequest(body, incomingHeaders = {}) {
+  const payload = Buffer.from(JSON.stringify(body || {}));
+  return {
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      ...(incomingHeaders?.["x-client-request-id"] ? { "x-client-request-id": incomingHeaders["x-client-request-id"] } : {}),
+    },
+    async *[Symbol.asyncIterator]() {
+      yield payload;
+    },
+  };
+}
+
+function makeCaptureResponse() {
+  const chunks = [];
+  return {
+    statusCode: 200,
+    headers: {},
+    writeHead(status, headers = {}) {
+      this.statusCode = status;
+      this.headers = Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
+      this.headersSent = true;
+    },
+    write(chunk) {
+      chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+      return true;
+    },
+    end(chunk) {
+      if (chunk != null) this.write(chunk);
+      this.writableEnded = true;
+    },
+    bodyText() {
+      return Buffer.concat(chunks).toString("utf8");
+    },
+  };
+}
+
+function batchOutputLine(customId, result) {
+  return {
+    id: prefixedId("batch_req"),
+    custom_id: customId,
+    response: {
+      status_code: result.status_code,
+      request_id: result.request_id || prefixedId("req"),
+      body: result.body,
+    },
+    error: null,
+  };
+}
+
+function batchErrorLine(customId, line, code, message, param = null, body = null) {
+  return {
+    id: prefixedId("batch_req"),
+    custom_id: customId || `line-${line}`,
+    response: null,
+    error: {
+      code: code || "batch_request_failed",
+      message: message || "batch request failed",
+      param: param || null,
+      ...(body ? { body } : {}),
+    },
+  };
+}
+
+function handleBatchesList(res, store, url) {
+  const batches = store.list()
+    .filter((record) => record?.batch)
+    .map((record) => clone(record.batch))
+    .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+  sendJson(res, 200, paginateList(batches, url));
+}
+
+function handleBatchGet(res, store, batchId) {
+  const record = store.get(batchId);
+  if (!record?.batch) {
+    sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
+    return;
+  }
+  sendJson(res, 200, record.batch);
+}
+
+function handleBatchCancel(res, store, batchId) {
+  const record = store.get(batchId);
+  if (!record?.batch) {
+    sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
+    return;
+  }
+  const batch = clone(record.batch);
+  if (["completed", "failed", "cancelled", "expired"].includes(batch.status)) {
+    batch.metadata = {
+      ...(batch.metadata || {}),
+      compatibility_cancel: "local Batch execution is synchronous; terminal batches are returned as a no-op",
+    };
+    sendJson(res, 200, batch);
+    return;
+  }
+  const now = nowSeconds();
+  batch.status = "cancelled";
+  batch.cancelling_at = batch.cancelling_at || now;
+  batch.cancelled_at = now;
+  store.put(batchId, { ...record, batch });
+  sendJson(res, 200, batch);
+}
+
 function handleResponseGet(res, store, responseId) {
   const record = store.get(responseId);
   if (!record?.response) {
@@ -3397,6 +3867,31 @@ function createServer(config = loadConfig()) {
       if (req.method === "POST" && url.pathname === "/v1/embeddings") {
         await handleEmbeddings(req, res, config);
         return;
+      }
+
+      if (url.pathname === "/v1/batches") {
+        if (req.method === "GET") {
+          handleBatchesList(res, store, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleBatchCreate(req, res, config, store, fileSearchStore, backgroundJobs, containerStore, conversationStore, skillStore);
+          return;
+        }
+      }
+
+      const batchRoute = url.pathname.match(/^\/v1\/batches\/([^/]+)(?:\/(cancel))?$/);
+      if (batchRoute) {
+        const batchId = decodeURIComponent(batchRoute[1]);
+        const action = batchRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleBatchGet(res, store, batchId);
+          return;
+        }
+        if (action === "cancel" && req.method === "POST") {
+          handleBatchCancel(res, store, batchId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/containers") {

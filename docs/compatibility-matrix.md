@@ -12,6 +12,8 @@ Primary sources:
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
+- OpenAI Batch OpenAPI operation `createBatch`: https://api.openai.com/v1/batches
+- OpenAI Batch guide: https://developers.openai.com/api/docs/guides/batch
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
@@ -262,6 +264,32 @@ defaults to `CODEXCOMPAT_EMBEDDINGS_MODEL=hashed-semantic-256` and
 `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS=256`, and caps requested dimensions at 3072.
 The `model` response field echoes the request model when provided so SDKs that
 require a model id can still validate the response shape.
+
+## Batch Endpoint Coverage
+
+OpenAI's Batch API creates an asynchronous job from a `purpose:"batch"` JSONL
+File. Each JSONL line has a `custom_id`, `method`, `url`, and request `body`.
+Completed batches expose `output_file_id` and `error_file_id` that clients read
+through the Files API. The bridge implements a local synchronous compatibility
+layer so evaluation tooling can batch requests against the already implemented
+OpenAI-compatible surfaces without adding a separate job runner.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/batches` | Implemented locally | Requires `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File |
+| `GET /v1/batches` | Implemented locally | Lists local batch records with `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/batches/{batch_id}` | Implemented locally | Returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id` |
+| `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary |
+
+Local Batch execution currently accepts `/v1/responses`,
+`/v1/chat/completions`, `/v1/completions`, and `/v1/embeddings`, because those
+surfaces are implemented by the bridge. Streaming (`stream:true`) and
+background Responses (`background:true`) requests are rejected per JSONL line
+and written to the error file because a completed Batch output file cannot
+represent an open stream or a still-running background response. The local
+request-count cap defaults to `CODEXCOMPAT_BATCH_MAX_REQUESTS=1000` to protect
+the `/srv/aialra/apps` test deployment; it can be raised up to OpenAI's 50,000
+request shape limit when disk and upstream quota policies are ready.
 
 ## Uploads, Files and Vector Stores Endpoint Coverage
 
@@ -605,6 +633,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
+| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding endpoints and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service and does not yet execute `/v1/moderations`, images, edits, or videos | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, and adapters for future moderation/image/video endpoints |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |

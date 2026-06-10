@@ -292,6 +292,32 @@ function buildSuites(defaultModel) {
           && json.compatibility?.provider === "local",
       },
       {
+        id: "batch-embeddings-local",
+        mode: "batch-embeddings",
+        endpoint: "/v1/embeddings",
+        requests: [
+          {
+            custom_id: "batch-embedding-a",
+            body: { model: "text-embedding-3-small", input: "batch embedding alpha", dimensions: 12 },
+          },
+          {
+            custom_id: "batch-embedding-b",
+            body: { model: "text-embedding-3-small", input: ["batch vehicle", "batch maintenance"], dimensions: 12 },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => batch?.object === "batch"
+          && batch.status === "completed"
+          && batch.request_counts?.total === 2
+          && batch.request_counts?.completed === 2
+          && batch.request_counts?.failed === 0
+          && !batch.error_file_id
+          && !errorText
+          && outputLines.length === 2
+          && outputLines.every((line) => line.response?.status_code === 200 && !line.error)
+          && outputLines[0].response?.body?.data?.[0]?.embedding?.length === 12
+          && outputLines[1].response?.body?.data?.length === 2,
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -1108,6 +1134,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "model-get") {
       return await runModelGetCase(testCase, context, started);
     }
+    if (testCase.mode === "batch-embeddings") {
+      return await runBatchEmbeddingsCase(testCase, context, started);
+    }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
     }
@@ -1364,6 +1393,93 @@ async function runModelGetCase(testCase, context, started) {
     model_id: response.json?.id || null,
     error: ok ? undefined : truncate(response.body),
   });
+}
+
+async function runBatchEmbeddingsCase(testCase, context, started) {
+  const endpoint = testCase.endpoint || "/v1/embeddings";
+  let inputFile = null;
+  let batch = null;
+  let outputText = "";
+  let errorText = "";
+  try {
+    const jsonl = `${testCase.requests.map((request, index) => JSON.stringify({
+      custom_id: request.custom_id || `request-${index + 1}`,
+      method: "POST",
+      url: endpoint,
+      body: request.body,
+    })).join("\n")}\n`;
+
+    const fileResponse = await postJson(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}.jsonl`,
+      purpose: "batch",
+      content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+      mime_type: "application/jsonl",
+      metadata: { suite, case_id: testCase.id },
+    });
+    const fileBody = await fileResponse.text();
+    if (!fileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fileResponse.status,
+        error: truncate(fileBody),
+      });
+    }
+    inputFile = JSON.parse(fileBody);
+
+    const batchResponse = await postJson(`${baseUrl}/v1/batches`, {
+      input_file_id: inputFile.id,
+      endpoint,
+      completion_window: "24h",
+      metadata: { suite, case_id: testCase.id },
+    });
+    const batchBody = await batchResponse.text();
+    if (!batchResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: batchResponse.status,
+        error: truncate(batchBody),
+      });
+    }
+    batch = JSON.parse(batchBody);
+
+    if (batch.output_file_id) outputText = await getText(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    if (batch.error_file_id) errorText = await getText(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
+    const outputLines = parseJsonl(outputText);
+    const errorLines = parseJsonl(errorText);
+    const fetched = await getJson(`${baseUrl}/v1/batches/${batch.id}`);
+    const listed = await getJson(`${baseUrl}/v1/batches?limit=20`);
+    const cancelledResponse = await postJson(`${baseUrl}/v1/batches/${batch.id}/cancel`, {});
+    const cancelled = parseJsonish(await cancelledResponse.text());
+    const ok = !!testCase.check({
+      batch,
+      outputText,
+      outputLines,
+      errorText,
+      errorLines,
+      fetched: fetched.json,
+      listed: listed.json,
+      cancelled,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: batchResponse.status,
+      batch_id: batch.id,
+      output_file_id: batch.output_file_id,
+      error_file_id: batch.error_file_id,
+      request_counts: batch.request_counts,
+      output_line_count: outputLines.length,
+      error_line_count: errorLines.length,
+      fetched_status: fetched.status,
+      list_status: listed.status,
+      cancel_status: cancelledResponse.status,
+      usage: sumUsage(outputLines.map((line) => embeddingUsage(line.response?.body)).filter(Boolean)),
+    });
+  } finally {
+    if (inputFile?.id) await deleteJson(`${baseUrl}/v1/files/${inputFile.id}`);
+    if (batch?.output_file_id) await deleteJson(`${baseUrl}/v1/files/${batch.output_file_id}`);
+    if (batch?.error_file_id) await deleteJson(`${baseUrl}/v1/files/${batch.error_file_id}`);
+  }
 }
 
 async function runBackgroundCase(testCase, context, started) {
@@ -2198,6 +2314,17 @@ async function getJson(url) {
   }
 }
 
+async function getText(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    return await response.text();
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function deleteJson(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -2351,6 +2478,14 @@ function parseSseEvents(body) {
         .join("\n");
       return { event, data: parseJsonish(data) };
     });
+}
+
+function parseJsonl(text) {
+  return String(text || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => JSON.parse(line));
 }
 
 function jsonHas(text, key, expected) {
