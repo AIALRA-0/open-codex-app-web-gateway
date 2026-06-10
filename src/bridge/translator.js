@@ -4,6 +4,21 @@ const crypto = require("node:crypto");
 
 const DEFAULT_TEXT = Object.freeze({ format: { type: "text" } });
 const DEFAULT_REASONING = Object.freeze({ effort: null, summary: null });
+const CHAT_NATIVE_PASSTHROUGH_FIELDS = Object.freeze([
+  "logit_bias",
+  "modalities",
+  "audio",
+  "prediction",
+  "n",
+  "prompt_cache_key",
+  "prompt_cache_retention",
+  "safety_identifier",
+  "moderation",
+  "verbosity",
+  "web_search_options",
+  "functions",
+  "function_call",
+]);
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -316,6 +331,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
 
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
+  const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, options);
 
   const toolChoice = mapToolChoice(request.tool_choice);
   if (tools.length) {
@@ -348,37 +364,101 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
-      ...(maxTokensCompatibility ? { max_completion_tokens: maxTokensCompatibility } : {}),
+      ...(maxTokensCompatibility || {}),
+      ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
 }
 
 function mapMaxTokens(request, chat, options = {}) {
   const maxTokensField = options.maxTokensField || "max_tokens";
+  const compatibility = {};
   if (request.max_output_tokens != null) {
     chat[maxTokensField] = request.max_output_tokens;
     if (
       request.max_completion_tokens != null
       && request.max_completion_tokens !== request.max_output_tokens
     ) {
-      return {
+      compatibility.max_completion_tokens = {
         source: "max_completion_tokens",
         value: request.max_completion_tokens,
         forwarded: false,
         reason: "max_output_tokens_precedence",
       };
     }
-    return null;
+    if (
+      request.max_tokens != null
+      && request.max_tokens !== request.max_output_tokens
+    ) {
+      compatibility.max_tokens = {
+        source: "max_tokens",
+        value: request.max_tokens,
+        forwarded: false,
+        reason: "max_output_tokens_precedence",
+      };
+    }
+    return Object.keys(compatibility).length ? compatibility : null;
   }
 
-  if (request.max_completion_tokens == null) return null;
-  chat[maxTokensField] = request.max_completion_tokens;
+  if (request.max_completion_tokens != null) {
+    chat[maxTokensField] = request.max_completion_tokens;
+    compatibility.max_completion_tokens = {
+      source: "max_completion_tokens",
+      target: maxTokensField,
+      value: request.max_completion_tokens,
+      forwarded: true,
+      reason: "chat_alias",
+    };
+    if (
+      request.max_tokens != null
+      && request.max_tokens !== request.max_completion_tokens
+    ) {
+      compatibility.max_tokens = {
+        source: "max_tokens",
+        value: request.max_tokens,
+        forwarded: false,
+        reason: "max_completion_tokens_precedence",
+      };
+    }
+    return compatibility;
+  }
+
+  if (request.max_tokens == null) return null;
+  chat[maxTokensField] = request.max_tokens;
   return {
-    source: "max_completion_tokens",
-    target: maxTokensField,
-    value: request.max_completion_tokens,
-    forwarded: true,
-    reason: "chat_alias",
+    max_tokens: {
+      source: "max_tokens",
+      target: maxTokensField,
+      value: request.max_tokens,
+      forwarded: true,
+      reason: "chat_alias",
+    },
+  };
+}
+
+function mapChatNativeFields(request, chat, options = {}) {
+  const present = CHAT_NATIVE_PASSTHROUGH_FIELDS.filter((field) => (
+    Object.prototype.hasOwnProperty.call(request, field)
+    && request[field] !== undefined
+  ));
+  if (!present.length) return null;
+
+  const forwarded = [];
+  const filtered = [];
+  const forward = options.forwardChatNativeFields !== false;
+  for (const field of present) {
+    if (forward) {
+      chat[field] = clone(request[field]);
+      forwarded.push(field);
+    } else {
+      filtered.push(field);
+    }
+  }
+
+  return {
+    ...(forwarded.length ? { forwarded } : {}),
+    ...(filtered.length ? { filtered } : {}),
+    reason: forward ? "chat_native_passthrough" : "provider_unsupported",
   };
 }
 

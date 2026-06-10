@@ -62,8 +62,10 @@ implementations for those tools.
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `max_completion_tokens` | configured max token field | Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence and conflicts are recorded in `metadata.compatibility.max_completion_tokens` |
+| `max_tokens` | configured max token field | Legacy Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence, then `max_completion_tokens`, and conflicts are recorded in `metadata.compatibility.max_tokens` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
+| `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `moderation`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
 | `stream_options` with `stream:true` | `stream_options` | Direct; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage |
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |

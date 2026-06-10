@@ -1178,3 +1178,57 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7wc1mb` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Provider-Aware Chat-Native Request Fields
+
+- Used the current OpenAI Chat Completions schema and DeepSeek Chat Completion
+  reference to split Chat-native request fields into provider-aware behavior:
+  - OpenAI Chat reference:
+    https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+  - DeepSeek Chat reference:
+    https://api-docs.deepseek.com/api/create-chat-completion
+- Added `/v1/responses` compatibility for additional Chat-native fields:
+  - `logit_bias`, `modalities`, `audio`, `prediction`, `n`,
+    `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`,
+    `moderation`, `verbosity`, `web_search_options`, and legacy
+    `functions` / `function_call`;
+  - non-DeepSeek/OpenAI-compatible providers forward these fields by default;
+  - DeepSeek filters them by default and records the filtered field names in
+    `metadata.compatibility.chat_native_fields`;
+  - `CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS` can override the provider default.
+- Extended token-limit aliasing:
+  - `max_tokens` is now accepted on `/v1/responses` as a legacy Chat-native
+    alias for the configured upstream max-token field;
+  - precedence is `max_output_tokens`, then `max_completion_tokens`, then
+    `max_tokens`;
+  - ignored alias conflicts are recorded under
+    `metadata.compatibility.max_completion_tokens` and/or
+    `metadata.compatibility.max_tokens`.
+- Updated `docs/compatibility-matrix.md` and `docs/deployment.md` with the new
+  request mapping and environment flag.
+- Added regression coverage for:
+  - translator `max_tokens` alias forwarding and conflict metadata;
+  - translator Chat-native field forwarding and provider-unsupported filtering;
+  - mock server upstream request shape and final compatibility metadata;
+  - config defaults that filter Chat-native fields for DeepSeek providers.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 54/54 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live DeepSeek Chat-native filter probe returned HTTP 200, visible output
+    `chat native filter ok`, `metadata.compatibility.max_tokens.forwarded=true`,
+    and `metadata.compatibility.chat_native_fields.filtered=["logit_bias","n"]`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1715 ms, P95 latency 3655 ms, total usage 2219 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7wsw2n` appeared before reload and after reload, console errors
+    0, warnings 0.

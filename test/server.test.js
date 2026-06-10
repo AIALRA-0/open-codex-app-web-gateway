@@ -192,6 +192,98 @@ test("POST /v1/responses maps Chat max_completion_tokens alias", async () => {
   });
 });
 
+test("POST /v1/responses maps Chat-native aliases and request fields", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 6);
+    assert.deepEqual(call.body.logit_bias, { "7": -2 });
+    assert.equal(call.body.n, 2);
+    assert.deepEqual(call.body.prediction, { type: "content", content: "cached draft" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_native",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat native ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check Chat-native fields.",
+        max_tokens: 6,
+        logit_bias: { "7": -2 },
+        n: 2,
+        prediction: { type: "content", content: "cached draft" },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "chat native ok");
+    assert.deepEqual(json.metadata.compatibility.max_tokens, {
+      source: "max_tokens",
+      target: "max_tokens",
+      value: 6,
+      forwarded: true,
+      reason: "chat_alias",
+    });
+    assert.equal(json.metadata.compatibility.chat_native_fields.reason, "chat_native_passthrough");
+    assert.deepEqual(json.metadata.compatibility.chat_native_fields.forwarded.sort(), [
+      "logit_bias",
+      "n",
+      "prediction",
+    ].sort());
+  });
+});
+
+test("POST /v1/responses filters Chat-native request fields when configured", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logit_bias, undefined);
+    assert.equal(call.body.n, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_native_filtered",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "filtered ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Filter Chat-native fields.",
+        logit_bias: { "8": -4 },
+        n: 3,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "filtered ok");
+    assert.equal(json.metadata.compatibility.chat_native_fields.reason, "provider_unsupported");
+    assert.deepEqual(json.metadata.compatibility.chat_native_fields.filtered.sort(), [
+      "logit_bias",
+      "n",
+    ].sort());
+  }, { forwardChatNativeFields: false });
+});
+
 test("POST /v1/responses filters stream_options for non-streaming requests", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);
@@ -1528,15 +1620,24 @@ test("GET /healthz does not require a provider key", async () => {
   }
 });
 
-test("loadConfig filters service_tier for DeepSeek providers by default", () => {
-  const previous = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+test("loadConfig filters provider-specific Chat fields for DeepSeek providers by default", () => {
+  const previousServiceTier = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  const previousChatNativeFields = process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   try {
-    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).forwardServiceTier, false);
-    assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).forwardServiceTier, true);
+    const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
+    assert.equal(deepseekConfig.forwardServiceTier, false);
+    assert.equal(deepseekConfig.forwardChatNativeFields, false);
+
+    const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
+    assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
+    assert.equal(openaiCompatibleConfig.forwardChatNativeFields, true);
   } finally {
-    if (previous === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
-    else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previous;
+    if (previousServiceTier === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+    else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previousServiceTier;
+    if (previousChatNativeFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
+    else process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS = previousChatNativeFields;
   }
 });
 

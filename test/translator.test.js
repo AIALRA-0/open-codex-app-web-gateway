@@ -143,7 +143,7 @@ test("maps Responses output logprobs request to Chat logprobs parameters", () =>
   assert.equal(compatibility.logprobs, "chat_logprobs");
 });
 
-test("maps Chat max_completion_tokens alias to configured upstream token field", () => {
+test("maps Chat token aliases to configured upstream token field", () => {
   const aliasOnly = responsesToChatRequest({
     model: "mock-model",
     input: "Use Chat token alias.",
@@ -158,11 +158,40 @@ test("maps Chat max_completion_tokens alias to configured upstream token field",
     reason: "chat_alias",
   });
 
+  const legacyAlias = responsesToChatRequest({
+    model: "mock-model",
+    input: "Use legacy Chat token alias.",
+    max_tokens: 13,
+  });
+  assert.equal(legacyAlias.chat.max_tokens, 13);
+  assert.deepEqual(legacyAlias.compatibility.max_tokens, {
+    source: "max_tokens",
+    target: "max_tokens",
+    value: 13,
+    forwarded: true,
+    reason: "chat_alias",
+  });
+
+  const aliasConflict = responsesToChatRequest({
+    model: "mock-model",
+    input: "Prefer current Chat token alias.",
+    max_completion_tokens: 18,
+    max_tokens: 19,
+  });
+  assert.equal(aliasConflict.chat.max_tokens, 18);
+  assert.deepEqual(aliasConflict.compatibility.max_tokens, {
+    source: "max_tokens",
+    value: 19,
+    forwarded: false,
+    reason: "max_completion_tokens_precedence",
+  });
+
   const conflict = responsesToChatRequest({
     model: "mock-model",
     input: "Prefer Responses token limit.",
     max_output_tokens: 11,
     max_completion_tokens: 22,
+    max_tokens: 33,
   }, [], { maxTokensField: "max_completion_tokens" });
   assert.equal(conflict.chat.max_completion_tokens, 11);
   assert.deepEqual(conflict.compatibility.max_completion_tokens, {
@@ -171,6 +200,83 @@ test("maps Chat max_completion_tokens alias to configured upstream token field",
     forwarded: false,
     reason: "max_output_tokens_precedence",
   });
+  assert.deepEqual(conflict.compatibility.max_tokens, {
+    source: "max_tokens",
+    value: 33,
+    forwarded: false,
+    reason: "max_output_tokens_precedence",
+  });
+});
+
+test("forwards provider-supported Chat-native request fields", () => {
+  const request = {
+    model: "mock-model",
+    input: "Use Chat-native options.",
+    logit_bias: { "42": -3 },
+    modalities: ["text", "audio"],
+    audio: { voice: "alloy", format: "wav" },
+    prediction: { type: "content", content: "draft" },
+    n: 2,
+    prompt_cache_key: "cache-key",
+    prompt_cache_retention: "24h",
+    safety_identifier: "safe-user",
+    moderation: { input: true, output: true },
+    verbosity: "low",
+    web_search_options: { search_context_size: "low" },
+    functions: [{ name: "legacy_tool", parameters: { type: "object", properties: {} } }],
+    function_call: "auto",
+  };
+  const { chat, compatibility } = responsesToChatRequest(request, [], { forwardChatNativeFields: true });
+
+  assert.deepEqual(chat.logit_bias, { "42": -3 });
+  assert.deepEqual(chat.modalities, ["text", "audio"]);
+  assert.deepEqual(chat.audio, { voice: "alloy", format: "wav" });
+  assert.deepEqual(chat.prediction, { type: "content", content: "draft" });
+  assert.equal(chat.n, 2);
+  assert.equal(chat.prompt_cache_key, "cache-key");
+  assert.equal(chat.prompt_cache_retention, "24h");
+  assert.equal(chat.safety_identifier, "safe-user");
+  assert.deepEqual(chat.moderation, { input: true, output: true });
+  assert.equal(chat.verbosity, "low");
+  assert.deepEqual(chat.web_search_options, { search_context_size: "low" });
+  assert.deepEqual(chat.functions, request.functions);
+  assert.equal(chat.function_call, "auto");
+  assert.equal(compatibility.chat_native_fields.reason, "chat_native_passthrough");
+  assert.deepEqual(compatibility.chat_native_fields.forwarded.sort(), [
+    "audio",
+    "function_call",
+    "functions",
+    "logit_bias",
+    "modalities",
+    "moderation",
+    "n",
+    "prediction",
+    "prompt_cache_key",
+    "prompt_cache_retention",
+    "safety_identifier",
+    "verbosity",
+    "web_search_options",
+  ].sort());
+});
+
+test("filters Chat-native request fields for unsupported providers", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Filter unsupported Chat-native options.",
+    logit_bias: { "1": 2 },
+    modalities: ["audio"],
+    n: 2,
+  }, [], { forwardChatNativeFields: false });
+
+  assert.equal(chat.logit_bias, undefined);
+  assert.equal(chat.modalities, undefined);
+  assert.equal(chat.n, undefined);
+  assert.deepEqual(compatibility.chat_native_fields.filtered.sort(), [
+    "logit_bias",
+    "modalities",
+    "n",
+  ].sort());
+  assert.equal(compatibility.chat_native_fields.reason, "provider_unsupported");
 });
 
 test("requests streaming usage from Chat stream options by default", () => {
