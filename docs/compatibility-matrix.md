@@ -62,6 +62,7 @@ implementations for those tools.
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
+| `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
@@ -96,7 +97,7 @@ behavior.
 | `usage.prompt_cache_hit_tokens` | `usage.input_tokens_details.cached_tokens` | DeepSeek-specific cache usage compatibility |
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
-| `service_tier` | `service_tier` | Direct when a Chat provider echoes the actual tier used |
+| `service_tier` | `service_tier` | Direct for non-streaming responses and streaming chunks when a Chat provider echoes the actual tier used |
 | `finish_reason=length` | `status=incomplete`, `incomplete_details.reason=max_output_tokens` | Direct for non-streaming and streaming Chat output |
 | `finish_reason=content_filter` | `status=incomplete`, `incomplete_details.reason=content_filter` | Direct for non-streaming and streaming Chat output |
 | `finish_reason=insufficient_system_resource` | `status=failed`, `error.code=server_error` | DeepSeek-specific Chat termination mapped to Responses failure because Responses incomplete reasons do not include this value |
@@ -116,7 +117,7 @@ behavior.
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
 | `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |
-| `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize conversation state, returns `response.compaction`, and encrypts local compaction content with an AES-GCM key stored outside Git |
+| `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize conversation state, returns `response.compaction`, encrypts local compaction content with an AES-GCM key stored outside Git, and disables DeepSeek thinking for compaction replay follow-ups by default |
 | `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request to Chat Completions, forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` |
 
 ## Chat Completions Endpoint Coverage
@@ -274,6 +275,7 @@ Configuration:
 | `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS` | `200000` | Maximum extracted text injected per file |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_URLS` | `true` | Allows HTTP(S) `file_url` fetching with size and timeout caps |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote input file fetches |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES` | `true` | Disables DeepSeek thinking mode for local input-file requests so visible output remains available under small output budgets |
 
 This is a text extraction compatibility layer, not native OpenAI file input
 processing. Text and code files, CSV/TSV, JSON, Markdown, HTML, XML, and similar

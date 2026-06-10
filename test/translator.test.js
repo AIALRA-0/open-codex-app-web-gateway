@@ -161,6 +161,32 @@ test("passes stop sequences and maps DeepSeek user identity aliases", () => {
   });
 });
 
+test("passes Chat service tier to upstream requests", () => {
+  const { chat } = responsesToChatRequest({
+    model: "mock-model",
+    input: "Use the requested tier.",
+    service_tier: "priority",
+  });
+
+  assert.equal(chat.service_tier, "priority");
+});
+
+test("can filter service tier for providers that do not support it", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Use the available tier.",
+    service_tier: "priority",
+  }, [], { forwardServiceTier: false });
+
+  assert.equal(chat.service_tier, undefined);
+  assert.deepEqual(compatibility.service_tier, {
+    source: "service_tier",
+    value: "priority",
+    forwarded: false,
+    reason: "provider_unsupported",
+  });
+});
+
 test("keeps already-compatible DeepSeek user_id values direct", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

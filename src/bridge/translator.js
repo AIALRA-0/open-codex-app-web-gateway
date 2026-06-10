@@ -308,6 +308,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "top_logprobs");
   copyIfPresent(request, chat, "stop");
 
+  const serviceTierCompatibility = mapServiceTier(request, chat, options);
   const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
 
   const logprobsRequested = shouldRequestChatLogprobs(request);
@@ -344,9 +345,24 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
         : {}),
       ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
+      ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
     },
   };
+}
+
+function mapServiceTier(request, chat, options = {}) {
+  if (request.service_tier === undefined) return null;
+  if (options.forwardServiceTier === false) {
+    return {
+      source: "service_tier",
+      value: request.service_tier,
+      forwarded: false,
+      reason: "provider_unsupported",
+    };
+  }
+  chat.service_tier = request.service_tier;
+  return null;
 }
 
 function mapDeepSeekUserId(request, chat, options = {}) {

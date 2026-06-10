@@ -70,6 +70,7 @@ function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
   const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
   const providerBaseUrl = trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL);
+  const deepseekProvider = isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl);
   const compactionSecretFile = overrides.compactionSecretFile
     || process.env.CODEXCOMPAT_COMPACTION_SECRET_FILE
     || path.join(stateDir, "compaction.key");
@@ -120,10 +121,12 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalWebSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH, true),
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
+    deepseekDisableThinkingForInputFiles: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES, true),
     deepseekUserIdCompat: parseBoolean(
       process.env.CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT,
-      isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl),
+      deepseekProvider,
     ),
+    forwardServiceTier: parseBoolean(process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER, !deepseekProvider),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };
@@ -272,6 +275,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     translatorOptions(config, { localHostedTools }),
   );
   chat.model = chat.model || config.defaultModel;
+  applyCompactionReplayToChat(chat, compatibility, request, config);
 
   if (request.background) {
     handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, {
@@ -283,7 +287,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
 
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) {
-    applyInputFilesToChat(chat, compatibility, localInputFiles);
+    applyInputFilesToChat(chat, compatibility, localInputFiles, config);
   }
   const localShell = await prepareShellContext(request, config, containerStore);
   if (localShell) {
@@ -397,7 +401,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
     if (localInputFiles) {
-      finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles);
+      finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles, config);
     }
     const localShell = await prepareShellContext(request, config, containerStore);
     if (localShell) {
@@ -544,10 +548,36 @@ function applyLocalShellToChat(chat, compatibility, localShell, config) {
   return compatibility;
 }
 
-function applyInputFilesToChat(chat, compatibility, localInputFiles) {
+function applyInputFilesToChat(chat, compatibility, localInputFiles, config = {}) {
   injectInputFileMessages(chat, localInputFiles);
   Object.assign(compatibility, inputFileCompatibility(localInputFiles));
+  if (config.deepseekDisableThinkingForInputFiles && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_input_files = {
+      ...(compatibility.local_input_files || {}),
+      deepseek_thinking: "disabled_for_input_files",
+    };
+  }
   return compatibility;
+}
+
+function applyCompactionReplayToChat(chat, compatibility, request, config) {
+  if (!hasCompactionInput(request.input)) return compatibility;
+  if (config.deepseekDisableThinkingForCompaction && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_compaction = {
+      ...(compatibility.local_compaction || {}),
+      deepseek_thinking: "disabled_for_compaction_replay",
+    };
+  }
+  return compatibility;
+}
+
+function hasCompactionInput(value) {
+  if (Array.isArray(value)) return value.some(hasCompactionInput);
+  if (!value || typeof value !== "object") return false;
+  if (value.type === "compaction") return true;
+  return hasCompactionInput(value.content) || hasCompactionInput(value.input);
 }
 
 function mergeCompatibility(existing, next, extra = {}) {
@@ -1094,6 +1124,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     response.completed_at = terminal.completed_at;
     response.incomplete_details = terminal.incomplete_details;
     response.error = terminal.error;
+    response.service_tier = state.serviceTier;
     response.usage = state.usage;
     const refusalLogprobs = streamRefusalLogprobs(state);
     response.metadata = {
@@ -1145,6 +1176,7 @@ function createStreamState(response, compatibility) {
     choices: new Map(),
     finishReasons: [],
     outputDone: new Set(),
+    serviceTier: response.service_tier,
     usage: null,
   };
 }
@@ -1317,6 +1349,7 @@ function ensureToolCallItem(state, choiceState, index, deltaToolCall) {
 function applyChatStreamChunk(state, chunk) {
   const events = [];
   if (chunk.usage) state.usage = mapUsage(chunk.usage);
+  if (chunk.service_tier != null) state.serviceTier = chunk.service_tier;
 
   for (const choice of chunk.choices || []) {
     if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);

@@ -867,3 +867,50 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7u4c2c` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Service Tier Passthrough and DeepSeek Visible-Output Stability
+
+- Used current OpenAI Chat Completions reference data to confirm
+  `service_tier` is a Chat request parameter and response field when supported
+  by the provider.
+- Used current DeepSeek Chat Completion docs to confirm DeepSeek does not
+  document `service_tier`, so DeepSeek deployments now filter this field by
+  default instead of blindly forwarding it upstream.
+- Added provider-aware `service_tier` request handling:
+  - non-DeepSeek/OpenAI-compatible providers forward `service_tier` by default;
+  - DeepSeek filters `service_tier` by default and records
+    `metadata.compatibility.service_tier.forwarded=false`;
+  - `CODEXCOMPAT_FORWARD_SERVICE_TIER` can override the provider-aware default.
+- Added streaming Chat-to-Responses `service_tier` preservation when an upstream
+  Chat stream chunk includes the actual tier used.
+- Tightened DeepSeek visible-output stability for local compatibility contexts:
+  - local `input_file` injection now disables DeepSeek thinking by default and
+    records `metadata.compatibility.local_input_files.deepseek_thinking`;
+  - local compaction replay follow-ups now disable DeepSeek thinking by default
+    and record `metadata.compatibility.local_compaction.deepseek_thinking`.
+- Added regression coverage for:
+  - translator `service_tier` passthrough and provider-unsupported filtering;
+  - config defaults that filter `service_tier` for DeepSeek providers;
+  - mock server non-streaming `service_tier` forwarding and upstream tier
+    preservation;
+  - streaming terminal Responses `service_tier` preservation;
+  - DeepSeek thinking disablement for local `input_file` and compaction replay.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 45/45 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - `npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose`:
+    passed 1/1, latency 1567 ms, output `input-file-ok`.
+  - `npm run eval:bridge -- --case responses-compact-continuation --timeout-ms 90000 --verbose`:
+    passed 1/1, latency 2937 ms, output `atlas-77`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1728 ms, P95 latency 3463 ms, total usage 2176 tokens.
+  - Live DeepSeek `service_tier` filter check returned HTTP 200, visible output
+    `tier filter ok`, and `metadata.compatibility.service_tier.forwarded=false`.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7uoyl8` appeared before reload and after reload, console errors
+    0, warnings 0.

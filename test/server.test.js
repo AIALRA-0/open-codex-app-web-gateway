@@ -118,6 +118,40 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("POST /v1/responses forwards service_tier and preserves provider tier", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.service_tier, "priority");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_tier",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      service_tier: "flex",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "tier ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check tier.",
+        service_tier: "priority",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.service_tier, "flex");
+  });
+});
+
 test("POST /v1/responses maps output logprobs include to Chat and back", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -360,10 +394,12 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
     assert.equal(call.body.top_logprobs, 2);
+    assert.equal(call.body.service_tier, "priority");
     res.writeHead(200, { "content-type": "text/event-stream" });
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream",
       object: "chat.completion.chunk",
+      service_tier: "flex",
       choices: [{
         index: 0,
         delta: { role: "assistant", content: "hel" },
@@ -394,6 +430,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
         stream: true,
         include: ["message.output_text.logprobs"],
         top_logprobs: 2,
+        service_tier: "priority",
       }),
     });
 
@@ -406,6 +443,9 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"text":"hello"/);
     assert.match(text, /"logprobs":\[\{"token":"hel","logprob":-0\.1/);
     assert.match(text, /\{"token":"lo","logprob":-0\.2/);
+    const events = parseSseEvents(text);
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.service_tier, "flex");
   });
 });
 
@@ -831,6 +871,7 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
 
 test("Responses input_file file_id and file_data are extracted for Chat compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
     assert.ok(call.body.messages.some((message) => /Local Responses input_file compatibility extracted file inputs/.test(message.content || "")));
     assert.ok(call.body.messages.some((message) => /File ID fixture says input-file-ok/.test(message.content || "")));
     assert.ok(call.body.messages.some((message) => /Inline fixture also says inline-ok/.test(message.content || "")));
@@ -886,6 +927,7 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
     assert.equal(json.metadata.compatibility.local_input_files.file_count, 2);
     assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 2);
     assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+    assert.equal(json.metadata.compatibility.local_input_files.deepseek_thinking, "disabled_for_input_files");
   });
 });
 
@@ -1222,9 +1264,11 @@ test("POST /v1/responses/compact returns local compaction and replays it", async
     assert.equal(continued.status, 200);
     const continuedJson = await continued.json();
     assert.equal(continuedJson.output[0].content[0].text, "continued from compact");
+    assert.equal(continuedJson.metadata.compatibility.local_compaction.deepseek_thinking, "disabled_for_compaction_replay");
 
     assert.match(requests[0].body.messages[1].content, /atlas-77/);
     assert.equal(requests[0].body.max_tokens, 512);
+    assert.deepEqual(requests[1].body.thinking, { type: "disabled" });
     assert.equal(requests[1].body.messages.at(-2).role, "system");
     assert.match(requests[1].body.messages.at(-2).content, /Compacted conversation context:\nProject code word atlas-77/);
     assert.equal(requests[1].body.messages.at(-1).content, "What is the code word?");
@@ -1365,6 +1409,18 @@ test("GET /healthz does not require a provider key", async () => {
     assert.equal(json.has_provider_key, false);
   } finally {
     await close(server);
+  }
+});
+
+test("loadConfig filters service_tier for DeepSeek providers by default", () => {
+  const previous = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  try {
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).forwardServiceTier, false);
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).forwardServiceTier, true);
+  } finally {
+    if (previous === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+    else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previous;
   }
 });
 
