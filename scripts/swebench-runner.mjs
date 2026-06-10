@@ -414,6 +414,7 @@ function makeReport({
     runId: reportRunId,
     split: reportSplit,
   });
+  const wrapperCommand = `npm run bench:swe:score -- --prediction-report ${shellQuote(reportOutputPath)} --dry-run`;
 
   return {
     kind: "swebench_prediction_report",
@@ -434,6 +435,7 @@ function makeReport({
       status: "not_run_by_this_script",
       reason: "SWE-bench scoring requires the official Docker harness; this script only generates bounded predictions.",
       command,
+      wrapper_command: wrapperCommand,
     },
     started_at: reportStartedAt,
     finished_at: new Date().toISOString(),

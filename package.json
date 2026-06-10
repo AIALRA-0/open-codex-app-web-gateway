@@ -15,6 +15,7 @@
     "smoke:ui": "node scripts/ui-smoke.mjs",
     "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
     "bench:swe": "node scripts/swebench-runner.mjs",
+    "bench:swe:score": "node scripts/swebench-evaluate.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"
   },
   "dependencies": {

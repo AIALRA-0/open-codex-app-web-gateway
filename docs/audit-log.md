@@ -1547,3 +1547,46 @@ Open follow-ups:
     passed through `http://127.0.0.1:12912`, generated 1 diff-like patch,
     latency 25068 ms, total usage 1611 tokens, and recorded zero transport
     errors or secret rejections.
+
+## 2026-06-10 SWE-bench Docker Scorer Wrapper
+
+- Added `scripts/swebench-evaluate.mjs` and `npm run bench:swe:score`.
+- The scorer wrapper is intentionally separated from `bench:swe`:
+  - `bench:swe` generates DeepSeek/bridge predictions;
+  - `bench:swe:score` invokes the official SWE-bench Docker harness when
+    `--dry-run` is omitted.
+- The wrapper accepts either a `bench:swe` prediction report or direct
+  `--predictions` plus dataset arguments, then builds the official
+  `python -m swebench.harness.run_evaluation` command.
+- Added deployment-safe defaults:
+  - `--max-workers 1`;
+  - `--cache-level env`;
+  - `--clean True`;
+  - `--max-instances 5` unless `--allow-large-run` is explicit;
+  - `--min-free-gb 120` for live Docker scoring;
+  - compact artifacts under `/srv/aialra/data/opencodexapp/eval/swebench/`.
+- Added preflight checks for Python, SWE-bench import, Docker, free disk,
+  selected instance IDs, prediction count, and secret-like patch content before
+  any live harness execution.
+- Added compact score outputs:
+  - JSON score report with prediction counts, patch hashes, harness command,
+    preflight status, parsed `results.json`, parsed `instance_results.jsonl`,
+    and summary metrics;
+  - Markdown score summary for audit review.
+- Updated `bench:swe` prediction reports to include a `wrapper_command` pointing
+  to `npm run bench:swe:score -- --prediction-report ... --dry-run`.
+- Updated `docs/evaluation-plan.md` and `docs/deployment.md`.
+- Verified:
+  - `node --check scripts/swebench-evaluate.mjs`: passed.
+  - targeted `node --test test/swebench_evaluate.test.js`: passed.
+  - `npm test`: 58/58 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Synthetic scorer dry-run:
+    `npm run bench:swe:score -- --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/synthetic-live-report.json --dry-run --output /srv/aialra/data/opencodexapp/eval/swebench/synthetic-score-dry-run.json --summary-md /srv/aialra/data/opencodexapp/eval/swebench/synthetic-score-dry-run.md --report-dir /srv/aialra/data/opencodexapp/eval/swebench/harness-smoke`
+    passed as a dry-run and produced compact JSON/Markdown score artifacts.
+  - Dry-run preflight intentionally did not start Docker scoring because the
+    current host cannot yet satisfy the live scorer gate:
+    `python3 -c "import swebench"` failed with `ModuleNotFoundError`, and free
+    disk was 34.86GB, below the 120GB live scoring guard. Docker itself was
+    available: `Docker version 29.1.3`.

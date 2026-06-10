@@ -43,6 +43,7 @@ larger agent evaluations.
 | `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction including PDF text-layer extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `swebench-runner` | Disk-bounded SWE-bench prediction generator for local JSONL subsets; writes official predictions JSONL and compact audit reports outside the repo |
+| `swebench-evaluate` | Guarded wrapper around the official SWE-bench Docker harness; parses scorer artifacts into compact JSON/Markdown reports |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
 Useful commands:
@@ -65,6 +66,7 @@ npm run smoke:ui -- --timeout-ms 180000
 npm run bench:code -- --timeout-ms 180000
 npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl --limit 3 --dry-run
 npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl --limit 3 --timeout-ms 180000
+npm run bench:swe:score -- --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json --dry-run
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 ```
 
@@ -129,6 +131,43 @@ npm run bench:swe -- \
 The report prints the follow-up official scoring command. Run that command only
 on a host with enough Docker capacity, for example with `--max_workers 1`,
 `--cache_level env`, and `--clean True` for disk-limited machines.
+
+## Current SWE-bench Scoring Wrapper
+
+`scripts/swebench-evaluate.mjs` is the guarded scoring half. It accepts either a
+prediction report from `bench:swe` or a direct predictions JSONL path, builds the
+official `python -m swebench.harness.run_evaluation` command, and writes a
+compact score report plus Markdown summary under
+`/srv/aialra/data/opencodexapp/eval/swebench/`.
+
+Default safety settings are tuned for this deployment rather than leaderboard
+runs:
+
+- `--max-workers 1`
+- `--cache-level env`
+- `--clean True`
+- `--max-instances 5` unless `--allow-large-run` is explicitly provided
+- `--min-free-gb 120` unless overridden for a known smaller local smoke
+- local JSONL subsets are preferred through `--dataset-jsonl`
+
+Use `--dry-run` first. Dry-run still validates predictions, derives instance
+IDs, computes patch hashes, checks Docker/Python/SWE-bench availability, checks
+free disk, and emits the exact official harness command. Live scoring is just
+the same command without `--dry-run`.
+
+Example:
+
+```bash
+npm run bench:swe:score -- \
+  --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json \
+  --dry-run
+
+npm run bench:swe:score -- \
+  --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json \
+  --max-workers 1 \
+  --cache-level env \
+  --min-free-gb 120
+```
 
 ## Current Stability Soak
 
@@ -199,8 +238,10 @@ Current public SWE-bench references to track:
 The next evaluation milestone is a disk-bounded runner that samples
 SWE-bench Verified or SWE-bench Lite into `/srv/aialra/data`, executes inside
 Docker, and writes only compact JSON/Markdown reports back to this repo. The
-prediction-generation half now exists as `npm run bench:swe`; the remaining
-milestone is the Docker scorer wrapper and result parser.
+prediction-generation half now exists as `npm run bench:swe`; the Docker scorer
+wrapper and result parser now exist as `npm run bench:swe:score`. The remaining
+milestone is an actual small Verified/Lite live scorer run on a host with enough
+Docker cache and disk capacity, followed by native Codex baseline comparison.
 
 ## Initial Command Skeleton
 
