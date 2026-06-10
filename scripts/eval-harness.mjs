@@ -536,7 +536,7 @@ function buildSuites(defaultModel) {
           modalities: ["text"],
           moderation: { input: true },
           stream_options: { include_usage: true },
-          thinking: { type: "disabled" },
+          reasoning_effort: "none",
           max_completion_tokens: 64,
         },
         check: ({ json, text }) => /chat-developer-ok/i.test(text)
@@ -545,6 +545,8 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.max_completion_tokens?.target === "max_tokens"
           && json.metadata?.compatibility?.chat_passthrough?.max_completion_tokens?.value === 64
           && json.metadata?.compatibility?.chat_passthrough?.max_completion_tokens?.forwarded === true
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning_effort?.value === "none"
+          && json.metadata?.compatibility?.chat_passthrough?.reasoning_effort?.reason === "deepseek_thinking_disabled"
           && json.metadata?.compatibility?.chat_passthrough?.service_tier?.forwarded === false
           && json.metadata?.compatibility?.chat_passthrough?.stream_options?.reason === "stream_required"
           && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("modalities")

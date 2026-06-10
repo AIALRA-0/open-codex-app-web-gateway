@@ -6001,6 +6001,8 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.stream_options, undefined);
     assert.equal(call.body.max_tokens, 32);
     assert.equal(call.body.max_completion_tokens, undefined);
+    assert.equal(call.body.reasoning_effort, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
 
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -6034,6 +6036,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         stream_options: { include_usage: true },
         max_completion_tokens: 32,
         max_tokens: 96,
+        reasoning_effort: "none",
       }),
     });
     assert.equal(response.status, 200);
@@ -6049,6 +6052,10 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.value, 96);
     assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.max_tokens.reason, "max_completion_tokens_precedence");
+    assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.value, "none");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.reasoning_effort.mapped, { type: "disabled" });
+    assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.forwarded, false);
+    assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.reason, "deepseek_thinking_disabled");
     assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
     assert.deepEqual(
@@ -6072,6 +6079,52 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     deepseekUserIdCompat: true,
     forwardChatNativeFields: false,
     forwardServiceTier: false,
+  });
+});
+
+test("POST /v1/chat/completions maps OpenAI reasoning_effort values for DeepSeek-compatible providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning_effort, "max");
+    assert.equal(call.body.thinking, undefined);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_reasoning_alias",
+      object: "chat.completion",
+      created: 1700000412,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-reasoning-alias-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-reasoning-alias" },
+        messages: [{ role: "user", content: "Return chat-reasoning-alias-ok." }],
+        reasoning_effort: "xhigh",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-reasoning-alias-ok");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.reasoning_effort, {
+      source: "reasoning_effort",
+      target: "reasoning_effort",
+      value: "xhigh",
+      mapped: "max",
+      forwarded: true,
+      reason: "deepseek_effort_compat",
+    });
+  }, {
+    deepseekReasoningEffortCompat: true,
   });
 });
 

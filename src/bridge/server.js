@@ -62,6 +62,7 @@ const {
   mapUsage,
   normalizeChatAudioPart,
   normalizeOutputTextLogprobs,
+  normalizeReasoningEffort,
   prefixedId,
   responseTerminalStateFromFinishReasons,
   responsesToChatRequest,
@@ -3302,6 +3303,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const maxTokens = normalizeChatPassthroughMaxTokens(upstreamBody, config);
   if (maxTokens) Object.assign(compatibility, maxTokens);
 
+  const reasoningEffort = normalizeChatPassthroughReasoningEffort(upstreamBody, config);
+  if (reasoningEffort) compatibility.reasoning_effort = reasoningEffort;
+
   const serviceTier = filterChatPassthroughServiceTier(upstreamBody, config);
   if (serviceTier) compatibility.service_tier = serviceTier;
 
@@ -3400,6 +3404,41 @@ function normalizeChatPassthroughMaxTokens(upstreamBody, config = {}) {
         forwarded: true,
         reason: "chat_passthrough_alias",
       },
+    };
+  }
+
+  return null;
+}
+
+function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}) {
+  if (!config.deepseekReasoningEffortCompat || upstreamBody.reasoning_effort == null) return null;
+  const value = upstreamBody.reasoning_effort;
+  const mapped = normalizeReasoningEffort(value, config);
+
+  if (mapped == null) {
+    const previousThinking = isPlainObject(upstreamBody.thinking) ? clone(upstreamBody.thinking) : upstreamBody.thinking;
+    delete upstreamBody.reasoning_effort;
+    upstreamBody.thinking = { type: "disabled" };
+    return {
+      source: "reasoning_effort",
+      target: "thinking",
+      value,
+      mapped: upstreamBody.thinking,
+      previous_thinking: previousThinking,
+      forwarded: false,
+      reason: "deepseek_thinking_disabled",
+    };
+  }
+
+  if (mapped !== value) {
+    upstreamBody.reasoning_effort = mapped;
+    return {
+      source: "reasoning_effort",
+      target: "reasoning_effort",
+      value,
+      mapped,
+      forwarded: true,
+      reason: "deepseek_effort_compat",
     };
   }
 

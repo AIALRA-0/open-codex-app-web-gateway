@@ -101,7 +101,7 @@ implementations for those tools.
 | `include:["computer_call_output.output.image_url"]` | local input-item projection plus computer-loop compatibility metadata | Emulated for `GET /v1/responses/{id}/input_items`, `GET /v1/conversations/{id}/items`, and `GET /v1/conversations/{id}/items/{item_id}`. Stored `computer_call_output.output.image_url` values are hidden by default and returned only when this include value is requested. Requests are also recorded in `metadata.compatibility.local_computer.include_output_image_url`, and returned `computer_call_output` input items are translated into Chat-visible context |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload plus output projection | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge stores encrypted content for each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and returns it only when this include value is requested on create or on `GET /v1/responses/{id}`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
-| `reasoning.effort` | `reasoning_effort` / DeepSeek `thinking` | DeepSeek-compatible mapping enabled by default; `none` disables DeepSeek thinking and omits unsupported `reasoning_effort:"none"`, while `minimal`/`low`/`medium` map to `high` and `xhigh` maps to `max` |
+| `reasoning.effort` / Chat `reasoning_effort` | `reasoning_effort` / DeepSeek `thinking` | DeepSeek-compatible mapping enabled by default on `/v1/responses` and direct `/v1/chat/completions`; `none` disables DeepSeek thinking and omits unsupported `reasoning_effort:"none"`, while `minimal`/`low`/`medium` map to `high` and `xhigh` maps to `max` |
 | `user_id`, `safety_identifier`, `prompt_cache_key`, `user` | DeepSeek `user_id` | DeepSeek-specific compatibility; direct when already `[A-Za-z0-9_-]`, otherwise stable SHA-256 normalized |
 
 DeepSeek effort compatibility maps OpenAI `reasoning.effort:"none"` to
@@ -232,9 +232,10 @@ before proxying: OpenAI Chat `messages[].role:"developer"` entries are mapped to
 `system` by default, `user` / `safety_identifier` / `prompt_cache_key` are
 normalized into DeepSeek `user_id`, OpenAI Chat `max_completion_tokens` is
 mapped to the configured provider max-token field (`max_tokens` for DeepSeek),
-conflicting legacy `max_tokens` values are withheld and audited, `service_tier`
-is filtered when unsupported, `stream_options` are removed on non-streaming
-requests, and configured
+conflicting legacy `max_tokens` values are withheld and audited, OpenAI Chat
+`reasoning_effort` values are mapped to DeepSeek `reasoning_effort` /
+`thinking`, `service_tier` is filtered when unsupported, `stream_options` are
+removed on non-streaming requests, and configured
 OpenAI-only Chat fields such as `modalities`, `moderation`, `prediction`, and
 legacy `functions` / `function_call` are filtered instead of being sent to the
 provider. Non-streaming JSON responses and stored reconstructed streaming

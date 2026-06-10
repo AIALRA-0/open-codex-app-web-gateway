@@ -4573,3 +4573,76 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 14 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Direct Chat Reasoning Effort Compatibility
+
+- Re-checked current field expectations before changing passthrough behavior:
+  - OpenAI developer docs MCP search for Chat Completions create confirmed
+    direct Chat `reasoning_effort` currently accepts values including `none`,
+    `minimal`, `low`, `medium`, `high`, and `xhigh`.
+  - OpenAI OpenAPI metadata remained version `2.3.0` for
+    `POST /v1/chat/completions`.
+  - DeepSeek's official Create Chat Completion and Thinking Mode references
+    document a narrower DeepSeek Chat surface around `reasoning_effort` /
+    `thinking`, with `thinking:{type:"disabled"}` used for non-thinking mode.
+- Found a direct Chat passthrough gap:
+  - Responses-to-Chat translation already normalized OpenAI/Codex
+    `reasoning.effort` values for DeepSeek-compatible providers;
+  - direct `POST /v1/chat/completions` passthrough still sent OpenAI Chat
+    `reasoning_effort` values as-is, so `reasoning_effort:"none"` could reach
+    DeepSeek instead of becoming non-thinking mode, and `xhigh` was not mapped
+    to DeepSeek's `max` effort.
+- Added provider-aware direct Chat reasoning normalization:
+  - direct Chat `reasoning_effort:"none"` now omits upstream
+    `reasoning_effort`, sends `thinking:{type:"disabled"}`, and records
+    `metadata.compatibility.chat_passthrough.reasoning_effort` with
+    `reason=deepseek_thinking_disabled`;
+  - direct Chat `reasoning_effort:"minimal"`, `"low"`, and `"medium"` map to
+    DeepSeek `reasoning_effort:"high"`;
+  - direct Chat `reasoning_effort:"xhigh"` maps to DeepSeek
+    `reasoning_effort:"max"`;
+  - already-supported values such as `high` pass through unchanged without
+    extra metadata noise.
+- Added unit coverage for both passthrough branches:
+  - the DeepSeek direct Chat compatibility test now asserts
+    `reasoning_effort:"none"` becomes upstream `thinking:{type:"disabled"}`
+    and records non-forwarded compatibility metadata;
+  - a focused direct Chat reasoning alias test asserts `xhigh` becomes upstream
+    `reasoning_effort:"max"` with forwarded compatibility metadata.
+- Extended live evaluation:
+  - `chat-developer-compat` now sends direct Chat `reasoning_effort:"none"`
+    instead of provider-native `thinking:{type:"disabled"}`, and requires
+    returned compatibility metadata to prove DeepSeek non-thinking mapping.
+- Updated compatibility, deployment, and evaluation docs to state that
+  `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` covers both Responses
+  `reasoning.effort` and direct Chat `reasoning_effort`.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "reasoning_effort|normalizes OpenAI Chat fields"`: 88/88 passing tests, including the direct Chat reasoning cases.
+  - `npm test`: 125/125 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-developer-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1133 ms, total usage 31 tokens, visible text
+    `chat-developer-ok`, and direct Chat reasoning metadata checks passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 998 ms, P95 latency 1124 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 46/46 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1119 ms, P95 latency 2556 ms, and total usage
+    9370 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8kve9m`, reload persistence
+    confirmed, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T21-25-37-402Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 478 runtime candidates,
+    selected 43 old UI screenshots by retention policy, deleted 0, selected
+    3355553 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 46 MB, `state/` is 4.2 MB, `output/` is 7.5 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 14 MB.
+  - No API keys, account credentials, or local secret files were committed.

@@ -72,7 +72,7 @@ Useful bridge flags:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` | `true` | Maps OpenAI/Codex effort values to DeepSeek-supported values |
+| `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` | `true` | Maps OpenAI/Codex Responses `reasoning.effort` and direct Chat `reasoning_effort` values to DeepSeek-supported values |
 | `CODEXCOMPAT_DEEPSEEK_THINKING_MODE` | `false` | Forces `thinking:{type:"enabled"}` when a request asks for reasoning effort |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` | `true` | Disables DeepSeek thinking mode for function-tool requests that also set `tool_choice` |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_COMPACTION` | `true` | Disables DeepSeek thinking mode for local `/v1/responses/compact` summarization and compaction replay follow-ups so visible content is returned reliably |
