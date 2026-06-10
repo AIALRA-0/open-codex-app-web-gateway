@@ -5271,3 +5271,54 @@ Open follow-ups:
   - This suite is still a deterministic quick signal; it supports the larger
     quality program but does not replace SWE-bench scoring or justify a 95%
     parity claim on its own.
+
+## 2026-06-11 - Active UI interrupt and recovery smoke coverage
+
+- Extended `scripts/ui-smoke.mjs` with an opt-in active browser workflow:
+  - `npm run smoke:ui -- --timeout-ms 240000 --exercise-active-controls`;
+  - starts a long-running model turn in a fresh conversation;
+  - finds the visible stop/interrupt control using short accessible button
+    labels to avoid matching conversation-history text;
+  - clicks the stop control, verifies it clears, records any visible
+    retry/regenerate/continue controls, and submits a recovery prompt to prove
+    the conversation remains usable after interruption.
+- Kept the default `npm run smoke:ui -- --timeout-ms 180000` path unchanged for
+  cheaper routine checks.
+- Updated README, deployment, and evaluation docs with the new command and the
+  remaining retry/regenerate limitation:
+  - the active interrupted-turn UI did not expose a visible
+    retry/regenerate/continue control in the verified run;
+  - completed-turn retry/regenerate still needs a dedicated browser path when
+    that action is visible.
+- Verification:
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - `git diff --check`: passed.
+  - Active UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8p0d4h`: load/authentication, sidebar controls, project dialog
+    open/cancel, browser-upload fixture write and filesystem verification,
+    project writable-root add/clear, prompt submit, reload persistence, active
+    stop click with control name `停止`, `stop_cleared:true`,
+    `retry_control_status:"not_visible_after_interrupt"`, recovery marker
+    occurrences 2, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T23-21-27-665Z.png`.
+  - Default UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8p30wk`, existing default coverage, console errors 0, warnings
+    0, and screenshot
+    `output/playwright/ui-smoke-2026-06-10T23-23-31-796Z.png`.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 938 ms, P95 latency 981 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 604 runtime candidates,
+    selected 56 old UI screenshots by retention policy, deleted 0, selected
+    4484726 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 38 GB available; repository checkout
+    is 51 MB, `state/` is 5.3 MB, `output/` is 8.8 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 16 MB.
+  - No API keys, account credentials, or local secret files were committed.

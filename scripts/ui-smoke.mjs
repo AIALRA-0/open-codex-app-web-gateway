@@ -9,6 +9,13 @@ const timeoutMs = parsePositiveInt(args.get("timeout-ms"), 120000);
 const headed = !!args.get("headed");
 const marker = String(args.get("marker") || process.env.UI_SMOKE_MARKER || `ui-smoke-${Date.now().toString(36)}`);
 const prompt = String(args.get("prompt") || process.env.UI_SMOKE_PROMPT || `Return exactly ${marker}.`);
+const exerciseActiveControls = !!args.get("exercise-active-controls") || parseBoolean(process.env.UI_SMOKE_EXERCISE_ACTIVE_CONTROLS, false);
+const activeMarker = String(args.get("active-marker") || process.env.UI_SMOKE_ACTIVE_MARKER || `${marker}-active`);
+const activePrompt = String(args.get("active-prompt") || process.env.UI_SMOKE_ACTIVE_PROMPT || [
+  `For UI smoke active control test ${activeMarker}, write 120 numbered lines.`,
+  `Every line must contain ${activeMarker} and at least twelve words.`,
+  "Do not summarize; keep writing until every requested line is complete.",
+].join(" "));
 const outputDir = path.resolve(String(args.get("output-dir") || process.env.UI_SMOKE_OUTPUT_DIR || "output/playwright"));
 const stateDir = path.resolve(String(args.get("state-dir") || process.env.UI_SMOKE_STATE_DIR || "state"));
 const screenshotPath = path.join(outputDir, `ui-smoke-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
@@ -33,6 +40,9 @@ const result = await runWorkflow(page, {
   timeoutMs,
   marker,
   prompt,
+  exerciseActiveControls,
+  activeMarker,
+  activePrompt,
   outputDir,
   stateDir,
   screenshotPath,
@@ -67,6 +77,11 @@ function parsePositiveInt(value, fallback) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.trunc(parsed);
+}
+
+function parseBoolean(value, fallback = false) {
+  if (value == null || value === "") return fallback;
+  return /^(1|true|yes|on)$/i.test(String(value));
 }
 
 async function runWorkflow(page, config) {
@@ -188,24 +203,129 @@ async function runWorkflow(page, config) {
   }
 
   async function markerCount() {
+    return markerCountFor(config.marker);
+  }
+
+  async function markerCountFor(value) {
     return await page.evaluate((value) => {
       const text = document.body?.innerText || "";
       return text.split(value).length - 1;
-    }, config.marker);
+    }, value);
   }
 
-  async function visibleButtonNames(pattern) {
-    return await page.getByRole("button").evaluateAll((buttons, source) => {
-      const regex = new RegExp(source, "i");
+  async function visibleButtonNames(pattern, { maxNameLength = Infinity } = {}) {
+    return await page.getByRole("button").evaluateAll((buttons, params) => {
+      const regex = new RegExp(params.source, "i");
       const visible = (element) => {
         const rect = element.getBoundingClientRect();
         return rect.width > 0 && rect.height > 0;
       };
       return buttons
-        .map((button) => (button.innerText || button.textContent || button.getAttribute("aria-label") || "").replace(/\s+/g, " ").trim())
-        .filter((name, index) => name && regex.test(name) && visible(buttons[index]))
+        .map((button) => (button.getAttribute("aria-label") || button.getAttribute("title") || button.innerText || button.textContent || "").replace(/\s+/g, " ").trim())
+        .filter((name, index) => name && name.length <= params.maxNameLength && regex.test(name) && visible(buttons[index]))
         .slice(0, 12);
-    }, pattern.source);
+    }, { source: pattern.source, maxNameLength });
+  }
+
+  async function findVisibleButton(pattern, timeout = 5000, { maxNameLength = Infinity } = {}) {
+    const deadline = Date.now() + timeout;
+    let lastNames = [];
+    do {
+      const buttons = await page.getByRole("button").all();
+      lastNames = [];
+      for (const button of buttons) {
+        const visible = await button.isVisible().catch(() => false);
+        if (!visible) continue;
+        const name = await button.evaluate((element) => (
+          element.getAttribute("aria-label") ||
+          element.getAttribute("title") ||
+          element.innerText ||
+          element.textContent ||
+          ""
+        ).replace(/\s+/g, " ").trim()).catch(() => "");
+        if (name && name.length <= maxNameLength) lastNames.push(name);
+        if (!name || name.length > maxNameLength) continue;
+        const regex = new RegExp(pattern.source, pattern.flags.replace("g", ""));
+        if (regex.test(name)) {
+          return { locator: button, name };
+        }
+      }
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(250);
+    } while (true);
+    return { locator: null, name: null, visible_names: lastNames.slice(0, 20) };
+  }
+
+  async function clickFirstVisibleButton(pattern, { timeout = 5000, settleMs = 500, maxNameLength = Infinity } = {}) {
+    const found = await findVisibleButton(pattern, timeout, { maxNameLength });
+    if (!found.locator) return { clicked: false, name: null, visible_names: found.visible_names || [] };
+    await found.locator.click({ timeout: 5000 });
+    if (settleMs > 0) await page.waitForTimeout(settleMs);
+    return { clicked: true, name: found.name };
+  }
+
+  async function waitUntilNoVisibleButton(pattern, timeout = 10000, { maxNameLength = Infinity } = {}) {
+    const deadline = Date.now() + timeout;
+    do {
+      const found = await findVisibleButton(pattern, 250, { maxNameLength });
+      if (!found.locator) return true;
+      if (Date.now() >= deadline) return false;
+      await page.waitForTimeout(300);
+    } while (true);
+  }
+
+  async function exerciseActiveInterruptAndRecover() {
+    const stopPattern = /停止|Stop|取消|Cancel|中断|Abort/i;
+    const retryPattern = /重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i;
+    const recoveryMarker = `${config.activeMarker}-recovered`;
+
+    await closeTransientOverlays();
+    const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
+    if (await isVisible(newChat)) {
+      await newChat.click();
+      await page.waitForTimeout(1000);
+    }
+
+    await fillEditor(config.activePrompt);
+    await page.keyboard.press("Enter");
+
+    const stop = await clickFirstVisibleButton(stopPattern, { timeout: Math.min(45000, config.timeoutMs), settleMs: 1200, maxNameLength: 80 });
+    if (!stop.clicked) {
+      throw new Error(`active stop/interrupt control did not appear; visible buttons: ${(stop.visible_names || []).join(", ")}`);
+    }
+
+    const stopCleared = await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80 });
+    const controlsAfterInterrupt = await visibleButtonNames(/停止|Stop|取消|Cancel|中断|Abort|重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i, { maxNameLength: 80 });
+
+    const retry = await clickFirstVisibleButton(retryPattern, { timeout: 5000, settleMs: 800, maxNameLength: 80 });
+    const retryStop = retry.clicked
+      ? await clickFirstVisibleButton(stopPattern, { timeout: 15000, settleMs: 1200, maxNameLength: 80 })
+      : { clicked: false, name: null };
+    const retryStopCleared = retryStop.clicked ? await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80 }) : true;
+
+    await closeTransientOverlays();
+    await fillEditor(`Return exactly ${recoveryMarker}.`);
+    await page.keyboard.press("Enter");
+    await page.waitForFunction((value) => {
+      const text = document.body?.innerText || "";
+      return text.split(value).length - 1 >= 2;
+    }, recoveryMarker, { timeout: config.timeoutMs });
+
+    return {
+      active_marker: config.activeMarker,
+      stop_clicked: stop.clicked,
+      stop_control_name: stop.name,
+      stop_cleared: stopCleared,
+      controls_after_interrupt: controlsAfterInterrupt,
+      retry_clicked: retry.clicked,
+      retry_control_name: retry.name,
+      retry_control_status: retry.clicked ? "clicked" : "not_visible_after_interrupt",
+      retry_stop_clicked: retryStop.clicked,
+      retry_stop_control_name: retryStop.name,
+      retry_stop_cleared: retryStopCleared,
+      recovery_marker: recoveryMarker,
+      recovery_marker_occurrences: await markerCountFor(recoveryMarker),
+    };
   }
 
   async function exerciseProjectDialog() {
@@ -363,6 +483,10 @@ async function runWorkflow(page, config) {
       }, config.marker, { timeout: config.timeoutMs });
       return { marker_occurrences_after_reload: await markerCount() };
     });
+
+    if (config.exerciseActiveControls) {
+      await recordStep("actively interrupt and recover from a model turn", exerciseActiveInterruptAndRecover);
+    }
 
     if (config.screenshotPath) await page.screenshot({ path: config.screenshotPath, fullPage: true });
     result.ok = result.steps.every((step) => step.ok) && result.console.errors.length === 0;

@@ -44,6 +44,7 @@ npm run bench:code -- --suite humaneval-mbpp --timeout-ms 180000
 npm run bench:code -- --suite repo-maintenance --timeout-ms 180000
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 npm run smoke:ui -- --timeout-ms 180000
+npm run smoke:ui -- --timeout-ms 240000 --exercise-active-controls
 ```
 
 For a live provider smoke test, start the bridge with a provider key and run:
