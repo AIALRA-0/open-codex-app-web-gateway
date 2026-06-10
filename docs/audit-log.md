@@ -1590,3 +1590,63 @@ Open follow-ups:
     `python3 -c "import swebench"` failed with `ModuleNotFoundError`, and free
     disk was 34.86GB, below the 120GB live scoring guard. Docker itself was
     available: `Docker version 29.1.3`.
+
+## 2026-06-10 Local Conversations API and Responses Conversation Replay
+
+- Used OpenAI's current endpoint list and conversation-state guide to close the
+  local Conversations API gap:
+  - endpoint list includes `/v1/conversations`,
+    `/v1/conversations/{conversation_id}`,
+    `/v1/conversations/{conversation_id}/items`, and
+    `/v1/conversations/{conversation_id}/items/{item_id}`;
+  - the conversation-state guide documents passing `conversation:"conv_..."`
+    into Responses and notes that Conversation items are durable separately from
+    ordinary stored response TTL.
+- Added `FileConversationStore`, backed by
+  `CODEXCOMPAT_CONVERSATION_STATE_DIR` with the default
+  `$CODEXCOMPAT_STATE_DIR/local-conversations`.
+- Implemented local endpoints:
+  - `POST /v1/conversations`;
+  - `GET`, `POST`, and `DELETE /v1/conversations/{conversation_id}`;
+  - `GET` and `POST /v1/conversations/{conversation_id}/items`;
+  - `GET` and `DELETE /v1/conversations/{conversation_id}/items/{item_id}`.
+- Added Responses integration:
+  - `conversation:"conv_..."`, `conversation_id`, and `{conversation:{id}}`
+    references are accepted;
+  - existing conversation items are replayed into the upstream Chat prompt;
+  - successful non-streaming, streaming, and background responses return
+    `response.conversation` and append input/output items back to the local
+    conversation;
+  - append occurs even when the Responses request sets `store:false`, matching
+    the Conversation durability boundary described by the official guide.
+- Added server tests for conversation CRUD, item pagination/retrieval/deletion,
+  `store:false` Responses conversation append, and missing-conversation 404.
+- Extended live `bridge-regression` with `responses-conversation-lifecycle`.
+- Updated `.env.example`, `docs/compatibility-matrix.md`,
+  `docs/evaluation-plan.md`, and `docs/deployment.md`.
+- Verified:
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted server tests for local Conversations and missing conversation
+    references: passed.
+  - `npm test`: 60/60 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live `responses-conversation-lifecycle` passed 1/1, elapsed 1985 ms,
+    item count 4, delete status 200, post-delete GET 404, total usage 96
+    tokens, output `conversation-ok`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 21/21, pass rate 1.0, average latency
+    1687 ms, P95 latency 2714 ms, total usage 2682 tokens. The new
+    `responses-conversation-lifecycle` case returned `conversation-ok` and
+    deleted the conversation successfully.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq8001kz` appeared before reload and after reload, console errors
+    0, warnings 0.

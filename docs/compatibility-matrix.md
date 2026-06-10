@@ -7,6 +7,8 @@ Primary sources:
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
+- OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
+- OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
@@ -48,6 +50,7 @@ implementations for those tools.
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
 | `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility |
 | `previous_response_id` | local replay store | Emulated locally |
+| `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution |
 | `tools[type=function]` | chat function tools | Direct |
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` and `url_citation` annotations |
@@ -120,12 +123,13 @@ behavior.
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
+| local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation |
 
 ## Responses Endpoint Coverage
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage |
+| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage; `conversation` replays and appends local Conversation items |
 | `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
@@ -153,6 +157,34 @@ stored Chat completion records.
 The bridge stores Chat completions only when the incoming Chat request sets
 `store:true`. This matches the stored-completion lifecycle intent and avoids
 unbounded state growth for ordinary passthrough Chat traffic.
+
+## Conversations Endpoint Coverage
+
+OpenAI's current endpoint list includes `/v1/conversations`,
+`/v1/conversations/{conversation_id}`,
+`/v1/conversations/{conversation_id}/items`, and
+`/v1/conversations/{conversation_id}/items/{item_id}`. The bridge implements a
+local file-backed version to support Responses `conversation` state on
+Chat-only providers.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/conversations` | Implemented locally | Creates `object:"conversation"` with metadata and optional initial items |
+| `GET /v1/conversations/{conversation_id}` | Implemented locally | Retrieves local conversation metadata |
+| `POST /v1/conversations/{conversation_id}` | Implemented locally | Updates local conversation `metadata` |
+| `DELETE /v1/conversations/{conversation_id}` | Implemented locally | Deletes the local conversation and its items |
+| `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination |
+| `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends one item, `{item}`, or `{items:[...]}` to the local conversation |
+| `GET /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Retrieves a local conversation item |
+| `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Deletes a local conversation item |
+
+When a Responses request includes `conversation:"conv_..."`, the bridge injects
+existing conversation items into the upstream Chat prompt, returns
+`response.conversation`, and appends the new input plus output items back to the
+conversation. This append happens even when the Responses request sets
+`store:false`, matching the OpenAI conversation-state guide's distinction
+between response storage and durable Conversation items. The local store is
+bounded by record count, not by the 30-day Responses TTL.
 
 ## Models Endpoint Coverage
 
@@ -390,7 +422,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
-| `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |
+| OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |

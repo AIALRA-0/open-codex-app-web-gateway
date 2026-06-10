@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { FileResponseStore } = require("./store");
+const { FileConversationStore, FileResponseStore } = require("./store");
 const {
   injectInputFileMessages,
   inputFileCompatibility,
@@ -92,6 +92,7 @@ function loadConfig(overrides = {}) {
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     stateDir,
+    conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
     compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
     compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
@@ -271,10 +272,18 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore) {
+async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
-  const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
+  const conversation = prepareConversationContext(request, conversationStore, config);
+  if (conversation?.missing) {
+    sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
+    return;
+  }
+  const previousMessages = [
+    ...(conversation?.messages || []),
+    ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
+  ];
   const localHostedTools = [
     ...localWebSearchToolTypes(request.tools || [], config),
     ...localFileSearchToolTypes(request.tools || [], config),
@@ -291,8 +300,9 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (request.background) {
     handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, {
       ...compatibility,
+      ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, fileSearchStore, containerStore);
+    }, fileSearchStore, containerStore, conversationStore, conversation);
     return;
   }
 
@@ -314,7 +324,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   }
 
   if (chat.stream) {
-    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch, localFileSearch, localShell);
+    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
+      ...compatibility,
+      ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
+    }, localWebSearch, localFileSearch, localShell, conversationStore, conversation);
     return;
   }
 
@@ -333,6 +346,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   }
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
@@ -352,11 +366,12 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ],
     });
   }
+  appendResponseToConversation(conversationStore, conversation, request, response);
 
   sendJson(res, 200, response);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -371,6 +386,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     model: chat.model,
     status: "in_progress",
   });
+  attachConversationToResponse(response, conversation);
   const backgroundCompatibility = {
     ...compatibility,
     background: request.store === false ? "local_store_forced" : "local_async",
@@ -402,12 +418,14 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     incomingHeaders: req.headers,
     fileSearchStore,
     containerStore,
+    conversationStore,
+    conversation,
   });
 
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation }) {
   try {
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
@@ -447,6 +465,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     }
 
     const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+    attachConversationToResponse(response, conversation);
     attachShellOutput(response, localShell);
     attachWebSearchOutput(response, localWebSearch);
     attachFileSearchOutput(response, localFileSearch);
@@ -465,6 +484,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
         ...chatCompletionToReplayMessages(upstreamJson),
       ],
     });
+    appendResponseToConversation(conversationStore, conversation, request, response);
   } catch (error) {
     if (job.deleted) return;
     if (job.timed_out) {
@@ -598,6 +618,74 @@ function mergeCompatibility(existing, next, extra = {}) {
     ...(next || {}),
     ...extra,
   };
+}
+
+function conversationIdFromRequest(request = {}) {
+  if (typeof request.conversation === "string") return request.conversation;
+  if (isPlainObject(request.conversation) && typeof request.conversation.id === "string") return request.conversation.id;
+  if (typeof request.conversation_id === "string") return request.conversation_id;
+  return "";
+}
+
+function prepareConversationContext(request, conversationStore, config) {
+  const id = conversationIdFromRequest(request);
+  if (!id) return null;
+  const items = conversationStore?.listItems(id);
+  if (!items) return { id, missing: true, items: [], messages: [] };
+  const replayRequest = {
+    model: request.model || config.defaultModel,
+    input: items,
+    stream: false,
+  };
+  const { chat } = responsesToChatRequest(replayRequest, [], translatorOptions(config));
+  return { id, items, messages: chat.messages };
+}
+
+function attachConversationToResponse(response, conversation) {
+  if (!conversation?.id) return response;
+  response.conversation = conversation.id;
+  response.metadata = {
+    ...(response.metadata || {}),
+    compatibility: mergeCompatibility(response.metadata?.compatibility, {
+      local_conversation: {
+        id: conversation.id,
+        replayed_item_count: conversation.items?.length || 0,
+      },
+    }),
+  };
+  return response;
+}
+
+function appendResponseToConversation(conversationStore, conversation, request, response) {
+  if (!conversationStore || !conversation?.id || !response) return;
+  const items = [
+    ...conversationInputItems(request.input),
+    ...conversationOutputItems(response.output),
+  ];
+  if (!items.length) return;
+  conversationStore.appendItems(conversation.id, items);
+}
+
+function conversationInputItems(input) {
+  return normalizeStoredInputItems(input).map((item) => {
+    const cloned = clone(item);
+    delete cloned.id;
+    delete cloned.object;
+    return cloned;
+  });
+}
+
+function conversationOutputItems(output) {
+  if (!Array.isArray(output)) return [];
+  return output
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const cloned = clone(item);
+      if (cloned.id) cloned.response_item_id = cloned.id;
+      delete cloned.id;
+      delete cloned.object;
+      return cloned;
+    });
 }
 
 async function handleResponseInputTokens(req, res, config, store, fileSearchStore) {
@@ -1159,8 +1247,9 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, conversationStore = null, conversation = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
+  attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
 
   res.writeHead(200, {
@@ -1230,6 +1319,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
         ],
       });
     }
+    appendResponseToConversation(conversationStore, conversation, request, response);
   } catch (error) {
     emitError(res, state, error.message, 500);
   } finally {
@@ -2080,6 +2170,96 @@ function handleChatCompletionMessages(res, store, completionId, url) {
   sendJson(res, 200, paginateList(messages, url));
 }
 
+async function handleConversationCreate(req, res, conversationStore) {
+  const body = await readJson(req);
+  sendJson(res, 200, conversationStore.create(body));
+}
+
+function handleConversationGet(res, conversationStore, conversationId) {
+  const record = conversationStore.get(conversationId);
+  if (!record) {
+    sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
+    return;
+  }
+  sendJson(res, 200, {
+    id: record.id,
+    object: "conversation",
+    created_at: record.created_at,
+    metadata: isPlainObject(record.metadata) ? record.metadata : {},
+  });
+}
+
+async function handleConversationUpdate(req, res, conversationStore, conversationId) {
+  const body = await readJson(req);
+  const keys = Object.keys(isPlainObject(body) ? body : {});
+  const unsupported = keys.filter((key) => key !== "metadata");
+  if (unsupported.length || (keys.length && !isPlainObject(body.metadata))) {
+    sendError(res, 400, "only metadata updates are supported for conversations", {
+      type: "invalid_request_error",
+      param: unsupported[0] || "metadata",
+      code: "unsupported_conversation_update",
+    });
+    return;
+  }
+  const conversation = conversationStore.update(conversationId, body);
+  if (!conversation) {
+    sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
+    return;
+  }
+  sendJson(res, 200, conversation);
+}
+
+function handleConversationDelete(res, conversationStore, conversationId) {
+  const deleted = conversationStore.delete(conversationId);
+  if (!deleted) {
+    sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function handleConversationItemsCreate(req, res, conversationStore, conversationId) {
+  const body = await readJson(req);
+  const inputItems = Object.prototype.hasOwnProperty.call(body, "items")
+    ? body.items
+    : Object.prototype.hasOwnProperty.call(body, "item")
+      ? body.item
+      : body;
+  const items = conversationStore.appendItems(conversationId, inputItems);
+  if (!items) {
+    sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
+    return;
+  }
+  sendJson(res, 200, Array.isArray(inputItems) ? paginateList(items, new URL("http://local/?limit=100")) : items[0]);
+}
+
+function handleConversationItemsList(res, conversationStore, conversationId, url) {
+  const items = conversationStore.listItems(conversationId);
+  if (!items) {
+    sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
+    return;
+  }
+  sendJson(res, 200, paginateList(items, url));
+}
+
+function handleConversationItemGet(res, conversationStore, conversationId, itemId) {
+  const item = conversationStore.getItem(conversationId, itemId);
+  if (!item) {
+    sendError(res, 404, `conversation item not found: ${itemId}`, { code: "conversation_item_not_found" });
+    return;
+  }
+  sendJson(res, 200, item);
+}
+
+function handleConversationItemDelete(res, conversationStore, conversationId, itemId) {
+  const deleted = conversationStore.deleteItem(conversationId, itemId);
+  if (!deleted) {
+    sendError(res, 404, `conversation item not found: ${itemId}`, { code: "conversation_item_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
 function normalizeStoredInputItems(input) {
   if (input == null) return [];
   if (typeof input === "string") {
@@ -2161,6 +2341,7 @@ function parseLimit(value, fallback, max) {
 
 function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
+  const conversationStore = config.conversationStore || new FileConversationStore({ dir: config.conversationStateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const backgroundJobs = new Map();
@@ -2358,8 +2539,54 @@ function createServer(config = loadConfig()) {
         return;
       }
 
+      if (url.pathname === "/v1/conversations") {
+        if (req.method === "POST") {
+          await handleConversationCreate(req, res, conversationStore);
+          return;
+        }
+      }
+
+      const conversationItemsRoute = url.pathname.match(/^\/v1\/conversations\/([^/]+)\/items(?:\/([^/]+))?$/);
+      if (conversationItemsRoute) {
+        const conversationId = decodeURIComponent(conversationItemsRoute[1]);
+        const itemId = conversationItemsRoute[2] ? decodeURIComponent(conversationItemsRoute[2]) : "";
+        if (!itemId && req.method === "GET") {
+          handleConversationItemsList(res, conversationStore, conversationId, url);
+          return;
+        }
+        if (!itemId && req.method === "POST") {
+          await handleConversationItemsCreate(req, res, conversationStore, conversationId);
+          return;
+        }
+        if (itemId && req.method === "GET") {
+          handleConversationItemGet(res, conversationStore, conversationId, itemId);
+          return;
+        }
+        if (itemId && req.method === "DELETE") {
+          handleConversationItemDelete(res, conversationStore, conversationId, itemId);
+          return;
+        }
+      }
+
+      const conversationRoute = url.pathname.match(/^\/v1\/conversations\/([^/]+)$/);
+      if (conversationRoute) {
+        const conversationId = decodeURIComponent(conversationRoute[1]);
+        if (req.method === "GET") {
+          handleConversationGet(res, conversationStore, conversationId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleConversationUpdate(req, res, conversationStore, conversationId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleConversationDelete(res, conversationStore, conversationId);
+          return;
+        }
+      }
+
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore);
+        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore);
         return;
       }
 

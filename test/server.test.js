@@ -1644,6 +1644,147 @@ test("POST /v1/responses/{id}/cancel cancels an in-progress background response"
   });
 });
 
+test("local Conversations API persists items and feeds Responses conversation context", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.messages[0].content, "Remember codeword delta-42.");
+    assert.equal(call.body.messages.at(-1).content, "What codeword is stored?");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_conversation",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "delta-42" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 2, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: { topic: "conversation-test" },
+        items: [{
+          type: "message",
+          role: "user",
+          content: "Remember codeword delta-42.",
+        }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.match(createdJson.id, /^conv_/);
+    assert.equal(createdJson.object, "conversation");
+    assert.deepEqual(createdJson.metadata, { topic: "conversation-test" });
+
+    const updated = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { topic: "updated" } }),
+    });
+    assert.equal(updated.status, 200);
+    assert.deepEqual((await updated.json()).metadata, { topic: "updated" });
+
+    const itemCreate = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "message",
+        role: "system",
+        content: "Answer tersely.",
+      }),
+    });
+    assert.equal(itemCreate.status, 200);
+    const itemCreateJson = await itemCreate.json();
+    assert.equal(itemCreateJson.type, "message");
+    assert.equal(itemCreateJson.role, "system");
+
+    const itemDelete = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items/${itemCreateJson.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(itemDelete.status, 200);
+    assert.deepEqual(await itemDelete.json(), {
+      id: itemCreateJson.id,
+      object: "conversation.item.deleted",
+      deleted: true,
+    });
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: createdJson.id,
+        input: "What codeword is stored?",
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const responseJson = await response.json();
+    assert.equal(responseJson.conversation, createdJson.id);
+    assert.equal(responseJson.store, false);
+    assert.equal(responseJson.output[0].content[0].text, "delta-42");
+    assert.equal(responseJson.metadata.compatibility.local_conversation.id, createdJson.id);
+    assert.equal(requests.length, 1);
+
+    const items = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items?limit=2`);
+    assert.equal(items.status, 200);
+    const itemsJson = await items.json();
+    assert.equal(itemsJson.object, "list");
+    assert.equal(itemsJson.data.length, 2);
+    assert.equal(itemsJson.has_more, true);
+
+    const allItems = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items`);
+    assert.equal(allItems.status, 200);
+    const allItemsJson = await allItems.json();
+    assert.equal(allItemsJson.data.length, 3);
+    assert.equal(allItemsJson.data[0].content, "Remember codeword delta-42.");
+    assert.equal(allItemsJson.data[1].content[0].text, "What codeword is stored?");
+    assert.equal(allItemsJson.data[2].role, "assistant");
+    assert.equal(allItemsJson.data[2].content[0].text, "delta-42");
+
+    const retrievedItem = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items/${allItemsJson.data[2].id}`);
+    assert.equal(retrievedItem.status, 200);
+    assert.equal((await retrievedItem.json()).role, "assistant");
+
+    const deletedConversation = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}`, { method: "DELETE" });
+    assert.equal(deletedConversation.status, 200);
+    assert.deepEqual(await deletedConversation.json(), {
+      id: createdJson.id,
+      object: "conversation.deleted",
+      deleted: true,
+    });
+
+    const missing = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}`);
+    assert.equal(missing.status, 404);
+  });
+});
+
+test("Responses conversation references return 404 when the local conversation is missing", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: "conv_missing",
+        input: "hello",
+      }),
+    });
+    assert.equal(response.status, 404);
+    assert.equal(requests.length, 0);
+    const json = await response.json();
+    assert.equal(json.error.code, "conversation_not_found");
+  });
+});
+
 test("POST /v1/responses/compact returns local compaction and replays it", async () => {
   await withMockProvider(async (_req, res, call) => {
     res.writeHead(200, { "content-type": "application/json" });

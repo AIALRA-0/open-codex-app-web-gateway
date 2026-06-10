@@ -301,6 +301,35 @@ function buildSuites(defaultModel) {
           && /background-ok/i.test(text),
       },
       {
+        id: "responses-conversation-lifecycle",
+        mode: "responses-conversation",
+        conversation: {
+          metadata: { suite: "bridge-regression", feature: "conversation" },
+          items: [{
+            type: "message",
+            role: "user",
+            content: "Remember the exact conversation marker conversation-ok.",
+          }],
+        },
+        request: ({ conversationId }) => ({
+          model: defaultModel,
+          conversation: conversationId,
+          input: "Using the conversation history, return exactly this text and nothing else: conversation-ok",
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ conversation, response, text, items, deleted, afterDelete }) => conversation?.object === "conversation"
+          && response?.conversation === conversation.id
+          && response?.metadata?.compatibility?.local_conversation?.id === conversation.id
+          && /conversation-ok/i.test(text)
+          && items?.object === "list"
+          && items.data?.length >= 3
+          && items.data?.some((item) => item.role === "assistant")
+          && deleted?.object === "conversation.deleted"
+          && deleted?.deleted === true
+          && afterDelete?.status === 404,
+      },
+      {
         id: "responses-web-search",
         mode: "responses",
         request: {
@@ -585,6 +614,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
     }
+    if (testCase.mode === "responses-conversation") {
+      return await runConversationCase(testCase, context, started);
+    }
     if (testCase.mode === "responses-shell") {
       return await runShellCase(testCase, context, started);
     }
@@ -801,6 +833,63 @@ async function runBackgroundCase(testCase, context, started) {
     usage: responseUsage(final),
     output_text: truncate(text),
   });
+}
+
+async function runConversationCase(testCase, context, started) {
+  let conversation = null;
+  try {
+    const conversationResponse = await postJson(`${baseUrl}/v1/conversations`, testCase.conversation || {});
+    const conversationBody = await conversationResponse.text();
+    if (!conversationResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: conversationResponse.status,
+        error: truncate(conversationBody),
+      });
+    }
+    conversation = JSON.parse(conversationBody);
+
+    const request = resolveRequest(testCase.request, { ...context, conversationId: conversation.id });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        conversation_id: conversation.id,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const createdConversation = conversation;
+    const items = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20`);
+    const deletion = await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
+    const deleted = parseJsonish(deletion.body);
+    const afterDelete = await getJson(`${baseUrl}/v1/conversations/${conversation.id}`);
+    conversation = null;
+    const ok = !!testCase.check({
+      conversation: createdConversation,
+      response: json,
+      text,
+      items: items.json,
+      deleted,
+      afterDelete,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      conversation_id: json.conversation || null,
+      item_count: Array.isArray(items.json?.data) ? items.json.data.length : 0,
+      delete_status: deletion.status,
+      post_delete_get_status: afterDelete.status,
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    if (conversation?.id) await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
+  }
 }
 
 async function runFileSearchCase(testCase, context, started) {
