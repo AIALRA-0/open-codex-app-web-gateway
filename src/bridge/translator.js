@@ -147,6 +147,13 @@ function inputItemToChatMessages(item, options = {}) {
     }];
   }
 
+  if (item.type === "computer_call_output") {
+    return [{
+      role: options.computerOutputRole || "user",
+      content: computerCallOutputToText(item),
+    }];
+  }
+
   if (item.type === "reasoning") {
     const text = reasoningItemToText(item, options);
     if (!text) return [];
@@ -194,6 +201,43 @@ function reasoningItemToText(item, options = {}) {
   if (typeof item.encrypted_content === "string" && typeof options.decodeReasoning !== "function") {
     return item.encrypted_content;
   }
+  return "";
+}
+
+function computerCallOutputToText(item) {
+  if (!isPlainObject(item)) return "";
+  const output = isPlainObject(item.output) ? item.output : {};
+  const imageUrl = computerOutputImageUrl(output);
+  const lines = ["Computer call output:"];
+  if (item.call_id) lines.push(`call_id: ${stringifyContent(item.call_id)}`);
+  if (item.status) lines.push(`status: ${stringifyContent(item.status)}`);
+  if (output.type || item.output_type) lines.push(`output_type: ${stringifyContent(output.type || item.output_type)}`);
+  if (imageUrl) lines.push(`image_url: ${imageUrl}`);
+  if (output.detail || item.detail) lines.push(`detail: ${stringifyContent(output.detail || item.detail)}`);
+  const text = computerOutputText(item);
+  if (text) lines.push(`text: ${text}`);
+  if (Array.isArray(item.acknowledged_safety_checks)) {
+    lines.push(`acknowledged_safety_checks_count: ${item.acknowledged_safety_checks.length}`);
+  }
+  return lines.join("\n");
+}
+
+function computerOutputImageUrl(output) {
+  if (!isPlainObject(output)) return "";
+  if (typeof output.image_url === "string") return output.image_url;
+  if (typeof output.image_url?.url === "string") return output.image_url.url;
+  if (typeof output.url === "string") return output.url;
+  return "";
+}
+
+function computerOutputText(item) {
+  if (typeof item.output_text === "string") return item.output_text;
+  if (typeof item.content === "string") return item.content;
+  const output = item.output;
+  if (typeof output === "string") return output;
+  if (!isPlainObject(output)) return "";
+  if (typeof output.text === "string") return output.text;
+  if (typeof output.content === "string") return output.content;
   return "";
 }
 

@@ -22,6 +22,7 @@ Primary sources:
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
 - OpenAI Skills guide: https://developers.openai.com/api/docs/guides/tools-skills
 - OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
+- OpenAI computer use guide: https://developers.openai.com/api/docs/guides/tools-computer-use
 - OpenAI Containers reference: https://platform.openai.com/docs/api-reference/containers
 - OpenAI Uploads reference: https://developers.openai.com/api/reference/resources/uploads
 - OpenAI Files reference: https://platform.openai.com/docs/api-reference/files
@@ -72,9 +73,11 @@ implementations for those tools.
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
 | `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries under `tools[].environment.skills` are mounted into the local container workspace |
 | `tools[type=code_interpreter]` | local shell/container adapter | Compatibility alias; explicit Python code blocks are executed through `python3` in the local container workspace |
+| `tools[type=computer]` | local computer action-loop adapter plus injected Chat context | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, and preserves loop/audit metadata |
+| `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
-| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, and `code_interpreter` adapters. The shared budget is consumed before each local built-in tool call/action; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
+| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, and `computer` adapters. The shared budget is consumed before each local built-in tool call/action; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
@@ -90,6 +93,7 @@ implementations for those tools.
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `include:["web_search_call.action.sources"]` | local `web_search_call.action.sources` | Emulated locally for the Responses web-search adapter. Search calls include URL sources from local results; `open_page` and `find_in_page` calls include the matching URL source. The bridge records `metadata.compatibility.local_web_search.action_sources` when requested |
+| `include:["computer_call_output.output.image_url"]` | local computer-loop compatibility metadata | Accepted and recorded in `metadata.compatibility.local_computer.include_output_image_url`; returned `computer_call_output` input items with `output.image_url` are translated into Chat-visible context |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` | DeepSeek-compatible mapping enabled by default |
@@ -142,6 +146,7 @@ behavior.
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses; bounded `open_page` extraction can inject top result page text and local `find_in_page` snippets |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
+| local computer context | output `computer_call` plus returned `computer_call_output` prompt context | Emulated for non-streaming, streaming, and background Responses; the bridge emits screenshot-first `computer_call` items and maps client-returned `computer_call_output` input items into Chat-visible evidence |
 | local hosted-tool budget | `metadata.compatibility.local_tool_budget` | Emulates Responses `max_tool_calls` across local hosted-tool adapters with `max_tool_calls`, `used`, `skipped`, `exhausted`, and bounded `skipped_calls` audit details |
 | local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation; replay-only for `/input_tokens` and local compaction probes |
 
@@ -468,23 +473,27 @@ When `file_search` is handled by the local adapter, the bridge emits a
 annotations to the final message content.
 When `shell` is handled by the local adapter, the bridge emits completed
 `shell_call` and `shell_call_output` items before Chat text deltas.
+When `computer` or `computer_use_preview` is handled by the local adapter, the
+bridge emits a screenshot-first `computer_call` item before Chat text deltas.
 
 ## Local Hosted Tool Call Budget
 
 Responses `max_tool_calls` limits the total number of built-in tool calls a
 response may process. Chat-only providers do not enforce this for hosted tools,
 so the bridge applies a shared local budget before executing emulated
-`web_search`, `file_search`, `shell`, and `code_interpreter` actions. The
-current deterministic adapter order is shell/code-interpreter, then web search,
-then file search, matching the bridge's local execution pipeline.
+`web_search`, `file_search`, `shell`, `code_interpreter`, and `computer`
+actions. The current deterministic adapter order is shell/code-interpreter,
+then computer, then web search, then file search, matching the bridge's local
+execution pipeline.
 
 When the budget is exhausted, the bridge does not run the extra local action,
 does not fabricate tool output, and records the skipped action under
 `metadata.compatibility.local_tool_budget.skipped_calls`. Tool-specific
 compatibility metadata also exposes skipped counters such as
 `local_web_search.open_skipped_count`, `local_file_search.skipped_count`, and
-`local_shell.skipped_count`. Invalid non-integer or negative `max_tool_calls`
-values are rejected with `400 invalid_max_tool_calls`.
+`local_shell.skipped_count`, and `local_computer.skipped_count`. Invalid
+non-integer or negative `max_tool_calls` values are rejected with
+`400 invalid_max_tool_calls`.
 
 ## Local Web Search Adapter
 
@@ -690,6 +699,43 @@ network, or filesystem isolation from the host. Full parity requires a hardened
 container runtime, network allowlist enforcement, domain secret sidecars,
 interactive service policies, and stronger artifact lifecycle controls.
 
+## Local Computer Use Adapter
+
+The bridge can emulate the Responses `computer` hosted tool and the deprecated
+`computer_use_preview` name for Chat-only providers by preserving the Computer
+Use action-loop shape. The adapter:
+
+- reserves `computer` and `computer_use_preview` so they are not forwarded as
+  unsupported Chat tools;
+- emits a `computer_call` output item with a GA-style `actions:[{type:"screenshot"}]`
+  array and preview-compatible `action:{type:"screenshot"}`;
+- preserves `call_id`, `environment`, `display_width`, `display_height`,
+  `pending_safety_checks`, and local compatibility metadata for auditability;
+- accepts follow-up Responses `computer_call_output` input items and translates
+  `call_id`, `output.type`, `output.image_url`, `detail`, text, and acknowledged
+  safety-check count into Chat-visible context;
+- records `include:["computer_call_output.output.image_url"]` requests in
+  `metadata.compatibility.local_computer.include_output_image_url`;
+- consumes one shared `max_tool_calls` budget slot before emitting the local
+  screenshot request;
+- disables DeepSeek thinking mode by default for local computer-use requests so
+  small-output compatibility tests receive visible text.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_COMPUTER_PROVIDER` | `local` | Use `disabled` to leave `computer` / `computer_use_preview` as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_COMPUTER` | `true` | Disables DeepSeek thinking mode for local computer-use requests so final text is visible under small output budgets |
+
+This is an action-loop protocol adapter, not OpenAI hosted Computer Use and not
+a browser/VNC executor. It does not click, type, scroll, run a VM, capture a
+real screenshot, or isolate desktop state by itself. A client-side or
+server-side executor must run returned actions and send
+`computer_call_output` back to the bridge. Full parity requires a Playwright or
+VNC-backed execution harness, safety-check acknowledgement flow, DOM/screenshot
+capture, secrets isolation, per-session cleanup, and multi-action loop control.
+
 ## Known Gaps
 
 | Capability | Why it is not fully native yet | Planned path |
@@ -702,7 +748,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
-| `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
+| OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |

@@ -880,6 +880,37 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-computer",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Use the local computer compatibility bridge if needed. After the bridge emits the computer_call item, return the exact string computer-ok.",
+          tools: [{
+            type: "computer",
+            environment: "browser",
+            display_width: 1024,
+            display_height: 768,
+          }],
+          tool_choice: { type: "computer" },
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const call = (json.output || []).find((item) => item.type === "computer_call");
+          const computer = json.metadata?.compatibility?.local_computer || {};
+          const budget = json.metadata?.compatibility?.local_tool_budget || {};
+          return !!call
+            && call.status === "completed"
+            && call.action?.type === "screenshot"
+            && call.actions?.some((action) => action.type === "screenshot")
+            && computer.call_count === 1
+            && computer.requested_action_count === 1
+            && budget.used === 1
+            && /computer-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-shell",
         mode: "responses-shell",
         container: { name: "bridge-shell-eval" },

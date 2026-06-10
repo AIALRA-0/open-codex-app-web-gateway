@@ -175,6 +175,39 @@ test("can reserve shell and code_interpreter for local bridge execution", () => 
   assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
 });
 
+test("can reserve computer hosted tools for local bridge execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Use the computer locally.",
+    tools: [{ type: "computer", environment: "browser" }],
+    tool_choice: { type: "computer" },
+  }, [], { localHostedTools: ["computer"] });
+
+  assert.equal(chat.tools, undefined);
+  assert.equal(chat.tool_choice, undefined);
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.equal(compatibility.local_tool_choice, "handled_by_bridge");
+  assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+});
+
+test("maps computer_call_output input to readable chat context", () => {
+  const messages = responseInputToChatMessages([{
+    type: "computer_call_output",
+    call_id: "call_123",
+    output: {
+      type: "input_image",
+      image_url: "https://example.test/screen.png",
+      detail: "high",
+    },
+  }]);
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "user");
+  assert.match(messages[0].content, /Computer call output/);
+  assert.match(messages[0].content, /call_123/);
+  assert.match(messages[0].content, /https:\/\/example\.test\/screen\.png/);
+});
+
 test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

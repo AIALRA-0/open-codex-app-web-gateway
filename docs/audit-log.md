@@ -3290,3 +3290,62 @@ Open follow-ups:
   - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
     193 GB filesystem with 39 GB available; bridge state is 2.0 MB, output
     artifacts are 5.4 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.
+
+## 2026-06-10 Local Computer Use Compatibility
+
+- Added a local Responses `computer` / `computer_use_preview` adapter for
+  Chat-only providers:
+  - reserves the hosted tool locally so it is not sent upstream as an
+    unsupported Chat tool;
+  - emits a screenshot-first `computer_call` output item with both GA
+    `actions:[{type:"screenshot"}]` and preview-compatible
+    `action:{type:"screenshot"}`;
+  - preserves `call_id`, `environment`, display dimensions,
+    `pending_safety_checks`, and `metadata.compatibility.local_computer`;
+  - maps returned `computer_call_output` input items into readable Chat context
+    including `call_id`, `output.type`, `output.image_url`, `detail`, text, and
+    acknowledged safety-check count;
+  - consumes the shared local `max_tool_calls` budget and records skipped
+    computer actions in `metadata.compatibility.local_tool_budget`;
+  - disables DeepSeek thinking mode by default for local computer-use requests
+    so small-output compatibility probes get visible assistant text.
+- Wired the adapter through non-streaming, streaming, and background Responses
+  paths. Streaming now sends local `computer_call` items as
+  `response.output_item.added` before upstream Chat text deltas.
+- Extended tests and live evals:
+  - translator tests cover local hosted-tool reservation for `computer` and
+    `computer_call_output` input mapping;
+  - server tests cover non-streaming `computer_call`, streaming `computer_call`,
+    `max_tool_calls` exhaustion, metadata, and DeepSeek thinking compatibility;
+  - live `bridge-regression` now includes `responses-computer`.
+- Updated docs:
+  - compatibility matrix references the official OpenAI Computer Use guide;
+  - documented request/response mappings, config flags, eval commands, and the
+    remaining boundary: this is an action-loop protocol adapter, not a
+    browser/VNC executor or OpenAI hosted Computer Use.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/translator.test.js`: 30/30 passing tests.
+  - `node --test test/server.test.js`: 69/69 passing tests.
+  - `npm test`: 102/102 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active. Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/` after the service restart window.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-computer` passed 1/1, elapsed 1788 ms, returned
+    `computer-ok`, and used 170 total tokens.
+  - Full live `bridge-regression` passed 38/38 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1748 ms, P95 latency 4157 ms, and total usage
+    8876 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8c6giz`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 291 runtime candidates,
+    selected 18 old UI screenshots by retention policy, deleted 0, selected
+    1214456 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 38 GB available; bridge state is 2.0 MB, output
+    artifacts are 5.5 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.

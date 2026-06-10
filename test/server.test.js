@@ -1518,6 +1518,50 @@ test("POST /v1/responses streams local web_search_preview call and citations", a
   });
 });
 
+test("POST /v1/responses streams local computer_call items", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses computer compatibility is active/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_computer",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { role: "assistant", content: "stream-computer-ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use the computer and stream a response.",
+        tools: [{ type: "computer", environment: "browser" }],
+        stream: true,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const computerEvent = events.find((event) => (
+      event.event === "response.output_item.added"
+      && event.data?.item?.type === "computer_call"
+    ));
+    assert.ok(computerEvent);
+    assert.equal(computerEvent.data.item.action.type, "screenshot");
+    assert.equal(computerEvent.data.item.actions[0].type, "screenshot");
+    assert.match(events.map((event) => event.data?.delta || "").join(""), /stream-computer-ok/);
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output[0].type, "computer_call");
+    assert.equal(completed.metadata.compatibility.local_computer.call_count, 1);
+    assert.equal(completed.metadata.compatibility.local_computer.deepseek_thinking, "disabled_for_local_computer");
+  });
+});
+
 test("POST /v1/responses limits local web_search actions with max_tool_calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -1639,6 +1683,127 @@ test("POST /v1/responses shares max_tool_calls across local shell and web_search
       url: "https://example.test/shell-budget",
       snippet: "This result should not be searched when shell consumes the budget.",
     }],
+  });
+});
+
+test("POST /v1/responses emits local computer_call for computer tools", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.equal(call.body.tool_choice, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses computer compatibility is active/);
+    assert.match(prompt, /actions: screenshot/);
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_computer",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "computer-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use the computer to inspect the page, then return computer-ok.",
+        tools: [{
+          type: "computer",
+          environment: "browser",
+          display_width: 1024,
+          display_height: 768,
+        }],
+        tool_choice: { type: "computer" },
+        include: ["computer_call_output.output.image_url"],
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "computer_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].environment, "browser");
+    assert.equal(json.output[0].display_width, 1024);
+    assert.equal(json.output[0].display_height, 768);
+    assert.equal(json.output[0].action.type, "screenshot");
+    assert.equal(json.output[0].actions[0].type, "screenshot");
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "computer-ok");
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 0,
+      exhausted: true,
+    });
+    assert.equal(json.metadata.compatibility.local_tool_choice, "handled_by_bridge");
+    assert.equal(json.metadata.compatibility.local_computer.provider, "local");
+    assert.equal(json.metadata.compatibility.local_computer.status, "completed");
+    assert.equal(json.metadata.compatibility.local_computer.call_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.requested_action_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.returned_output_count, 0);
+    assert.equal(json.metadata.compatibility.local_computer.include_output_image_url, true);
+    assert.equal(json.metadata.compatibility.local_computer.deepseek_thinking, "disabled_for_local_computer");
+  });
+});
+
+test("POST /v1/responses skips local computer_call when max_tool_calls is exhausted", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /did not request a computer action/);
+    assert.match(prompt, /max_tool_calls was exhausted/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_computer_budget",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "computer-budget-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use the computer and return computer-budget-ok.",
+        tools: [{ type: "computer" }],
+        max_tool_calls: 0,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output.filter((item) => item.type === "computer_call").length, 0);
+    assert.equal(json.metadata.compatibility.local_computer.status, "skipped");
+    assert.equal(json.metadata.compatibility.local_computer.skipped_count, 1);
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 0,
+      used: 0,
+      skipped: 1,
+      exhausted: true,
+      skipped_calls: [{
+        type: "computer_call",
+        tool_type: "computer",
+        action: "screenshot",
+        reason: "max_tool_calls_exhausted",
+      }],
+    });
   });
 });
 

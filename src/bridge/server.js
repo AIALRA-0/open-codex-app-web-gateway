@@ -40,6 +40,14 @@ const {
   shellCompatibility,
   shellOutputItems,
 } = require("./local_shell");
+const {
+  attachComputerOutput,
+  computerCompatibility,
+  computerOutputItems,
+  injectComputerMessages,
+  localComputerToolTypes,
+  prepareComputerContext,
+} = require("./local_computer");
 const { LocalSkillStore } = require("./local_skills");
 const {
   chatCompatibilityMetadata,
@@ -192,6 +200,7 @@ function loadConfig(overrides = {}) {
     shellMaxCommandChars: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS", 4000, 32, 20000),
     shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
+    computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     skillMaxFileCount: numberFromEnv("CODEXCOMPAT_SKILL_MAX_FILE_COUNT", 500, 1, 500),
@@ -202,6 +211,7 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalWebSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH, true),
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
+    deepseekDisableThinkingForLocalComputer: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_COMPUTER, true),
     deepseekDisableThinkingForInputFiles: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES, true),
     deepseekUserIdCompat: parseBoolean(
       process.env.CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT,
@@ -394,6 +404,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     ...localWebSearchToolTypes(request.tools || [], config),
     ...localFileSearchToolTypes(request.tools || [], config),
     ...localShellToolTypes(request.tools || [], config),
+    ...localComputerToolTypes(request.tools || [], config),
   ];
   const { chat, compatibility } = responsesToChatRequest(
     request,
@@ -420,6 +431,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localShell) {
     applyLocalShellToChat(chat, compatibility, localShell, config);
   }
+  const localComputer = await prepareComputerContext(request, config, { toolBudget });
+  if (localComputer) {
+    applyLocalComputerToChat(chat, compatibility, localComputer, config);
+  }
   const localWebSearch = await prepareWebSearchContext(request, config, { toolBudget });
   if (localWebSearch) {
     applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config);
@@ -439,7 +454,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
-    }, localWebSearch, localFileSearch, localShell, conversationStore, conversation);
+    }, localWebSearch, localFileSearch, localShell, localComputer, conversationStore, conversation);
     return;
   }
 
@@ -460,6 +475,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
   attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell);
+  attachComputerOutput(response, localComputer);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
@@ -561,6 +577,10 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     if (localShell) {
       finalCompatibility = applyLocalShellToChat(chat, { ...finalCompatibility }, localShell, config);
     }
+    const localComputer = await prepareComputerContext(request, config, { toolBudget });
+    if (localComputer) {
+      finalCompatibility = applyLocalComputerToChat(chat, { ...finalCompatibility }, localComputer, config);
+    }
     const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal, toolBudget });
     if (localWebSearch) {
       finalCompatibility = applyLocalWebSearchToChat(chat, { ...finalCompatibility }, localWebSearch, config);
@@ -600,6 +620,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     const response = chatCompletionToResponse(upstreamJson, request, { responseId });
     attachConversationToResponse(response, conversation);
     attachShellOutput(response, localShell);
+    attachComputerOutput(response, localComputer);
     attachWebSearchOutput(response, localWebSearch);
     attachFileSearchOutput(response, localFileSearch);
     response.background = true;
@@ -750,6 +771,19 @@ function applyLocalShellToChat(chat, compatibility, localShell, config) {
     compatibility.local_shell = {
       ...(compatibility.local_shell || {}),
       deepseek_thinking: "disabled_for_local_shell",
+    };
+  }
+  return compatibility;
+}
+
+function applyLocalComputerToChat(chat, compatibility, localComputer, config) {
+  injectComputerMessages(chat, localComputer);
+  Object.assign(compatibility, computerCompatibility(localComputer));
+  if (config.deepseekDisableThinkingForLocalComputer && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_computer = {
+      ...(compatibility.local_computer || {}),
+      deepseek_thinking: "disabled_for_local_computer",
     };
   }
   return compatibility;
@@ -1867,7 +1901,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, conversationStore = null, conversation = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, conversationStore = null, conversation = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
@@ -1882,6 +1916,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   writeSse(res, "response.created", sequence(state, { type: "response.created", response: clone(response) }));
   writeSse(res, "response.in_progress", sequence(state, { type: "response.in_progress", response: clone(response) }));
   emitShellStreamItems(res, state, localShell);
+  emitComputerStreamItems(res, state, localComputer);
   emitWebSearchStreamItems(res, state, localWebSearch);
   emitFileSearchStreamItems(res, state, localFileSearch);
 
@@ -2039,6 +2074,18 @@ function emitFileSearchStreamItems(res, state, context) {
 
 function emitShellStreamItems(res, state, context) {
   for (const item of shellOutputItems(context)) {
+    state.response.output.push(item);
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: state.response.output.length - 1,
+      item: clone(item),
+    }));
+  }
+}
+
+function emitComputerStreamItems(res, state, context) {
+  for (const item of computerOutputItems(context)) {
     state.response.output.push(item);
     writeSse(res, "response.output_item.added", sequence(state, {
       type: "response.output_item.added",
