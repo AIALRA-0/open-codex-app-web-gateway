@@ -765,3 +765,33 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7tegzw` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Streaming Multi-Choice Preservation
+
+- Used the current OpenAI Chat Completions streaming schema to confirm Chat
+  streamed chunks expose `choices[]`, that the array can contain more than one
+  element when `n > 1`, and that each choice carries an `index`.
+- Used current DeepSeek Chat Completion docs to confirm streaming chunks use
+  `object:"chat.completion.chunk"` with `choices[].index`,
+  `choices[].delta`, and `choices[].finish_reason`.
+- Refactored Responses streaming state from a single assistant accumulator into
+  per-choice accumulators keyed by `choice.index`.
+- Streaming now preserves separate output `message`, `reasoning`, token
+  logprobs, function-call items, and replay assistant messages per Chat choice.
+- Added regression coverage for a two-choice interleaved Chat stream:
+  - final Responses output contains two message items, `alpha` and `beta`;
+  - a later `previous_response_id` request replays both choices as distinct
+    assistant messages to upstream Chat.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `npm test`: 38/38 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Full live `bridge-regression` against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+  2035 ms, P95 latency 4608 ms, total usage 2422 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7toti0` appeared before reload and after reload, console errors
+  0, warnings 0.

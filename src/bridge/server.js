@@ -1129,16 +1129,27 @@ function createStreamState(response, compatibility) {
     response,
     compatibility,
     sequenceNumber: 0,
-    messageItem: null,
-    text: "",
-    reasoningItem: null,
-    reasoningText: "",
-    outputTextLogprobs: [],
-    toolCalls: new Map(),
+    choices: new Map(),
     finishReasons: [],
     outputDone: new Set(),
     usage: null,
   };
+}
+
+function getChoiceStreamState(state, choiceIndex = 0) {
+  const index = choiceIndex ?? 0;
+  if (!state.choices.has(index)) {
+    state.choices.set(index, {
+      index,
+      messageItem: null,
+      text: "",
+      reasoningItem: null,
+      reasoningText: "",
+      outputTextLogprobs: [],
+      toolCalls: new Map(),
+    });
+  }
+  return state.choices.get(index);
 }
 
 function terminalEventForResponseStatus(status) {
@@ -1189,14 +1200,17 @@ function emitShellStreamItems(res, state, context) {
 }
 
 function syncStreamTextFromResponse(state) {
-  const message = state.response.output.find((item) => item.type === "message");
-  const textPart = message?.content?.find((part) => part.type === "output_text");
-  if (typeof textPart?.text === "string") state.text = textPart.text;
-  if (state.outputTextLogprobs.length && textPart) textPart.logprobs = clone(state.outputTextLogprobs);
+  for (const choiceState of state.choices.values()) {
+    const textPart = choiceState.messageItem?.content?.find((part) => part.type === "output_text");
+    if (typeof textPart?.text === "string") choiceState.text = textPart.text;
+    if (choiceState.outputTextLogprobs.length && textPart) {
+      textPart.logprobs = clone(choiceState.outputTextLogprobs);
+    }
+  }
 }
 
-function ensureMessageItem(state) {
-  if (state.messageItem) return [];
+function ensureMessageItem(state, choiceState) {
+  if (choiceState.messageItem) return [];
   const item = {
     id: prefixedId("msg"),
     type: "message",
@@ -1204,7 +1218,7 @@ function ensureMessageItem(state) {
     role: "assistant",
     content: [],
   };
-  state.messageItem = item;
+  choiceState.messageItem = item;
   state.response.output.push(item);
   return [{
     type: "response.output_item.added",
@@ -1214,31 +1228,31 @@ function ensureMessageItem(state) {
   }];
 }
 
-function ensureTextPart(state) {
-  const events = ensureMessageItem(state);
-  if (state.messageItem.content.length) return events;
+function ensureTextPart(state, choiceState) {
+  const events = ensureMessageItem(state, choiceState);
+  if (choiceState.messageItem.content.length) return events;
   const part = { type: "output_text", text: "", annotations: [] };
-  state.messageItem.content.push(part);
+  choiceState.messageItem.content.push(part);
   events.push({
     type: "response.content_part.added",
     response_id: state.response.id,
-    item_id: state.messageItem.id,
-    output_index: state.response.output.indexOf(state.messageItem),
+    item_id: choiceState.messageItem.id,
+    output_index: state.response.output.indexOf(choiceState.messageItem),
     content_index: 0,
     part: clone(part),
   });
   return events;
 }
 
-function ensureReasoningItem(state) {
-  if (state.reasoningItem) return [];
+function ensureReasoningItem(state, choiceState) {
+  if (choiceState.reasoningItem) return [];
   const item = {
     id: prefixedId("rs"),
     type: "reasoning",
     status: "in_progress",
     summary: [{ type: "summary_text", text: "" }],
   };
-  state.reasoningItem = item;
+  choiceState.reasoningItem = item;
   state.response.output.push(item);
   return [{
     type: "response.output_item.added",
@@ -1248,18 +1262,18 @@ function ensureReasoningItem(state) {
   }];
 }
 
-function ensureToolCallItem(state, index, deltaToolCall) {
-  if (state.toolCalls.has(index)) return [];
+function ensureToolCallItem(state, choiceState, index, deltaToolCall) {
+  if (choiceState.toolCalls.has(index)) return [];
   const callId = deltaToolCall.id || prefixedId("call");
   const item = {
     id: prefixedId("fc"),
     type: "function_call",
     call_id: callId,
-    name: deltaToolCall.function?.name || "",
+    name: "",
     arguments: "",
     status: "in_progress",
   };
-  state.toolCalls.set(index, item);
+  choiceState.toolCalls.set(index, item);
   state.response.output.push(item);
   return [{
     type: "response.output_item.added",
@@ -1275,14 +1289,15 @@ function applyChatStreamChunk(state, chunk) {
 
   for (const choice of chunk.choices || []) {
     if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);
+    const choiceState = getChoiceStreamState(state, choice.index);
     const delta = choice.delta || {};
 
     if (delta.reasoning_content) {
-      events.push(...ensureReasoningItem(state));
-      const item = state.reasoningItem;
+      events.push(...ensureReasoningItem(state, choiceState));
+      const item = choiceState.reasoningItem;
       const outputIndex = state.response.output.indexOf(item);
       item.summary[0].text += delta.reasoning_content;
-      state.reasoningText += delta.reasoning_content;
+      choiceState.reasoningText += delta.reasoning_content;
       events.push({
         type: "response.reasoning_summary_text.delta",
         response_id: state.response.id,
@@ -1294,11 +1309,11 @@ function applyChatStreamChunk(state, chunk) {
     }
 
     if (delta.content) {
-      events.push(...ensureTextPart(state));
-      const item = state.messageItem;
+      events.push(...ensureTextPart(state, choiceState));
+      const item = choiceState.messageItem;
       const outputIndex = state.response.output.indexOf(item);
       item.content[0].text += delta.content;
-      state.text += delta.content;
+      choiceState.text += delta.content;
       events.push({
         type: "response.output_text.delta",
         response_id: state.response.id,
@@ -1311,20 +1326,20 @@ function applyChatStreamChunk(state, chunk) {
 
     const logprobs = normalizeOutputTextLogprobs(choice.logprobs);
     if (Array.isArray(logprobs) && logprobs.length) {
-      events.push(...ensureTextPart(state));
-      const item = state.messageItem;
-      state.outputTextLogprobs.push(...logprobs);
-      item.content[0].logprobs = clone(state.outputTextLogprobs);
+      events.push(...ensureTextPart(state, choiceState));
+      const item = choiceState.messageItem;
+      choiceState.outputTextLogprobs.push(...logprobs);
+      item.content[0].logprobs = clone(choiceState.outputTextLogprobs);
     } else if (logprobs && !Array.isArray(logprobs)) {
-      events.push(...ensureTextPart(state));
-      const item = state.messageItem;
+      events.push(...ensureTextPart(state, choiceState));
+      const item = choiceState.messageItem;
       item.content[0].logprobs = logprobs;
     }
 
     for (const deltaToolCall of delta.tool_calls || []) {
       const index = deltaToolCall.index || 0;
-      events.push(...ensureToolCallItem(state, index, deltaToolCall));
-      const item = state.toolCalls.get(index);
+      events.push(...ensureToolCallItem(state, choiceState, index, deltaToolCall));
+      const item = choiceState.toolCalls.get(index);
       const outputIndex = state.response.output.indexOf(item);
       if (deltaToolCall.id) item.call_id = deltaToolCall.id;
       if (deltaToolCall.function?.name) item.name += deltaToolCall.function.name;
@@ -1402,16 +1417,27 @@ function finishStreamState(state) {
 
 function streamStateToReplayMessages(state) {
   const messages = [];
-  const assistant = { role: "assistant", content: state.text || null };
-  if (state.reasoningText) assistant.reasoning_content = state.reasoningText;
-  const toolCalls = Array.from(state.toolCalls.values()).map((item) => ({
-    id: item.call_id,
-    type: "function",
-    function: { name: item.name, arguments: item.arguments },
-  }));
-  if (toolCalls.length) assistant.tool_calls = toolCalls;
-  if (assistant.content !== null || assistant.tool_calls || assistant.reasoning_content) messages.push(assistant);
+  for (const choiceState of sortedChoiceStates(state)) {
+    const assistant = { role: "assistant", content: choiceState.text || null };
+    if (choiceState.reasoningText) assistant.reasoning_content = choiceState.reasoningText;
+    const toolCalls = Array.from(choiceState.toolCalls.values()).map((item) => ({
+      id: item.call_id,
+      type: "function",
+      function: { name: item.name, arguments: item.arguments },
+    }));
+    if (toolCalls.length) assistant.tool_calls = toolCalls;
+    if (assistant.content !== null || assistant.tool_calls || assistant.reasoning_content) messages.push(assistant);
+  }
   return messages;
+}
+
+function sortedChoiceStates(state) {
+  return Array.from(state.choices.values()).sort((a, b) => {
+    const aIndex = Number(a.index);
+    const bIndex = Number(b.index);
+    if (Number.isFinite(aIndex) && Number.isFinite(bIndex)) return aIndex - bIndex;
+    return String(a.index).localeCompare(String(b.index));
+  });
 }
 
 async function* iterateSseJson(stream) {

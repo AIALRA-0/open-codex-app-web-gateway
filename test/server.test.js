@@ -52,6 +52,21 @@ async function withMockProvider(handler, run, configOverrides = {}) {
   }
 }
 
+function parseSseEvents(text) {
+  return text
+    .split(/\n\n/)
+    .filter((frame) => frame.trim())
+    .map((frame) => {
+      const lines = frame.split(/\r?\n/);
+      const event = lines.find((line) => line.startsWith("event:"))?.slice(6).trim() || "message";
+      const data = lines
+        .filter((line) => line.startsWith("data:"))
+        .map((line) => line.slice(5).trimStart())
+        .join("\n");
+      return { event, data: data ? JSON.parse(data) : null };
+    });
+}
+
 test("POST /v1/responses maps to /v1/chat/completions and stores previous response replay", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -347,6 +362,89 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"text":"hello"/);
     assert.match(text, /"logprobs":\[\{"token":"hel","logprob":-0\.1/);
     assert.match(text, /\{"token":"lo","logprob":-0\.2/);
+  });
+});
+
+test("POST /v1/responses preserves multiple streaming Chat choices", async () => {
+  let callCount = 0;
+  await withMockProvider(async (_req, res, call) => {
+    callCount += 1;
+    if (callCount === 1) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_multi",
+        object: "chat.completion.chunk",
+        choices: [
+          { index: 0, delta: { role: "assistant", content: "al" }, finish_reason: null },
+          { index: 1, delta: { role: "assistant", content: "be" }, finish_reason: null },
+        ],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_multi",
+        object: "chat.completion.chunk",
+        choices: [
+          { index: 1, delta: { content: "ta" }, finish_reason: "stop" },
+          { index: 0, delta: { content: "pha" }, finish_reason: "stop" },
+        ],
+        usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    const assistantMessages = call.body.messages
+      .filter((message) => message.role === "assistant")
+      .map((message) => message.content);
+    assert.deepEqual(assistantMessages, ["alpha", "beta"]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_after_stream_multi",
+      object: "chat.completion",
+      created: 456,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "continued" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "stream multi",
+        stream: true,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    const messages = completed.output.filter((item) => item.type === "message");
+    assert.deepEqual(messages.map((message) => message.content[0].text), ["alpha", "beta"]);
+
+    const addedMessages = events
+      .filter((event) => event.event === "response.output_item.added")
+      .map((event) => event.data.item)
+      .filter((item) => item.type === "message");
+    assert.equal(addedMessages.length, 2);
+
+    const followUp = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        previous_response_id: completed.id,
+        input: "continue",
+      }),
+    });
+    assert.equal(followUp.status, 200);
+    const json = await followUp.json();
+    assert.equal(json.output[0].content[0].text, "continued");
   });
 });
 

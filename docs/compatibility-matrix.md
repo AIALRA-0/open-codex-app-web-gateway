@@ -85,7 +85,7 @@ behavior.
 
 | Chat response field | Responses field | Status |
 | --- | --- | --- |
-| `choices[].message.content` | output `message.content[].output_text` | Direct for each non-streaming Chat choice returned by the provider |
+| `choices[].message.content` / streaming `choices[].delta.content` | output `message.content[].output_text` | Direct for each Chat choice returned by the provider |
 | `choices[].message.refusal` | output refusal content part | Direct when present |
 | `choices[].message.tool_calls[]` | output `function_call` items | Direct |
 | `choices[].message.function_call` | output `function_call` item | Legacy Chat function-call compatibility |
@@ -215,6 +215,9 @@ to the final `output_text` content part and terminal response.
 Terminal `choice.finish_reason` values are aggregated across chunks. `length`
 and `content_filter` end the stream with `response.incomplete`; DeepSeek
 `insufficient_system_resource` ends the stream with `response.failed`.
+When a Chat stream contains multiple `choices[].index` values, the bridge keeps
+separate Responses output items and replay messages per choice instead of
+merging deltas into one assistant message.
 When `web_search_preview` is handled by the local adapter, the bridge emits a
 `web_search_call` output item and applies URL citation annotations to the final
 message content.
@@ -353,7 +356,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
-| `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
+| `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve when present, synthesize only from local tools |
 
 ## Reference Projects Reviewed
