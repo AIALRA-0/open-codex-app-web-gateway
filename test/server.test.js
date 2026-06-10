@@ -1579,6 +1579,98 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
   });
 });
 
+test("local Vector Store static chunking strategy controls file_search chunks", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "provider should not be called" }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const tokens = Array.from({ length: 230 }, (_, index) => (
+      index === 135 ? "chunk-needle" : `chunkword${index}`
+    ));
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "chunked.txt",
+        purpose: "assistants",
+        content: tokens.join(" "),
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const storeResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "chunking-store" }),
+    });
+    assert.equal(storeResponse.status, 200);
+    const vectorStore = await storeResponse.json();
+
+    const attachedResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        file_id: file.id,
+        attributes: { suite: "chunking" },
+        chunking_strategy: {
+          type: "static",
+          static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
+        },
+      }),
+    });
+    assert.equal(attachedResponse.status, 200);
+    const attached = await attachedResponse.json();
+    assert.deepEqual(attached.chunking_strategy, {
+      type: "static",
+      static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
+    });
+
+    const contentResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${file.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    const content = await contentResponse.json();
+    assert.equal(content.content.length, 4);
+    assert.equal(content.chunks[1].chunk_index, 1);
+    assert.equal(content.chunks[1].token_start, 50);
+    assert.equal(content.chunks[1].token_end, 150);
+    assert.equal(content.chunks[1].token_count, 100);
+    assert.deepEqual(content.chunking_strategy, {
+      type: "static",
+      static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
+    });
+
+    const searchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "chunk-needle",
+        filters: { type: "eq", key: "suite", value: "chunking" },
+        max_num_results: 3,
+      }),
+    });
+    assert.equal(searchResponse.status, 200);
+    const search = await searchResponse.json();
+    assert.ok(search.data.some((result) => result.file_id === file.id && /chunk-needle/.test(result.content[0].text)));
+    assert.ok(search.data.every((result) => result.token_count <= 100));
+    assert.ok(search.data.some((result) => result.chunk_index === 1 || result.chunk_index === 2));
+
+    const invalidResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        file_id: file.id,
+        chunking_strategy: {
+          type: "static",
+          static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 60 },
+        },
+      }),
+    });
+    assert.equal(invalidResponse.status, 400);
+    assert.match(await invalidResponse.text(), /chunk_overlap_tokens/);
+  });
+});
+
 test("Responses input_file file_id and file_data are extracted for Chat compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.thinking, { type: "disabled" });

@@ -5,6 +5,13 @@ const path = require("node:path");
 const { prefixedId, stringifyContent } = require("./translator");
 
 const FILE_SEARCH_TOOL_TYPES = new Set(["file_search"]);
+const DEFAULT_CHUNKING_STRATEGY = Object.freeze({
+  type: "static",
+  static: Object.freeze({
+    max_chunk_size_tokens: 800,
+    chunk_overlap_tokens: 400,
+  }),
+});
 
 function isFileSearchTool(tool) {
   return !!tool && typeof tool === "object" && FILE_SEARCH_TOOL_TYPES.has(tool.type);
@@ -160,7 +167,7 @@ class LocalFileSearchStore {
       last_error: null,
       usage_bytes: file.bytes,
       attributes: isPlainObject(body.attributes) ? body.attributes : {},
-      ...(isPlainObject(body.chunking_strategy) ? { chunking_strategy: body.chunking_strategy } : {}),
+      ...(isPlainObject(body.chunking_strategy) ? { chunking_strategy: normalizeChunkingStrategy(body.chunking_strategy) } : {}),
     };
     this.writeJson(this.vectorStoreFilePath(storeId, file.id), { vector_store_file: attached });
     return attached;
@@ -270,14 +277,17 @@ class LocalFileSearchStore {
     if (!attached) return null;
     const record = this.getFileRecord(fileId);
     if (!record?.file || typeof record.content !== "string") return null;
-    const content = chunkText(record.content).map((chunk) => ({ type: "text", text: chunk.text }));
+    const chunks = chunkText(record.content, attached.chunking_strategy);
+    const content = chunks.map((chunk) => ({ type: "text", text: chunk.text }));
     return {
       object: "vector_store.file_content.page",
       file_id: fileId,
       filename: record.file.filename,
       attributes: attached.attributes || {},
+      chunking_strategy: effectiveChunkingStrategy(attached.chunking_strategy),
       content,
       data: content,
+      chunks: chunks.map((chunk) => chunkMetadata(chunk)),
       has_more: false,
       next_page: null,
     };
@@ -309,7 +319,7 @@ class LocalFileSearchStore {
         purpose: record.file.purpose,
       };
       if (!matchesMetadataFilter(filters, attributes)) continue;
-      for (const chunk of chunkText(record.content)) {
+      for (const chunk of chunkText(record.content, item.chunking_strategy)) {
         const score = scoreText(query, chunk.text, record.file.filename);
         if (score <= 0) continue;
         results.push({
@@ -317,6 +327,8 @@ class LocalFileSearchStore {
           filename: record.file.filename,
           score,
           attributes: item.attributes || {},
+          ...chunkMetadata(chunk),
+          chunking_strategy: effectiveChunkingStrategy(item.chunking_strategy),
           content: [{ type: "text", text: chunk.text }],
         });
       }
@@ -636,22 +648,108 @@ function extractInputText(input) {
   return "";
 }
 
-function chunkText(text) {
-  const paragraphs = String(text || "")
-    .split(/\n{2,}|\r?\n/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const chunks = paragraphs.length ? paragraphs : [String(text || "").trim()].filter(Boolean);
-  return chunks.map((part) => ({ text: part.slice(0, 1200) }));
+function chunkText(text, chunkingStrategy) {
+  const value = String(text || "").trim();
+  if (!value) return [];
+  const strategy = effectiveChunkingStrategy(chunkingStrategy);
+  const maxTokens = strategy.static.max_chunk_size_tokens;
+  const overlapTokens = strategy.static.chunk_overlap_tokens;
+  const tokens = value.match(/\S+\s*/g) || [];
+  if (!tokens.length) return [];
+  const step = Math.max(1, maxTokens - overlapTokens);
+  const chunks = [];
+  for (let start = 0; start < tokens.length; start += step) {
+    const end = Math.min(tokens.length, start + maxTokens);
+    const chunkTextValue = tokens.slice(start, end).join("").trim();
+    if (chunkTextValue) {
+      chunks.push({
+        text: chunkTextValue,
+        chunk_index: chunks.length,
+        token_start: start,
+        token_end: end,
+        token_count: end - start,
+      });
+    }
+    if (end >= tokens.length) break;
+  }
+  return chunks;
 }
 
 function scoreText(query, text, filename = "") {
   const terms = tokenize(query);
   if (!terms.length) return 0;
-  const haystack = new Set(tokenize(`${filename} ${text}`));
+  const haystackTokens = tokenize(`${filename} ${text}`);
+  const haystack = new Set(haystackTokens);
   let hits = 0;
   for (const term of terms) if (haystack.has(term)) hits += 1;
-  return hits / terms.length;
+  const coverage = hits / terms.length;
+  const frequency = terms.reduce((sum, term) => sum + haystackTokens.filter((token) => token === term).length, 0);
+  const phraseBoost = String(text || "").toLowerCase().includes(String(query || "").toLowerCase()) ? 0.25 : 0;
+  return coverage + Math.min(frequency / Math.max(haystackTokens.length, 1), 0.25) + phraseBoost;
+}
+
+function effectiveChunkingStrategy(value) {
+  if (!isPlainObject(value)) return cloneChunkingStrategy(DEFAULT_CHUNKING_STRATEGY);
+  if (String(value.type || "").toLowerCase() === "auto") return cloneChunkingStrategy(DEFAULT_CHUNKING_STRATEGY);
+  try {
+    return normalizeChunkingStrategy(value);
+  } catch {
+    return cloneChunkingStrategy(DEFAULT_CHUNKING_STRATEGY);
+  }
+}
+
+function normalizeChunkingStrategy(value) {
+  if (!isPlainObject(value)) {
+    const error = new Error("chunking_strategy must be an object");
+    error.status = 400;
+    throw error;
+  }
+  const type = String(value.type || "").toLowerCase();
+  if (type === "auto") return { type: "auto" };
+  if (type !== "static") {
+    const error = new Error("chunking_strategy.type must be auto or static");
+    error.status = 400;
+    throw error;
+  }
+  const staticConfig = isPlainObject(value.static) ? value.static : {};
+  const maxChunkSize = Number(staticConfig.max_chunk_size_tokens);
+  const overlap = Number(staticConfig.chunk_overlap_tokens);
+  if (!Number.isFinite(maxChunkSize) || maxChunkSize < 100 || maxChunkSize > 4096) {
+    const error = new Error("chunking_strategy.static.max_chunk_size_tokens must be between 100 and 4096");
+    error.status = 400;
+    throw error;
+  }
+  if (!Number.isFinite(overlap) || overlap < 0 || overlap > maxChunkSize / 2) {
+    const error = new Error("chunking_strategy.static.chunk_overlap_tokens must be non-negative and no more than half of max_chunk_size_tokens");
+    error.status = 400;
+    throw error;
+  }
+  return {
+    type: "static",
+    static: {
+      max_chunk_size_tokens: Math.trunc(maxChunkSize),
+      chunk_overlap_tokens: Math.trunc(overlap),
+    },
+  };
+}
+
+function cloneChunkingStrategy(value) {
+  return {
+    type: value.type,
+    static: {
+      max_chunk_size_tokens: value.static.max_chunk_size_tokens,
+      chunk_overlap_tokens: value.static.chunk_overlap_tokens,
+    },
+  };
+}
+
+function chunkMetadata(chunk) {
+  return {
+    chunk_index: chunk.chunk_index,
+    token_start: chunk.token_start,
+    token_end: chunk.token_end,
+    token_count: chunk.token_count,
+  };
 }
 
 function matchesMetadataFilter(filter, attributes = {}) {

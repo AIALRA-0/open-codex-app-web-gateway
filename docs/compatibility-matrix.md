@@ -218,17 +218,17 @@ under the configured bridge state directory, not in Git.
 | `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata and live file counts |
 | `POST /v1/vector_stores/{vector_store_id}` | Implemented | Updates local vector-store `name`, `metadata`, and `expires_after`; computes `expires_at` from the local `last_active_at` timestamp |
 | `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |
-| `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering |
+| `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering and validates `chunking_strategy` |
 | `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with pagination |
 | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Returns local vector-store file metadata |
 | `POST /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Updates local vector-store file `attributes` for later `file_search` filters |
-| `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` | Implemented | Returns local extracted text chunks for a vector-store file |
+| `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` | Implemented | Returns local extracted text chunks for a vector-store file, with chunk metadata and effective chunking strategy |
 | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
-| `POST /v1/vector_stores/{vector_store_id}/file_batches` | Implemented | Synchronously attaches up to 2000 local files; accepts either `file_ids` with global `attributes`/`chunking_strategy` or `files[]` with per-file values |
+| `POST /v1/vector_stores/{vector_store_id}/file_batches` | Implemented | Synchronously attaches up to 2000 local files; accepts either `file_ids` with global `attributes`/`chunking_strategy` or `files[]` with per-file values; validates static chunking limits |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with pagination and `filter` by file status |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns the completed batch unless a future async batch is still `in_progress`, in which case it is marked `cancelled` |
-| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, and simple metadata `filters` |
+| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, chunk metadata, static chunk overlap, and simple metadata `filters` |
 
 ## Containers Endpoint Coverage
 
@@ -385,7 +385,12 @@ lexical search over uploaded text. The adapter:
   optional results when `include:["file_search_call.results"]` is requested;
 - annotates final message text with `file_citation` entries;
 - supports simple metadata filters such as `{type:"eq",key:"suite",value:"x"}`
-  over file metadata and vector-store-file attributes.
+  over file metadata and vector-store-file attributes;
+- honors OpenAI-style `chunking_strategy` when files are attached to vector
+  stores. Missing or `auto` strategies use the documented default static
+  behavior: 800-token chunks with 400-token overlap. Static strategies are
+  validated with `max_chunk_size_tokens` from 100 to 4096 and
+  `chunk_overlap_tokens` no more than half the chunk size.
 
 Configuration:
 
@@ -398,9 +403,10 @@ Configuration:
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH` | `true` | Disables DeepSeek thinking mode for local file-search requests to avoid reasoning-only completions exhausting small output budgets |
 
 This is a bridge compatibility layer, not native OpenAI file search. The current
-retriever is intentionally local, auditable, and disk-bounded; it is not yet an
-embedding-based vector index and does not process binary PDFs, OCR, image files,
-asynchronous batch indexing, or OpenAI's complete ranking behavior.
+retriever is intentionally local, auditable, and disk-bounded; it supports
+overlapping static chunks but is not yet an embedding-based vector index and
+does not process binary PDFs, OCR, image files, asynchronous batch indexing, or
+OpenAI's complete ranking behavior.
 
 ## Local Shell and Code Interpreter Adapter
 
@@ -447,7 +453,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, PDF text-layer extraction, and basic `.docx`/`.xlsx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
-| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, static overlapping chunks, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed semantic vector search | Add embedding/vector indexing, file parsers, async batches, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |

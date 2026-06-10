@@ -1889,3 +1889,50 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq81p7ky`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local File Search Static Chunking
+
+- Closed a local `file_search` fidelity gap where vector-store file attachments
+  stored `chunking_strategy` but search/content generation still used fixed
+  paragraph slicing.
+- Local vector-store files now:
+  - validate OpenAI-style `chunking_strategy` on attach and file-batch attach;
+  - use the documented default static strategy of 800-token chunks with
+    400-token overlap when no strategy is provided or `type:"auto"` is used;
+  - reject invalid static strategies where `max_chunk_size_tokens` is outside
+    100-4096 or overlap exceeds half the chunk size;
+  - expose effective `chunking_strategy` plus chunk metadata through
+    `/v1/vector_stores/{vector_store_id}/files/{file_id}/content`;
+  - include `chunk_index`, token offsets, token count, and effective strategy in
+    `/v1/vector_stores/{vector_store_id}/search` results.
+- Also tightened lexical ranking slightly with exact-phrase and term-frequency
+  boosts while keeping the retriever local and auditable.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/guides/retrieval#chunking`, which
+  documents the 800/400 default and static chunking limits.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Remaining known gap: this is still lexical local retrieval, not OpenAI's
+  managed semantic vector search with embeddings, reranking, async ingestion,
+  and full hosted ranking policy.
+- Verified:
+  - `node --check src/bridge/local_file_search.js scripts/eval-harness.mjs test/server.test.js`:
+    passed.
+  - Targeted local vector/file-search tests passed, including the new static
+    chunking strategy case.
+  - `npm test`: 67/67 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `vector-store-lifecycle` passed 1/1, elapsed 176 ms, with
+    `content_parts:4` and `search_results:3`, proving the configured
+    100-token/50-token-overlap static chunking path was exercised.
+  - Full live `bridge-regression` passed 22/22 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1722 ms, P95 latency 3900 ms, and total
+    usage 6898 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq820iqn`, reload persistence
+    confirmed, console errors 0, warnings 0.

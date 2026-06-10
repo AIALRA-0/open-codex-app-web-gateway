@@ -215,6 +215,12 @@ function xmlEscape(value) {
     .replace(/'/g, "&apos;");
 }
 
+function vectorChunkFixture(marker) {
+  return Array.from({ length: 230 }, (_unused, index) => (
+    index === 135 ? marker : `vectorword${index}`
+  )).join(" ");
+}
+
 function buildSuites(defaultModel) {
   const protocolSmoke = [
     {
@@ -639,7 +645,13 @@ function buildSuites(defaultModel) {
         file: {
           filename: "bridge-vector-lifecycle.txt",
           purpose: "assistants",
-          content: "Bridge vector lifecycle fixture. The exact lifecycle answer is vector-lifecycle-ok.",
+          content: vectorChunkFixture("vector-lifecycle-ok"),
+        },
+        vectorFile: {
+          chunking_strategy: {
+            type: "static",
+            static: { max_chunk_size_tokens: 100, chunk_overlap_tokens: 50 },
+          },
         },
         check: ({ store, updatedStore, attached, updatedFile, content, search }) => store?.object === "vector_store"
           && updatedStore?.name === "bridge-vector-lifecycle-updated"
@@ -647,9 +659,12 @@ function buildSuites(defaultModel) {
           && updatedStore?.expires_after?.days === 7
           && Number.isInteger(updatedStore?.expires_at)
           && attached?.object === "vector_store.file"
+          && attached?.chunking_strategy?.static?.max_chunk_size_tokens === 100
           && updatedFile?.attributes?.suite === "vector-lifecycle-updated"
+          && content?.chunking_strategy?.static?.chunk_overlap_tokens === 50
+          && content?.chunks?.some((chunk) => chunk.chunk_index === 1 && chunk.token_count === 100)
           && content?.content?.some((part) => /vector-lifecycle-ok/i.test(part.text || ""))
-          && search?.data?.some((result) => result.file_id === attached.id),
+          && search?.data?.some((result) => result.file_id === attached.id && Number.isInteger(result.chunk_index)),
       },
       {
         id: "responses-compact-continuation",
@@ -1258,6 +1273,7 @@ async function runVectorStoreLifecycleCase(testCase, context, started) {
     const attachResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/files`, {
       file_id: file.id,
       attributes: { suite: "vector-lifecycle-initial" },
+      ...(testCase.vectorFile || {}),
     });
     const attachBody = await attachResponse.text();
     if (!attachResponse.ok) {
