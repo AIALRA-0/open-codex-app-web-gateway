@@ -5342,15 +5342,21 @@ function normalizeStoredInputItem(item, index) {
 }
 
 function projectInputItemsForIncludes(items, url) {
-  const includeInputImageUrls = includeValuesFromUrl(url).has("message.input_image.image_url");
+  const includes = includeValuesFromUrl(url);
+  const includeInputImageUrls = includes.has("message.input_image.image_url");
+  const includeComputerOutputImageUrls = includes.has("computer_call_output.output.image_url");
   return (Array.isArray(items) ? items : [items])
-    .map((item) => projectInputItemForIncludes(item, { includeInputImageUrls }));
+    .map((item) => projectInputItemForIncludes(item, {
+      includeInputImageUrls,
+      includeComputerOutputImageUrls,
+    }));
 }
 
 function projectInputItemForIncludes(item, options = {}) {
-  const cloned = clone(item);
-  if (options.includeInputImageUrls) return cloned;
-  return redactInputImageUrls(cloned);
+  let projected = clone(item);
+  if (!options.includeInputImageUrls) projected = redactInputImageUrls(projected);
+  if (!options.includeComputerOutputImageUrls) projected = redactComputerOutputImageUrls(projected);
+  return projected;
 }
 
 function redactInputImageUrls(value) {
@@ -5369,6 +5375,30 @@ function redactInputImageUrlPart(part) {
   delete cloned.image_url;
   delete cloned.url;
   if (detail != null && cloned.detail == null) cloned.detail = detail;
+  return cloned;
+}
+
+function redactComputerOutputImageUrls(value) {
+  if (Array.isArray(value)) return value.map(redactComputerOutputImageUrls);
+  if (!isPlainObject(value)) return value;
+  if (value.type === "computer_call_output") return redactComputerOutputImageUrlItem(value);
+  const cloned = { ...value };
+  if (Array.isArray(cloned.content)) cloned.content = cloned.content.map(redactComputerOutputImageUrls);
+  if (Array.isArray(cloned.input)) cloned.input = cloned.input.map(redactComputerOutputImageUrls);
+  return cloned;
+}
+
+function redactComputerOutputImageUrlItem(item) {
+  const cloned = { ...item };
+  if (isPlainObject(cloned.output)) {
+    const output = { ...cloned.output };
+    const detail = output.detail
+      ?? (isPlainObject(output.image_url) ? output.image_url.detail : undefined);
+    delete output.image_url;
+    delete output.url;
+    if (detail != null && output.detail == null) output.detail = detail;
+    cloned.output = output;
+  }
   return cloned;
 }
 

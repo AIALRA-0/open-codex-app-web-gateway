@@ -900,6 +900,7 @@ function buildSuites(defaultModel) {
       {
         id: "conversation-image-include",
         mode: "conversation-items-local",
+        include: "message.input_image.image_url",
         conversation: {
           items: [{
             type: "message",
@@ -928,6 +929,39 @@ function buildSuites(defaultModel) {
             && includedImage.image_url?.detail === "low"
             && hiddenItem?.content?.[1]?.image_url === undefined
             && includedItem?.content?.[1]?.image_url?.url === "https://example.test/local-include-image.png"
+            && deleted?.object === "conversation.deleted"
+            && deleted.deleted === true;
+        },
+      },
+      {
+        id: "conversation-computer-output-include",
+        mode: "conversation-items-local",
+        include: "computer_call_output.output.image_url",
+        conversation: {
+          items: [{
+            type: "computer_call_output",
+            call_id: "call_eval_screen",
+            output: {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/local-computer-screen.png",
+                detail: "high",
+              },
+            },
+          }],
+        },
+        check: ({ conversation, hiddenItems, includedItems, hiddenItem, includedItem, deleted }) => {
+          const hiddenOutput = hiddenItems?.data?.[0]?.output || {};
+          const includedOutput = includedItems?.data?.[0]?.output || {};
+          return conversation?.object === "conversation"
+            && hiddenItems?.object === "list"
+            && hiddenOutput.type === "input_image"
+            && hiddenOutput.detail === "high"
+            && hiddenOutput.image_url === undefined
+            && includedOutput.image_url?.url === "https://example.test/local-computer-screen.png"
+            && includedOutput.image_url?.detail === "high"
+            && hiddenItem?.output?.image_url === undefined
+            && includedItem?.output?.image_url?.url === "https://example.test/local-computer-screen.png"
             && deleted?.object === "conversation.deleted"
             && deleted.deleted === true;
         },
@@ -2032,14 +2066,15 @@ async function runConversationItemsLocalCase(testCase, context, started) {
     }
     conversation = JSON.parse(conversationBody);
 
+    const include = encodeURIComponent(testCase.include || "message.input_image.image_url");
     const hiddenItems = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20`);
-    const includedItems = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20&include[]=message.input_image.image_url`);
+    const includedItems = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20&include[]=${include}`);
     const firstItemId = includedItems.json?.data?.[0]?.id || hiddenItems.json?.data?.[0]?.id;
     const hiddenItem = firstItemId
       ? await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items/${firstItemId}`)
       : { ok: false, status: 0, json: null };
     const includedItem = firstItemId
-      ? await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items/${firstItemId}?include=message.input_image.image_url`)
+      ? await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items/${firstItemId}?include=${include}`)
       : { ok: false, status: 0, json: null };
     const createdConversation = conversation;
     const deletion = await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);

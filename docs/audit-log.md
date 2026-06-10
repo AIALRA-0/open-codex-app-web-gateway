@@ -3975,3 +3975,67 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Computer Output Image URL Include Projection
+
+- Re-checked the current OpenAI Responses reference through the official OpenAI
+  developer docs MCP. The supported `include` values list includes
+  `computer_call_output.output.image_url`, alongside the existing input-image
+  include projection work.
+- Added local input-item projection for
+  `include:["computer_call_output.output.image_url"]`:
+  - `GET /v1/responses/{response_id}/input_items` hides stored
+    `computer_call_output.output.image_url` values by default and returns them
+    only when the include value is requested;
+  - `GET /v1/conversations/{conversation_id}/items` applies the same projection
+    to list results;
+  - `GET /v1/conversations/{conversation_id}/items/{item_id}` applies the same
+    projection to single-item retrieval.
+- Preserved the full stored item internally for previous-response and
+  Conversation replay. The bridge only redacts `output.image_url` / `output.url`
+  at API read time and keeps `detail` visible so clients can inspect image
+  fidelity without the URL unless they explicitly opt in.
+- Kept create-request compatibility behavior intact: returned
+  `computer_call_output` input items still translate to Chat-visible evidence,
+  and create requests that include this field continue recording
+  `metadata.compatibility.local_computer.include_output_image_url`.
+- Added mock-provider server coverage proving:
+  - upstream Chat context still receives the original computer output image URL
+    and `call_id`;
+  - stored Responses input items hide `output.image_url` by default and expose it
+    with `include=computer_call_output.output.image_url`;
+  - local Conversations list and item-get paths hide the URL by default and
+    expose it with the include parameter.
+- Added live `bridge-regression` case `conversation-computer-output-include` so
+  deployed local Conversations projection is exercised without upstream model
+  spend.
+- Updated compatibility and evaluation docs to record the include mapping,
+  default redaction behavior, and parity gate.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `conversation-computer-output-include` passed 1/1, latency
+    101 ms, no upstream token usage, and all hidden/included item endpoints
+    returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 2012 ms, P95 latency 2057 ms, and total usage 155 tokens.
+  - Full live `bridge-regression` passed 44/44 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1507 ms, P95 latency 3072 ms, and total usage
+    9621 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8hfrp2`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 394 runtime candidates,
+    selected 32 old UI screenshots by retention policy, deleted 0, selected
+    2407005 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
+    repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.

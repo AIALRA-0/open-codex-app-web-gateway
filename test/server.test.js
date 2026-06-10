@@ -954,6 +954,96 @@ test("Conversations items include message.input_image.image_url only when reques
   });
 });
 
+test("Input item retrieval includes computer_call_output image_url only when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.messages.length, 1);
+    assert.equal(call.body.messages[0].role, "user");
+    assert.match(call.body.messages[0].content, /Computer call output/);
+    assert.match(call.body.messages[0].content, /call_screen/);
+    assert.match(call.body.messages[0].content, /https:\/\/example\.test\/screen\.png/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_computer_output_items",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "computer output items ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const computerOutput = {
+      type: "computer_call_output",
+      call_id: "call_screen",
+      output: {
+        type: "input_image",
+        image_url: {
+          url: "https://example.test/screen.png",
+          detail: "high",
+        },
+      },
+    };
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [computerOutput],
+        store: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+
+    const defaultItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items`);
+    assert.equal(defaultItems.status, 200);
+    const defaultJson = await defaultItems.json();
+    assert.equal(defaultJson.data[0].type, "computer_call_output");
+    assert.equal(defaultJson.data[0].output.type, "input_image");
+    assert.equal(defaultJson.data[0].output.detail, "high");
+    assert.equal(defaultJson.data[0].output.image_url, undefined);
+
+    const includedItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?include=computer_call_output.output.image_url`);
+    assert.equal(includedItems.status, 200);
+    const includedJson = await includedItems.json();
+    assert.deepEqual(includedJson.data[0].output.image_url, {
+      url: "https://example.test/screen.png",
+      detail: "high",
+    });
+
+    const createdConversation = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items: [computerOutput] }),
+    });
+    assert.equal(createdConversation.status, 200);
+    const conversation = await createdConversation.json();
+
+    const defaultList = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`);
+    assert.equal(defaultList.status, 200);
+    const defaultListJson = await defaultList.json();
+    assert.equal(defaultListJson.data[0].output.image_url, undefined);
+    assert.equal(defaultListJson.data[0].output.detail, "high");
+
+    const includedList = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?include[]=computer_call_output.output.image_url`);
+    assert.equal(includedList.status, 200);
+    const includedListJson = await includedList.json();
+    assert.equal(includedListJson.data[0].output.image_url.url, "https://example.test/screen.png");
+
+    const defaultItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${includedListJson.data[0].id}`);
+    assert.equal(defaultItem.status, 200);
+    assert.equal((await defaultItem.json()).output.image_url, undefined);
+
+    const includedItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${includedListJson.data[0].id}?include=computer_call_output.output.image_url`);
+    assert.equal(includedItem.status, 200);
+    assert.equal((await includedItem.json()).output.image_url.url, "https://example.test/screen.png");
+  });
+});
+
 test("POST /v1/responses maps input_audio content to Chat content parts", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [{
