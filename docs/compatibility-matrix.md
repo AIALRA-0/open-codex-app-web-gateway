@@ -10,6 +10,7 @@ Primary sources:
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - Codex config reference: https://developers.openai.com/codex/config-reference
 - DeepSeek Chat Completion docs: https://api-docs.deepseek.com/api/create-chat-completion
+- DeepSeek Token & Token Usage docs: https://api-docs.deepseek.com/quick_start/token_usage
 - DeepSeek Thinking Mode docs: https://api-docs.deepseek.com/guides/thinking_mode
 - DeepSeek Tool Calls docs: https://api-docs.deepseek.com/guides/tool_calls
 
@@ -87,7 +88,7 @@ behavior.
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
 | `POST /v1/responses/{response_id}/cancel` | Compatibility no-op for completed records | The bridge only stores terminal responses today; completed records are returned unchanged with metadata explaining the no-op |
 | `POST /v1/responses/compact` | Explicit 501 | Requires native Responses compaction semantics or a local summarization policy |
-| `POST /v1/responses/input_tokens` | Explicit 501 | Requires provider-specific tokenizer accounting; planned for a tokenizer adapter layer |
+| `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request to Chat Completions, forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` |
 
 ## Chat Completions Endpoint Coverage
 

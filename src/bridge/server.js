@@ -179,6 +179,39 @@ async function handleResponses(req, res, config, store) {
   sendJson(res, 200, response);
 }
 
+async function handleResponseInputTokens(req, res, config, store) {
+  const request = await readJson(req);
+  const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
+  const { chat } = responsesToChatRequest(request, previousMessages, config);
+  chat.model = chat.model || config.defaultModel;
+  chat.stream = false;
+  delete chat.store;
+  chat[config.maxTokensField || "max_tokens"] = 1;
+
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
+  const upstreamText = await upstream.text();
+  const upstreamJson = parseJsonOrNull(upstreamText);
+
+  if (!upstream.ok) {
+    sendJson(res, upstream.status, upstreamJson || { error: { message: upstreamText } });
+    return;
+  }
+
+  const inputTokens = upstreamJson?.usage?.prompt_tokens ?? upstreamJson?.usage?.input_tokens;
+  if (!Number.isFinite(inputTokens)) {
+    sendError(res, 502, "upstream provider did not return input token usage", {
+      type: "upstream_provider_error",
+      code: "missing_usage",
+    });
+    return;
+  }
+
+  sendJson(res, 200, {
+    object: "response.input_tokens",
+    input_tokens: inputTokens,
+  });
+}
+
 async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   const state = createStreamState(response, compatibility);
@@ -807,8 +840,8 @@ function createServer(config = loadConfig()) {
         return;
       }
 
-      if (url.pathname === "/v1/responses/input_tokens") {
-        handleUnsupportedResponseEndpoint(res, "response input token estimation");
+      if (req.method === "POST" && url.pathname === "/v1/responses/input_tokens") {
+        await handleResponseInputTokens(req, res, config, store);
         return;
       }
 

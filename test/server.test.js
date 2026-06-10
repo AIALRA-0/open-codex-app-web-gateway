@@ -201,7 +201,7 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
   });
 });
 
-test("Responses collection endpoints that require native semantics return explicit compatibility errors", async () => {
+test("Response compaction returns an explicit compatibility error", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500).end();
   }, async ({ bridgeAddress }) => {
@@ -209,11 +209,50 @@ test("Responses collection endpoints that require native semantics return explic
     assert.equal(compact.status, 501);
     const compactJson = await compact.json();
     assert.equal(compactJson.error.code, "unsupported_endpoint");
+  });
+});
 
-    const inputTokens = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/input_tokens`, { method: "POST" });
-    assert.equal(inputTokens.status, 501);
-    const inputTokensJson = await inputTokens.json();
-    assert.equal(inputTokensJson.error.type, "unsupported_compatibility_feature");
+test("POST /v1/responses/input_tokens returns upstream prompt token usage", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_token_probe",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 42, completion_tokens: 1, total_tokens: 43 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const inputTokens = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        instructions: "count only",
+        input: "How many tokens?",
+        stream: true,
+        store: true,
+        max_output_tokens: 99,
+      }),
+    });
+    assert.equal(inputTokens.status, 200);
+    assert.deepEqual(await inputTokens.json(), {
+      object: "response.input_tokens",
+      input_tokens: 42,
+    });
+    assert.equal(requests[0].req.url, "/chat/completions");
+    assert.equal(requests[0].body.stream, false);
+    assert.equal(requests[0].body.max_tokens, 1);
+    assert.equal("store" in requests[0].body, false);
+    assert.deepEqual(requests[0].body.messages, [
+      { role: "system", content: "count only" },
+      { role: "user", content: "How many tokens?" },
+    ]);
   });
 });
 

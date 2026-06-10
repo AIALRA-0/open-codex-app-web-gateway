@@ -180,3 +180,25 @@ Open follow-ups:
 - State directory baseline was 10 files and 23796 bytes. Creation added 5 files
   and 13151 bytes. Cleanup returned the directory to the same 10 files and
   23796 bytes, for zero residual file and byte growth after deletion.
+
+## 2026-06-10 Responses Input Token Count Compatibility
+
+- Used the current OpenAI endpoint list and OpenAPI schema to confirm
+  `POST /v1/responses/input_tokens` returns an object with
+  `object: "response.input_tokens"` and an `input_tokens` count.
+- Added a bridge implementation for `POST /v1/responses/input_tokens`.
+- The handler reuses Responses-to-Chat translation and local
+  `previous_response_id` replay, forces a non-streaming upstream Chat
+  Completion probe with `max_tokens:1`, removes upstream `store`, and returns
+  the provider's `usage.prompt_tokens` as `input_tokens`.
+- Kept `POST /v1/responses/compact` as an explicit 501 because native
+  compaction requires summarization/compaction semantics, not just field
+  translation.
+- Added mock-provider coverage for the token probe request shape and response.
+- Added `responses-input-tokens` to the live `bridge-regression` suite.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-input-tokens --timeout-ms 45000`
+  passed 1/1, latency 888 ms, input tokens 10.
+- Full live `bridge-regression` passed 8/8, pass rate 1.0, average latency
+  1843 ms, P95 latency 3891 ms, total usage 847 tokens.

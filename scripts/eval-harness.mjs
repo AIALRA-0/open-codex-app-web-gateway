@@ -144,6 +144,19 @@ function buildSuites(defaultModel) {
           && messages.data?.some((message) => message.role === "assistant"),
       },
       {
+        id: "responses-input-tokens",
+        mode: "responses-input-tokens",
+        request: {
+          model: defaultModel,
+          input: "Count this bridge token probe.",
+          max_output_tokens: 64,
+          store: false,
+        },
+        check: ({ json }) => json?.object === "response.input_tokens"
+          && Number.isInteger(json.input_tokens)
+          && json.input_tokens > 0,
+      },
+      {
         id: "responses-stream-events",
         mode: "responses-stream",
         request: {
@@ -232,6 +245,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "chat-lifecycle") {
       return await runChatLifecycleCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-input-tokens") {
+      return await runInputTokensCase(testCase, context, started);
     }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
@@ -337,6 +353,31 @@ async function runChatLifecycleCase(testCase, context, started) {
     fetched_status: fetched.status,
     messages_status: messages.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+  });
+}
+
+async function runInputTokensCase(testCase, context, started) {
+  const response = await postJson(`${baseUrl}/v1/responses/input_tokens`, testCase.request);
+  const body = await response.text();
+  if (!response.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: response.status,
+      error: truncate(body),
+    });
+  }
+
+  const json = JSON.parse(body);
+  const ok = !!testCase.check({ json, ok: response.ok });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: response.status,
+    usage: {
+      input_tokens: json.input_tokens || 0,
+      output_tokens: 0,
+      total_tokens: json.input_tokens || 0,
+    },
+    input_tokens: json.input_tokens || 0,
   });
 }
 
