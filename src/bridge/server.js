@@ -15,6 +15,10 @@ const {
   prepareInputFileContext,
 } = require("./input_files");
 const {
+  inputImageCompatibility,
+  prepareInputImageContext,
+} = require("./input_images");
+const {
   LOCAL_EMBEDDING_DIMENSIONS,
   annotateFileSearchResponse,
   attachFileSearchOutput,
@@ -182,6 +186,9 @@ function loadConfig(overrides = {}) {
     inputFileFetchTimeoutMs: numberFromEnv("CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     inputFilePdfExtractor: process.env.CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR || "pdftotext",
     inputFilePdfTimeoutMs: numberFromEnv("CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS", 10 * 1000, 1000, 120 * 1000),
+    inputImageProvider: process.env.CODEXCOMPAT_INPUT_IMAGE_PROVIDER || "local",
+    inputImageMaxImages: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES", 32, 1, 1500),
+    inputImageMaxBytes: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES", 4 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -415,11 +422,14 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     ...localShellToolTypes(request.tools || [], config),
     ...localComputerToolTypes(request.tools || [], config),
   ];
+  const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
+  const translatorRequest = localInputImages?.request || request;
   const { chat, compatibility } = responsesToChatRequest(
-    request,
+    translatorRequest,
     previousMessages,
     translatorOptions(config, { localHostedTools }),
   );
+  Object.assign(compatibility, inputImageCompatibility(localInputImages));
   chat.model = chat.model || config.defaultModel;
   applyCompactionReplayToChat(chat, compatibility, request, config);
 
@@ -1681,7 +1691,9 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     ...(conversation?.messages || []),
     ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
   ];
-  const { chat } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
+  const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
+  const translatorRequest = localInputImages?.request || request;
+  const { chat } = responsesToChatRequest(translatorRequest, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) injectInputFileMessages(chat, localInputFiles);
@@ -1729,7 +1741,10 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     ...(conversation?.messages || []),
     ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
   ];
-  const { chat, compatibility } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
+  const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
+  const translatorRequest = localInputImages?.request || request;
+  const { chat, compatibility } = responsesToChatRequest(translatorRequest, previousMessages, translatorOptions(config));
+  Object.assign(compatibility, inputImageCompatibility(localInputImages));
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) applyInputFilesToChat(chat, compatibility, localInputFiles, config);

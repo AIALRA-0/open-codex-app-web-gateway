@@ -711,6 +711,78 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
   });
 });
 
+test("POST /v1/responses resolves input_image file_id to Chat data URLs", async () => {
+  const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [{
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect local file image." },
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/png;base64,${imageBase64}`,
+            detail: "low",
+          },
+        },
+      ],
+    }]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_file_id",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image file id ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdFile = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "vision.png",
+        purpose: "vision",
+        content_base64: imageBase64,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "Inspect local file image." },
+            { type: "input_image", file_id: file.id, detail: "low" },
+          ],
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "image file id ok");
+    assert.equal(json.metadata.compatibility.local_input_images.status, "completed");
+    assert.equal(json.metadata.compatibility.local_input_images.resolved_count, 1);
+    assert.equal(json.metadata.compatibility.local_input_images.files[0].file_id, file.id);
+    assert.equal(json.metadata.compatibility.local_input_images.files[0].media_type, "image/png");
+    assert.equal(json.metadata.compatibility.local_input_images.files[0].status, "completed");
+    assert.equal(Object.prototype.hasOwnProperty.call(json.metadata.compatibility.local_input_images.files[0], "image_url"), false);
+  });
+});
+
 test("POST /v1/responses maps input_audio content to Chat content parts", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [{

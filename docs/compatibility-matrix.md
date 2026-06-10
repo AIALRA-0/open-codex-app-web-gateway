@@ -56,7 +56,7 @@ implementations for those tools.
 | string `input` | `messages: [{role:"user"}]` | Direct |
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
-| `input_image` | chat `image_url` content part | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...`. `file_id` image inputs still fall back to an explicit marker unless a future image-file resolver is enabled |
+| `input_image` | chat `image_url` content part | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...`. Local Files API `file_id` image inputs are resolved to bounded data URLs before upstream Chat calls and recorded in `metadata.compatibility.local_input_images` without storing the base64 payload in metadata |
 | `input_audio` | chat `input_audio` content part | Direct for audio-capable Chat providers using `input_audio:{data,format}`. The bridge also accepts compatible top-level `data`, `audio_data`, or `file_data` shapes and preserves extra audio fields. Non-user or non-forwardable audio becomes an explicit text marker with any transcript; text-only providers such as DeepSeek do not natively understand audio input |
 | `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
 | prior `message` output item | assistant chat message | Direct |
@@ -551,6 +551,35 @@ Configuration:
 This is a bridge compatibility layer, not native OpenAI web search. Full parity
 still requires a production-grade web index/provider, citation policy, and
 stronger citation ranking.
+
+## Local Input Image Adapter
+
+OpenAI Responses can reference image inputs by URL, base64 data URL, or Files
+API `file_id`. Chat Completions commonly accepts image URL/data URL content
+parts, so the bridge resolves local Files API image `file_id` inputs before the
+upstream Chat request:
+
+- `image_url` strings and `image_url:{url,detail}` objects are forwarded
+  directly;
+- inline base64 `file_data`, `data`, and `image_data` are converted to
+  `data:<media_type>;base64,...`;
+- local Files API `file_id` image inputs are read as bytes, checked against
+  local image byte caps, converted to data URLs, and the original `detail` is
+  preserved;
+- compatibility metadata records only file IDs, filenames, media types, byte
+  counts, status, and errors; it does not echo the base64 image payload.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_INPUT_IMAGE_PROVIDER` | `local` | Use `disabled` to leave `input_image.file_id` as a marker-only compatibility fallback |
+| `CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES` | `32` | Maximum local image file IDs resolved per request |
+| `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before it is converted to a data URL |
+
+This adapter does not make a text-only model understand images. It preserves
+the protocol shape for vision-capable Chat providers and keeps DeepSeek text
+workflows stable by avoiding live vision eval claims against text-only models.
 
 ## Local Input File Adapter
 
