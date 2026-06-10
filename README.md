@@ -41,6 +41,7 @@ npm run secret-scan
 npm run eval:bridge -- --timeout-ms 45000
 npm run bench:code -- --timeout-ms 180000
 npm run bench:code -- --suite humaneval-mbpp --timeout-ms 180000
+npm run bench:code -- --suite repo-maintenance --timeout-ms 180000
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 npm run smoke:ui -- --timeout-ms 180000
 ```

@@ -5225,3 +5225,49 @@ Open follow-ups:
   - No API keys, account credentials, or local secret files were committed.
   - This suite is not a SWE-bench substitute; it is a small, deterministic
     pass/fail sentinel for issue-to-patch generation quality.
+
+## 2026-06-11 - Repository-maintenance code benchmark suite
+
+- Closed the next evaluation-plan gap for bridge-repo maintenance scenarios:
+  - added `npm run bench:code -- --suite repo-maintenance --timeout-ms 180000`;
+  - cases cover deployment documentation with provider env vars and secret
+    hygiene, writable project-root normalization, Responses-style function-call
+    tool loops, and previous-response multi-turn replay reconstruction;
+  - default `npm run bench:code` behavior remains the low-cost `micro` suite.
+- Updated documentation:
+  - README verification commands include the new suite;
+  - deployment verification checklist includes the new suite;
+  - evaluation plan now describes repository-maintenance tasks as present quick
+    benchmark coverage rather than future work.
+- Verification:
+  - `node --check scripts/code-benchmark.mjs`: passed.
+  - `git diff --check`: passed.
+  - Unknown-suite CLI guard exits 2 and lists
+    `micro, humaneval-mbpp, repo-maintenance`.
+  - Live `repo-maintenance` code benchmark passed 4/4 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 19652 ms, P95 latency
+    38633 ms, and total usage 9465 tokens. Before-fix tests failed and
+    after-fix tests passed for all four cases.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1131 ms, P95 latency 1177 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 599 runtime candidates,
+    selected 51 old UI screenshots by retention policy, deleted 0, selected
+    4051398 bytes, and reported 0 errors.
+  - Report artifact written outside release docs at
+    `/srv/aialra/data/opencodexapp/eval/code-benchmark/repo-maintenance-latest.json`;
+    transient work directories remain under ignored `output/code-benchmark/`.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 50 MB, `state/` is 5.2 MB, `output/` is 8.3 MB,
+    `/srv/aialra/data/opencodexapp/eval/code-benchmark` is 36 KB, and
+    `/srv/aialra/logs/opencodexapp` is 15 MB.
+  - No API keys, account credentials, or local secret files were committed.
+  - This suite is still a deterministic quick signal; it supports the larger
+    quality program but does not replace SWE-bench scoring or justify a 95%
+    parity claim on its own.

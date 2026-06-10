@@ -20,6 +20,7 @@ const verbose = !!args.get("verbose");
 const suites = {
   micro: buildMicroSuite(),
   "humaneval-mbpp": buildHumanEvalMbppSuite(),
+  "repo-maintenance": buildRepoMaintenanceSuite(),
 };
 const selected = caseFilter
   ? suites[suite]?.filter((task) => task.id === caseFilter)
@@ -323,6 +324,204 @@ console.log("matrix rotation tests passed");
       },
       testCommand: ["node", "test.js"],
       editableFiles: ["matrix.js"],
+    },
+  ];
+}
+
+function buildRepoMaintenanceSuite() {
+  return [
+    {
+      id: "deployment-doc-env-vars",
+      issue: [
+        "Update docs/deployment.md so a new operator can configure the bridge without leaking secrets.",
+        "Requirements:",
+        "- document CODEXCOMPAT_PROVIDER_BASE_URL, CODEXCOMPAT_PROVIDER_API_KEY, and CODEXCOMPAT_DEFAULT_MODEL",
+        "- mention that provider API keys must live in machine-local secret files, not in git",
+        "- include npm run secret-scan in the verification checklist",
+        "- keep the document concise",
+      ].join("\n"),
+      files: {
+        "docs/deployment.md": `# Deployment
+
+## Runtime
+
+Start the bridge with CODEXCOMPAT_DEFAULT_MODEL=deepseek-v4-pro.
+
+## Verification
+
+Run npm test after changes.
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const fs = require("node:fs");
+
+const doc = fs.readFileSync("docs/deployment.md", "utf8");
+assert.match(doc, /CODEXCOMPAT_PROVIDER_BASE_URL/);
+assert.match(doc, /CODEXCOMPAT_PROVIDER_API_KEY/);
+assert.match(doc, /CODEXCOMPAT_DEFAULT_MODEL/);
+assert.match(doc, /npm run secret-scan/);
+assert.match(doc, /(machine-local|local).*secret/i);
+assert.match(doc, /(not|never).*git/i);
+console.log("deployment doc tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["docs/deployment.md"],
+    },
+    {
+      id: "project-root-normalization",
+      issue: [
+        "Fix normalizeProjectRoots(roots).",
+        "It receives an array of candidate writable root paths from UI settings.",
+        "Return a new array that trims whitespace, removes empty values, removes trailing slashes except for '/', and de-duplicates while preserving first occurrence order.",
+        "Do not mutate the caller's input array.",
+      ].join("\n"),
+      files: {
+        "src/project-roots.js": `function normalizeProjectRoots(roots) {
+  return roots;
+}
+
+module.exports = { normalizeProjectRoots };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { normalizeProjectRoots } = require("./src/project-roots");
+
+const input = [" /srv/aialra/apps/ ", "", "/tmp//", "/srv/aialra/apps", "/", "   ", "/tmp"];
+const result = normalizeProjectRoots(input);
+assert.deepEqual(result, ["/srv/aialra/apps", "/tmp", "/"]);
+assert.deepEqual(input, [" /srv/aialra/apps/ ", "", "/tmp//", "/srv/aialra/apps", "/", "   ", "/tmp"]);
+assert.deepEqual(normalizeProjectRoots(["/a///", "/a", "/b/"]), ["/a", "/b"]);
+assert.deepEqual(normalizeProjectRoots([]), []);
+console.log("project root normalization tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["src/project-roots.js"],
+    },
+    {
+      id: "responses-tool-loop",
+      issue: [
+        "Fix runToolLoop(client, tools, input, maxSteps).",
+        "It should call client.create({ input }) until the model returns a final text answer.",
+        "When a Responses output item has type function_call, parse its JSON arguments, call the matching function from tools, append { type: 'function_call_output', call_id, output } to the next input, and continue.",
+        "The first request must pass the original input unchanged. Follow-up requests should pass an array containing the original input followed by tool output items.",
+        "Return response.output_text when present, otherwise extract output_text parts from message content.",
+        "Throw a useful error for an unknown tool name or when maxSteps is exceeded.",
+      ].join("\n"),
+      files: {
+        "src/tool-loop.js": `async function runToolLoop(client, tools, input, maxSteps = 4) {
+  const response = await client.create({ input });
+  return response.output_text || "";
+}
+
+module.exports = { runToolLoop };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { runToolLoop } = require("./src/tool-loop");
+
+(async () => {
+  const requests = [];
+  const client = {
+    async create(request) {
+      requests.push(request);
+      if (requests.length === 1) {
+        assert.equal(request.input, "What is 2+3?");
+        return {
+          output: [
+            { type: "function_call", call_id: "call_1", name: "add", arguments: "{\\"a\\":2,\\"b\\":3}" },
+          ],
+        };
+      }
+      assert.ok(Array.isArray(request.input));
+      assert.equal(request.input[0], "What is 2+3?");
+      assert.deepEqual(request.input[1], { type: "function_call_output", call_id: "call_1", output: "5" });
+      return {
+        output: [
+          {
+            type: "message",
+            content: [{ type: "output_text", text: "The answer is 5." }],
+          },
+        ],
+      };
+    },
+  };
+
+  const answer = await runToolLoop(client, { add: ({ a, b }) => String(a + b) }, "What is 2+3?");
+  assert.equal(answer, "The answer is 5.");
+  assert.equal(requests.length, 2);
+
+  await assert.rejects(
+    () => runToolLoop({ create: async () => ({ output: [{ type: "function_call", call_id: "x", name: "missing", arguments: "{}" }] }) }, {}, "x"),
+    /unknown tool/i,
+  );
+  console.log("responses tool-loop tests passed");
+})().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["src/tool-loop.js"],
+    },
+    {
+      id: "multi-turn-state-replay",
+      issue: [
+        "Fix buildConversationInput(store, request).",
+        "It should rebuild a Responses conversation turn from request.previous_response_id.",
+        "Look up the previous response from either a Map or a plain object.",
+        "Preserve previous input items, convert previous assistant message output_text content into assistant messages, and append the current request input.",
+        "Normalize string input into { role: 'user', content: string }.",
+        "Return a new array without mutating stored responses or the request.",
+      ].join("\n"),
+      files: {
+        "src/replay.js": `function buildConversationInput(store, request) {
+  return request.input;
+}
+
+module.exports = { buildConversationInput };
+`,
+        "test.js": `const assert = require("node:assert/strict");
+const { buildConversationInput } = require("./src/replay");
+
+const previous = {
+  id: "resp_1",
+  input: [{ role: "user", content: "Plan the deployment." }],
+  output: [
+    {
+      type: "message",
+      role: "assistant",
+      content: [
+        { type: "output_text", text: "Check services first." },
+        { type: "output_text", text: "Then run smoke tests." },
+      ],
+    },
+  ],
+};
+const store = new Map([["resp_1", previous]]);
+const request = {
+  previous_response_id: "resp_1",
+  input: [{ role: "user", content: "Continue with docs." }],
+};
+
+const result = buildConversationInput(store, request);
+assert.deepEqual(result, [
+  { role: "user", content: "Plan the deployment." },
+  { role: "assistant", content: "Check services first.\\nThen run smoke tests." },
+  { role: "user", content: "Continue with docs." },
+]);
+assert.notEqual(result, previous.input);
+assert.deepEqual(previous.input, [{ role: "user", content: "Plan the deployment." }]);
+assert.deepEqual(request.input, [{ role: "user", content: "Continue with docs." }]);
+
+assert.deepEqual(buildConversationInput({ resp_2: { input: "hello", output: [] } }, { previous_response_id: "resp_2", input: "again" }), [
+  { role: "user", content: "hello" },
+  { role: "user", content: "again" },
+]);
+console.log("multi-turn replay tests passed");
+`,
+      },
+      testCommand: ["node", "test.js"],
+      editableFiles: ["src/replay.js"],
     },
   ];
 }
