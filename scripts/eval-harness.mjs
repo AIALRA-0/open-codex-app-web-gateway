@@ -333,6 +333,50 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-file-search-batch",
+        mode: "responses-file-search",
+        file: {
+          filename: "bridge-file-search-batch.txt",
+          purpose: "assistants",
+          content: "Bridge file batch search fixture. The exact batch search answer is file-batch-ok. When asked for the exact answer, return file-batch-ok [1].",
+        },
+        vectorStore: { name: "bridge-file-search-batch-eval" },
+        vectorFileBatch: ({ fileId }) => ({
+          files: [{
+            file_id: fileId,
+            attributes: { suite: "bridge-regression-batch" },
+          }],
+        }),
+        request: ({ vectorStoreId }) => ({
+          model: defaultModel,
+          input: "File search for file-batch-ok. Using the file search result, return exactly this text and nothing else: file-batch-ok [1]",
+          tools: [{
+            type: "file_search",
+            vector_store_ids: [vectorStoreId],
+            max_num_results: 3,
+            filters: { type: "eq", key: "suite", value: "bridge-regression-batch" },
+          }],
+          include: ["file_search_call.results"],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, fileId, vectorStoreId, fileBatch }) => {
+          const call = (json.output || []).find((item) => item.type === "file_search_call");
+          const annotations = (json.output || [])
+            .flatMap((item) => item.content || [])
+            .flatMap((part) => part.annotations || []);
+          return fileBatch?.object === "vector_store.file_batch"
+            && fileBatch.status === "completed"
+            && fileBatch.file_counts?.completed === 1
+            && !!call
+            && call.status === "completed"
+            && call.vector_store_ids?.includes(vectorStoreId)
+            && call.results?.some((result) => result.file_id === fileId)
+            && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === fileId)
+            && /file-batch-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-compact-continuation",
         mode: "responses-compact",
         request: {
@@ -687,6 +731,7 @@ async function runBackgroundCase(testCase, context, started) {
 async function runFileSearchCase(testCase, context, started) {
   let file = null;
   let vectorStore = null;
+  let fileBatch = null;
   try {
     const fileResponse = await postJson(`${baseUrl}/v1/files`, testCase.file);
     const fileBody = await fileResponse.text();
@@ -710,17 +755,31 @@ async function runFileSearchCase(testCase, context, started) {
     }
     vectorStore = JSON.parse(storeBody);
 
-    const attachResponse = await postJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
-      file_id: file.id,
-      ...(testCase.vectorFile || {}),
-    });
-    const attachBody = await attachResponse.text();
-    if (!attachResponse.ok) {
-      return finishResult(testCase, context, started, {
-        ok: false,
-        status: attachResponse.status,
-        error: truncate(attachBody),
+    if (testCase.vectorFileBatch) {
+      const batchRequest = resolveRequest(testCase.vectorFileBatch, { ...context, fileId: file.id, vectorStoreId: vectorStore.id });
+      const batchResponse = await postJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, batchRequest);
+      const batchBody = await batchResponse.text();
+      if (!batchResponse.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: batchResponse.status,
+          error: truncate(batchBody),
+        });
+      }
+      fileBatch = JSON.parse(batchBody);
+    } else {
+      const attachResponse = await postJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+        file_id: file.id,
+        ...(testCase.vectorFile || {}),
       });
+      const attachBody = await attachResponse.text();
+      if (!attachResponse.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: attachResponse.status,
+          error: truncate(attachBody),
+        });
+      }
     }
 
     const request = resolveRequest(testCase.request, { ...context, fileId: file.id, vectorStoreId: vectorStore.id });
@@ -736,12 +795,13 @@ async function runFileSearchCase(testCase, context, started) {
 
     const json = JSON.parse(body);
     const text = responseOutputText(json);
-    const ok = !!testCase.check({ json, text, fileId: file.id, vectorStoreId: vectorStore.id });
+    const ok = !!testCase.check({ json, text, fileId: file.id, vectorStoreId: vectorStore.id, fileBatch });
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
       file_id: file.id,
       vector_store_id: vectorStore.id,
+      ...(fileBatch?.id ? { file_batch_id: fileBatch.id, file_batch_status: fileBatch.status } : {}),
       usage: responseUsage(json),
       output_text: truncate(text),
     });

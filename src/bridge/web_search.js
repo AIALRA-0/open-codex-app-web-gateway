@@ -7,6 +7,8 @@ const WEB_SEARCH_TOOL_TYPES = new Set([
   "web_search_preview",
   "web_search_preview_2025_03_11",
 ]);
+const DEFAULT_WIKIPEDIA_ENDPOINT = "https://en.wikipedia.org/w/api.php";
+const DEFAULT_WEB_SEARCH_USER_AGENT = "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)";
 
 function isWebSearchTool(tool) {
   return !!tool && typeof tool === "object" && WEB_SEARCH_TOOL_TYPES.has(tool.type);
@@ -165,7 +167,7 @@ function staticResults(config = {}) {
 }
 
 async function searchWikipedia(query, maxResults, config = {}, options = {}) {
-  const endpoint = config.webSearchWikipediaEndpoint || "https://en.wikipedia.org/w/api.php";
+  const endpoint = config.webSearchWikipediaEndpoint || DEFAULT_WIKIPEDIA_ENDPOINT;
   const url = new URL(endpoint);
   url.searchParams.set("action", "query");
   url.searchParams.set("list", "search");
@@ -174,6 +176,38 @@ async function searchWikipedia(query, maxResults, config = {}, options = {}) {
   url.searchParams.set("srlimit", String(maxResults));
   url.searchParams.set("srsearch", query);
 
+  try {
+    const json = await fetchJson(url, config, options, "wikipedia search");
+    return normalizeResults((json.query?.search || []).map((item) => ({
+      title: item.title,
+      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(item.title || "").replace(/ /g, "_"))}`,
+      snippet: stripHtml(item.snippet || ""),
+    }))).slice(0, maxResults);
+  } catch (error) {
+    const configuredStatic = staticResults(config).slice(0, maxResults);
+    if (configuredStatic.length) return configuredStatic;
+    if (endpoint !== DEFAULT_WIKIPEDIA_ENDPOINT) throw error;
+    try {
+      return await searchWikipediaRest(query, maxResults, config, options);
+    } catch (fallbackError) {
+      throw new Error(`${error.message || "wikipedia search failed"}; REST fallback failed: ${fallbackError.message || fallbackError}`);
+    }
+  }
+}
+
+async function searchWikipediaRest(query, maxResults, config = {}, options = {}) {
+  const url = new URL("https://en.wikipedia.org/w/rest.php/v1/search/page");
+  url.searchParams.set("q", query);
+  url.searchParams.set("limit", String(maxResults));
+  const json = await fetchJson(url, config, options, "wikipedia REST search");
+  return normalizeResults((json.pages || []).map((item) => ({
+    title: item.title,
+    url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(item.key || item.title || "").replace(/ /g, "_"))}`,
+    snippet: stripHtml(item.excerpt || item.description || ""),
+  }))).slice(0, maxResults);
+}
+
+async function fetchJson(url, config = {}, options = {}, label = "request") {
   const fetchImpl = options.fetch || globalThis.fetch;
   const controller = new AbortController();
   const abortFromParent = () => controller.abort();
@@ -184,17 +218,12 @@ async function searchWikipedia(query, maxResults, config = {}, options = {}) {
     const response = await fetchImpl(url, {
       headers: {
         "accept": "application/json",
-        "user-agent": config.webSearchUserAgent || "open-codex-responses-bridge/0.2",
+        "user-agent": config.webSearchUserAgent || DEFAULT_WEB_SEARCH_USER_AGENT,
       },
       signal: controller.signal,
     });
-    if (!response.ok) throw new Error(`wikipedia search failed with HTTP ${response.status}`);
-    const json = await response.json();
-    return normalizeResults((json.query?.search || []).map((item) => ({
-      title: item.title,
-      url: `https://en.wikipedia.org/wiki/${encodeURIComponent(String(item.title || "").replace(/ /g, "_"))}`,
-      snippet: stripHtml(item.snippet || ""),
-    }))).slice(0, maxResults);
+    if (!response.ok) throw new Error(`${label} failed with HTTP ${response.status}`);
+    return await response.json();
   } finally {
     options.signal?.removeEventListener?.("abort", abortFromParent);
     clearTimeout(timeout);

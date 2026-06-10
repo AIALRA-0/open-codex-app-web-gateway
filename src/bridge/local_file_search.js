@@ -134,9 +134,85 @@ class LocalFileSearchStore {
       last_error: null,
       usage_bytes: file.bytes,
       attributes: isPlainObject(body.attributes) ? body.attributes : {},
+      ...(isPlainObject(body.chunking_strategy) ? { chunking_strategy: body.chunking_strategy } : {}),
     };
     this.writeJson(this.vectorStoreFilePath(storeId, file.id), { vector_store_file: attached });
     return attached;
+  }
+
+  createVectorStoreFileBatch(storeId, body = {}) {
+    const store = this.getVectorStore(storeId);
+    if (!store) return null;
+    const entries = normalizeBatchFiles(body);
+    for (const entry of entries) {
+      const file = this.getFile(entry.file_id);
+      if (!file) {
+        const error = new Error(`file not found: ${entry.file_id}`);
+        error.status = 404;
+        throw error;
+      }
+    }
+
+    const batch = {
+      id: prefixedId("vsfb"),
+      object: "vector_store.file_batch",
+      created_at: nowSeconds(),
+      vector_store_id: storeId,
+      status: "completed",
+      file_counts: {
+        in_progress: 0,
+        completed: entries.length,
+        failed: 0,
+        cancelled: 0,
+        total: entries.length,
+      },
+    };
+
+    const fileIds = [];
+    for (const entry of entries) {
+      const attached = this.attachFile(storeId, entry);
+      fileIds.push(attached.id);
+    }
+    this.writeJson(this.vectorStoreFileBatchPath(storeId, batch.id), {
+      vector_store_file_batch: batch,
+      file_ids: fileIds,
+    });
+    return batch;
+  }
+
+  getVectorStoreFileBatch(storeId, batchId) {
+    const batch = this.readJson(this.vectorStoreFileBatchPath(storeId, batchId))?.vector_store_file_batch || null;
+    if (!batch || !this.getVectorStore(storeId)) return null;
+    return batch;
+  }
+
+  cancelVectorStoreFileBatch(storeId, batchId) {
+    const record = this.readJson(this.vectorStoreFileBatchPath(storeId, batchId));
+    const batch = record?.vector_store_file_batch;
+    if (!batch || !this.getVectorStore(storeId)) return null;
+    if (batch.status === "in_progress") {
+      batch.status = "cancelled";
+      batch.file_counts = {
+        in_progress: 0,
+        completed: 0,
+        failed: 0,
+        cancelled: record.file_ids?.length || 0,
+        total: record.file_ids?.length || 0,
+      };
+      this.writeJson(this.vectorStoreFileBatchPath(storeId, batchId), { ...record, vector_store_file_batch: batch });
+    }
+    return batch;
+  }
+
+  listVectorStoreFileBatchFiles(storeId, batchId, { url } = {}) {
+    const record = this.readJson(this.vectorStoreFileBatchPath(storeId, batchId));
+    if (!record?.vector_store_file_batch || !this.getVectorStore(storeId)) return null;
+    const status = url?.searchParams?.get("filter") || "";
+    const files = (record.file_ids || [])
+      .map((fileId) => this.getVectorStoreFile(storeId, fileId))
+      .filter(Boolean)
+      .filter((file) => !status || file.status === status);
+    return paginateList(files, url);
   }
 
   listVectorStoreFiles(storeId, { url } = {}) {
@@ -247,6 +323,14 @@ class LocalFileSearchStore {
 
   vectorStoreFilePath(storeId, fileId) {
     return path.join(this.vectorStoreFilesDir(storeId), `${safeId(fileId)}.json`);
+  }
+
+  vectorStoreFileBatchesDir(storeId) {
+    return path.join(this.vectorStoreDir(storeId), "file_batches");
+  }
+
+  vectorStoreFileBatchPath(storeId, batchId) {
+    return path.join(this.vectorStoreFileBatchesDir(storeId), `${safeId(batchId)}.json`);
   }
 
   readJson(filePath) {
@@ -592,6 +676,67 @@ function paginateList(items, url) {
 
 function emptyFileCounts() {
   return { in_progress: 0, completed: 0, failed: 0, cancelled: 0, total: 0 };
+}
+
+function normalizeBatchFiles(body = {}) {
+  const hasFileIds = Object.prototype.hasOwnProperty.call(body, "file_ids");
+  const hasFiles = Object.prototype.hasOwnProperty.call(body, "files");
+  if (hasFileIds && hasFiles) {
+    const error = new Error("file_ids and files are mutually exclusive");
+    error.status = 400;
+    throw error;
+  }
+
+  let entries = [];
+  if (hasFileIds) {
+    if (!Array.isArray(body.file_ids)) {
+      const error = new Error("file_ids must be an array");
+      error.status = 400;
+      throw error;
+    }
+    entries = body.file_ids.map((fileId) => ({
+      file_id: fileId,
+      ...(isPlainObject(body.attributes) ? { attributes: body.attributes } : {}),
+      ...(isPlainObject(body.chunking_strategy) ? { chunking_strategy: body.chunking_strategy } : {}),
+    }));
+  } else if (hasFiles) {
+    if (!Array.isArray(body.files)) {
+      const error = new Error("files must be an array");
+      error.status = 400;
+      throw error;
+    }
+    entries = body.files.map((file) => {
+      if (!isPlainObject(file)) {
+        const error = new Error("files entries must be objects");
+        error.status = 400;
+        throw error;
+      }
+      return {
+        file_id: file.file_id,
+        ...(isPlainObject(file.attributes) ? { attributes: file.attributes } : {}),
+        ...(isPlainObject(file.chunking_strategy) ? { chunking_strategy: file.chunking_strategy } : {}),
+      };
+    });
+  }
+
+  if (!entries.length) {
+    const error = new Error("file_ids or files is required");
+    error.status = 400;
+    throw error;
+  }
+  if (entries.length > 2000) {
+    const error = new Error("file batch cannot contain more than 2000 files");
+    error.status = 400;
+    throw error;
+  }
+  for (const entry of entries) {
+    if (typeof entry.file_id !== "string" || !entry.file_id) {
+      const error = new Error("each batch file must include file_id");
+      error.status = 400;
+      throw error;
+    }
+  }
+  return entries;
 }
 
 function nowSeconds() {

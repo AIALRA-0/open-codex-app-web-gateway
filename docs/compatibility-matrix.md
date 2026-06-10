@@ -184,6 +184,10 @@ under the configured bridge state directory, not in Git.
 | `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with pagination |
 | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Returns local vector-store file metadata |
 | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
+| `POST /v1/vector_stores/{vector_store_id}/file_batches` | Implemented | Synchronously attaches up to 2000 local files; accepts either `file_ids` with global `attributes`/`chunking_strategy` or `files[]` with per-file values |
+| `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |
+| `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with pagination and `filter` by file status |
+| `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns the completed batch unless a future async batch is still `in_progress`, in which case it is marked `cancelled` |
 | `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, and simple metadata `filters` |
 
 ## Containers Endpoint Coverage

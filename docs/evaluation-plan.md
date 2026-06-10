@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
@@ -56,6 +56,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-input-f
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search-batch --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
 npm run bench:code -- --timeout-ms 180000
@@ -124,6 +125,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Responses `input_file` text extraction works for local file IDs, inline base64 payloads, and bounded HTTP(S) file URLs, with failed/unsupported files surfaced in compatibility metadata.
 - Hosted-tool emulation returns auditable call items and citations for web search.
 - Hosted-tool emulation returns auditable call items and citations for file search.
+- Local vector-store file batches accept both OpenAI batch request shapes and remain compatible with file-search retrieval.
 - Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.
 - State/log growth remains bounded under the configured cleanup policy.

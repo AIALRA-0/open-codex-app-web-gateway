@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { createServer, loadConfig } = require("../src/bridge/server");
+const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
 function listen(server) {
   return new Promise((resolve) => {
@@ -557,6 +558,43 @@ test("POST /v1/responses executes local web_search_preview compatibility", async
   });
 });
 
+test("local web_search falls back to Wikipedia REST when the MediaWiki API is rejected", async () => {
+  const seen = [];
+  const context = await prepareWebSearchContext({
+    input: "Use web search for OpenAI.",
+    tools: [{ type: "web_search_preview" }],
+  }, {
+    webSearchProvider: "wikipedia",
+    webSearchMaxResults: 1,
+    webSearchTimeoutMs: 1000,
+  }, {
+    fetch: async (url, options) => {
+      seen.push({ url: String(url), userAgent: options.headers["user-agent"] });
+      if (String(url).includes("/w/api.php")) {
+        return { ok: false, status: 403, json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          pages: [{
+            key: "OpenAI",
+            title: "OpenAI",
+            excerpt: "<span>OpenAI</span> is an AI research organization.",
+          }],
+        }),
+      };
+    },
+  });
+
+  assert.equal(context.calls[0].status, "completed");
+  assert.equal(context.results.length, 1);
+  assert.equal(context.results[0].title, "OpenAI");
+  assert.equal(context.results[0].url, "https://en.wikipedia.org/wiki/OpenAI");
+  assert.ok(seen[0].userAgent.includes("opencodexapp.aialra.online"));
+  assert.ok(seen.some((item) => item.url.includes("/w/rest.php/v1/search/page")));
+});
+
 test("POST /v1/responses streams Chat chunks as typed Responses events", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -1074,6 +1112,143 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const listed = await fetch(`${baseUrl}/v1/files?purpose=assistants`);
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, file.id);
+  });
+});
+
+test("local Vector Store file batches attach files and expose batch lifecycle", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "provider should not be called" }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileAResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "batch-a.txt",
+        purpose: "assistants",
+        content: "Batch file A contains batch-global-ok.",
+      }),
+    });
+    assert.equal(fileAResponse.status, 200);
+    const fileA = await fileAResponse.json();
+
+    const fileBResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "batch-b.txt",
+        purpose: "assistants",
+        content: "Batch file B contains batch-per-file-ok.",
+      }),
+    });
+    assert.equal(fileBResponse.status, 200);
+    const fileB = await fileBResponse.json();
+
+    const storeResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "batch-store" }),
+    });
+    assert.equal(storeResponse.status, 200);
+    const vectorStore = await storeResponse.json();
+
+    const globalBatchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        file_ids: [fileA.id],
+        attributes: { suite: "batch-global" },
+        chunking_strategy: {
+          type: "static",
+          static: { max_chunk_size_tokens: 800, chunk_overlap_tokens: 200 },
+        },
+      }),
+    });
+    assert.equal(globalBatchResponse.status, 200);
+    const globalBatch = await globalBatchResponse.json();
+    assert.equal(globalBatch.object, "vector_store.file_batch");
+    assert.equal(globalBatch.status, "completed");
+    assert.deepEqual(globalBatch.file_counts, {
+      in_progress: 0,
+      completed: 1,
+      failed: 0,
+      cancelled: 0,
+      total: 1,
+    });
+
+    const perFileBatchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        attributes: { suite: "ignored-global" },
+        files: [{
+          file_id: fileB.id,
+          attributes: { suite: "batch-per-file" },
+          chunking_strategy: {
+            type: "static",
+            static: { max_chunk_size_tokens: 1200, chunk_overlap_tokens: 300 },
+          },
+        }],
+      }),
+    });
+    assert.equal(perFileBatchResponse.status, 200);
+    const perFileBatch = await perFileBatchResponse.json();
+    assert.equal(perFileBatch.object, "vector_store.file_batch");
+    assert.equal(perFileBatch.status, "completed");
+    assert.equal(perFileBatch.file_counts.completed, 1);
+
+    const retrieved = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}`);
+    assert.equal(retrieved.status, 200);
+    assert.equal((await retrieved.json()).id, perFileBatch.id);
+
+    const globalFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${globalBatch.id}/files?filter=completed`);
+    assert.equal(globalFiles.status, 200);
+    const globalFilesJson = await globalFiles.json();
+    assert.equal(globalFilesJson.object, "list");
+    assert.equal(globalFilesJson.data.length, 1);
+    assert.equal(globalFilesJson.data[0].id, fileA.id);
+    assert.deepEqual(globalFilesJson.data[0].attributes, { suite: "batch-global" });
+    assert.equal(globalFilesJson.data[0].chunking_strategy.type, "static");
+
+    const perFileFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files`);
+    assert.equal(perFileFiles.status, 200);
+    const perFileFilesJson = await perFileFiles.json();
+    assert.equal(perFileFilesJson.data.length, 1);
+    assert.equal(perFileFilesJson.data[0].id, fileB.id);
+    assert.deepEqual(perFileFilesJson.data[0].attributes, { suite: "batch-per-file" });
+
+    const failedFilter = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?filter=failed`);
+    assert.equal(failedFilter.status, 200);
+    assert.deepEqual((await failedFilter.json()).data, []);
+
+    const search = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "batch-per-file-ok",
+        filters: { type: "eq", key: "suite", value: "batch-per-file" },
+      }),
+    });
+    assert.equal(search.status, 200);
+    assert.equal((await search.json()).data[0].file_id, fileB.id);
+
+    const cancel = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/cancel`, {
+      method: "POST",
+    });
+    assert.equal(cancel.status, 200);
+    assert.equal((await cancel.json()).status, "completed");
+
+    const invalid = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_ids: [fileA.id], files: [{ file_id: fileB.id }] }),
+    });
+    assert.equal(invalid.status, 400);
+    assert.match(await invalid.text(), /mutually exclusive/);
+
+    const missing = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/vsfb_missing`);
+    assert.equal(missing.status, 404);
   });
 });
 

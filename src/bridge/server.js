@@ -107,7 +107,7 @@ function loadConfig(overrides = {}) {
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     webSearchStaticResults: process.env.CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS || "",
     webSearchWikipediaEndpoint: process.env.CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT || "",
-    webSearchUserAgent: process.env.CODEXCOMPAT_WEB_SEARCH_USER_AGENT || "open-codex-responses-bridge/0.2",
+    webSearchUserAgent: process.env.CODEXCOMPAT_WEB_SEARCH_USER_AGENT || "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)",
     fileSearchProvider: process.env.CODEXCOMPAT_FILE_SEARCH_PROVIDER || "local",
     fileSearchStateDir: process.env.CODEXCOMPAT_FILE_SEARCH_STATE_DIR || path.join(stateDir, "local-file-search"),
     fileSearchMaxResults: numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS", 5, 1, 20),
@@ -755,6 +755,43 @@ async function handleVectorStoreFileCreate(req, res, fileSearchStore, storeId) {
     return;
   }
   sendJson(res, 200, attached);
+}
+
+async function handleVectorStoreFileBatchCreate(req, res, fileSearchStore, storeId) {
+  const body = await readJson(req);
+  const batch = fileSearchStore.createVectorStoreFileBatch(storeId, body);
+  if (!batch) {
+    sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
+    return;
+  }
+  sendJson(res, 200, batch);
+}
+
+function handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId) {
+  const batch = fileSearchStore.getVectorStoreFileBatch(storeId, batchId);
+  if (!batch) {
+    sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
+    return;
+  }
+  sendJson(res, 200, batch);
+}
+
+function handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId) {
+  const batch = fileSearchStore.cancelVectorStoreFileBatch(storeId, batchId);
+  if (!batch) {
+    sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
+    return;
+  }
+  sendJson(res, 200, batch);
+}
+
+function handleVectorStoreFileBatchFilesList(res, fileSearchStore, storeId, batchId, url) {
+  const page = fileSearchStore.listVectorStoreFileBatchFiles(storeId, batchId, { url });
+  if (!page) {
+    sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
+    return;
+  }
+  sendJson(res, 200, page);
 }
 
 function handleVectorStoreFilesList(res, fileSearchStore, storeId, url) {
@@ -2211,6 +2248,29 @@ function createServer(config = loadConfig()) {
       if (vectorStoreSearchRoute && req.method === "POST") {
         await handleVectorStoreSearch(req, res, fileSearchStore, decodeURIComponent(vectorStoreSearchRoute[1]));
         return;
+      }
+
+      const vectorStoreFileBatchesRoute = url.pathname.match(/^\/v1\/vector_stores\/([^/]+)\/file_batches(?:\/([^/]+)(?:\/(files|cancel))?)?$/);
+      if (vectorStoreFileBatchesRoute) {
+        const storeId = decodeURIComponent(vectorStoreFileBatchesRoute[1]);
+        const batchId = vectorStoreFileBatchesRoute[2] ? decodeURIComponent(vectorStoreFileBatchesRoute[2]) : "";
+        const action = vectorStoreFileBatchesRoute[3] || "";
+        if (!batchId && req.method === "POST") {
+          await handleVectorStoreFileBatchCreate(req, res, fileSearchStore, storeId);
+          return;
+        }
+        if (batchId && !action && req.method === "GET") {
+          handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId);
+          return;
+        }
+        if (batchId && action === "files" && req.method === "GET") {
+          handleVectorStoreFileBatchFilesList(res, fileSearchStore, storeId, batchId, url);
+          return;
+        }
+        if (batchId && action === "cancel" && req.method === "POST") {
+          handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId);
+          return;
+        }
       }
 
       const vectorStoreFilesRoute = url.pathname.match(/^\/v1\/vector_stores\/([^/]+)\/files(?:\/([^/]+))?$/);

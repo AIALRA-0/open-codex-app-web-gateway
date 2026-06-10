@@ -1326,3 +1326,74 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7xa7js` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Vector Store File Batches and Web Search Resilience
+
+- Used the current OpenAI file-search guide and Vector Store File Batch API
+  reference to close a local vector-store compatibility gap:
+  - guide:
+    https://developers.openai.com/api/docs/assistants/tools/file-search#creating-vector-stores-and-adding-files
+  - create batch:
+    https://developers.openai.com/api/reference/python/resources/vector_stores/subresources/file_batches/methods/create
+  - retrieve batch:
+    https://developers.openai.com/api/reference/python/resources/vector_stores/subresources/file_batches/methods/retrieve
+  - list batch files:
+    https://developers.openai.com/api/reference/python/resources/vector_stores/subresources/file_batches/methods/list_files
+  - cancel batch:
+    https://developers.openai.com/api/reference/python/resources/vector_stores/subresources/file_batches/methods/cancel
+- Added local support for the OpenAI Vector Store File Batch lifecycle:
+  - `POST /v1/vector_stores/{vector_store_id}/file_batches`;
+  - `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}`;
+  - `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files`;
+  - `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel`.
+- Batch creation now accepts both current OpenAI request shapes:
+  - `file_ids` with global `attributes` and `chunking_strategy`;
+  - `files[]` entries with per-file `file_id`, `attributes`, and
+    `chunking_strategy`.
+- The local adapter enforces `file_ids` / `files` mutual exclusion and a 2000
+  file upper bound from the current API reference. Because local indexing is
+  synchronous, new batches return `status:"completed"` immediately with
+  OpenAI-style `file_counts`; canceling an already completed batch returns the
+  completed batch as a compatibility no-op.
+- Extended the live bridge regression harness with
+  `responses-file-search-batch`, which creates a local file, creates a vector
+  store, attaches the file through the new file-batch endpoint, then verifies
+  Responses `file_search` returns a `file_search_call`, result citation, and
+  visible answer through DeepSeek.
+- During live verification, the existing `responses-web-search` case exposed a
+  Wikimedia HTTP 403 from the default MediaWiki API request. The bridge now:
+  - uses a more complete default `CODEXCOMPAT_WEB_SEARCH_USER_AGENT`;
+  - falls back from the default MediaWiki API endpoint to Wikipedia REST page
+    search when the first request is rejected;
+  - still prefers configured `CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS` when
+    present.
+- Updated `docs/compatibility-matrix.md`, `docs/evaluation-plan.md`, and
+  `docs/deployment.md`.
+- Added regression coverage for:
+  - vector-store file batch creation with `file_ids`;
+  - vector-store file batch creation with `files[]`;
+  - batch retrieve, list-files with `filter`, completed cancel no-op, and
+    mutual-exclusion rejection;
+  - MediaWiki API rejection falling back to Wikipedia REST search.
+- Verified:
+  - `node --check src/bridge/web_search.js`: passed.
+  - `node --check src/bridge/local_file_search.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 56/56 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 18/18, pass rate 1.0, average latency
+    1663 ms, P95 latency 4052 ms, total usage 2358 tokens. The new
+    `responses-file-search-batch` case returned `file_batch_status:"completed"`
+    and the `responses-web-search` case returned `ok:true`.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7xthoj` appeared before reload and after reload, console errors
+    0, warnings 0.
