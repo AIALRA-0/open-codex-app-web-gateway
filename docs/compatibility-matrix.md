@@ -41,6 +41,7 @@ implementations for those tools.
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
 | `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility |
 | `previous_response_id` | local replay store | Emulated locally |
+| `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution |
 | `tools[type=function]` | chat function tools | Direct |
 | hosted tools | compatibility system notice | Requires local hosted-tool executor |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
@@ -77,16 +78,17 @@ behavior.
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
 | `finish_reason=length` | `status=incomplete` | Direct |
 | other finish reasons | `status=completed` | Direct |
+| local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
 
 ## Responses Endpoint Coverage
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false` |
+| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately and completes asynchronously through local storage |
 | `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
-| `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record and returns a deletion marker |
+| `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
-| `POST /v1/responses/{response_id}/cancel` | Compatibility no-op for completed records | The bridge only stores terminal responses today; completed records are returned unchanged with metadata explaining the no-op |
+| `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |
 | `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize conversation state, returns `response.compaction`, and encrypts local compaction content with an AES-GCM key stored outside Git |
 | `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request to Chat Completions, forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` |
 
@@ -151,6 +153,7 @@ kept in the replay store so later tool turns can pass the reasoning content back
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
+| Background durability after process restart | Local background jobs are in-process while the response record is file-backed | Add a persisted job queue if Codex relies on long-running background tasks across bridge restarts |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one output | Run multiple requests at caller layer |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve when present, synthesize only from local tools |
 

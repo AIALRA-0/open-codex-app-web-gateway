@@ -135,8 +135,11 @@ async function fetchProvider(config, route, body, incomingHeaders = {}, options 
     throw error;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const controller = options.controller || new AbortController();
+  const timeout = setTimeout(() => {
+    options.onTimeout?.();
+    controller.abort();
+  }, config.requestTimeoutMs);
   try {
     return await fetch(`${config.providerBaseUrl}${route}`, {
       method: "POST",
@@ -156,8 +159,11 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
     throw error;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+  const controller = options.controller || new AbortController();
+  const timeout = setTimeout(() => {
+    options.onTimeout?.();
+    controller.abort();
+  }, config.requestTimeoutMs);
   try {
     return await fetch(`${config.providerBaseUrl}${route}`, {
       method: "GET",
@@ -169,12 +175,17 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function handleResponses(req, res, config, store) {
+async function handleResponses(req, res, config, store, backgroundJobs) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
   const { chat, compatibility } = responsesToChatRequest(request, previousMessages, translatorOptions(config));
   chat.model = chat.model || config.defaultModel;
+
+  if (request.background) {
+    handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility);
+    return;
+  }
 
   if (chat.stream) {
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility);
@@ -214,6 +225,147 @@ async function handleResponses(req, res, config, store) {
   }
 
   sendJson(res, 200, response);
+}
+
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility) {
+  const backgroundRequest = {
+    ...request,
+    background: true,
+    stream: false,
+    store: true,
+  };
+  chat.stream = false;
+  chat.store = true;
+
+  const response = createResponseSkeleton(backgroundRequest, {
+    id: responseId,
+    model: chat.model,
+    status: "in_progress",
+  });
+  const backgroundCompatibility = {
+    ...compatibility,
+    background: request.store === false ? "local_store_forced" : "local_async",
+    ...(request.stream ? { stream: "disabled_for_background" } : {}),
+  };
+  response.metadata = {
+    ...(response.metadata || {}),
+    compatibility: backgroundCompatibility,
+  };
+
+  store.put(response.id, {
+    response,
+    input_items: normalizeStoredInputItems(request.input),
+    messages: chat.messages,
+  });
+
+  const controller = new AbortController();
+  const job = { controller, created_at: Date.now(), deleted: false };
+  backgroundJobs.set(response.id, job);
+  runBackgroundResponse({
+    config,
+    store,
+    backgroundJobs,
+    job,
+    request: backgroundRequest,
+    chat,
+    responseId: response.id,
+    compatibility: backgroundCompatibility,
+    incomingHeaders: req.headers,
+  });
+
+  sendJson(res, 200, response);
+}
+
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders }) {
+  try {
+    const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
+      controller: job.controller,
+      onTimeout: () => {
+        job.timed_out = true;
+      },
+    });
+    const upstreamText = await upstream.text();
+    const upstreamJson = parseJsonOrNull(upstreamText);
+    if (job.deleted) return;
+    if (job.controller.signal.aborted) {
+      storeCancelledBackgroundResponse(store, responseId, "cancelled");
+      return;
+    }
+
+    if (!upstream.ok) {
+      storeFailedBackgroundResponse(store, responseId, upstreamText, upstream.status, upstreamJson);
+      return;
+    }
+
+    const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+    response.background = true;
+    response.metadata = {
+      ...(response.metadata || {}),
+      compatibility,
+      upstream_object: upstreamJson?.object || null,
+    };
+
+    store.put(response.id, {
+      response,
+      input_items: normalizeStoredInputItems(request.input),
+      messages: [
+        ...chat.messages,
+        ...chatCompletionToReplayMessages(upstreamJson),
+      ],
+    });
+  } catch (error) {
+    if (job.deleted) return;
+    if (job.timed_out) {
+      storeFailedBackgroundResponse(store, responseId, "upstream provider request timed out", 504);
+      return;
+    }
+    if (job.controller.signal.aborted || error.name === "AbortError") {
+      storeCancelledBackgroundResponse(store, responseId, "cancelled");
+      return;
+    }
+    storeFailedBackgroundResponse(store, responseId, error.message, 500);
+  } finally {
+    backgroundJobs.delete(responseId);
+  }
+}
+
+function storeFailedBackgroundResponse(store, responseId, message, status, upstreamJson = null) {
+  return updateStoredResponse(store, responseId, (response) => ({
+    ...response,
+    status: "failed",
+    completed_at: nowSeconds(),
+    error: {
+      message: stringifyContent(upstreamJson?.error?.message || message || "background response failed"),
+      type: upstreamJson?.error?.type || "upstream_provider_error",
+      code: upstreamJson?.error?.code || status || 500,
+      param: upstreamJson?.error?.param || null,
+    },
+  }));
+}
+
+function storeCancelledBackgroundResponse(store, responseId, reason) {
+  return updateStoredResponse(store, responseId, (response) => ({
+    ...response,
+    status: "cancelled",
+    completed_at: nowSeconds(),
+    error: null,
+    metadata: {
+      ...(response.metadata || {}),
+      compatibility_cancel: reason || "cancelled",
+    },
+  }));
+}
+
+function updateStoredResponse(store, responseId, updater) {
+  const record = store.get(responseId);
+  if (!record?.response) return null;
+  if (record.response.status !== "in_progress") return record.response;
+  const response = updater(clone(record.response));
+  store.put(responseId, {
+    ...record,
+    response,
+  });
+  return response;
 }
 
 async function handleResponseInputTokens(req, res, config, store) {
@@ -932,7 +1084,14 @@ function handleResponseGet(res, store, responseId) {
   sendJson(res, 200, record.response);
 }
 
-function handleResponseDelete(res, store, responseId) {
+function handleResponseDelete(res, store, responseId, backgroundJobs) {
+  const job = backgroundJobs?.get(responseId);
+  if (job) {
+    job.deleted = true;
+    job.controller.abort();
+    backgroundJobs.delete(responseId);
+  }
+
   const deleted = store.delete(responseId);
   if (!deleted) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
@@ -946,10 +1105,21 @@ function handleResponseDelete(res, store, responseId) {
   });
 }
 
-function handleResponseCancel(res, store, responseId) {
+function handleResponseCancel(res, store, responseId, backgroundJobs) {
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  if (record.response.status === "in_progress") {
+    const job = backgroundJobs?.get(responseId);
+    if (job) {
+      job.controller.abort();
+      backgroundJobs.delete(responseId);
+    }
+    const response = storeCancelledBackgroundResponse(store, responseId, job ? "background job aborted" : "background job marked cancelled");
+    sendJson(res, 200, response || store.get(responseId)?.response || record.response);
     return;
   }
 
@@ -1076,6 +1246,7 @@ function parseLimit(value, fallback, max) {
 
 function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
+  const backgroundJobs = new Map();
 
   return http.createServer(async (req, res) => {
     try {
@@ -1103,7 +1274,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponses(req, res, config, store);
+        await handleResponses(req, res, config, store, backgroundJobs);
         return;
       }
 
@@ -1126,11 +1297,11 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!action && req.method === "DELETE") {
-          handleResponseDelete(res, store, responseId);
+          handleResponseDelete(res, store, responseId, backgroundJobs);
           return;
         }
         if (action === "cancel" && req.method === "POST") {
-          handleResponseCancel(res, store, responseId);
+          handleResponseCancel(res, store, responseId, backgroundJobs);
           return;
         }
         if (action === "input_items" && req.method === "GET") {

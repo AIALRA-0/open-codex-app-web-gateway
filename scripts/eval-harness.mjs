@@ -163,6 +163,20 @@ function buildSuites(defaultModel) {
           && json.input_tokens > 0,
       },
       {
+        id: "responses-background",
+        mode: "responses-background",
+        request: {
+          model: defaultModel,
+          input: "Return the exact string background-ok.",
+          background: true,
+          max_output_tokens: 128,
+        },
+        check: ({ created, final, text, history }) => created?.status === "in_progress"
+          && final?.status === "completed"
+          && history.includes("in_progress")
+          && /background-ok/i.test(text),
+      },
+      {
         id: "responses-compact-continuation",
         mode: "responses-compact",
         request: {
@@ -291,6 +305,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-input-tokens") {
       return await runInputTokensCase(testCase, context, started);
     }
+    if (testCase.mode === "responses-background") {
+      return await runBackgroundCase(testCase, context, started);
+    }
     if (testCase.mode === "responses-compact") {
       return await runCompactionCase(testCase, context, started);
     }
@@ -413,6 +430,48 @@ async function runModelGetCase(testCase, context, started) {
     status: response.status,
     model_id: response.json?.id || null,
     error: ok ? undefined : truncate(response.body),
+  });
+}
+
+async function runBackgroundCase(testCase, context, started) {
+  const createdResponse = await postJson(`${baseUrl}/v1/responses`, testCase.request);
+  const createdBody = await createdResponse.text();
+  if (!createdResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: createdResponse.status,
+      error: truncate(createdBody),
+    });
+  }
+
+  const created = JSON.parse(createdBody);
+  const history = [created.status];
+  let final = created;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    await sleep(1000);
+    const fetched = await getJson(`${baseUrl}/v1/responses/${created.id}`);
+    if (!fetched.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fetched.status,
+        error: truncate(fetched.body),
+        status_history: history,
+      });
+    }
+    final = fetched.json;
+    history.push(final.status);
+    if (["completed", "failed", "cancelled", "incomplete"].includes(final.status)) break;
+  }
+
+  const text = responseOutputText(final);
+  const ok = !!testCase.check({ created, final, text, history });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: 200,
+    response_id: created.id,
+    status_history: history,
+    usage: responseUsage(final),
+    output_text: truncate(text),
   });
 }
 
@@ -571,6 +630,10 @@ async function getJson(url) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function resolveRequest(request, context) {

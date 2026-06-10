@@ -259,3 +259,53 @@ Open follow-ups:
   1/1, latency 468 ms, retrieved model ID `deepseek-v4-pro`.
 - Full live `bridge-regression` passed 10/10, pass rate 1.0, average latency
   2304 ms, P95 latency 7773 ms, total usage 1392 tokens.
+
+## 2026-06-10 Responses Background Mode Compatibility
+
+- Used the current OpenAI Responses API schema and examples to confirm
+  background responses expose `background`, transition through `in_progress`,
+  and are polled through `GET /v1/responses/{response_id}`.
+- Added local `background:true` emulation for `POST /v1/responses`:
+  - returns a stored `in_progress` Responses object immediately;
+  - runs the upstream Chat Completion asynchronously in the bridge process;
+  - updates the stored Responses object to `completed` or `failed`;
+  - forces `store:true` because polling requires a local response record;
+  - disables upstream streaming for background requests and records that in
+    compatibility metadata.
+- Added cancellation and deletion behavior for in-process background jobs:
+  - `POST /v1/responses/{response_id}/cancel` aborts an in-progress job and
+    marks the response `cancelled`;
+  - `DELETE /v1/responses/{response_id}` aborts an in-process job before
+    deleting the local response record;
+  - terminal completed records keep the existing cancel no-op compatibility.
+- Added a timeout marker so upstream background timeouts are recorded as
+  failed provider errors instead of user cancellations.
+- Caveat: background workers are currently process-local. The response record is
+  file-backed for audit and polling, but a bridge restart does not resume an
+  already in-progress upstream Chat Completion. A persisted job queue remains a
+  future hardening item if Codex depends on long-running background jobs across
+  restarts.
+- Added mock-provider coverage for:
+  - immediate `in_progress` creation followed by later `completed`;
+  - forced local storage when the caller sends `store:false`;
+  - stream disabling when the caller sends `stream:true`;
+  - cancellation remaining `cancelled` even if the mock upstream later returns.
+- Added `responses-background` to live `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 20/20 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-background --timeout-ms 90000 --verbose`
+  passed 1/1, latency 2164 ms, status history
+  `in_progress -> in_progress -> completed`, output `background-ok`, total
+  usage 63 tokens.
+- Full live `bridge-regression` passed 11/11, pass rate 1.0, average latency
+  2427 ms, P95 latency 8417 ms, total usage 1431 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7p0kr8` appeared before reload and after reload, console errors
+  0, warnings 0.

@@ -382,6 +382,7 @@ function createResponseSkeleton(request = {}, overrides = {}) {
     created_at: createdAt,
     status: overrides.status || "in_progress",
     completed_at: overrides.completed_at ?? null,
+    background: request.background ?? false,
     error: overrides.error ?? null,
     incomplete_details: overrides.incomplete_details ?? null,
     instructions: request.instructions ?? null,

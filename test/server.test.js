@@ -18,6 +18,10 @@ function close(server) {
   return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function withMockProvider(handler, run) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -198,6 +202,111 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
 
     const missing = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
     assert.equal(missing.status, 404);
+  });
+});
+
+test("POST /v1/responses with background true returns in_progress and later completes", async () => {
+  await withMockProvider(async (_req, res) => {
+    await sleep(40);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_background",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "background done" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 6, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "run in background",
+        background: true,
+        stream: true,
+        store: false,
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.status, "in_progress");
+    assert.equal(createdJson.background, true);
+    assert.equal(createdJson.store, true);
+    assert.equal(createdJson.output.length, 0);
+    assert.equal(createdJson.metadata.compatibility.background, "local_store_forced");
+    assert.equal(createdJson.metadata.compatibility.stream, "disabled_for_background");
+
+    const pending = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+    assert.equal(pending.status, 200);
+    assert.equal((await pending.json()).status, "in_progress");
+
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.background, true);
+    assert.equal(finalJson.output[0].content[0].text, "background done");
+    assert.equal(finalJson.usage.total_tokens, 11);
+    assert.equal(finalJson.metadata.compatibility.background, "local_store_forced");
+    assert.equal(finalJson.metadata.compatibility.stream, "disabled_for_background");
+    assert.equal(requests[0].body.stream, false);
+    assert.equal(requests[0].body.store, true);
+  });
+});
+
+test("POST /v1/responses/{id}/cancel cancels an in-progress background response", async () => {
+  await withMockProvider(async (_req, res) => {
+    await sleep(200);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_cancelled_late",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "too late" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "cancel me",
+        background: true,
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.status, "in_progress");
+
+    const cancelled = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    const cancelledJson = await cancelled.json();
+    assert.equal(cancelledJson.status, "cancelled");
+    assert.match(cancelledJson.metadata.compatibility_cancel, /background job/);
+
+    await sleep(240);
+    const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.status, "cancelled");
   });
 });
 
