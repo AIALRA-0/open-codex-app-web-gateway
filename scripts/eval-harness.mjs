@@ -585,6 +585,35 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-max-tool-calls",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Use web search for OpenAI. Then return the exact string web-budget-ok [1].",
+          tools: [{ type: "web_search_preview" }],
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const calls = (json.output || []).filter((item) => item.type === "web_search_call");
+          const annotations = (json.output || [])
+            .flatMap((item) => item.content || [])
+            .flatMap((part) => part.annotations || []);
+          const budget = json.metadata?.compatibility?.local_tool_budget || {};
+          const webSearch = json.metadata?.compatibility?.local_web_search || {};
+          return calls.length === 1
+            && calls[0].action?.type === "search"
+            && budget.max_tool_calls === 1
+            && budget.used === 1
+            && budget.skipped >= 1
+            && webSearch.open_skipped_count >= 1
+            && !calls.some((call) => call.action?.type === "open_page")
+            && annotations.some((annotation) => annotation.type === "url_citation")
+            && /web-budget-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-shell",
         mode: "responses-shell",
         container: { name: "bridge-shell-eval" },

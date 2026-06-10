@@ -1272,6 +1272,152 @@ test("POST /v1/responses streams local web_search_preview call and citations", a
   });
 });
 
+test("POST /v1/responses limits local web_search actions with max_tool_calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Budget Search Result/);
+    assert.match(prompt, /Open page skipped: max_tool_calls_exhausted/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_web_budget",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "budget-web-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use web search for budget result and return budget-web-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    const webCalls = json.output.filter((item) => item.type === "web_search_call");
+    assert.equal(webCalls.length, 1);
+    assert.equal(webCalls[0].action.type, "search");
+    assert.equal(json.metadata.compatibility.local_web_search.open_skipped_count, 1);
+    assert.equal(json.metadata.compatibility.local_web_search.skipped_count, 1);
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 1,
+      exhausted: true,
+      skipped_calls: [{
+        type: "web_search_call",
+        tool_type: "web_search_preview",
+        action: "open_page",
+        url: "https://example.test/budget-search",
+        reason: "max_tool_calls_exhausted",
+      }],
+    });
+    assert.equal(json.output.at(-1).content[0].text, "budget-web-ok [1]");
+  }, {
+    webSearchProvider: "static",
+    webSearchOpenPages: 1,
+    webSearchStaticResults: [{
+      title: "Budget Search Result",
+      url: "https://example.test/budget-search",
+      snippet: "The web budget fixture can be cited without opening.",
+    }],
+  });
+});
+
+test("POST /v1/responses shares max_tool_calls across local shell and web_search", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /STDOUT:\nbudget-shell-ok/);
+    assert.match(prompt, /max_tool_calls exhausted before local web search could run/);
+    assert.doesNotMatch(prompt, /This result should not be searched when shell consumes the budget/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_shared_budget",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "budget-shell-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: printf budget-shell-ok\nUse web search for Shell Budget Web Result.",
+        tools: [{ type: "shell" }, { type: "web_search_preview" }],
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output.filter((item) => item.type === "shell_call").length, 1);
+    assert.equal(json.output.filter((item) => item.type === "web_search_call").length, 0);
+    assert.equal(json.metadata.compatibility.local_shell.command_count, 1);
+    assert.equal(json.metadata.compatibility.local_web_search.status, "skipped");
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 1,
+      exhausted: true,
+      skipped_calls: [{
+        type: "web_search_call",
+        tool_type: "web_search_preview",
+        action: "search",
+        query: "Shell Budget Web Result",
+        reason: "max_tool_calls_exhausted",
+      }],
+    });
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Shell Budget Web Result",
+      url: "https://example.test/shell-budget",
+      snippet: "This result should not be searched when shell consumes the budget.",
+    }],
+  });
+});
+
+test("POST /v1/responses rejects invalid max_tool_calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid max_tool_calls");
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "invalid max tool calls",
+        tools: [{ type: "web_search_preview" }],
+        max_tool_calls: -1,
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const json = await response.json();
+    assert.equal(json.error.code, "invalid_max_tool_calls");
+    assert.equal(json.error.param, "max_tool_calls");
+  });
+});
+
 test("local Files and Vector Stores back Responses file_search compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

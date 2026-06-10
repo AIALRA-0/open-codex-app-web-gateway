@@ -60,6 +60,7 @@ implementations for those tools.
 | `tools[type=code_interpreter]` | local shell/container adapter | Compatibility alias; explicit Python code blocks are executed through `python3` in the local container workspace |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
+| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, and `code_interpreter` adapters. The shared budget is consumed before each local built-in tool call/action; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
@@ -123,6 +124,7 @@ behavior.
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses; bounded `open_page` extraction can inject top result page text and local `find_in_page` snippets |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
+| local hosted-tool budget | `metadata.compatibility.local_tool_budget` | Emulates Responses `max_tool_calls` across local hosted-tool adapters with `max_tool_calls`, `used`, `skipped`, `exhausted`, and bounded `skipped_calls` audit details |
 | local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation; replay-only for `/input_tokens` and local compaction probes |
 
 ## Responses Endpoint Coverage
@@ -297,6 +299,23 @@ annotations to the final message content.
 When `shell` is handled by the local adapter, the bridge emits completed
 `shell_call` and `shell_call_output` items before Chat text deltas.
 
+## Local Hosted Tool Call Budget
+
+Responses `max_tool_calls` limits the total number of built-in tool calls a
+response may process. Chat-only providers do not enforce this for hosted tools,
+so the bridge applies a shared local budget before executing emulated
+`web_search`, `file_search`, `shell`, and `code_interpreter` actions. The
+current deterministic adapter order is shell/code-interpreter, then web search,
+then file search, matching the bridge's local execution pipeline.
+
+When the budget is exhausted, the bridge does not run the extra local action,
+does not fabricate tool output, and records the skipped action under
+`metadata.compatibility.local_tool_budget.skipped_calls`. Tool-specific
+compatibility metadata also exposes skipped counters such as
+`local_web_search.open_skipped_count`, `local_file_search.skipped_count`, and
+`local_shell.skipped_count`. Invalid non-integer or negative `max_tool_calls`
+values are rejected with `400 invalid_max_tool_calls`.
+
 ## Local Web Search Adapter
 
 The bridge can emulate the Responses `web_search_preview` hosted tool for
@@ -309,7 +328,9 @@ bounded text from HTML/plain text, inject it into the Chat prompt, and emit an
 additional `web_search_call` with `action.type:"open_page"`. When
 `CODEXCOMPAT_WEB_SEARCH_FIND_IN_PAGE` is enabled, the bridge searches that
 extracted text for the request query and injects bounded snippets while emitting
-`action.type:"find_in_page"`.
+`action.type:"find_in_page"`. Search, `open_page`, and `find_in_page` each
+consume one shared `max_tool_calls` budget slot when that Responses field is
+present.
 
 Current providers:
 
@@ -394,6 +415,8 @@ lexical search over uploaded text. The adapter:
 - injects retrieved chunks into the upstream Chat prompt as source material;
 - emits `file_search_call` output items with queries, vector store IDs, and
   optional results when `include:["file_search_call.results"]` is requested;
+- consumes one shared `max_tool_calls` budget slot per vector-store search when
+  that Responses field is present;
 - annotates final message text with `file_citation` entries;
 - supports simple metadata filters such as `{type:"eq",key:"suite",value:"x"}`
   over file metadata and vector-store-file attributes;
@@ -440,6 +463,8 @@ local container workspace. The adapter:
   `container_reference`-style tool configuration;
 - maps `/mnt/data` in commands to the local container workspace;
 - emits paired `shell_call` and `shell_call_output` output items;
+- consumes one shared `max_tool_calls` budget slot before each local shell or
+  code-interpreter command execution when that Responses field is present;
 - injects stdout, stderr, exit code, timeout status, and artifact list into the
   upstream Chat prompt;
 - exposes generated files through the local Containers files endpoints.

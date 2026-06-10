@@ -1,5 +1,6 @@
 "use strict";
 
+const { reserveToolCall } = require("./local_tool_budget");
 const { prefixedId, stringifyContent } = require("./translator");
 
 const WEB_SEARCH_TOOL_TYPES = new Set([
@@ -55,22 +56,38 @@ async function prepareWebSearchContext(request = {}, config = {}, options = {}) 
     provider,
     query,
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
-    calls: [{
-      id: prefixedId("ws"),
-      type: "web_search_call",
-      status: "completed",
-      action: {
-        type: "search",
-        query,
-      },
-    }],
+    status: "completed",
+    calls: [],
     results: [],
+    skipped_calls: [],
   };
+
+  const searchCall = {
+    id: prefixedId("ws"),
+    type: "web_search_call",
+    status: "completed",
+    action: {
+      type: "search",
+      query,
+    },
+  };
+  if (!reserveToolCall(options.toolBudget, {
+    type: "web_search_call",
+    tool_type: context.tool_types[0] || "web_search",
+    action: "search",
+    query,
+  })) {
+    context.error = "max_tool_calls exhausted before local web search could run";
+    context.status = "skipped";
+    context.skipped_calls.push({ action: "search", query, reason: "max_tool_calls_exhausted" });
+    return context;
+  }
+  context.calls.push(searchCall);
 
   try {
     context.results = await runSearchProvider(provider, query, maxResults, config, options);
     await openSearchResultPages(context, config, options);
-    findInOpenedPages(context, config);
+    findInOpenedPages(context, config, options);
     return context;
   } catch (error) {
     context.calls[0].status = "failed";
@@ -127,13 +144,16 @@ function webSearchCompatibility(context) {
   return {
     local_web_search: {
       provider: context.provider,
-      status: context.calls?.[0]?.status || "completed",
+      status: context.status || context.calls?.[0]?.status || "completed",
       result_count: context.results?.length || 0,
       opened_count: context.results?.filter((result) => result.opened?.status === "completed").length || 0,
       open_failed_count: context.results?.filter((result) => result.opened?.status === "failed").length || 0,
+      open_skipped_count: context.results?.filter((result) => result.opened?.status === "skipped").length || 0,
       find_in_page_count: context.results?.filter((result) => result.find_in_page?.status === "completed").length || 0,
       find_in_page_match_count: context.results?.reduce((sum, result) => sum + (result.find_in_page?.match_count || 0), 0) || 0,
       find_in_page_failed_count: context.results?.filter((result) => result.find_in_page?.status === "failed").length || 0,
+      find_in_page_skipped_count: context.results?.filter((result) => result.find_in_page?.status === "skipped").length || 0,
+      skipped_count: context.skipped_calls?.length || 0,
       tool_types: context.tool_types || [],
       ...(context.error ? { error: context.error } : {}),
     },
@@ -166,8 +186,10 @@ function webSearchPrompt(context) {
     `Snippet: ${result.snippet || ""}`,
     result.opened?.status === "completed" ? `Opened page text:\n${result.opened.text}` : null,
     result.opened?.status === "failed" ? `Open page error: ${result.opened.error}` : null,
+    result.opened?.status === "skipped" ? `Open page skipped: ${result.opened.reason}` : null,
     result.find_in_page?.status === "completed" ? findInPagePrompt(result.find_in_page) : null,
     result.find_in_page?.status === "failed" ? `Find in page error: ${result.find_in_page.error}` : null,
+    result.find_in_page?.status === "skipped" ? `Find in page skipped: ${result.find_in_page.reason}` : null,
   ].join("\n"));
 
   return [
@@ -190,6 +212,19 @@ async function openSearchResultPages(context, config = {}, options = {}) {
   if (!openCount || !context?.results?.length) return;
   const candidates = context.results.slice(0, openCount);
   for (const result of candidates) {
+    if (!reserveToolCall(options.toolBudget, {
+      type: "web_search_call",
+      tool_type: context.tool_types?.[0] || "web_search",
+      action: "open_page",
+      url: result.url,
+    })) {
+      result.opened = {
+        status: "skipped",
+        reason: "max_tool_calls_exhausted",
+      };
+      context.skipped_calls.push({ action: "open_page", url: result.url, reason: "max_tool_calls_exhausted" });
+      continue;
+    }
     const call = {
       id: prefixedId("ws"),
       type: "web_search_call",
@@ -220,10 +255,24 @@ async function openSearchResultPages(context, config = {}, options = {}) {
   }
 }
 
-function findInOpenedPages(context, config = {}) {
+function findInOpenedPages(context, config = {}, options = {}) {
   if (config.webSearchFindInPage === false || !context?.results?.length) return;
   for (const result of context.results) {
     if (result.opened?.status !== "completed") continue;
+    if (!reserveToolCall(options.toolBudget, {
+      type: "web_search_call",
+      tool_type: context.tool_types?.[0] || "web_search",
+      action: "find_in_page",
+      url: result.url,
+      query: context.query || "",
+    })) {
+      result.find_in_page = {
+        status: "skipped",
+        reason: "max_tool_calls_exhausted",
+      };
+      context.skipped_calls.push({ action: "find_in_page", url: result.url, reason: "max_tool_calls_exhausted" });
+      continue;
+    }
     const call = {
       id: prefixedId("ws"),
       type: "web_search_call",

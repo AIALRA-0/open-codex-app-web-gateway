@@ -2155,3 +2155,55 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq836bza`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Local Hosted Tool `max_tool_calls` Budget
+
+- Closed a Responses compatibility gap where `max_tool_calls` was preserved on
+  the response object but did not constrain local hosted-tool emulation for
+  Chat-only providers.
+- Added a shared local tool-call budget module that:
+  - validates `max_tool_calls` as a non-negative integer and returns
+    `400 invalid_max_tool_calls` for invalid values;
+  - records `max_tool_calls`, `used`, `skipped`, `exhausted`, and bounded
+    `skipped_calls` under `metadata.compatibility.local_tool_budget`;
+  - avoids running skipped local actions and avoids fabricating tool output.
+- Applied the shared budget to local hosted-tool adapters:
+  - `web_search` consumes one slot for search, one for each bounded
+    `open_page`, and one for each local `find_in_page`;
+  - `file_search` consumes one slot per vector-store search;
+  - `shell` and `code_interpreter` consume one slot per local command
+    execution.
+- Tool-specific metadata now exposes skipped counters such as
+  `local_web_search.open_skipped_count`,
+  `local_file_search.skipped_count`, and `local_shell.skipped_count`.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/reference/responses/create`, whose
+  Responses create reference describes `max_tool_calls` as the maximum total
+  built-in tool calls processed in a response.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Remaining known gap: local hosted-tool execution order is deterministic
+  (`shell`/`code_interpreter`, then web search, then file search) rather than
+  model-decided dynamic tool planning. Full native parity still requires a real
+  tool loop against a Responses-capable model or deeper Codex-side hosted-tool
+  negotiation.
+- Verified:
+  - `node --check` passed for `src/bridge/local_tool_budget.js`,
+    `src/bridge/web_search.js`, `src/bridge/local_file_search.js`,
+    `src/bridge/local_shell.js`, `src/bridge/server.js`, and
+    `scripts/eval-harness.mjs`.
+  - Targeted local tests passed 4/4, covering web-search action limiting,
+    shared shell/web-search budget consumption, invalid `max_tool_calls`
+    rejection, and existing file-search compatibility.
+  - `npm test`: 72/72 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-max-tool-calls` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 2007 ms, output `web-budget-ok [1]`, and total
+    usage 409 tokens.
+  - Full live `bridge-regression` passed 25/25 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1814 ms, P95 latency 4411 ms, and total usage
+    7725 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq83r5va`, reload persistence
+    confirmed, console errors 0, warnings 0.

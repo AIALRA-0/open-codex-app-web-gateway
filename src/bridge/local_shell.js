@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
+const { reserveToolCall } = require("./local_tool_budget");
 const { prefixedId, stringifyContent } = require("./translator");
 
 const SHELL_TOOL_TYPES = new Set(["shell", "code_interpreter"]);
@@ -232,7 +233,7 @@ class LocalContainerStore {
   }
 }
 
-async function prepareShellContext(request = {}, config = {}, containerStore) {
+async function prepareShellContext(request = {}, config = {}, containerStore, options = {}) {
   const tools = (request.tools || []).filter(isShellTool);
   if (!tools.length || !canUseLocalShell(config) || !containerStore) return null;
 
@@ -245,6 +246,7 @@ async function prepareShellContext(request = {}, config = {}, containerStore) {
     outputs: [],
     executions: [],
     artifacts: [],
+    skipped_calls: [],
   };
 
   if (!commands.length) {
@@ -255,6 +257,23 @@ async function prepareShellContext(request = {}, config = {}, containerStore) {
   const maxCommands = Math.max(1, Math.min(Number(config.shellMaxCommands || 1), 5));
   for (const command of commands.slice(0, maxCommands)) {
     const tool = tools[0];
+    if (!reserveToolCall(options.toolBudget, {
+      type: tool.type === "code_interpreter" ? "code_interpreter_call" : "shell_call",
+      tool_type: tool.type || "shell",
+      action: "exec",
+      command,
+    })) {
+      context.skipped_calls.push({
+        action: "exec",
+        command,
+        reason: "max_tool_calls_exhausted",
+      });
+      if (!context.calls.length) {
+        context.status = "skipped";
+        context.warning = "max_tool_calls was exhausted before local shell compatibility could execute a command.";
+      }
+      continue;
+    }
     const container = containerStore.ensureContainer(tool);
     const callId = prefixedId("call");
     const call = {
@@ -339,6 +358,7 @@ function shellCompatibility(context) {
       status: context.status || "completed",
       tool_types: context.tool_types || [],
       command_count: context.calls?.length || 0,
+      skipped_count: context.skipped_calls?.length || 0,
       artifact_count: context.artifacts?.length || 0,
       ...(first ? {
         container_id: first.container.id,
@@ -355,8 +375,9 @@ function shellPrompt(context) {
     return [
       "Local Responses shell compatibility was requested but did not execute a command.",
       context.warning,
+      context.skipped_calls?.length ? `Skipped commands: ${context.skipped_calls.length}` : null,
       "Do not invent command output. Ask for an explicit command or answer from visible context.",
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   const sections = [];

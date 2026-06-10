@@ -6,6 +6,10 @@ const http = require("node:http");
 const path = require("node:path");
 const { FileConversationStore, FileResponseStore } = require("./store");
 const {
+  createToolCallBudget,
+  toolBudgetCompatibility,
+} = require("./local_tool_budget");
+const {
   injectInputFileMessages,
   inputFileCompatibility,
   prepareInputFileContext,
@@ -283,6 +287,7 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
+  const toolBudget = createToolCallBudget(request.max_tool_calls);
   const conversation = prepareConversationContext(request, conversationStore, config);
   if (conversation?.missing) {
     sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
@@ -310,7 +315,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, fileSearchStore, containerStore, conversationStore, conversation);
+    }, fileSearchStore, containerStore, conversationStore, conversation, toolBudget);
     return;
   }
 
@@ -318,18 +323,19 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localInputFiles) {
     applyInputFilesToChat(chat, compatibility, localInputFiles, config);
   }
-  const localShell = await prepareShellContext(request, config, containerStore);
+  const localShell = await prepareShellContext(request, config, containerStore, { toolBudget });
   if (localShell) {
     applyLocalShellToChat(chat, compatibility, localShell, config);
   }
-  const localWebSearch = await prepareWebSearchContext(request, config);
+  const localWebSearch = await prepareWebSearchContext(request, config, { toolBudget });
   if (localWebSearch) {
     applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config);
   }
-  const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore);
+  const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore, { toolBudget });
   if (localFileSearch) {
     applyLocalFileSearchToChat(chat, compatibility, localFileSearch, config);
   }
+  Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
 
   if (chat.stream) {
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
@@ -379,7 +385,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   sendJson(res, 200, response);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation, toolBudget) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -397,6 +403,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
   attachConversationToResponse(response, conversation);
   const backgroundCompatibility = {
     ...compatibility,
+    ...toolBudgetCompatibility(toolBudget),
     background: request.store === false ? "local_store_forced" : "local_async",
     ...(request.stream ? { stream: "disabled_for_background" } : {}),
   };
@@ -428,30 +435,32 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     containerStore,
     conversationStore,
     conversation,
+    toolBudget,
   });
 
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation, toolBudget }) {
   try {
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
     if (localInputFiles) {
       finalCompatibility = applyInputFilesToChat(chat, { ...compatibility }, localInputFiles, config);
     }
-    const localShell = await prepareShellContext(request, config, containerStore);
+    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget });
     if (localShell) {
       finalCompatibility = applyLocalShellToChat(chat, { ...finalCompatibility }, localShell, config);
     }
-    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal });
+    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal, toolBudget });
     if (localWebSearch) {
       finalCompatibility = applyLocalWebSearchToChat(chat, { ...finalCompatibility }, localWebSearch, config);
     }
-    const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore);
+    const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore, { toolBudget });
     if (localFileSearch) {
       finalCompatibility = applyLocalFileSearchToChat(chat, { ...finalCompatibility }, localFileSearch, config);
     }
+    Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
 
     const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
       controller: job.controller,
@@ -2724,7 +2733,11 @@ function createServer(config = loadConfig()) {
 
       sendError(res, 404, "not found");
     } catch (error) {
-      sendError(res, error.status || 500, error.message || "internal server error");
+      sendError(res, error.status || 500, error.message || "internal server error", {
+        code: error.code,
+        param: error.param,
+        type: error.type,
+      });
     }
   });
 }

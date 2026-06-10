@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { reserveToolCall } = require("./local_tool_budget");
 const { prefixedId, stringifyContent } = require("./translator");
 
 const FILE_SEARCH_TOOL_TYPES = new Set(["file_search"]);
@@ -451,7 +452,7 @@ class LocalFileSearchStore {
   }
 }
 
-async function prepareFileSearchContext(request = {}, config = {}, store) {
+async function prepareFileSearchContext(request = {}, config = {}, store, options = {}) {
   const tools = (request.tools || []).filter(isFileSearchTool);
   if (!tools.length || !canUseLocalFileSearch(config) || !store) return null;
   const queries = extractSearchQueries(request.input);
@@ -459,6 +460,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
   const includeResults = (request.include || []).some((item) => String(item).includes("file_search_call.results"));
   const allResults = [];
   const calls = [];
+  const skippedCalls = [];
 
   for (const tool of tools) {
     const vectorStoreIds = tool.vector_store_ids
@@ -467,6 +469,21 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
     const maxResults = tool.max_num_results || config.fileSearchMaxResults || 5;
     const toolQueries = normalizeSearchQueries(tool.queries || tool.query || queries);
     for (const vectorStoreId of vectorStoreIds) {
+      if (!reserveToolCall(options.toolBudget, {
+        type: "file_search_call",
+        tool_type: tool.type || "file_search",
+        action: "search",
+        vector_store_id: vectorStoreId,
+        queries: toolQueries,
+      })) {
+        skippedCalls.push({
+          action: "search",
+          vector_store_id: vectorStoreId,
+          queries: toolQueries,
+          reason: "max_tool_calls_exhausted",
+        });
+        continue;
+      }
       const page = store.searchVectorStore(vectorStoreId, {
         query: toolQueries,
         max_num_results: maxResults,
@@ -488,15 +505,17 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
   }
 
   if (!calls.length) {
-    calls.push({
-      id: prefixedId("fs"),
-      type: "file_search_call",
-      status: "failed",
-      queries,
-      vector_store_ids: [],
-      ranking_options: normalizeRankingOptions(null),
-      ...(includeResults ? { results: [] } : {}),
-    });
+    if (!skippedCalls.length) {
+      calls.push({
+        id: prefixedId("fs"),
+        type: "file_search_call",
+        status: "failed",
+        queries,
+        vector_store_ids: [],
+        ranking_options: normalizeRankingOptions(null),
+        ...(includeResults ? { results: [] } : {}),
+      });
+    }
   }
 
   allResults.sort((a, b) => b.score - a.score);
@@ -507,6 +526,7 @@ async function prepareFileSearchContext(request = {}, config = {}, store) {
     queries: effectiveQueries,
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     calls,
+    skipped_calls: skippedCalls,
     results: allResults.slice(0, config.fileSearchMaxResults || 5),
     ranking_options: calls.find((call) => call.ranking_options)?.ranking_options || normalizeRankingOptions(null),
   };
@@ -561,9 +581,12 @@ function fileSearchCompatibility(context) {
   return {
     local_file_search: {
       provider: context.provider || "local",
-      status: context.calls?.some((call) => call.status === "completed") ? "completed" : "failed",
+      status: context.calls?.some((call) => call.status === "completed")
+        ? "completed"
+        : (context.skipped_calls?.length ? "skipped" : "failed"),
       result_count: context.results?.length || 0,
       query_count: context.queries?.length || 0,
+      skipped_count: context.skipped_calls?.length || 0,
       tool_types: context.tool_types || [],
       ranking_options: context.ranking_options || normalizeRankingOptions(null),
     },
@@ -573,10 +596,15 @@ function fileSearchCompatibility(context) {
 function fileSearchPrompt(context) {
   if (!context.results.length) {
     return [
-      "Local Responses file_search compatibility found no matching vector store results.",
+      context.skipped_calls?.length
+        ? "Local Responses file_search compatibility skipped one or more searches because max_tool_calls was exhausted."
+        : "Local Responses file_search compatibility found no matching vector store results.",
       `Queries: ${(context.queries || [context.query]).join(" | ")}`,
+      context.skipped_calls?.length
+        ? `Skipped searches: ${context.skipped_calls.map((call) => call.vector_store_id || call.action).join(", ")}`
+        : null,
       "Do not invent file search results. Answer from visible context and say when file evidence is unavailable.",
-    ].join("\n");
+    ].filter(Boolean).join("\n");
   }
 
   const lines = context.results.map((result, index) => [
