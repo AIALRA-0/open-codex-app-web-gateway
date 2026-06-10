@@ -27,6 +27,68 @@ test("maps Responses string and instructions to Chat Completions messages", () =
   ]);
 });
 
+test("expands configured Responses prompt templates before request input", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-chat",
+    prompt: {
+      id: "pmpt_test",
+      version: "2",
+      variables: {
+        tone: "terse",
+        answer: "prompt-template-ok",
+      },
+    },
+    instructions: "Prefer exact output.",
+    input: "Follow the reusable prompt.",
+  }, [], {
+    localPromptTemplates: {
+      "pmpt_test@2": {
+        instructions: "Use a {{tone}} style.",
+        messages: [{ role: "user", content: "Return exactly {{answer}}." }],
+      },
+    },
+  });
+
+  assert.deepEqual(chat.messages, [
+    { role: "system", content: "Use a terse style." },
+    { role: "user", content: "Return exactly prompt-template-ok." },
+    { role: "system", content: "Prefer exact output." },
+    { role: "user", content: "Follow the reusable prompt." },
+  ]);
+  assert.deepEqual(compatibility.prompt_template, {
+    status: "expanded_locally",
+    id: "pmpt_test",
+    version: "2",
+    variable_keys: ["tone", "answer"],
+    message_count: 2,
+    source: "configured_template",
+  });
+});
+
+test("preserves hosted Responses prompt references when no local template is configured", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-chat",
+    prompt: {
+      id: "pmpt_hosted",
+      version: "7",
+      variables: { answer: "hosted-template-ok" },
+    },
+    input: "Use the visible input.",
+  });
+
+  assert.match(chat.messages[0].content, /hosted prompt template reference/i);
+  assert.match(chat.messages[0].content, /prompt_id: pmpt_hosted/);
+  assert.match(chat.messages[0].content, /variable_keys: answer/);
+  assert.deepEqual(chat.messages[1], { role: "user", content: "Use the visible input." });
+  assert.deepEqual(compatibility.prompt_template, {
+    status: "reference_preserved",
+    id: "pmpt_hosted",
+    version: "7",
+    variable_keys: ["answer"],
+    reason: "hosted_prompt_template_unavailable",
+  });
+});
+
 test("maps multimodal input items to OpenAI-compatible chat content parts", () => {
   const messages = responseInputToChatMessages([
     {

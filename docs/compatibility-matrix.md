@@ -6,6 +6,7 @@ Primary sources:
 
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
+- OpenAI Responses create reference: https://developers.openai.com/api/reference/resources/responses/methods/create
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
 - OpenAI encrypted reasoning guidance: https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
@@ -59,6 +60,7 @@ implementations for those tools.
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
 | `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility; local `encrypted_content` values with prefix `ocrsn1.` are decoded in memory when replayed |
+| `prompt` template reference | local prompt-template expansion or compatibility system context | Emulated locally. Official `prompt:{id,version,variables}` references are expanded from `CODEXCOMPAT_PROMPT_TEMPLATES` / `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` when available, using `{{variable}}` substitution; otherwise the bridge injects a bounded compatibility system message preserving the prompt id/version/variable keys and records `metadata.compatibility.prompt_template` |
 | `previous_response_id` | local replay store | Emulated locally |
 | `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution; startup reconciliation marks stale in-progress background records failed after a bridge restart |

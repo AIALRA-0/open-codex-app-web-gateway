@@ -298,6 +298,66 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("POST /v1/responses expands configured local prompt templates", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [
+      { role: "system", content: "Use a terse style." },
+      { role: "user", content: "Return exactly prompt-template-ok." },
+      { role: "system", content: "Prefer exact output." },
+      { role: "user", content: "Follow the reusable prompt." },
+    ]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_prompt_template",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "prompt-template-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 11, completion_tokens: 2, total_tokens: 13 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: {
+          id: "pmpt_test",
+          version: "2",
+          variables: {
+            tone: "terse",
+            answer: "prompt-template-ok",
+          },
+        },
+        instructions: "Prefer exact output.",
+        input: "Follow the reusable prompt.",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "prompt-template-ok");
+    assert.deepEqual(json.metadata.compatibility.prompt_template, {
+      status: "expanded_locally",
+      id: "pmpt_test",
+      version: "2",
+      variable_keys: ["tone", "answer"],
+      message_count: 2,
+      source: "configured_template",
+    });
+  }, {
+    localPromptTemplates: {
+      "pmpt_test@2": {
+        instructions: "Use a {{tone}} style.",
+        messages: [{ role: "user", content: "Return exactly {{answer}}." }],
+      },
+    },
+  });
+});
+
 test("POST /v1/responses forwards service_tier and preserves provider tier", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.service_tier, "priority");
@@ -4436,6 +4496,36 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previousServiceTier;
     if (previousChatNativeFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
     else process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS = previousChatNativeFields;
+  }
+});
+
+test("loadConfig reads local prompt templates from file and env JSON", () => {
+  const previousFile = process.env.CODEXCOMPAT_PROMPT_TEMPLATE_FILE;
+  const previousInline = process.env.CODEXCOMPAT_PROMPT_TEMPLATES;
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-prompt-config-"));
+  const templateFile = path.join(stateDir, "prompt-templates.json");
+  fs.writeFileSync(templateFile, JSON.stringify({
+    pmpt_file: { instructions: "from file" },
+    pmpt_override: { instructions: "file value" },
+  }));
+
+  try {
+    process.env.CODEXCOMPAT_PROMPT_TEMPLATE_FILE = templateFile;
+    process.env.CODEXCOMPAT_PROMPT_TEMPLATES = JSON.stringify({
+      pmpt_env: { instructions: "from env" },
+      pmpt_override: { instructions: "env value" },
+    });
+
+    const config = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
+    assert.deepEqual(config.localPromptTemplates.pmpt_file, { instructions: "from file" });
+    assert.deepEqual(config.localPromptTemplates.pmpt_env, { instructions: "from env" });
+    assert.deepEqual(config.localPromptTemplates.pmpt_override, { instructions: "env value" });
+  } finally {
+    if (previousFile === undefined) delete process.env.CODEXCOMPAT_PROMPT_TEMPLATE_FILE;
+    else process.env.CODEXCOMPAT_PROMPT_TEMPLATE_FILE = previousFile;
+    if (previousInline === undefined) delete process.env.CODEXCOMPAT_PROMPT_TEMPLATES;
+    else process.env.CODEXCOMPAT_PROMPT_TEMPLATES = previousInline;
+    fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });
 

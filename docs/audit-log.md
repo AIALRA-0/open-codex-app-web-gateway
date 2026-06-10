@@ -3047,3 +3047,71 @@ Open follow-ups:
   DeepSeek-style Chat compatibility; it cannot reconstruct hidden reasoning
   tokens when a Chat provider does not expose `reasoning_content`, and local
   encrypted reasoning tokens are only decryptable by this bridge/key.
+
+## 2026-06-10 Prompt Template Compatibility
+
+- Added local Responses `prompt` compatibility for Chat-Completions-only
+  provider deployments.
+- Official source checked on 2026-06-10:
+  - OpenAI Responses `create` exposes `prompt` as a reference to a prompt
+    template and its variables.
+  - The same Responses create reference documents `instructions`, `input`, and
+    other request context that may be combined with a prompt reference.
+- Implemented local prompt-template handling:
+  - official-shaped `prompt:{id,version,variables}` references are expanded
+    when a matching local template is configured;
+  - templates are keyed by `id` or `id@version` and can come from
+    `CODEXCOMPAT_PROMPT_TEMPLATES` JSON or
+    `CODEXCOMPAT_PROMPT_TEMPLATE_FILE`, with env JSON overriding duplicate file
+    keys;
+  - local templates support `instructions`, `messages`, `input`, `content`,
+    and `text`, with `{{variable}}` substitution;
+  - inline local templates are supported with `prompt.template` /
+    `prompt.local_template` for deterministic local evals and migration
+    fixtures;
+  - when a hosted prompt reference cannot be expanded locally, the bridge
+    injects a bounded compatibility system message that preserves prompt
+    id/version/variable keys instead of silently dropping the field;
+  - `metadata.compatibility.prompt_template` records whether the prompt was
+    expanded locally or preserved as an unavailable hosted reference.
+- Added tests for:
+  - translator expansion of configured prompt templates before request
+    instructions/input;
+  - translator fallback for hosted prompt references with no local template;
+  - server-level `/v1/responses` expansion into upstream Chat messages;
+  - config loading from prompt-template file and env JSON.
+- Added live `responses-prompt-template-local` to `bridge-regression`.
+- Updated `.env.example`, the compatibility matrix, deployment docs, and the
+  evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 63/63 passing tests.
+  - `node --test test/translator.test.js`: 28/28 passing tests.
+  - `npm test`: 94/94 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Targeted live `responses-prompt-template-local` passed 1/1, elapsed
+    1903 ms, output `prompt-template-ok`, and total usage 74 tokens.
+  - Full live `bridge-regression` passed 36/36 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1308 ms, P95 latency 3289 ms, and total usage
+    8756 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8an7w9`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 271 runtime candidates,
+    selected 14 old UI screenshots by retention policy, deleted 0, selected
+    874090 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 40 GB available; bridge state is 1.7 MB and output
+    artifacts are 5.1 MB.
+- Remaining known gap: the bridge cannot fetch OpenAI-hosted dashboard prompt
+  templates by id; those references require a local template mirror or are
+  preserved as compatibility context for the Chat provider.

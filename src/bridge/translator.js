@@ -301,6 +301,7 @@ function makeCompatibilityMessage(unsupportedTools) {
 
 function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const messages = [];
+  const promptCompatibility = applyPromptTemplate(request.prompt, messages, options);
   if (request.instructions) {
     messages.push({ role: options.instructionsRole || "system", content: stringifyContent(request.instructions) });
   }
@@ -377,10 +378,137 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
+      ...(promptCompatibility ? { prompt_template: promptCompatibility } : {}),
       ...(maxTokensCompatibility || {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
+}
+
+function applyPromptTemplate(prompt, messages, options = {}) {
+  const reference = normalizePromptReference(prompt);
+  if (!reference) return null;
+
+  const template = findLocalPromptTemplate(reference, options);
+  if (!template) {
+    messages.push(promptReferenceCompatibilityMessage(reference));
+    return {
+      status: "reference_preserved",
+      id: reference.id || null,
+      version: reference.version || null,
+      variable_keys: Object.keys(reference.variables),
+      reason: "hosted_prompt_template_unavailable",
+    };
+  }
+
+  const renderedTemplate = renderPromptTemplate(template, reference.variables);
+  const promptMessages = promptTemplateToChatMessages(renderedTemplate, options);
+  messages.push(...promptMessages);
+  return {
+    status: "expanded_locally",
+    id: reference.id || renderedTemplate.id || null,
+    version: reference.version || renderedTemplate.version || null,
+    variable_keys: Object.keys(reference.variables),
+    message_count: promptMessages.length,
+    source: reference.inlineTemplate ? "inline_template" : "configured_template",
+  };
+}
+
+function normalizePromptReference(prompt) {
+  if (prompt == null) return null;
+  if (typeof prompt === "string") {
+    return { id: prompt, version: null, variables: {}, inlineTemplate: null };
+  }
+  if (!isPlainObject(prompt)) {
+    return { id: null, version: null, variables: {}, inlineTemplate: { instructions: stringifyContent(prompt) } };
+  }
+  const variables = isPlainObject(prompt.variables) ? prompt.variables : {};
+  const inlineTemplate = prompt.template || prompt.local_template || (
+    ["messages", "instructions", "input", "content", "text"].some((key) => Object.prototype.hasOwnProperty.call(prompt, key))
+      ? {
+        ...(Object.prototype.hasOwnProperty.call(prompt, "messages") ? { messages: prompt.messages } : {}),
+        ...(Object.prototype.hasOwnProperty.call(prompt, "instructions") ? { instructions: prompt.instructions } : {}),
+        ...(Object.prototype.hasOwnProperty.call(prompt, "input") ? { input: prompt.input } : {}),
+        ...(Object.prototype.hasOwnProperty.call(prompt, "content") ? { content: prompt.content } : {}),
+        ...(Object.prototype.hasOwnProperty.call(prompt, "text") ? { text: prompt.text } : {}),
+      }
+      : null
+  );
+  return {
+    id: stringifyOptional(prompt.id ?? prompt.prompt_id ?? prompt.name),
+    version: stringifyOptional(prompt.version),
+    variables,
+    inlineTemplate,
+  };
+}
+
+function stringifyOptional(value) {
+  if (value == null || value === "") return null;
+  return stringifyContent(value);
+}
+
+function findLocalPromptTemplate(reference, options = {}) {
+  if (reference.inlineTemplate) return reference.inlineTemplate;
+  if (!reference.id) return null;
+  const templates = isPlainObject(options.localPromptTemplates) ? options.localPromptTemplates : {};
+  if (reference.version && Object.prototype.hasOwnProperty.call(templates, `${reference.id}@${reference.version}`)) {
+    return templates[`${reference.id}@${reference.version}`];
+  }
+  return Object.prototype.hasOwnProperty.call(templates, reference.id) ? templates[reference.id] : null;
+}
+
+function promptReferenceCompatibilityMessage(reference) {
+  return {
+    role: "system",
+    content: [
+      "Responses prompt template compatibility:",
+      "A hosted prompt template reference was supplied, but this Chat-only bridge cannot fetch OpenAI-hosted prompt templates.",
+      `prompt_id: ${reference.id || "unknown"}`,
+      ...(reference.version ? [`version: ${reference.version}`] : []),
+      `variable_keys: ${Object.keys(reference.variables).join(", ") || "none"}`,
+      "Continue using the visible instructions and input in this request.",
+    ].join("\n"),
+  };
+}
+
+function renderPromptTemplate(template, variables = {}) {
+  if (typeof template === "string") return renderTemplateString(template, variables);
+  if (Array.isArray(template)) return template.map((item) => renderPromptTemplate(item, variables));
+  if (!isPlainObject(template)) return template;
+  return Object.fromEntries(
+    Object.entries(template).map(([key, value]) => [key, renderPromptTemplate(value, variables)]),
+  );
+}
+
+function renderTemplateString(value, variables = {}) {
+  return String(value).replace(/\{\{\s*([A-Za-z0-9_.-]+)\s*\}\}/g, (match, key) => (
+    Object.prototype.hasOwnProperty.call(variables, key) ? stringifyContent(variables[key]) : match
+  ));
+}
+
+function promptTemplateToChatMessages(template, options = {}) {
+  if (typeof template === "string") {
+    return [{ role: options.instructionsRole || "system", content: template }];
+  }
+  if (Array.isArray(template)) return responseInputToChatMessages(template, options);
+  if (!isPlainObject(template)) {
+    return [{ role: options.instructionsRole || "system", content: stringifyContent(template) }];
+  }
+
+  const messages = [];
+  if (template.instructions != null) {
+    messages.push({ role: options.instructionsRole || "system", content: stringifyContent(template.instructions) });
+  }
+  if (template.content != null || template.text != null) {
+    messages.push({ role: options.instructionsRole || "system", content: stringifyContent(template.content ?? template.text) });
+  }
+  if (template.messages != null) {
+    messages.push(...responseInputToChatMessages(template.messages, options));
+  }
+  if (template.input != null) {
+    messages.push(...responseInputToChatMessages(template.input, options));
+  }
+  return messages;
 }
 
 function mapMaxTokens(request, chat, options = {}) {

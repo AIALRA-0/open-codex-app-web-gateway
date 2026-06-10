@@ -149,6 +149,7 @@ function loadConfig(overrides = {}) {
     batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
+    localPromptTemplates: loadLocalPromptTemplates(),
     stateDir,
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
@@ -222,6 +223,38 @@ function normalizeRoute(value) {
   const route = String(value || "").trim();
   if (!route) return "/";
   return route.startsWith("/") ? route : `/${route}`;
+}
+
+function loadLocalPromptTemplates() {
+  const templates = {};
+  mergePlainObjects(templates, readJsonObjectFile(process.env.CODEXCOMPAT_PROMPT_TEMPLATE_FILE));
+  mergePlainObjects(templates, parseJsonObject(process.env.CODEXCOMPAT_PROMPT_TEMPLATES));
+  return templates;
+}
+
+function mergePlainObjects(target, source) {
+  if (!isPlainObject(source)) return target;
+  for (const [key, value] of Object.entries(source)) target[key] = value;
+  return target;
+}
+
+function readJsonObjectFile(filePath) {
+  if (!filePath) return {};
+  try {
+    return parseJsonObject(fs.readFileSync(path.resolve(filePath), "utf8"));
+  } catch {
+    return {};
+  }
+}
+
+function parseJsonObject(value) {
+  if (!value) return {};
+  try {
+    const parsed = JSON.parse(String(value));
+    return isPlainObject(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
 }
 
 function isDeepSeekProvider(value) {

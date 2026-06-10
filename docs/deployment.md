@@ -86,6 +86,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_FORWARD_STREAM_OPTIONS` | `true` | Forwards Chat-native `stream_options` when a Responses request uses `stream:true` |
 | `CODEXCOMPAT_STREAM_INCLUDE_USAGE` | `true` | Adds `stream_options.include_usage=true` to streaming upstream Chat requests unless the caller sets it explicitly |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
+| `CODEXCOMPAT_PROMPT_TEMPLATES` | empty | Optional JSON object of local Responses prompt templates keyed by prompt id or `id@version`; supports `instructions`, `messages`, `input`, `content`, and `{{variable}}` substitution. Keep private templates out of Git |
+| `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` | empty | Optional path to a JSON object containing local prompt templates; env JSON overrides duplicate file keys. Store under `/srv/aialra/config` or another runtime path, not the repo |
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |

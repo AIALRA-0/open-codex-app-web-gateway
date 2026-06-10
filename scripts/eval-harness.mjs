@@ -327,6 +327,26 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_moderation?.output?.flagged === false,
       },
       {
+        id: "responses-prompt-template-local",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          prompt: {
+            id: "pmpt_eval_inline",
+            variables: { answer: "prompt-template-ok" },
+            template: {
+              instructions: "Return exactly this text and nothing else: {{answer}}",
+            },
+          },
+          input: "Follow the reusable prompt template.",
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => /prompt-template-ok/i.test(text)
+          && json.metadata?.compatibility?.prompt_template?.status === "expanded_locally"
+          && json.metadata?.compatibility?.prompt_template?.source === "inline_template",
+      },
+      {
         id: "batch-embeddings-local",
         mode: "batch-local",
         endpoint: "/v1/embeddings",
