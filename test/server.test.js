@@ -754,6 +754,78 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
   });
 });
 
+test("Responses input_items include message.input_image.image_url only when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [{
+      role: "user",
+      content: [
+        { type: "text", text: "Store this image input." },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://example.test/stored-vision.png",
+            detail: "high",
+          },
+        },
+      ],
+    }]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_input_items",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image input items ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "Store this image input." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/stored-vision.png",
+                detail: "high",
+              },
+            },
+          ],
+        }],
+        store: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+
+    const defaultItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items`);
+    assert.equal(defaultItems.status, 200);
+    const defaultJson = await defaultItems.json();
+    const defaultImage = defaultJson.data[0].content[1];
+    assert.equal(defaultImage.type, "input_image");
+    assert.equal(defaultImage.detail, "high");
+    assert.equal(defaultImage.image_url, undefined);
+
+    const includedItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?include[]=message.input_image.image_url`);
+    assert.equal(includedItems.status, 200);
+    const includedJson = await includedItems.json();
+    assert.deepEqual(includedJson.data[0].content[1].image_url, {
+      url: "https://example.test/stored-vision.png",
+      detail: "high",
+    });
+  });
+});
+
 test("POST /v1/responses resolves input_image file_id to Chat data URLs", async () => {
   const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (_req, res, call) => {
@@ -823,6 +895,62 @@ test("POST /v1/responses resolves input_image file_id to Chat data URLs", async 
     assert.equal(json.metadata.compatibility.local_input_images.files[0].media_type, "image/png");
     assert.equal(json.metadata.compatibility.local_input_images.files[0].status, "completed");
     assert.equal(Object.prototype.hasOwnProperty.call(json.metadata.compatibility.local_input_images.files[0], "image_url"), false);
+  });
+});
+
+test("Conversations items include message.input_image.image_url only when requested", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "conversation item include should not call upstream" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Remember this image input." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/conversation-vision.png",
+                detail: "low",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const conversation = await created.json();
+
+    const defaultList = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`);
+    assert.equal(defaultList.status, 200);
+    const defaultJson = await defaultList.json();
+    const defaultImage = defaultJson.data[0].content[1];
+    assert.equal(defaultImage.type, "input_image");
+    assert.equal(defaultImage.detail, "low");
+    assert.equal(defaultImage.image_url, undefined);
+
+    const includedList = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?include=message.input_image.image_url`);
+    assert.equal(includedList.status, 200);
+    const includedJson = await includedList.json();
+    assert.deepEqual(includedJson.data[0].content[1].image_url, {
+      url: "https://example.test/conversation-vision.png",
+      detail: "low",
+    });
+
+    const defaultItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${includedJson.data[0].id}`);
+    assert.equal(defaultItem.status, 200);
+    assert.equal((await defaultItem.json()).content[1].image_url, undefined);
+
+    const includedItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${includedJson.data[0].id}?include[]=message.input_image.image_url`);
+    assert.equal(includedItem.status, 200);
+    assert.equal((await includedItem.json()).content[1].image_url.url, "https://example.test/conversation-vision.png");
+    assert.equal(requests.length, 0);
   });
 });
 

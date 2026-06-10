@@ -96,6 +96,7 @@ implementations for those tools.
 | `include:["message.output_text.logprobs"]` | `logprobs:true` | Direct for Chat providers that support token log probabilities |
 | `include:["web_search_call.action.sources"]` | local `web_search_call.action.sources` | Emulated locally for the Responses web-search adapter. Search calls include URL sources from local results; `open_page` and `find_in_page` calls include the matching URL source. The bridge records `metadata.compatibility.local_web_search.action_sources` when requested |
 | `include:["code_interpreter_call.outputs"]` | local `code_interpreter_call.outputs` | Emulated locally for the Responses code-interpreter adapter. When requested, local stdout/stderr logs are attached to the `code_interpreter_call.outputs` array and the include request is recorded in `metadata.compatibility.local_shell.include_code_interpreter_outputs` |
+| `include:["message.input_image.image_url"]` | local input-item projection | Emulated for `GET /v1/responses/{id}/input_items`, `GET /v1/conversations/{id}/items`, and `GET /v1/conversations/{id}/items/{item_id}`. Stored input image URLs are hidden by default and returned only when this include value is requested |
 | `include:["computer_call_output.output.image_url"]` | local computer-loop compatibility metadata | Accepted and recorded in `metadata.compatibility.local_computer.include_output_image_url`; returned `computer_call_output` input items with `output.image_url` are translated into Chat-visible context |
 | `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
@@ -164,7 +165,7 @@ behavior.
 | `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
 | `POST /v1/responses/{response_id}` | Implemented for local `store:true` and local background records | Updates only the stored response `metadata` field; local compatibility metadata is preserved so bridge-emulated behavior remains inspectable, and metadata updates made while a background response is `in_progress` are retained when the final completed response is stored |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
-| `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination; input image URLs are hidden unless `include[]=message.input_image.image_url` is requested |
 | `POST /v1/responses/{response_id}/cancel` | Implemented for local `in_progress` background responses; compatibility no-op for terminal records | In-process background jobs are aborted and marked `cancelled`; completed records are returned unchanged with metadata explaining the no-op |
 | `POST /v1/responses/compact` | Implemented via local encrypted summary | Uses upstream Chat Completions to summarize request, `previous_response_id`, and local `conversation` state; returns `response.compaction`, attaches `response.conversation` when present, encrypts local compaction content with an AES-GCM key stored outside Git, and disables DeepSeek thinking for compaction replay follow-ups by default |
 | `POST /v1/responses/input_tokens` | Implemented via upstream usage probe | Translates the request, `previous_response_id`, and local `conversation` state to Chat Completions; forces non-streaming `max_tokens:1`, disables upstream storage, and returns `usage.prompt_tokens` as `input_tokens` without appending Conversation items |
@@ -240,9 +241,9 @@ Chat-only providers.
 | `GET /v1/conversations/{conversation_id}` | Implemented locally | Retrieves local conversation metadata |
 | `POST /v1/conversations/{conversation_id}` | Implemented locally | Updates local conversation `metadata` |
 | `DELETE /v1/conversations/{conversation_id}` | Implemented locally | Deletes the local conversation and its items |
-| `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination; input image URLs are hidden unless `include[]=message.input_image.image_url` is requested |
 | `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends one item, `{item}`, or `{items:[...]}` to the local conversation |
-| `GET /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Retrieves a local conversation item |
+| `GET /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Retrieves a local conversation item; input image URLs are hidden unless `include[]=message.input_image.image_url` is requested |
 | `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Deletes a local conversation item |
 
 When a Responses request includes `conversation:"conv_..."`, the bridge injects

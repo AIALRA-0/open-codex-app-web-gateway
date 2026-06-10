@@ -3916,3 +3916,62 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
     repository checkout is 41 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Input Image URL Include Projection
+
+- Re-checked the current OpenAI Responses and Conversations reference through
+  the official OpenAI developer docs MCP. The supported `include` values list
+  includes `message.input_image.image_url`, defined as including image URLs from
+  input messages.
+- Added local input-item projection for
+  `include:["message.input_image.image_url"]`:
+  - `GET /v1/responses/{response_id}/input_items` hides stored input image
+    URLs by default and returns them only when the include value is requested;
+  - `GET /v1/conversations/{conversation_id}/items` applies the same projection
+    to list results;
+  - `GET /v1/conversations/{conversation_id}/items/{item_id}` applies the same
+    projection to single-item retrieval.
+- Kept the full stored item available internally for replay while redacting
+  `image_url` / `url` fields only at API read time, so conversation replay and
+  previous-response state continue to see the original request content.
+- The include parser accepts `include=...`, repeated `include`, comma-separated
+  include values, and `include[]=...` query forms.
+- Added mock-provider server coverage proving:
+  - upstream Chat image content still receives the original image URL/detail;
+  - stored Responses input items hide image URLs by default and expose them with
+    `include[]=message.input_image.image_url`;
+  - local Conversations list and item-get paths hide image URLs by default and
+    expose them with the include parameter;
+  - the Conversations include projection is local and does not call upstream.
+- Added live `bridge-regression` case `conversation-image-include` to exercise
+  the deployed local Conversations projection without depending on multimodal
+  DeepSeek support.
+- Updated compatibility and evaluation docs to record the include mapping,
+  default redaction behavior, and parity gate.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 84/84 passing tests.
+  - `npm test`: 121/121 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `conversation-image-include` passed 1/1, latency 143 ms, no
+    upstream token usage, and all hidden/included item endpoints returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1938 ms, P95 latency 2071 ms, and total usage 154 tokens.
+  - Full live `bridge-regression` passed 43/43 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1484 ms, P95 latency 3356 ms, and total usage
+    9522 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8h3wz1`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 387 runtime candidates,
+    selected 31 old UI screenshots by retention policy, deleted 0, selected
+    2320784 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 40 GB available;
+    repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.

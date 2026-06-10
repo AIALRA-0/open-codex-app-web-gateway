@@ -5095,7 +5095,7 @@ function handleResponseInputItems(res, store, responseId, url) {
   const items = Array.isArray(record.input_items)
     ? record.input_items
     : normalizeStoredInputItems(record.request?.input);
-  sendJson(res, 200, paginateInputItems(items, url));
+  sendJson(res, 200, paginateInputItems(projectInputItemsForIncludes(items, url), url));
 }
 
 function handleChatCompletionGet(res, store, completionId) {
@@ -5279,16 +5279,16 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
     return;
   }
-  sendJson(res, 200, paginateList(items, url));
+  sendJson(res, 200, paginateList(projectInputItemsForIncludes(items, url), url));
 }
 
-function handleConversationItemGet(res, conversationStore, conversationId, itemId) {
+function handleConversationItemGet(res, conversationStore, conversationId, itemId, url) {
   const item = conversationStore.getItem(conversationId, itemId);
   if (!item) {
     sendError(res, 404, `conversation item not found: ${itemId}`, { code: "conversation_item_not_found" });
     return;
   }
-  sendJson(res, 200, item);
+  sendJson(res, 200, projectInputItemsForIncludes([item], url)[0]);
 }
 
 function handleConversationItemDelete(res, conversationStore, conversationId, itemId) {
@@ -5339,6 +5339,54 @@ function normalizeStoredInputItem(item, index) {
   if (!stored.id) stored.id = id;
   if (!stored.type && stored.role) stored.type = "message";
   return stored;
+}
+
+function projectInputItemsForIncludes(items, url) {
+  const includeInputImageUrls = includeValuesFromUrl(url).has("message.input_image.image_url");
+  return (Array.isArray(items) ? items : [items])
+    .map((item) => projectInputItemForIncludes(item, { includeInputImageUrls }));
+}
+
+function projectInputItemForIncludes(item, options = {}) {
+  const cloned = clone(item);
+  if (options.includeInputImageUrls) return cloned;
+  return redactInputImageUrls(cloned);
+}
+
+function redactInputImageUrls(value) {
+  if (Array.isArray(value)) return value.map(redactInputImageUrls);
+  if (!isPlainObject(value)) return value;
+  if (isInputImageItem(value)) return redactInputImageUrlPart(value);
+  const cloned = { ...value };
+  if (Array.isArray(cloned.content)) cloned.content = cloned.content.map(redactInputImageUrls);
+  return cloned;
+}
+
+function redactInputImageUrlPart(part) {
+  const cloned = { ...part };
+  const detail = cloned.detail
+    ?? (isPlainObject(cloned.image_url) ? cloned.image_url.detail : undefined);
+  delete cloned.image_url;
+  delete cloned.url;
+  if (detail != null && cloned.detail == null) cloned.detail = detail;
+  return cloned;
+}
+
+function includeValuesFromUrl(url) {
+  const values = [];
+  for (const key of ["include", "include[]"]) {
+    for (const value of url?.searchParams?.getAll?.(key) || []) {
+      values.push(...String(value || "").split(",").map((item) => item.trim()).filter(Boolean));
+    }
+  }
+  return new Set(values);
+}
+
+function isInputImageItem(value) {
+  return isPlainObject(value)
+    && (value.type === "input_image"
+      || value.type === "image_url"
+      || Object.prototype.hasOwnProperty.call(value, "image_url"));
 }
 
 function paginateInputItems(items, url) {
@@ -5736,7 +5784,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (itemId && req.method === "GET") {
-          handleConversationItemGet(res, conversationStore, conversationId, itemId);
+          handleConversationItemGet(res, conversationStore, conversationId, itemId, url);
           return;
         }
         if (itemId && req.method === "DELETE") {

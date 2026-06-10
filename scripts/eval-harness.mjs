@@ -898,6 +898,41 @@ function buildSuites(defaultModel) {
           && afterDelete?.status === 404,
       },
       {
+        id: "conversation-image-include",
+        mode: "conversation-items-local",
+        conversation: {
+          items: [{
+            type: "message",
+            role: "user",
+            content: [
+              { type: "input_text", text: "Local image include regression." },
+              {
+                type: "input_image",
+                image_url: {
+                  url: "https://example.test/local-include-image.png",
+                  detail: "low",
+                },
+              },
+            ],
+          }],
+        },
+        check: ({ conversation, hiddenItems, includedItems, hiddenItem, includedItem, deleted }) => {
+          const hiddenImage = hiddenItems?.data?.[0]?.content?.[1] || {};
+          const includedImage = includedItems?.data?.[0]?.content?.[1] || {};
+          return conversation?.object === "conversation"
+            && hiddenItems?.object === "list"
+            && hiddenImage.type === "input_image"
+            && hiddenImage.detail === "low"
+            && hiddenImage.image_url === undefined
+            && includedImage.image_url?.url === "https://example.test/local-include-image.png"
+            && includedImage.image_url?.detail === "low"
+            && hiddenItem?.content?.[1]?.image_url === undefined
+            && includedItem?.content?.[1]?.image_url?.url === "https://example.test/local-include-image.png"
+            && deleted?.object === "conversation.deleted"
+            && deleted.deleted === true;
+        },
+      },
+      {
         id: "responses-web-search",
         mode: "responses",
         request: {
@@ -1391,6 +1426,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-conversation") {
       return await runConversationCase(testCase, context, started);
+    }
+    if (testCase.mode === "conversation-items-local") {
+      return await runConversationItemsLocalCase(testCase, context, started);
     }
     if (testCase.mode === "responses-shell") {
       return await runShellCase(testCase, context, started);
@@ -1974,6 +2012,58 @@ async function runConversationCase(testCase, context, started) {
       post_delete_get_status: afterDelete.status,
       usage: sumUsage(stepResults.map((step) => step.usage).filter(Boolean)),
       output_text: truncate(text),
+    });
+  } finally {
+    if (conversation?.id) await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
+  }
+}
+
+async function runConversationItemsLocalCase(testCase, context, started) {
+  let conversation = null;
+  try {
+    const conversationResponse = await postJson(`${baseUrl}/v1/conversations`, testCase.conversation || {});
+    const conversationBody = await conversationResponse.text();
+    if (!conversationResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: conversationResponse.status,
+        error: truncate(conversationBody),
+      });
+    }
+    conversation = JSON.parse(conversationBody);
+
+    const hiddenItems = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20`);
+    const includedItems = await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=20&include[]=message.input_image.image_url`);
+    const firstItemId = includedItems.json?.data?.[0]?.id || hiddenItems.json?.data?.[0]?.id;
+    const hiddenItem = firstItemId
+      ? await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items/${firstItemId}`)
+      : { ok: false, status: 0, json: null };
+    const includedItem = firstItemId
+      ? await getJson(`${baseUrl}/v1/conversations/${conversation.id}/items/${firstItemId}?include=message.input_image.image_url`)
+      : { ok: false, status: 0, json: null };
+    const createdConversation = conversation;
+    const deletion = await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
+    const deleted = parseJsonish(deletion.body);
+    conversation = null;
+
+    const ok = !!testCase.check({
+      conversation: createdConversation,
+      hiddenItems: hiddenItems.json,
+      includedItems: includedItems.json,
+      hiddenItem: hiddenItem.json,
+      includedItem: includedItem.json,
+      deleted,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: conversationResponse.status,
+      conversation_id: createdConversation.id,
+      hidden_items_status: hiddenItems.status,
+      included_items_status: includedItems.status,
+      hidden_item_status: hiddenItem.status,
+      included_item_status: includedItem.status,
+      delete_status: deletion.status,
+      item_count: Array.isArray(includedItems.json?.data) ? includedItems.json.data.length : 0,
     });
   } finally {
     if (conversation?.id) await deleteJson(`${baseUrl}/v1/conversations/${conversation.id}`);
