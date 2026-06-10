@@ -306,6 +306,14 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
     object: "chat.completion",
     created: 123,
     model: "deepseek-chat",
+    seed: 4242,
+    tool_choice: "auto",
+    response_format: { type: "json_object" },
+    temperature: 0.2,
+    top_p: 0.8,
+    presence_penalty: 0.1,
+    frequency_penalty: 0.3,
+    metadata: { upstream: "chat-meta" },
     system_fingerprint: null,
     request_id: "req_123",
     input_user: "test-user",
@@ -354,10 +362,21 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.output[2].call_id, "call_1");
   assert.equal(response.service_tier, "priority");
   assert.equal(response.metadata.compatibility.chat_completion_id, "chatcmpl_1");
+  assert.equal(response.metadata.compatibility.chat_object, "chat.completion");
+  assert.equal(response.metadata.compatibility.chat_created, 123);
+  assert.equal(response.metadata.compatibility.chat_model, "deepseek-chat");
   assert.equal(Object.prototype.hasOwnProperty.call(response.metadata.compatibility, "chat_system_fingerprint"), true);
   assert.equal(response.metadata.compatibility.chat_system_fingerprint, null);
   assert.equal(response.metadata.compatibility.chat_request_id, "req_123");
   assert.equal(response.metadata.compatibility.chat_input_user, "test-user");
+  assert.equal(response.metadata.compatibility.chat_seed, 4242);
+  assert.equal(response.metadata.compatibility.chat_tool_choice, "auto");
+  assert.deepEqual(response.metadata.compatibility.chat_response_format, { type: "json_object" });
+  assert.equal(response.metadata.compatibility.chat_temperature, 0.2);
+  assert.equal(response.metadata.compatibility.chat_top_p, 0.8);
+  assert.equal(response.metadata.compatibility.chat_presence_penalty, 0.1);
+  assert.equal(response.metadata.compatibility.chat_frequency_penalty, 0.3);
+  assert.deepEqual(response.metadata.compatibility.chat_metadata, { upstream: "chat-meta" });
   assert.equal(response.usage.input_tokens_details.cached_tokens, 6);
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });

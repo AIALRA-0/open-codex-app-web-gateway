@@ -1069,3 +1069,39 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7vqg7y` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Chat Top-Level Metadata Preservation
+
+- Used the current OpenAI Chat Completions OpenAPI schema to confirm Chat
+  completion responses and streaming chunks expose top-level `id`, `object`,
+  `created`, `model`, `system_fingerprint`, `choices`, and optional stored
+  completion metadata fields:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+- Extended Chat-to-Responses compatibility metadata preservation:
+  - `object`, `created`, and `model` are preserved as
+    `metadata.compatibility.chat_object`, `chat_created`, and `chat_model` for
+    non-streaming responses and streaming chunks;
+  - stored-completion metadata fields returned by an upstream Chat provider,
+    including `seed`, `tool_choice`, `response_format`, sampling parameters,
+    `metadata`, and `tools`, are preserved under `metadata.compatibility.chat_*`;
+  - this keeps the bridge-generated Responses object identity (`object=response`
+    and local `resp_*` id) stable while retaining the original Chat envelope.
+- Updated `docs/compatibility-matrix.md` with the new top-level metadata rows.
+- Added regression coverage for:
+  - non-streaming Chat top-level/stored metadata preservation;
+  - streaming Chat chunk `object`, `created`, and `model` preservation in the
+    terminal Responses event.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1696 ms, P95 latency 3599 ms, total usage 2135 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7vw0s8` appeared before reload and after reload, console errors
+    0, warnings 0.

@@ -567,12 +567,26 @@ function chatCompatibilityMetadata(chat) {
   const metadata = {};
   const fieldMap = {
     id: "chat_completion_id",
+    object: "chat_object",
+    created: "chat_created",
+    model: "chat_model",
     system_fingerprint: "chat_system_fingerprint",
     request_id: "chat_request_id",
     input_user: "chat_input_user",
+    seed: "chat_seed",
+    tool_choice: "chat_tool_choice",
+    response_format: "chat_response_format",
+    temperature: "chat_temperature",
+    top_p: "chat_top_p",
+    presence_penalty: "chat_presence_penalty",
+    frequency_penalty: "chat_frequency_penalty",
+    metadata: "chat_metadata",
+    tools: "chat_tools",
   };
   for (const [source, target] of Object.entries(fieldMap)) {
-    if (Object.prototype.hasOwnProperty.call(chat, source)) metadata[target] = chat[source];
+    if (Object.prototype.hasOwnProperty.call(chat, source) && chat[source] !== undefined) {
+      metadata[target] = clone(chat[source]);
+    }
   }
   return metadata;
 }

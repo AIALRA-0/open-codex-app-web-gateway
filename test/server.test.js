@@ -435,6 +435,8 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream",
       object: "chat.completion.chunk",
+      created: 1694268190,
+      model: "mock-stream-model",
       service_tier: "flex",
       system_fingerprint: "fp_stream",
       choices: [{
@@ -500,6 +502,9 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
       title: "Stream Citation",
     }]);
     assert.equal(completed.metadata.compatibility.chat_completion_id, "chatcmpl_stream");
+    assert.equal(completed.metadata.compatibility.chat_object, "chat.completion.chunk");
+    assert.equal(completed.metadata.compatibility.chat_created, 1694268190);
+    assert.equal(completed.metadata.compatibility.chat_model, "mock-stream-model");
     assert.equal(completed.metadata.compatibility.chat_system_fingerprint, "fp_stream");
     assert.deepEqual(completed.metadata.compatibility.chat_choices, [
       { choice_index: 0, finish_reason: "stop" },

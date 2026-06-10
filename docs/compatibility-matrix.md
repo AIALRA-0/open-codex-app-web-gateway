@@ -103,8 +103,10 @@ behavior.
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
 | `service_tier` | `service_tier` | Direct for non-streaming responses and streaming chunks when a Chat provider echoes the actual tier used |
 | `id` | `metadata.compatibility.chat_completion_id` | Preserved because the bridge must keep its own Responses `resp_*` id for storage and continuation |
+| `object`, `created`, `model` | `metadata.compatibility.chat_object`, `chat_created`, `chat_model` | Preserved for non-streaming responses and streaming chunks; Responses keeps its own object identity |
 | `system_fingerprint` | `metadata.compatibility.chat_system_fingerprint` | Preserved for non-streaming responses and streaming chunks, including explicit `null` values |
 | `request_id`, `input_user` | `metadata.compatibility.chat_request_id`, `metadata.compatibility.chat_input_user` | Preserved when stored Chat response metadata is returned by an upstream provider |
+| `seed`, `tool_choice`, `response_format`, sampling penalties, `metadata`, `tools` | `metadata.compatibility.chat_*` | Preserved when an upstream Chat provider returns stored-completion metadata fields with the response |
 | `finish_reason=length` | `status=incomplete`, `incomplete_details.reason=max_output_tokens` | Direct for non-streaming and streaming Chat output |
 | `finish_reason=content_filter` | `status=incomplete`, `incomplete_details.reason=content_filter` | Direct for non-streaming and streaming Chat output |
 | `finish_reason=insufficient_system_resource` | `status=failed`, `error.code=server_error` | DeepSeek-specific Chat termination mapped to Responses failure because Responses incomplete reasons do not include this value |
