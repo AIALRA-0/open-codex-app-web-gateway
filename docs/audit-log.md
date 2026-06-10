@@ -4269,3 +4269,68 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 39 GB available;
     repository checkout is 42 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
+
+## 2026-06-10 Reasoning Encrypted Content Stored-Response Projection
+
+- Re-checked the current OpenAI deployment checklist through the official
+  OpenAI developer docs MCP. The `reasoning.encrypted_content` guidance says to
+  add the value to `include`, round-trip the returned reasoning item exactly as
+  returned, and pass it back on later requests as a stateless handoff.
+- Extended local encrypted reasoning compatibility from create-time projection
+  to stored-response projection:
+  - local reasoning text returned by Chat providers is encrypted with the local
+    `ocrsn1.` payload format and retained internally for stored Responses;
+  - create responses return `reasoning.encrypted_content` only when the request
+    includes `include:["reasoning.encrypted_content"]`;
+  - `GET /v1/responses/{response_id}` hides encrypted reasoning content by
+    default;
+  - `GET /v1/responses/{response_id}?include[]=reasoning.encrypted_content`
+    returns the stored encrypted reasoning content.
+- Preserved replay behavior: clients can pass the encrypted reasoning item back
+  in a later request, and the bridge decodes it locally into upstream
+  `reasoning_content` for Chat-compatible providers.
+- Preserved streaming client behavior while storing a full internal response at
+  completion time, so later retrieval can project encrypted reasoning content
+  only when the include query requests it.
+- Extended background response finalization so completed background Responses
+  also retain local encrypted reasoning content internally and report
+  compatibility metadata when requested.
+- Added unit coverage for create-time include projection, default stored
+  retrieval redaction, include-based stored retrieval recovery, no-include
+  create redaction with internal storage, and replay from encrypted reasoning
+  items.
+- Added a live `responses-reasoning-encrypted` bridge-regression case that
+  verifies visible output, `ocrsn1.` encrypted content on create, default GET
+  redaction, include GET recovery, and local compatibility metadata.
+- Updated compatibility and evaluation docs to record the stored-response
+  projection behavior and the targeted eval command.
+- Verification:
+  - `node --check src/bridge/server.js scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js`: 85/85 passing tests.
+  - `npm test`: 122/122 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-reasoning-encrypted` passed 1/1 against
+    `deepseek-v4-pro`, latency 1476 ms, total usage 77 tokens, visible text
+    `reasoning-encrypted-ok`, and both hidden/included stored-response
+    retrieves returned 200.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1648 ms, P95 latency 1699 ms, and total usage 203 tokens.
+  - Full live `bridge-regression` passed 45/45 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1151 ms, P95 latency 2472 ms, and total usage
+    9669 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8j8rt7`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 429 runtime candidates,
+    selected 37 old UI screenshots by retention policy, deleted 0, selected
+    2838229 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 37 GB available;
+    repository checkout is 44 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 13 MB.
+  - No API keys, account credentials, or local secret files were committed.

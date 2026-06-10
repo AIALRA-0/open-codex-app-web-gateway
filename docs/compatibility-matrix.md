@@ -99,7 +99,7 @@ implementations for those tools.
 | `include:["file_search_call.results"]` | local output projection | Emulated locally for the Responses file-search adapter. Search results are hidden by default on `file_search_call` items and returned when this include value is requested on create or on `GET /v1/responses/{id}` |
 | `include:["message.input_image.image_url"]` | local input-item projection | Emulated for `GET /v1/responses/{id}/input_items`, `GET /v1/conversations/{id}/items`, and `GET /v1/conversations/{id}/items/{item_id}`. Stored input image URLs are hidden by default and returned only when this include value is requested |
 | `include:["computer_call_output.output.image_url"]` | local input-item projection plus computer-loop compatibility metadata | Emulated for `GET /v1/responses/{id}/input_items`, `GET /v1/conversations/{id}/items`, and `GET /v1/conversations/{id}/items/{item_id}`. Stored `computer_call_output.output.image_url` values are hidden by default and returned only when this include value is requested. Requests are also recorded in `metadata.compatibility.local_computer.include_output_image_url`, and returned `computer_call_output` input items are translated into Chat-visible context |
-| `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge adds `encrypted_content` to each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and records `metadata.compatibility.local_reasoning_encrypted_content`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
+| `include:["reasoning.encrypted_content"]` | local encrypted reasoning payload plus output projection | Emulated locally. When the Chat provider returns `reasoning_content`, the bridge stores encrypted content for each Responses `reasoning` item using AES-GCM, prefix `ocrsn1.`, and returns it only when this include value is requested on create or on `GET /v1/responses/{id}`. Clients can pass the item back in a later stateless request and the bridge decodes it in memory to upstream `reasoning_content` |
 | `top_logprobs` | `top_logprobs` plus `logprobs:true` | Direct; Chat requires `logprobs:true` when `top_logprobs` is set |
 | `reasoning.effort` | `reasoning_effort` / DeepSeek `thinking` | DeepSeek-compatible mapping enabled by default; `none` disables DeepSeek thinking and omits unsupported `reasoning_effort:"none"`, while `minimal`/`low`/`medium` map to `high` and `xhigh` maps to `max` |
 | `user_id`, `safety_identifier`, `prompt_cache_key`, `user` | DeepSeek `user_id` | DeepSeek-specific compatibility; direct when already `[A-Za-z0-9_-]`, otherwise stable SHA-256 normalized |
@@ -163,7 +163,7 @@ behavior.
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false`; `background:true` returns `in_progress` immediately, persists a local background job snapshot, completes asynchronously through local storage, resumes safe `preparing` checkpoints and `provider_pending` snapshots after restart, and fails unsafe interrupted snapshots explicitly; `conversation` replays and appends local Conversation items |
-| `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object; local `message.output_text.logprobs`, `web_search_call.action.sources`, `code_interpreter_call.outputs`, and `file_search_call.results` are hidden unless their matching include values are requested |
+| `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object; local `message.output_text.logprobs`, `reasoning.encrypted_content`, `web_search_call.action.sources`, `code_interpreter_call.outputs`, and `file_search_call.results` are hidden unless their matching include values are requested |
 | `POST /v1/responses/{response_id}` | Implemented for local `store:true` and local background records | Updates only the stored response `metadata` field; local compatibility metadata is preserved so bridge-emulated behavior remains inspectable, and metadata updates made while a background response is `in_progress` are retained when the final completed response is stored |
 | `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record, aborting an in-process background job when present, and returns a deletion marker |
 | `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
@@ -464,6 +464,10 @@ Chat stream chunks with `delta.content` become text deltas. Chunks with
 become function-call item events and argument deltas. Chunks
 with DeepSeek `delta.reasoning_content` become reasoning summary deltas and are
 kept in the replay store so later tool turns can pass the reasoning content back.
+For stored Responses, local `reasoning.encrypted_content` payloads are retained
+internally when reasoning text is available, but ordinary response retrieval
+hides them. Clients can recover them with
+`GET /v1/responses/{response_id}?include[]=reasoning.encrypted_content`.
 Chat stream chunks with `choice.logprobs.content[]` are accumulated and attached
 to the final `output_text` content part and terminal response. Chat stream
 chunks with `choice.logprobs.refusal[]` are preserved under

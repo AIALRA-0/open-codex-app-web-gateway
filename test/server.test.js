@@ -5459,7 +5459,7 @@ test("POST /v1/responses returns and replays encrypted reasoning content", async
         model: "mock-model",
         input: "Return with reasoning.",
         include: ["reasoning.encrypted_content"],
-        store: false,
+        store: true,
       }),
     });
     assert.equal(first.status, 200);
@@ -5471,6 +5471,40 @@ test("POST /v1/responses returns and replays encrypted reasoning content", async
     assert.equal(firstJson.metadata.compatibility.local_reasoning_encrypted_content.output_count, 1);
     assert.equal(firstJson.metadata.compatibility.local_reasoning_encrypted_content.status, "emulated_locally");
     assert.equal(fs.existsSync(path.join(stateDir, "compaction.key")), true);
+
+    const hiddenStoredResponse = await fetch(`${baseUrl}/v1/responses/${firstJson.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].type, "reasoning");
+    assert.equal(hiddenStoredJson.output[0].summary[0].text, "hidden chain atlas-77");
+    assert.equal(hiddenStoredJson.output[0].encrypted_content, undefined);
+
+    const includedStoredResponse = await fetch(`${baseUrl}/v1/responses/${firstJson.id}?include[]=reasoning.encrypted_content`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].type, "reasoning");
+    assert.match(includedStoredJson.output[0].encrypted_content, /^ocrsn1\./);
+
+    const withoutInclude = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Return with reasoning but do not include encrypted content.",
+        store: true,
+      }),
+    });
+    assert.equal(withoutInclude.status, 200);
+    const withoutIncludeJson = await withoutInclude.json();
+    assert.equal(withoutIncludeJson.output[0].type, "reasoning");
+    assert.equal(withoutIncludeJson.output[0].encrypted_content, undefined);
+    assert.equal(withoutIncludeJson.metadata.compatibility.local_reasoning_encrypted_content, undefined);
+
+    const includedStoredWithoutCreateInclude = await fetch(`${baseUrl}/v1/responses/${withoutIncludeJson.id}?include[]=reasoning.encrypted_content`);
+    assert.equal(includedStoredWithoutCreateInclude.status, 200);
+    const includedStoredWithoutCreateIncludeJson = await includedStoredWithoutCreateInclude.json();
+    assert.equal(includedStoredWithoutCreateIncludeJson.output[0].type, "reasoning");
+    assert.match(includedStoredWithoutCreateIncludeJson.output[0].encrypted_content, /^ocrsn1\./);
 
     const continued = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -5487,7 +5521,7 @@ test("POST /v1/responses returns and replays encrypted reasoning content", async
     assert.equal(continued.status, 200);
     const continuedJson = await continued.json();
     assert.equal(continuedJson.output[0].content[0].text, "continued from encrypted reasoning");
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
   });
 });
 

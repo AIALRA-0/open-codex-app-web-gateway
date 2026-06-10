@@ -497,7 +497,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachComputerOutput(response, localComputer);
   attachWebSearchOutput(response, localWebSearch, { includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
-  const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
+  const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config, { force: true });
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
   response.metadata = {
     ...(response.metadata || {}),
@@ -873,6 +873,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
   attachConversationToResponse(response, conversation);
   prependLocalOutputItems(response, localOutputItems);
   response.background = true;
+  const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config, { force: true });
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
   const storedResponse = store.get(responseId)?.response;
   const storedMetadata = isPlainObject(storedResponse?.metadata) ? clone(storedResponse.metadata) : {};
@@ -884,7 +885,10 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
       responseMetadata.compatibility,
       storedMetadata.compatibility,
       compatibility,
-      localModeration ? { local_moderation: localModeration } : {},
+      {
+        ...(localReasoningEncryptedContent ? { local_reasoning_encrypted_content: localReasoningEncryptedContent } : {}),
+        ...(localModeration ? { local_moderation: localModeration } : {}),
+      },
     ),
     upstream_object: upstreamJson?.object || null,
   };
@@ -912,6 +916,12 @@ function prependLocalOutputItems(response, items = []) {
 
 function responseWithFullLocalOutputs(response, contexts = {}) {
   const full = clone(response);
+  if (contexts.request && contexts.config) {
+    attachLocalReasoningEncryptedContent(full, contexts.request, contexts.config, {
+      force: true,
+      reportMetadata: false,
+    });
+  }
   if (contexts.localShell) mergeFullShellOutputs(full, contexts.localShell);
   if (contexts.localWebSearch) mergeFullWebSearchOutputs(full, contexts.localWebSearch);
   if (contexts.localFileSearch) mergeFullFileSearchOutputs(full, contexts.localFileSearch);
@@ -1613,25 +1623,29 @@ function hasCompactionInput(value) {
   return hasCompactionInput(value.content) || hasCompactionInput(value.input);
 }
 
-function attachLocalReasoningEncryptedContent(response, request, config) {
-  if (!reasoningEncryptedContentRequested(request)) return null;
+function attachLocalReasoningEncryptedContent(response, request, config, options = {}) {
+  const requested = reasoningEncryptedContentRequested(request);
+  if (!requested && !options.force) return null;
   const reasoningItems = Array.isArray(response?.output)
     ? response.output.filter((item) => item?.type === "reasoning")
     : [];
-  let outputCount = 0;
+  let encryptedCount = 0;
 
   for (const item of reasoningItems) {
-    if (typeof item.encrypted_content === "string" && item.encrypted_content) continue;
+    if (typeof item.encrypted_content === "string" && item.encrypted_content) {
+      encryptedCount += 1;
+      continue;
+    }
     const reasoning = reasoningOutputText(item);
     if (!reasoning) continue;
     item.encrypted_content = encryptLocalReasoning(reasoning, config);
-    outputCount += 1;
+    encryptedCount += 1;
   }
 
-  if (!outputCount) return null;
+  if (!encryptedCount || (!requested && !options.reportMetadata)) return null;
   return {
     status: "emulated_locally",
-    output_count: outputCount,
+    output_count: encryptedCount,
     source: "chat_reasoning_content",
   };
 }
@@ -2666,7 +2680,13 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     writeSse(res, terminalEvent, sequence(state, { type: terminalEvent, response: clone(response) }));
 
     if (request.store !== false) {
-      const storedResponse = responseWithFullLocalOutputs(response, { localShell, localWebSearch, localFileSearch });
+      const storedResponse = responseWithFullLocalOutputs(response, {
+        request,
+        config,
+        localShell,
+        localWebSearch,
+        localFileSearch,
+      });
       store.put(response.id, {
         response: storedResponse,
         input_items: normalizeStoredInputItems(request.input),
@@ -5406,6 +5426,9 @@ function projectResponseForIncludeSet(response, includes = new Set()) {
   if (!includes.has("message.output_text.logprobs")) {
     projected = redactOutputTextLogprobs(projected);
   }
+  if (!includes.has("reasoning.encrypted_content")) {
+    projected = redactReasoningEncryptedContent(projected);
+  }
   if (!includes.has("code_interpreter_call.outputs")) {
     projected = redactCodeInterpreterCallOutputs(projected);
   }
@@ -5440,6 +5463,17 @@ function redactOutputTextLogprobs(response) {
       return cloned;
     });
     return { ...item, content };
+  });
+  return response;
+}
+
+function redactReasoningEncryptedContent(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "reasoning") return item;
+    const cloned = { ...item };
+    delete cloned.encrypted_content;
+    return cloned;
   });
   return response;
 }

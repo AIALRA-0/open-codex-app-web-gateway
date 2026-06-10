@@ -362,6 +362,29 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.reasoning_effort?.reason === "deepseek_thinking_disabled",
       },
       {
+        id: "responses-reasoning-encrypted",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Think briefly, then return exactly this text and nothing else: reasoning-encrypted-ok",
+          reasoning: { effort: "high" },
+          include: ["reasoning.encrypted_content"],
+          max_output_tokens: 128,
+          store: true,
+        },
+        retrieveResponseInclude: "reasoning.encrypted_content",
+        check: ({ json, text, hiddenResponse, includedResponse }) => {
+          const reasoning = (json.output || []).find((item) => item.type === "reasoning");
+          const hiddenReasoning = (hiddenResponse?.output || []).find((item) => item.type === "reasoning");
+          const includedReasoning = (includedResponse?.output || []).find((item) => item.type === "reasoning");
+          return /reasoning-encrypted-ok/i.test(text)
+            && /^ocrsn1\./.test(reasoning?.encrypted_content || "")
+            && hiddenReasoning?.encrypted_content === undefined
+            && /^ocrsn1\./.test(includedReasoning?.encrypted_content || "")
+            && json.metadata?.compatibility?.local_reasoning_encrypted_content?.output_count >= 1;
+        },
+      },
+      {
         id: "batch-embeddings-local",
         mode: "batch-local",
         endpoint: "/v1/embeddings",
