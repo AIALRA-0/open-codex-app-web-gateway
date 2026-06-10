@@ -153,6 +153,7 @@ function loadConfig(overrides = {}) {
     stateDir,
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
+    truncationMaxInputChars: numberFromEnv("CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS", 400000, 1000, 2 * 1024 * 1024),
     compactionMaxOutputTokens: numberFromEnv("CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS", 512, 64, 4096),
     compactionSecret: process.env.CODEXCOMPAT_COMPACTION_SECRET || "",
     compactionSecretFile,
@@ -407,7 +408,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore);
+    }, previousMessages, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore);
     return;
   }
 
@@ -428,6 +429,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     applyLocalFileSearchToChat(chat, compatibility, localFileSearch, config);
   }
   Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
+  const truncationError = applyLocalContextTruncation(chat, compatibility, request, previousMessages, config);
+  if (truncationError) {
+    sendLocalTruncationError(res, truncationError);
+    return;
+  }
 
   if (chat.stream) {
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
@@ -486,7 +492,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   sendJson(res, 200, response);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, previousMessages, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -532,6 +538,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     responseId: response.id,
     compatibility: backgroundCompatibility,
     incomingHeaders: req.headers,
+    previousMessages,
     fileSearchStore,
     containerStore,
     conversationStore,
@@ -543,7 +550,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore }) {
   try {
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
@@ -563,6 +570,13 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       finalCompatibility = applyLocalFileSearchToChat(chat, { ...finalCompatibility }, localFileSearch, config);
     }
     Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
+    const truncationError = applyLocalContextTruncation(chat, finalCompatibility, request, previousMessages, config);
+    if (truncationError) {
+      storeFailedBackgroundResponse(store, responseId, truncationError.message, 400, {
+        error: localTruncationErrorBody(truncationError).error,
+      });
+      return;
+    }
 
     const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
       controller: job.controller,
@@ -761,6 +775,109 @@ function applyCompactionReplayToChat(chat, compatibility, request, config) {
   return compatibility;
 }
 
+function applyLocalContextTruncation(chat, compatibility, request = {}, previousMessages = [], config = {}) {
+  const maxChars = Number(config.truncationMaxInputChars || 0);
+  if (!Number.isFinite(maxChars) || maxChars <= 0 || !Array.isArray(chat?.messages)) return null;
+
+  const estimatedBefore = estimateChatMessagesChars(chat.messages);
+  if (estimatedBefore <= maxChars) return null;
+
+  const strategy = request.truncation ?? "disabled";
+  if (strategy !== "auto") {
+    return makeLocalTruncationError({
+      strategy,
+      maxChars,
+      estimatedBefore,
+      estimatedAfter: estimatedBefore,
+      droppedMessageCount: 0,
+      reason: "truncation_disabled",
+    });
+  }
+
+  const replayMessages = new WeakSet((previousMessages || []).filter(isPlainObject));
+  let estimatedAfter = estimatedBefore;
+  let droppedMessageCount = 0;
+  let droppedChars = 0;
+  const droppedRoles = {};
+
+  while (estimatedAfter > maxChars) {
+    const dropIndex = chat.messages.findIndex((message) => isPlainObject(message) && replayMessages.has(message));
+    if (dropIndex === -1) break;
+    const [dropped] = chat.messages.splice(dropIndex, 1);
+    const chars = estimateChatMessageChars(dropped);
+    droppedMessageCount += 1;
+    droppedChars += chars;
+    const role = stringifyContent(dropped.role || "unknown").slice(0, 40) || "unknown";
+    droppedRoles[role] = (droppedRoles[role] || 0) + 1;
+    estimatedAfter = estimateChatMessagesChars(chat.messages);
+  }
+
+  const status = estimatedAfter <= maxChars ? "applied" : "failed";
+  compatibility.local_truncation = {
+    status,
+    strategy: "auto",
+    source: "local_char_budget",
+    max_input_chars: maxChars,
+    estimated_chars_before: estimatedBefore,
+    estimated_chars_after: estimatedAfter,
+    dropped_message_count: droppedMessageCount,
+    dropped_chars: droppedChars,
+    dropped_roles: droppedRoles,
+    preserved_current_input: true,
+  };
+
+  if (status === "failed") {
+    return makeLocalTruncationError({
+      strategy,
+      maxChars,
+      estimatedBefore,
+      estimatedAfter,
+      droppedMessageCount,
+      reason: droppedMessageCount ? "insufficient_replay_context" : "no_replay_context",
+    });
+  }
+  return null;
+}
+
+function estimateChatMessagesChars(messages = []) {
+  return (messages || []).reduce((sum, message) => sum + estimateChatMessageChars(message), 0);
+}
+
+function estimateChatMessageChars(message) {
+  try {
+    return JSON.stringify(message || {}).length;
+  } catch {
+    return stringifyContent(message).length;
+  }
+}
+
+function makeLocalTruncationError(details = {}) {
+  const maxChars = details.maxChars || 0;
+  const estimatedAfter = details.estimatedAfter ?? details.estimatedBefore ?? 0;
+  return {
+    message: `input exceeds local context budget (${estimatedAfter}/${maxChars} estimated chars)`,
+    type: "invalid_request_error",
+    code: "context_length_exceeded",
+    param: "truncation",
+    details,
+  };
+}
+
+function localTruncationErrorBody(error) {
+  return {
+    error: {
+      message: error.message,
+      type: error.type || "invalid_request_error",
+      param: error.param || "truncation",
+      code: error.code || "context_length_exceeded",
+    },
+  };
+}
+
+function sendLocalTruncationError(res, error) {
+  sendJson(res, 400, localTruncationErrorBody(error));
+}
+
 function hasCompactionInput(value) {
   if (Array.isArray(value)) return value.some(hasCompactionInput);
   if (!value || typeof value !== "object") return false;
@@ -900,6 +1017,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) injectInputFileMessages(chat, localInputFiles);
+  const truncationError = applyLocalContextTruncation(chat, {}, request, previousMessages, config);
+  if (truncationError) {
+    sendLocalTruncationError(res, truncationError);
+    return;
+  }
   chat.stream = false;
   delete chat.store;
   chat[config.maxTokensField || "max_tokens"] = 1;
@@ -943,6 +1065,11 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) applyInputFilesToChat(chat, compatibility, localInputFiles, config);
+  const truncationError = applyLocalContextTruncation(chat, compatibility, request, previousMessages, config);
+  if (truncationError) {
+    sendLocalTruncationError(res, truncationError);
+    return;
+  }
 
   const upstream = await fetchProvider(config, config.chatCompletionsPath, makeCompactionChatRequest(request, chat, config), req.headers);
   const upstreamText = await upstream.text();

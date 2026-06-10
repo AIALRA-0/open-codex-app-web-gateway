@@ -90,6 +90,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` | empty | Optional path to a JSON object containing local prompt templates; env JSON overrides duplicate file keys. Store under `/srv/aialra/config` or another runtime path, not the repo |
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
+| `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS` | `400000` | Local estimated input-character budget used to emulate Responses `truncation`. With `truncation:"auto"`, old replay messages are dropped from the beginning of conversation state until under this budget; with `disabled`, the bridge returns `400 context_length_exceeded` before calling the provider when this budget is exceeded |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content` and local Responses `reasoning.encrypted_content` emulation; keep outside Git and mode `0600` |
 | `CODEXCOMPAT_INPUT_FILE_PROVIDER` | `local` | Local Responses `input_file` adapter provider. Use `disabled` to leave file inputs as marker-only metadata |

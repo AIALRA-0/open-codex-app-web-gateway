@@ -3174,3 +3174,61 @@ Open follow-ups:
 - Remaining known gap: this exposes sources from the local web-search adapter;
   it is not OpenAI hosted web-search ranking or policy parity and still depends
   on the configured local provider.
+
+## 2026-06-10 Local Responses Truncation Compatibility
+
+- Added local Responses `truncation` compatibility before upstream Chat calls.
+- Official source checked on 2026-06-10:
+  - OpenAI Responses `create` documents `truncation:"auto"` as dropping items
+    from the beginning of the conversation when input exceeds the model context
+    window.
+  - The same reference documents `truncation:"disabled"` as the default, where
+    oversized input fails with a 400-style error instead of being truncated.
+- Implemented local truncation handling:
+  - added `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS`, default `400000`, as the
+    bridge's estimated input-character budget for Chat-only providers;
+  - `truncation:"auto"` drops oldest `conversation` / `previous_response_id`
+    replay messages first, preserving current request input and local tool
+    context;
+  - `metadata.compatibility.local_truncation` records the local budget, before
+    and after estimates, dropped message count, dropped roles, and status;
+  - omitted or `disabled` truncation returns `400 context_length_exceeded`
+    before calling the provider when the local budget is exceeded;
+  - the same preflight is applied to normal Responses, streaming Responses,
+    background Responses, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`.
+- Added tests for:
+  - `truncation:"auto"` dropping the oldest replay messages before upstream
+    Chat while preserving current input;
+  - omitted/disabled truncation returning `context_length_exceeded` before any
+    provider request.
+- Updated `.env.example`, deployment docs, the compatibility matrix, and the
+  evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 66/66 passing tests.
+  - `npm test`: 97/97 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Full live `bridge-regression` passed 36/36 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1273 ms, P95 latency 3475 ms, and total usage
+    8640 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8bakz7`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 281 runtime candidates,
+    selected 16 old UI screenshots by retention policy, deleted 0, selected
+    1044764 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 39 GB available; bridge state is 1.9 MB, output
+    artifacts are 5.3 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.
+- Remaining known gap: this uses a deterministic character estimate because
+  Chat Completions providers do not expose the Responses service's exact
+  tokenizer/context-window truncation behavior. Provider-specific tokenizers can
+  replace the estimate later for closer parity.

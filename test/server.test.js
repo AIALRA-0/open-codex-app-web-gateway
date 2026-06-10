@@ -3383,6 +3383,104 @@ test("local Conversations API persists items and feeds Responses conversation co
   });
 });
 
+test("Responses truncation auto drops oldest replay messages before upstream Chat", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n");
+    assert.doesNotMatch(prompt, /drop-me-old-1/);
+    assert.doesNotMatch(prompt, /drop-me-old-2/);
+    assert.match(prompt, /keep-me-new/);
+    assert.match(prompt, /truncation-current/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_truncation_auto",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "truncation-auto-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const conversationResponse = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          { type: "message", role: "user", content: `drop-me-old-1 ${"x".repeat(240)}` },
+          { type: "message", role: "assistant", content: `drop-me-old-2 ${"y".repeat(240)}` },
+          { type: "message", role: "user", content: "keep-me-new" },
+        ],
+      }),
+    });
+    assert.equal(conversationResponse.status, 200);
+    const conversation = await conversationResponse.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: conversation.id,
+        input: "truncation-current",
+        truncation: "auto",
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "truncation-auto-ok");
+    assert.equal(json.truncation, "auto");
+    assert.equal(json.metadata.compatibility.local_truncation.status, "applied");
+    assert.equal(json.metadata.compatibility.local_truncation.strategy, "auto");
+    assert.equal(json.metadata.compatibility.local_truncation.max_input_chars, 260);
+    assert.equal(json.metadata.compatibility.local_truncation.dropped_message_count, 2);
+    assert.equal(json.metadata.compatibility.local_truncation.dropped_roles.user, 1);
+    assert.equal(json.metadata.compatibility.local_truncation.dropped_roles.assistant, 1);
+    assert.equal(json.metadata.compatibility.local_truncation.preserved_current_input, true);
+    assert.ok(json.metadata.compatibility.local_truncation.estimated_chars_before > 260);
+    assert.ok(json.metadata.compatibility.local_truncation.estimated_chars_after <= 260);
+  }, { truncationMaxInputChars: 260 });
+});
+
+test("Responses truncation disabled returns context_length_exceeded before provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const conversationResponse = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{ type: "message", role: "user", content: `too-long ${"z".repeat(240)}` }],
+      }),
+    });
+    assert.equal(conversationResponse.status, 200);
+    const conversation = await conversationResponse.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: conversation.id,
+        input: "current input remains but truncation is disabled",
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 400);
+    const json = await response.json();
+    assert.equal(json.error.type, "invalid_request_error");
+    assert.equal(json.error.code, "context_length_exceeded");
+    assert.equal(json.error.param, "truncation");
+    assert.equal(requests.length, 0);
+  }, { truncationMaxInputChars: 120 });
+});
+
 test("Responses conversation references return 404 when the local conversation is missing", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
