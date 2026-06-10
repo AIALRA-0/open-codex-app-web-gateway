@@ -3349,3 +3349,68 @@ Open follow-ups:
   - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
     193 GB filesystem with 38 GB available; bridge state is 2.0 MB, output
     artifacts are 5.5 MB, and `/srv/aialra/data/opencodexapp` is 48 KB.
+
+## 2026-06-10 Restartable Background Provider Calls
+
+- Added file-backed local background job snapshots for `background:true`
+  Responses:
+  - newly created background responses now store `background_job.stage:"queued"`
+    with the normalized request, Chat request, compatibility metadata,
+    previous-message snapshot, and conversation snapshot;
+  - after local input-file/tool/context preparation succeeds, the job snapshot
+    advances to `stage:"provider_pending"` and stores the final upstream Chat
+    request plus local output items that must be prepended to the completed
+    Responses output;
+  - final completed/failed/cancelled terminal records remove
+    `background_job`, keeping state bounded and avoiding accidental replays.
+- Added restart recovery:
+  - bridge startup now resumes `provider_pending` snapshots by retrying the
+    upstream Chat provider call and preserving local output items;
+  - `queued` snapshots can restart the full local preparation path;
+  - missing snapshots, unknown stages, or `preparing` snapshots fail closed with
+    `background_job_interrupted_by_restart` and
+    `metadata.compatibility.background_restart_reason` so side-effecting local
+    tools are not re-run after an unsafe interruption.
+- Fixed a compatibility metadata merge footgun by changing
+  `mergeCompatibility` to accept any number of object parts. This preserves
+  background resume metadata and extra local moderation compatibility entries
+  in paths that already passed more than three merge inputs.
+- Added server tests for:
+  - stale in-progress background records without a persistent job snapshot
+    still reconciling to explicit failed terminal responses;
+  - `provider_pending` background records being resumed on startup, completing
+    through the mock provider, preserving prepended local output items, and
+    clearing `background_job` from the final store record;
+  - corrupt resumable snapshots with invalid `max_tool_calls` failing closed
+    during startup without crashing the bridge or calling the provider.
+- Official source checked on 2026-06-10:
+  - OpenAI's Responses migration guide describes background mode as a Responses
+    capability with `in_progress` to terminal-state polling semantics; this
+    bridge emulates that lifecycle locally for Chat-only providers.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 71/71 passing tests.
+  - `npm test`: 104/104 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - `protocol-smoke` passed 2/2, pass rate 1.0, average latency 1259 ms, P95
+    latency 1423 ms, and total usage 160 tokens.
+  - Targeted live `responses-background` passed 1/1 after the final deploy,
+    elapsed 2109 ms, status history `in_progress`, `in_progress`,
+    `completed`, and total usage 56 tokens.
+  - Full live `bridge-regression` passed 38/38 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1315 ms, P95 latency 3344 ms, and total usage
+    8899 tokens.
+  - UI smoke passed with marker `ui-smoke-bgresume-final-20260610`, reload
+    persistence confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 303 runtime candidates,
+    selected 20 old UI screenshots by retention policy, deleted 0, selected
+    1383964 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 38 GB available; repository checkout is 38 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 11 MB.

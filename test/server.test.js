@@ -3488,8 +3488,222 @@ test("server startup reconciles stale in-progress background responses", async (
     assert.equal(json.error.code, "background_job_interrupted_by_restart");
     assert.equal(json.metadata.compatibility.background, "local_async");
     assert.equal(json.metadata.compatibility.background_restart, "marked_failed_on_startup");
+    assert.equal(json.metadata.compatibility.background_restart_reason, "missing_persistent_background_job");
   } finally {
     await close(bridge);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("server startup resumes provider-pending background responses", async () => {
+  const requests = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_background_resume",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "background resumed" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 3, total_tokens: 10 },
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-resume-background-"));
+  const responseId = "resp_resume_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  const localComputerCall = {
+    id: "cu_resume",
+    type: "computer_call",
+    call_id: "call_resume",
+    status: "completed",
+    action: { type: "screenshot" },
+    actions: [{ type: "screenshot" }],
+    pending_safety_checks: [],
+  };
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+        },
+      },
+    },
+    input_items: [{ id: "item_resume", type: "message", role: "user", content: "resume background" }],
+    messages: [{ role: "user", content: "resume background" }],
+    background_job: {
+      version: 1,
+      stage: "provider_pending",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      request: {
+        model: "mock-model",
+        input: "resume background",
+        background: true,
+        stream: false,
+        store: true,
+      },
+      chat: {
+        model: "mock-model",
+        messages: [{ role: "user", content: "resume background" }],
+        stream: false,
+        store: true,
+      },
+      compatibility: {
+        background: "local_async",
+        local_computer: { status: "completed" },
+      },
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [localComputerCall],
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+      assert.equal(fetched.status, 200);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.background, true);
+    assert.equal(finalJson.output[0].type, "computer_call");
+    assert.equal(finalJson.output[0].call_id, "call_resume");
+    assert.equal(finalJson.output[1].content[0].text, "background resumed");
+    assert.equal(finalJson.usage.total_tokens, 10);
+    assert.equal(finalJson.metadata.compatibility.background, "local_async");
+    assert.equal(finalJson.metadata.compatibility.background_restart, "resumed_provider_call");
+    assert.equal(finalJson.metadata.compatibility.local_computer.status, "completed");
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.stream, false);
+    assert.equal(requests[0].body.store, true);
+    assert.equal(requests[0].body.messages[0].content, "resume background");
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    await close(bridge);
+    await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("server startup fails corrupt resumable background snapshots without crashing", async () => {
+  const requests = [];
+  const provider = http.createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    requests.push({ req, body: body ? JSON.parse(body) : null });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_unexpected_resume",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "unexpected" },
+        finish_reason: "stop",
+      }],
+    }));
+  });
+  const providerAddress = await listen(provider);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-corrupt-background-"));
+  const responseId = "resp_corrupt_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+        },
+      },
+    },
+    input_items: [{ id: "item_corrupt", type: "message", role: "user", content: "corrupt background" }],
+    messages: [{ role: "user", content: "corrupt background" }],
+    background_job: {
+      version: 1,
+      stage: "provider_pending",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      request: {
+        model: "mock-model",
+        input: "corrupt background",
+        background: true,
+        stream: false,
+        store: true,
+        max_tool_calls: "invalid",
+      },
+      chat: {
+        model: "mock-model",
+        messages: [{ role: "user", content: "corrupt background" }],
+        stream: false,
+        store: true,
+      },
+      compatibility: { background: "local_async" },
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [],
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+    assert.equal(fetched.status, 200);
+    const json = await fetched.json();
+    assert.equal(json.status, "failed");
+    assert.equal(json.error.code, "background_job_interrupted_by_restart");
+    assert.equal(json.metadata.compatibility.background_restart, "marked_failed_on_startup");
+    assert.equal(
+      json.metadata.compatibility.background_restart_reason,
+      "invalid_persistent_background_job_invalid_max_tool_calls",
+    );
+    assert.equal(requests.length, 0);
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    await close(bridge);
+    await close(provider);
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });

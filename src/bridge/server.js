@@ -539,16 +539,20 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     response,
     input_items: normalizeStoredInputItems(request.input),
     messages: chat.messages,
+    background_job: backgroundJobState({
+      stage: "queued",
+      request: backgroundRequest,
+      chat,
+      compatibility: backgroundCompatibility,
+      previousMessages,
+      conversation,
+    }),
   });
 
-  const controller = new AbortController();
-  const job = { controller, created_at: Date.now(), deleted: false };
-  backgroundJobs.set(response.id, job);
-  runBackgroundResponse({
+  startBackgroundJob({
     config,
     store,
     backgroundJobs,
-    job,
     request: backgroundRequest,
     chat,
     responseId: response.id,
@@ -566,8 +570,42 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore }) {
+function startBackgroundJob(params) {
+  const controller = new AbortController();
+  const job = {
+    controller,
+    created_at: Date.now(),
+    deleted: false,
+    resumed: !!params.resumed,
+  };
+  params.backgroundJobs.set(params.responseId, job);
+  runBackgroundResponse({
+    ...params,
+    job,
+  });
+  return job;
+}
+
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [] }) {
   try {
+    if (prepared) {
+      await runPreparedBackgroundProviderResponse({
+        config,
+        store,
+        job,
+        request,
+        chat,
+        responseId,
+        compatibility,
+        incomingHeaders,
+        conversationStore,
+        conversation,
+        localOutputItems,
+      });
+      return;
+    }
+
+    persistBackgroundJobState(store, responseId, { stage: "preparing" });
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     let finalCompatibility = compatibility;
     if (localInputFiles) {
@@ -598,57 +636,34 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       return;
     }
 
-    const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
-      controller: job.controller,
-      onTimeout: () => {
-        job.timed_out = true;
-      },
+    const preparedLocalOutputItems = [
+      ...shellOutputItems(localShell),
+      ...computerOutputItems(localComputer),
+      ...webSearchOutputItems(localWebSearch),
+      ...fileSearchOutputItems(localFileSearch),
+    ];
+    persistBackgroundJobState(store, responseId, {
+      stage: "provider_pending",
+      request,
+      chat,
+      compatibility: finalCompatibility,
+      local_output_items: preparedLocalOutputItems,
+      conversation,
     });
-    const upstreamText = await upstream.text();
-    const upstreamJson = parseJsonOrNull(upstreamText);
-    if (job.deleted) return;
-    if (job.controller.signal.aborted) {
-      storeCancelledBackgroundResponse(store, responseId, "cancelled");
-      return;
-    }
 
-    if (!upstream.ok) {
-      storeFailedBackgroundResponse(store, responseId, upstreamText, upstream.status, upstreamJson);
-      return;
-    }
-
-    const response = chatCompletionToResponse(upstreamJson, request, { responseId });
-    attachConversationToResponse(response, conversation);
-    attachShellOutput(response, localShell);
-    attachComputerOutput(response, localComputer);
-    attachWebSearchOutput(response, localWebSearch);
-    attachFileSearchOutput(response, localFileSearch);
-    response.background = true;
-    const localModeration = attachLocalResponseInlineModeration(response, request, config);
-    const storedResponse = store.get(responseId)?.response;
-    const storedMetadata = isPlainObject(storedResponse?.metadata) ? clone(storedResponse.metadata) : {};
-    const responseMetadata = isPlainObject(response.metadata) ? response.metadata : {};
-    response.metadata = {
-      ...responseMetadata,
-      ...storedMetadata,
-      compatibility: mergeCompatibility(
-        responseMetadata.compatibility,
-        storedMetadata.compatibility,
-        finalCompatibility,
-        localModeration ? { local_moderation: localModeration } : {},
-      ),
-      upstream_object: upstreamJson?.object || null,
-    };
-
-    store.put(response.id, {
-      response,
-      input_items: normalizeStoredInputItems(request.input),
-      messages: [
-        ...chat.messages,
-        ...chatCompletionToReplayMessages(upstreamJson),
-      ],
+    await runPreparedBackgroundProviderResponse({
+      config,
+      store,
+      job,
+      request,
+      chat,
+      responseId,
+      compatibility: finalCompatibility,
+      incomingHeaders,
+      conversationStore,
+      conversation,
+      localOutputItems: preparedLocalOutputItems,
     });
-    appendResponseToConversation(conversationStore, conversation, request, response);
   } catch (error) {
     if (job.deleted) return;
     if (job.timed_out) {
@@ -663,6 +678,107 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
   } finally {
     backgroundJobs.delete(responseId);
   }
+}
+
+async function runPreparedBackgroundProviderResponse({ config, store, job, request, chat, responseId, compatibility, incomingHeaders = {}, conversationStore, conversation, localOutputItems = [] }) {
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
+    controller: job.controller,
+    onTimeout: () => {
+      job.timed_out = true;
+    },
+  });
+  const upstreamText = await upstream.text();
+  const upstreamJson = parseJsonOrNull(upstreamText);
+  if (job.deleted) return;
+  if (job.controller.signal.aborted) {
+    storeCancelledBackgroundResponse(store, responseId, "cancelled");
+    return;
+  }
+
+  if (!upstream.ok) {
+    storeFailedBackgroundResponse(store, responseId, upstreamText, upstream.status, upstreamJson);
+    return;
+  }
+
+  const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  attachConversationToResponse(response, conversation);
+  prependLocalOutputItems(response, localOutputItems);
+  response.background = true;
+  const localModeration = attachLocalResponseInlineModeration(response, request, config);
+  const storedResponse = store.get(responseId)?.response;
+  const storedMetadata = isPlainObject(storedResponse?.metadata) ? clone(storedResponse.metadata) : {};
+  const responseMetadata = isPlainObject(response.metadata) ? response.metadata : {};
+  response.metadata = {
+    ...responseMetadata,
+    ...storedMetadata,
+    compatibility: mergeCompatibility(
+      responseMetadata.compatibility,
+      storedMetadata.compatibility,
+      compatibility,
+      localModeration ? { local_moderation: localModeration } : {},
+    ),
+    upstream_object: upstreamJson?.object || null,
+  };
+
+  store.put(response.id, {
+    response,
+    input_items: normalizeStoredInputItems(request.input),
+    messages: [
+      ...chat.messages,
+      ...chatCompletionToReplayMessages(upstreamJson),
+    ],
+  });
+  appendResponseToConversation(conversationStore, conversation, request, response);
+}
+
+function prependLocalOutputItems(response, items = []) {
+  const localItems = Array.isArray(items) ? items.filter(isPlainObject).map(clone) : [];
+  if (!localItems.length) return response;
+  response.output = [
+    ...localItems,
+    ...(response.output || []),
+  ];
+  return response;
+}
+
+function backgroundJobState({
+  stage,
+  request,
+  chat,
+  compatibility,
+  previousMessages = [],
+  conversation = null,
+  local_output_items = [],
+} = {}) {
+  return {
+    version: 1,
+    stage,
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    request: clone(request || {}),
+    chat: clone(chat || {}),
+    compatibility: clone(compatibility || {}),
+    previous_messages: clone(previousMessages || []),
+    conversation: conversation ? clone(conversation) : null,
+    local_output_items: clone(local_output_items || []),
+  };
+}
+
+function persistBackgroundJobState(store, responseId, patch = {}) {
+  const record = store.get(responseId);
+  if (!record?.response || record.response.status !== "in_progress") return null;
+  const existing = isPlainObject(record.background_job) ? record.background_job : {};
+  const next = {
+    ...existing,
+    ...clone(patch),
+    version: existing.version || 1,
+    updated_at: Date.now(),
+  };
+  store.put(responseId, {
+    ...record,
+    background_job: next,
+  });
+  return next;
 }
 
 function storeFailedBackgroundResponse(store, responseId, message, status, upstreamJson = null) {
@@ -692,37 +808,156 @@ function storeCancelledBackgroundResponse(store, responseId, reason) {
   }));
 }
 
-function reconcileStaleBackgroundResponses(store) {
-  if (typeof store?.list !== "function" || typeof store?.put !== "function") return 0;
-  let reconciled = 0;
+function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore }) {
+  if (typeof store?.list !== "function" || typeof store?.put !== "function") {
+    return { resumed: 0, reconciled: 0 };
+  }
+  const summary = { resumed: 0, reconciled: 0 };
   for (const record of store.list()) {
     const response = record?.response;
     if (!response || response.status !== "in_progress" || response.background !== true) continue;
     const responseId = response.id || record.id;
     if (!responseId) continue;
-    store.put(responseId, {
-      ...record,
-      response: {
-        ...response,
-        status: "failed",
-        completed_at: nowSeconds(),
-        error: {
-          message: "background response was interrupted by bridge restart",
-          type: "compatibility_bridge_error",
-          code: "background_job_interrupted_by_restart",
-          param: null,
-        },
-        metadata: {
-          ...(response.metadata || {}),
-          compatibility: mergeCompatibility(response.metadata?.compatibility, {
-            background_restart: "marked_failed_on_startup",
-          }),
-        },
-      },
-    });
-    reconciled += 1;
+    const jobState = isPlainObject(record.background_job) ? record.background_job : null;
+    if (canResumePreparedBackgroundJob(jobState)) {
+      const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls);
+      if (toolBudget.error) {
+        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        summary.reconciled += 1;
+        continue;
+      }
+      markBackgroundRestart(store, responseId, "resumed_provider_call");
+      startBackgroundJob({
+        config,
+        store,
+        backgroundJobs,
+        request: jobState.request,
+        chat: jobState.chat,
+        responseId,
+        compatibility: jobState.compatibility || response.metadata?.compatibility || {},
+        incomingHeaders: {},
+        previousMessages: jobState.previous_messages || [],
+        fileSearchStore,
+        containerStore,
+        conversationStore,
+        conversation: jobState.conversation || null,
+        toolBudget: toolBudget.value,
+        skillStore,
+        resumed: true,
+        prepared: true,
+        localOutputItems: jobState.local_output_items || [],
+      });
+      summary.resumed += 1;
+      continue;
+    }
+
+    if (canResumeQueuedBackgroundJob(jobState)) {
+      const toolBudget = createResumedToolCallBudget(jobState.request?.max_tool_calls);
+      if (toolBudget.error) {
+        markInterruptedBackgroundResponseFailed(store, responseId, record, response, backgroundJobValidationFailureReason(toolBudget.error));
+        summary.reconciled += 1;
+        continue;
+      }
+      markBackgroundRestart(store, responseId, "resumed_from_queue");
+      startBackgroundJob({
+        config,
+        store,
+        backgroundJobs,
+        request: jobState.request,
+        chat: jobState.chat,
+        responseId,
+        compatibility: jobState.compatibility || response.metadata?.compatibility || {},
+        incomingHeaders: {},
+        previousMessages: jobState.previous_messages || [],
+        fileSearchStore,
+        containerStore,
+        conversationStore,
+        conversation: jobState.conversation || null,
+        toolBudget: toolBudget.value,
+        skillStore,
+        resumed: true,
+      });
+      summary.resumed += 1;
+      continue;
+    }
+
+    markInterruptedBackgroundResponseFailed(store, responseId, record, response, restartFailureReason(jobState));
+    summary.reconciled += 1;
   }
-  return reconciled;
+  return summary;
+}
+
+function createResumedToolCallBudget(maxToolCalls) {
+  try {
+    return { value: createToolCallBudget(maxToolCalls) };
+  } catch (error) {
+    return { error };
+  }
+}
+
+function backgroundJobValidationFailureReason(error) {
+  const code = stringifyContent(error?.code || error?.message || "invalid_background_job").slice(0, 80);
+  return `invalid_persistent_background_job_${code}`;
+}
+
+function canResumePreparedBackgroundJob(jobState) {
+  return isPlainObject(jobState)
+    && jobState.stage === "provider_pending"
+    && isPlainObject(jobState.request)
+    && isPlainObject(jobState.chat)
+    && Array.isArray(jobState.chat.messages);
+}
+
+function canResumeQueuedBackgroundJob(jobState) {
+  return isPlainObject(jobState)
+    && jobState.stage === "queued"
+    && isPlainObject(jobState.request)
+    && isPlainObject(jobState.chat)
+    && Array.isArray(jobState.chat.messages);
+}
+
+function restartFailureReason(jobState) {
+  if (!isPlainObject(jobState)) return "missing_persistent_background_job";
+  if (jobState.stage === "preparing") return "interrupted_during_local_preparation";
+  return `unresumable_stage_${stringifyContent(jobState.stage || "unknown").slice(0, 80)}`;
+}
+
+function markBackgroundRestart(store, responseId, reason) {
+  return updateStoredResponse(store, responseId, (response) => ({
+    ...response,
+    metadata: {
+      ...(response.metadata || {}),
+      compatibility: mergeCompatibility(response.metadata?.compatibility, {
+        background_restart: reason,
+      }),
+    },
+  }));
+}
+
+function markInterruptedBackgroundResponseFailed(store, responseId, record, response, reason) {
+  const nextRecord = {
+    ...record,
+    response: {
+      ...response,
+      status: "failed",
+      completed_at: nowSeconds(),
+      error: {
+        message: "background response was interrupted by bridge restart",
+        type: "compatibility_bridge_error",
+        code: "background_job_interrupted_by_restart",
+        param: null,
+      },
+      metadata: {
+        ...(response.metadata || {}),
+        compatibility: mergeCompatibility(response.metadata?.compatibility, {
+          background_restart: "marked_failed_on_startup",
+          background_restart_reason: reason,
+        }),
+      },
+    },
+  };
+  delete nextRecord.background_job;
+  store.put(responseId, nextRecord);
 }
 
 function updateStoredResponse(store, responseId, updater) {
@@ -730,10 +965,12 @@ function updateStoredResponse(store, responseId, updater) {
   if (!record?.response) return null;
   if (record.response.status !== "in_progress") return record.response;
   const response = updater(clone(record.response));
-  store.put(responseId, {
+  const nextRecord = {
     ...record,
     response,
-  });
+  };
+  if (response.status !== "in_progress") delete nextRecord.background_job;
+  store.put(responseId, nextRecord);
   return response;
 }
 
@@ -964,13 +1201,14 @@ function reasoningOutputText(item) {
   return "";
 }
 
-function mergeCompatibility(existing, next, extra = {}) {
-  const current = existing && typeof existing === "object" && !Array.isArray(existing) ? existing : {};
-  return {
-    ...current,
-    ...(next || {}),
-    ...extra,
-  };
+function mergeCompatibility(...parts) {
+  const merged = {};
+  for (const part of parts) {
+    if (part && typeof part === "object" && !Array.isArray(part)) {
+      Object.assign(merged, part);
+    }
+  }
+  return merged;
 }
 
 function conversationIdFromRequest(request = {}) {
@@ -4683,9 +4921,17 @@ function createServer(config = loadConfig()) {
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
   const backgroundJobs = new Map();
-  const reconciledBackgroundJobs = reconcileStaleBackgroundResponses(store);
-  if (reconciledBackgroundJobs) {
-    log("reconciled stale background responses after startup", { count: reconciledBackgroundJobs });
+  const backgroundRestart = resumeStaleBackgroundResponses({
+    config,
+    store,
+    backgroundJobs,
+    fileSearchStore,
+    containerStore,
+    conversationStore,
+    skillStore,
+  });
+  if (backgroundRestart.resumed || backgroundRestart.reconciled) {
+    log("processed stale background responses after startup", backgroundRestart);
   }
 
   return http.createServer(async (req, res) => {
