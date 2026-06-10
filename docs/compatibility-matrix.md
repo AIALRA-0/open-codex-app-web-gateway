@@ -42,7 +42,7 @@ implementations for those tools.
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
 | `input_image` | chat `image_url` content part | Provider-dependent |
-| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted |
+| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled |
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
@@ -299,13 +299,17 @@ Configuration:
 | `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS` | `200000` | Maximum extracted text injected per file |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_URLS` | `true` | Allows HTTP(S) `file_url` fetching with size and timeout caps |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote input file fetches |
+| `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR` | `pdftotext` | Uses local Poppler `pdftotext` for PDF text extraction; use `disabled` to report PDFs as unsupported metadata |
+| `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS` | `10000` | Timeout for each local PDF text extraction process |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES` | `true` | Disables DeepSeek thinking mode for local input-file requests so visible output remains available under small output budgets |
 
 This is a text extraction compatibility layer, not native OpenAI file input
 processing. Text and code files, CSV/TSV, JSON, Markdown, HTML, XML, and similar
 formats are injected directly. Inline `file_data` must be valid base64. Binary
-PDFs and rich Office documents are reported with metadata unless a future parser
-extracts text safely. For large files, prefer the local `file_search` adapter.
+PDF text layers are extracted with Poppler `pdftotext` when available; scanned
+PDF images, OCR, PDF page rendering, and rich Office documents are still
+reported with metadata unless a future parser extracts text safely. For large
+files, prefer the local `file_search` adapter.
 
 ## Local File Search Adapter
 
@@ -381,7 +385,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
-| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs, but not PDF page images, spreadsheet augmentation, or rich Office document parsing | Add PDF text extraction, optional rendered-page context, spreadsheet summarization, Office parsers, and stronger file-type detection |
+| OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/HTTP(S) URLs and PDF text-layer extraction, but not PDF page images/OCR, spreadsheet augmentation, or rich Office document parsing | Add optional rendered-page context, OCR, spreadsheet summarization, Office parsers, and stronger file-type detection |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

@@ -1,5 +1,8 @@
 "use strict";
 
+const childProcess = require("node:child_process");
+const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const { stringifyContent } = require("./translator");
 
@@ -46,6 +49,7 @@ function inputFileCompatibility(context) {
       resolved_count: context.files?.filter((file) => file.status === "completed").length || 0,
       failed_count: context.files?.filter((file) => file.status !== "completed").length || 0,
       truncated_count: context.files?.filter((file) => file.truncated).length || 0,
+      pdf_extracted_count: context.files?.filter((file) => file.extraction_method === "pdftotext").length || 0,
     },
   };
 }
@@ -63,6 +67,7 @@ function inputFilePrompt(context) {
       file.file_id ? `file_id: ${file.file_id}` : null,
       file.file_url ? `file_url: ${file.file_url}` : null,
       file.media_type ? `media_type: ${file.media_type}` : null,
+      file.extraction_method ? `extraction_method: ${file.extraction_method}` : null,
       `bytes: ${file.bytes || 0}`,
       `status: ${file.status}`,
       file.truncated ? "truncated: true" : null,
@@ -243,6 +248,7 @@ function fileRecordToInputFile({ source, file_id, file_url, filename, media_type
     status: extracted.content ? "completed" : "failed",
     content: extracted.content,
     truncated: extracted.truncated,
+    ...(extracted.method ? { extraction_method: extracted.method } : {}),
     ...(extracted.error ? { error: extracted.error } : {}),
   };
 }
@@ -250,6 +256,9 @@ function fileRecordToInputFile({ source, file_id, file_url, filename, media_type
 function extractText(buffer, filename, mediaType, config = {}) {
   const media = String(mediaType || "").toLowerCase();
   const extension = path.extname(String(filename || "")).toLowerCase();
+  if (isPdfFile(media, extension, buffer)) {
+    return extractPdfText(buffer, config);
+  }
   if (!isTextLike(media, extension, buffer)) {
     return {
       content: "",
@@ -262,7 +271,85 @@ function extractText(buffer, filename, mediaType, config = {}) {
   const maxChars = config.inputFileMaxTextChars || 200000;
   const truncated = text.length > maxChars;
   if (truncated) text = text.slice(0, maxChars);
-  return { content: text, truncated };
+  return { content: text, truncated, method: "utf8_text" };
+}
+
+function extractPdfText(buffer, config = {}) {
+  const extractor = String(config.inputFilePdfExtractor || "pdftotext").toLowerCase();
+  if (extractor === "disabled" || extractor === "none") {
+    return {
+      content: "",
+      truncated: false,
+      error: "local PDF extraction is disabled",
+    };
+  }
+  if (extractor !== "pdftotext") {
+    return {
+      content: "",
+      truncated: false,
+      error: `unsupported local PDF extractor: ${extractor}`,
+    };
+  }
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-input-pdf-"));
+  const inputPath = path.join(workDir, "input.pdf");
+  try {
+    fs.writeFileSync(inputPath, buffer, { mode: 0o600 });
+    const result = childProcess.spawnSync("pdftotext", [
+      "-enc", "UTF-8",
+      "-layout",
+      "-q",
+      inputPath,
+      "-",
+    ], {
+      encoding: "utf8",
+      maxBuffer: Math.max(1024, Number(config.inputFileMaxTextChars || 200000) * 4),
+      timeout: Math.max(1000, Number(config.inputFilePdfTimeoutMs || 10000)),
+      windowsHide: true,
+    });
+
+    if (result.error) {
+      return {
+        content: "",
+        truncated: false,
+        error: result.error.code === "ENOENT"
+          ? "pdftotext is not installed"
+          : `pdftotext failed: ${result.error.message}`,
+      };
+    }
+    if (result.status !== 0) {
+      return {
+        content: "",
+        truncated: false,
+        error: `pdftotext exited with status ${result.status}${result.stderr ? `: ${String(result.stderr).trim()}` : ""}`,
+      };
+    }
+
+    let text = String(result.stdout || "").replace(/\u0000/g, "").trim();
+    const maxChars = config.inputFileMaxTextChars || 200000;
+    const truncated = text.length > maxChars;
+    if (truncated) text = text.slice(0, maxChars);
+    if (!text) {
+      return {
+        content: "",
+        truncated: false,
+        error: "pdftotext returned no extractable text",
+      };
+    }
+    return { content: text, truncated, method: "pdftotext" };
+  } finally {
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup of temporary PDF extraction files.
+    }
+  }
+}
+
+function isPdfFile(mediaType, extension, buffer) {
+  return mediaType.split(";")[0].trim() === "application/pdf"
+    || extension === ".pdf"
+    || buffer.subarray(0, 5).toString("ascii") === "%PDF-";
 }
 
 function isTextLike(mediaType, extension, buffer) {

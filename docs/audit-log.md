@@ -1452,3 +1452,54 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7y9d8c` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Input File PDF Text Extraction
+
+- Closed a local `input_file` compatibility gap for PDFs with extractable text
+  layers:
+  - inline `file_data` PDFs now run through local Poppler `pdftotext`;
+  - extracted PDF text is injected into the upstream Chat prompt like other
+    local `input_file` text;
+  - unsupported/scanned PDFs still surface as compatibility metadata rather
+    than invented content.
+- Added bounded PDF extraction controls:
+  - `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR=pdftotext` by default;
+  - `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR=disabled` to turn this off;
+  - `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS=10000` by default;
+  - extraction still obeys `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` and
+    `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS`.
+- Added `metadata.compatibility.local_input_files.pdf_extracted_count` and an
+  `extraction_method: pdftotext` prompt header. Regression tests assert the
+  prompt does not contain the raw `%PDF-1.4` body, preventing a false pass from
+  raw ASCII PDF injection.
+- Extended the live bridge regression harness with `responses-input-file-pdf`,
+  which sends an inline base64 PDF through `/v1/responses`, verifies
+  `pdf_extracted_count:1`, and requires DeepSeek to answer from the extracted
+  PDF text.
+- Updated `docs/compatibility-matrix.md`, `docs/deployment.md`, and
+  `docs/evaluation-plan.md`.
+- Verified:
+  - `pdftotext` is installed at `/usr/bin/pdftotext`, version 24.02.0.
+  - `node --check src/bridge/input_files.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted server test for Responses `input_file`: passed.
+  - `npm test`: 56/56 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live `responses-input-file-pdf` passed 1/1 after restart, elapsed 1524 ms,
+    total usage 129 tokens, output `pdf-input-ok`. The same stricter case failed
+    before restart because the previous service did not report
+    `pdf_extracted_count`, proving the live check gates the new behavior.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 20/20, pass rate 1.0, average latency
+    1532 ms, P95 latency 2336 ms, total usage 2538 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7ypehb` appeared before reload and after reload, console errors
+    0, warnings 0.

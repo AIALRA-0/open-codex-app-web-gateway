@@ -75,6 +75,36 @@ function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+function tinyPdfBase64(text) {
+  const escaped = String(text)
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${escaped}) Tj\nET\n`;
+  objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream`);
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf, "ascii"));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf, "ascii");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let index = 1; index <= objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "ascii").toString("base64");
+}
+
 function buildSuites(defaultModel) {
   const protocolSmoke = [
     {
@@ -200,6 +230,30 @@ function buildSuites(defaultModel) {
         check: ({ json, text }) => /input-file-ok/i.test(text)
           && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
+      },
+      {
+        id: "responses-input-file-pdf",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "bridge-input-file.pdf",
+                file_data: `data:application/pdf;base64,${tinyPdfBase64("Bridge PDF input fixture. The exact answer is pdf-input-ok.")}`,
+              },
+              { type: "input_text", text: "Using the PDF input file, return exactly this text and nothing else: pdf-input-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => /pdf-input-ok/i.test(text)
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0
+          && json.metadata?.compatibility?.local_input_files?.pdf_extracted_count === 1,
       },
       {
         id: "responses-logprobs",

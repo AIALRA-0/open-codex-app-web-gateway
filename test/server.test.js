@@ -68,6 +68,36 @@ function parseSseEvents(text) {
     });
 }
 
+function tinyPdfBuffer(text) {
+  const escaped = String(text)
+    .replace(/\\/g, "\\\\")
+    .replace(/\(/g, "\\(")
+    .replace(/\)/g, "\\)");
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+    "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+  ];
+  const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${escaped}) Tj\nET\n`;
+  objects.push(`<< /Length ${Buffer.byteLength(stream, "ascii")} >>\nstream\n${stream}endstream`);
+
+  let pdf = "%PDF-1.4\n";
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(pdf, "ascii"));
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(pdf, "ascii");
+  pdf += `xref\n0 ${objects.length + 1}\n`;
+  pdf += "0000000000 65535 f \n";
+  for (let index = 1; index <= objects.length; index += 1) {
+    pdf += `${String(offsets[index]).padStart(10, "0")} 00000 n \n`;
+  }
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF\n`;
+  return Buffer.from(pdf, "ascii");
+}
+
 test("POST /v1/responses maps to /v1/chat/completions and stores previous response replay", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -1293,6 +1323,9 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
     assert.ok(call.body.messages.some((message) => /Local Responses input_file compatibility extracted file inputs/.test(message.content || "")));
     assert.ok(call.body.messages.some((message) => /File ID fixture says input-file-ok/.test(message.content || "")));
     assert.ok(call.body.messages.some((message) => /Inline fixture also says inline-ok/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /PDF fixture says pdf-ok/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /extraction_method: pdftotext/.test(message.content || "")));
+    assert.ok(!call.body.messages.some((message) => /%PDF-1\.4/.test(message.content || "")));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_input_file",
@@ -1301,7 +1334,7 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
       model: "mock-model",
       choices: [{
         index: 0,
-        message: { role: "assistant", content: "input-file-ok inline-ok" },
+        message: { role: "assistant", content: "input-file-ok inline-ok pdf-ok" },
         finish_reason: "stop",
       }],
       usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
@@ -1321,6 +1354,7 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
     const file = await createdFile.json();
 
     const inline = Buffer.from("Inline fixture also says inline-ok.", "utf8").toString("base64");
+    const inlinePdf = tinyPdfBuffer("PDF fixture says pdf-ok.").toString("base64");
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1331,7 +1365,8 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
           content: [
             { type: "input_file", file_id: file.id },
             { type: "input_file", filename: "inline.txt", file_data: `data:text/plain;base64,${inline}` },
-            { type: "input_text", text: "Return input-file-ok inline-ok." },
+            { type: "input_file", filename: "inline.pdf", file_data: `data:application/pdf;base64,${inlinePdf}` },
+            { type: "input_text", text: "Return input-file-ok inline-ok pdf-ok." },
           ],
         }],
         store: false,
@@ -1339,12 +1374,13 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
     });
     assert.equal(response.status, 200);
     const json = await response.json();
-    assert.equal(json.output[0].content[0].text, "input-file-ok inline-ok");
+    assert.equal(json.output[0].content[0].text, "input-file-ok inline-ok pdf-ok");
     assert.equal(json.metadata.compatibility.local_input_files.provider, "local");
     assert.equal(json.metadata.compatibility.local_input_files.status, "completed");
-    assert.equal(json.metadata.compatibility.local_input_files.file_count, 2);
-    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 2);
+    assert.equal(json.metadata.compatibility.local_input_files.file_count, 3);
+    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 3);
     assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+    assert.equal(json.metadata.compatibility.local_input_files.pdf_extracted_count, 1);
     assert.equal(json.metadata.compatibility.local_input_files.deepseek_thinking, "disabled_for_input_files");
   });
 });
