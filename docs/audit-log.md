@@ -1397,3 +1397,58 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7xthoj` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Vector Store Update, File Attributes, and File Content
+
+- Used the current OpenAI Vector Stores API reference to close three local
+  file-search support gaps:
+  - update vector store:
+    https://developers.openai.com/api/reference/resources/vector_stores/methods/update/
+  - update vector-store file attributes:
+    https://developers.openai.com/api/reference/resources/vector_stores/subresources/files/methods/update/
+  - retrieve vector-store file content:
+    https://developers.openai.com/api/reference/resources/vector_stores/subresources/files/methods/content/
+- Added local support for:
+  - `POST /v1/vector_stores/{vector_store_id}` to update `name`, `metadata`,
+    and `expires_after`, with local `expires_at` computation from
+    `last_active_at`;
+  - `POST /v1/vector_stores/{vector_store_id}/files/{file_id}` to update
+    vector-store file `attributes`;
+  - `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` to return
+    local extracted text chunks for the attached file, including the
+    `vector_store.file_content.page` page fields plus an example-compatible
+    `content` alias.
+- Added `usage_bytes` as a compatibility alias on hydrated local vector-store
+  objects while preserving the existing `bytes` field.
+- Extended regression coverage:
+  - server tests now update vector-store metadata/expiry policy, update file
+    attributes, retrieve vector-store file content, and verify the updated
+    attributes are returned;
+  - live `bridge-regression` now includes a new `vector-store-lifecycle` case
+    that creates a file and vector store, updates the vector store, attaches and
+    updates a vector-store file, retrieves file content, searches using updated
+    attributes, and cleans up without model token spend.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md`.
+- Verified:
+  - `node --check src/bridge/local_file_search.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - targeted server test for local Vector Store file batches/lifecycle: passed.
+  - `npm test`: 56/56 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Live `vector-store-lifecycle` case passed 1/1 in 262 ms with
+    `vector_store_file_status:"completed"`, `content_parts:1`, and
+    `search_results:1`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 19/19, pass rate 1.0, average latency
+    1708 ms, P95 latency 4102 ms, total usage 2447 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7y9d8c` appeared before reload and after reload, console errors
+    0, warnings 0.

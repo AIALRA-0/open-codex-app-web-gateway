@@ -377,6 +377,24 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "vector-store-lifecycle",
+        mode: "vector-store-lifecycle",
+        file: {
+          filename: "bridge-vector-lifecycle.txt",
+          purpose: "assistants",
+          content: "Bridge vector lifecycle fixture. The exact lifecycle answer is vector-lifecycle-ok.",
+        },
+        check: ({ store, updatedStore, attached, updatedFile, content, search }) => store?.object === "vector_store"
+          && updatedStore?.name === "bridge-vector-lifecycle-updated"
+          && updatedStore?.metadata?.suite === "vector-lifecycle"
+          && updatedStore?.expires_after?.days === 7
+          && Number.isInteger(updatedStore?.expires_at)
+          && attached?.object === "vector_store.file"
+          && updatedFile?.attributes?.suite === "vector-lifecycle-updated"
+          && content?.content?.some((part) => /vector-lifecycle-ok/i.test(part.text || ""))
+          && search?.data?.some((result) => result.file_id === attached.id),
+      },
+      {
         id: "responses-compact-continuation",
         mode: "responses-compact",
         request: {
@@ -518,6 +536,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-file-search") {
       return await runFileSearchCase(testCase, context, started);
+    }
+    if (testCase.mode === "vector-store-lifecycle") {
+      return await runVectorStoreLifecycleCase(testCase, context, started);
     }
     if (testCase.mode === "responses-compact") {
       return await runCompactionCase(testCase, context, started);
@@ -807,6 +828,125 @@ async function runFileSearchCase(testCase, context, started) {
     });
   } finally {
     if (vectorStore?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
+  }
+}
+
+async function runVectorStoreLifecycleCase(testCase, context, started) {
+  let file = null;
+  let store = null;
+  try {
+    const fileResponse = await postJson(`${baseUrl}/v1/files`, testCase.file);
+    const fileBody = await fileResponse.text();
+    if (!fileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fileResponse.status,
+        error: truncate(fileBody),
+      });
+    }
+    file = JSON.parse(fileBody);
+
+    const storeResponse = await postJson(`${baseUrl}/v1/vector_stores`, {
+      name: "bridge-vector-lifecycle",
+      metadata: { suite: "vector-lifecycle-initial" },
+    });
+    const storeBody = await storeResponse.text();
+    if (!storeResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: storeResponse.status,
+        error: truncate(storeBody),
+      });
+    }
+    store = JSON.parse(storeBody);
+
+    const updatedStoreResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}`, {
+      name: "bridge-vector-lifecycle-updated",
+      metadata: { suite: "vector-lifecycle" },
+      expires_after: { anchor: "last_active_at", days: 7 },
+    });
+    const updatedStoreBody = await updatedStoreResponse.text();
+    if (!updatedStoreResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: updatedStoreResponse.status,
+        error: truncate(updatedStoreBody),
+      });
+    }
+    const updatedStore = JSON.parse(updatedStoreBody);
+
+    const attachResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/files`, {
+      file_id: file.id,
+      attributes: { suite: "vector-lifecycle-initial" },
+    });
+    const attachBody = await attachResponse.text();
+    if (!attachResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: attachResponse.status,
+        error: truncate(attachBody),
+      });
+    }
+    const attached = JSON.parse(attachBody);
+
+    const updatedFileResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/files/${file.id}`, {
+      attributes: { suite: "vector-lifecycle-updated" },
+    });
+    const updatedFileBody = await updatedFileResponse.text();
+    if (!updatedFileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: updatedFileResponse.status,
+        error: truncate(updatedFileBody),
+      });
+    }
+    const updatedFile = JSON.parse(updatedFileBody);
+
+    const content = await getJson(`${baseUrl}/v1/vector_stores/${store.id}/files/${file.id}/content`);
+    if (!content.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: content.status,
+        error: truncate(content.body),
+      });
+    }
+
+    const searchResponse = await postJson(`${baseUrl}/v1/vector_stores/${store.id}/search`, {
+      query: "vector-lifecycle-ok",
+      filters: { type: "eq", key: "suite", value: "vector-lifecycle-updated" },
+      max_num_results: 3,
+    });
+    const searchBody = await searchResponse.text();
+    if (!searchResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchResponse.status,
+        error: truncate(searchBody),
+      });
+    }
+    const search = JSON.parse(searchBody);
+
+    const ok = !!testCase.check({
+      file,
+      store,
+      updatedStore,
+      attached,
+      updatedFile,
+      content: content.json,
+      search,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: 200,
+      file_id: file.id,
+      vector_store_id: store.id,
+      vector_store_file_status: updatedFile.status,
+      content_parts: content.json.content?.length || 0,
+      search_results: search.data?.length || 0,
+    });
+  } finally {
+    if (store?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${store.id}`);
     if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
   }
 }

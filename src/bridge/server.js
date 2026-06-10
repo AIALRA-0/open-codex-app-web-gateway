@@ -738,6 +738,16 @@ function handleVectorStoreGet(res, fileSearchStore, storeId) {
   sendJson(res, 200, store);
 }
 
+async function handleVectorStoreUpdate(req, res, fileSearchStore, storeId) {
+  const body = await readJson(req);
+  const store = fileSearchStore.updateVectorStore(storeId, body);
+  if (!store) {
+    sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
+    return;
+  }
+  sendJson(res, 200, store);
+}
+
 function handleVectorStoreDelete(res, fileSearchStore, storeId) {
   const deleted = fileSearchStore.deleteVectorStore(storeId);
   if (!deleted) {
@@ -810,6 +820,25 @@ function handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId) {
     return;
   }
   sendJson(res, 200, attached);
+}
+
+async function handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId) {
+  const body = await readJson(req);
+  const attached = fileSearchStore.updateVectorStoreFile(storeId, fileId, body);
+  if (!attached) {
+    sendError(res, 404, `vector store file not found: ${fileId}`, { code: "vector_store_file_not_found" });
+    return;
+  }
+  sendJson(res, 200, attached);
+}
+
+function handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId) {
+  const content = fileSearchStore.getVectorStoreFileContent(storeId, fileId);
+  if (!content) {
+    sendError(res, 404, `vector store file not found: ${fileId}`, { code: "vector_store_file_not_found" });
+    return;
+  }
+  sendJson(res, 200, content);
 }
 
 function handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId) {
@@ -2273,10 +2302,11 @@ function createServer(config = loadConfig()) {
         }
       }
 
-      const vectorStoreFilesRoute = url.pathname.match(/^\/v1\/vector_stores\/([^/]+)\/files(?:\/([^/]+))?$/);
+      const vectorStoreFilesRoute = url.pathname.match(/^\/v1\/vector_stores\/([^/]+)\/files(?:\/([^/]+)(?:\/(content))?)?$/);
       if (vectorStoreFilesRoute) {
         const storeId = decodeURIComponent(vectorStoreFilesRoute[1]);
         const fileId = vectorStoreFilesRoute[2] ? decodeURIComponent(vectorStoreFilesRoute[2]) : "";
+        const action = vectorStoreFilesRoute[3] || "";
         if (!fileId && req.method === "GET") {
           handleVectorStoreFilesList(res, fileSearchStore, storeId, url);
           return;
@@ -2285,12 +2315,20 @@ function createServer(config = loadConfig()) {
           await handleVectorStoreFileCreate(req, res, fileSearchStore, storeId);
           return;
         }
-        if (fileId && req.method === "GET") {
+        if (fileId && !action && req.method === "GET") {
           handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId);
           return;
         }
-        if (fileId && req.method === "DELETE") {
+        if (fileId && !action && req.method === "POST") {
+          await handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId);
+          return;
+        }
+        if (fileId && !action && req.method === "DELETE") {
           handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId);
+          return;
+        }
+        if (fileId && action === "content" && req.method === "GET") {
+          handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId);
           return;
         }
       }
@@ -2300,6 +2338,10 @@ function createServer(config = loadConfig()) {
         const storeId = decodeURIComponent(vectorStoreRoute[1]);
         if (req.method === "GET") {
           handleVectorStoreGet(res, fileSearchStore, storeId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleVectorStoreUpdate(req, res, fileSearchStore, storeId);
           return;
         }
         if (req.method === "DELETE") {

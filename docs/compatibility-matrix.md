@@ -179,10 +179,13 @@ under the configured bridge state directory, not in Git.
 | `POST /v1/vector_stores` | Implemented | Creates a local vector-store record with `file_counts` and metadata |
 | `GET /v1/vector_stores` | Implemented | Lists local vector stores with pagination |
 | `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata and live file counts |
+| `POST /v1/vector_stores/{vector_store_id}` | Implemented | Updates local vector-store `name`, `metadata`, and `expires_after`; computes `expires_at` from the local `last_active_at` timestamp |
 | `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |
 | `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering |
 | `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with pagination |
 | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Returns local vector-store file metadata |
+| `POST /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Updates local vector-store file `attributes` for later `file_search` filters |
+| `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` | Implemented | Returns local extracted text chunks for a vector-store file |
 | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches` | Implemented | Synchronously attaches up to 2000 local files; accepts either `file_ids` with global `attributes`/`chunking_strategy` or `files[]` with per-file values |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |

@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle including Chat completion list/get/update-metadata/messages/delete, Responses input-token counting, Responses output logprobs mapping, non-streaming multi-choice Chat-to-Responses mapping, Chat-native stop sequence passthrough, local `input_file` extraction, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping including vector-store update/file update/content and file batches, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
@@ -57,6 +57,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-sea
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search-batch --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case vector-store-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
 npm run bench:code -- --timeout-ms 180000

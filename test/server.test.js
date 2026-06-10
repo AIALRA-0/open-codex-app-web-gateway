@@ -1152,6 +1152,24 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     });
     assert.equal(storeResponse.status, 200);
     const vectorStore = await storeResponse.json();
+    assert.equal(vectorStore.status, "completed");
+    assert.equal(vectorStore.usage_bytes, 0);
+
+    const updatedStoreResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "batch-store-updated",
+        metadata: { suite: "vector-update" },
+        expires_after: { anchor: "last_active_at", days: 3 },
+      }),
+    });
+    assert.equal(updatedStoreResponse.status, 200);
+    const updatedStore = await updatedStoreResponse.json();
+    assert.equal(updatedStore.name, "batch-store-updated");
+    assert.deepEqual(updatedStore.metadata, { suite: "vector-update" });
+    assert.deepEqual(updatedStore.expires_after, { anchor: "last_active_at", days: 3 });
+    assert.ok(Number.isInteger(updatedStore.expires_at));
 
     const globalBatchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
       method: "POST",
@@ -1210,6 +1228,23 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     assert.equal(globalFilesJson.data[0].id, fileA.id);
     assert.deepEqual(globalFilesJson.data[0].attributes, { suite: "batch-global" });
     assert.equal(globalFilesJson.data[0].chunking_strategy.type, "static");
+
+    const updatedFileResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${fileA.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ attributes: { suite: "batch-global-updated", topic: "content" } }),
+    });
+    assert.equal(updatedFileResponse.status, 200);
+    const updatedFile = await updatedFileResponse.json();
+    assert.deepEqual(updatedFile.attributes, { suite: "batch-global-updated", topic: "content" });
+
+    const attachedContent = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${fileA.id}/content`);
+    assert.equal(attachedContent.status, 200);
+    const attachedContentJson = await attachedContent.json();
+    assert.equal(attachedContentJson.file_id, fileA.id);
+    assert.equal(attachedContentJson.filename, "batch-a.txt");
+    assert.deepEqual(attachedContentJson.attributes, { suite: "batch-global-updated", topic: "content" });
+    assert.match(attachedContentJson.content[0].text, /batch-global-ok/);
 
     const perFileFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files`);
     assert.equal(perFileFiles.status, 200);

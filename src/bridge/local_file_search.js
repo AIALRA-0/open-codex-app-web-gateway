@@ -82,16 +82,21 @@ class LocalFileSearchStore {
   }
 
   createVectorStore(body = {}) {
+    const now = nowSeconds();
     const store = {
       id: prefixedId("vs"),
       object: "vector_store",
-      created_at: nowSeconds(),
+      created_at: now,
+      last_active_at: now,
       name: body.name || null,
       description: body.description || null,
       metadata: isPlainObject(body.metadata) ? body.metadata : {},
+      status: "completed",
+      ...(isPlainObject(body.expires_after) ? { expires_after: normalizeExpiresAfter(body.expires_after) } : {}),
       bytes: 0,
       file_counts: emptyFileCounts(),
     };
+    if (store.expires_after) store.expires_at = expiresAtFromPolicy(store.expires_after, store.last_active_at);
     this.writeJson(this.vectorStoreJsonPath(store.id), { vector_store: store });
     return this.hydrateVectorStore(store.id);
   }
@@ -106,6 +111,27 @@ class LocalFileSearchStore {
   }
 
   getVectorStore(storeId) {
+    return this.hydrateVectorStore(storeId);
+  }
+
+  updateVectorStore(storeId, body = {}) {
+    const record = this.readJson(this.vectorStoreJsonPath(storeId));
+    const store = record?.vector_store;
+    if (!store) return null;
+    const updated = { ...store };
+    if (Object.prototype.hasOwnProperty.call(body, "name")) updated.name = body.name == null ? null : String(body.name);
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
+      updated.metadata = isPlainObject(body.metadata) ? body.metadata : {};
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "expires_after")) {
+      updated.expires_after = isPlainObject(body.expires_after) ? normalizeExpiresAfter(body.expires_after) : null;
+    }
+    if (updated.expires_after) {
+      updated.expires_at = expiresAtFromPolicy(updated.expires_after, updated.last_active_at || updated.created_at || nowSeconds());
+    } else {
+      delete updated.expires_at;
+    }
+    this.writeJson(this.vectorStoreJsonPath(storeId), { ...record, vector_store: updated });
     return this.hydrateVectorStore(storeId);
   }
 
@@ -227,6 +253,36 @@ class LocalFileSearchStore {
     return this.readJson(this.vectorStoreFilePath(storeId, fileId))?.vector_store_file || null;
   }
 
+  updateVectorStoreFile(storeId, fileId, body = {}) {
+    const record = this.readJson(this.vectorStoreFilePath(storeId, fileId));
+    const attached = record?.vector_store_file;
+    if (!attached || !this.getVectorStore(storeId)) return null;
+    const updated = { ...attached };
+    if (Object.prototype.hasOwnProperty.call(body, "attributes")) {
+      updated.attributes = isPlainObject(body.attributes) ? body.attributes : {};
+    }
+    this.writeJson(this.vectorStoreFilePath(storeId, fileId), { ...record, vector_store_file: updated });
+    return updated;
+  }
+
+  getVectorStoreFileContent(storeId, fileId) {
+    const attached = this.getVectorStoreFile(storeId, fileId);
+    if (!attached) return null;
+    const record = this.getFileRecord(fileId);
+    if (!record?.file || typeof record.content !== "string") return null;
+    const content = chunkText(record.content).map((chunk) => ({ type: "text", text: chunk.text }));
+    return {
+      object: "vector_store.file_content.page",
+      file_id: fileId,
+      filename: record.file.filename,
+      attributes: attached.attributes || {},
+      content,
+      data: content,
+      has_more: false,
+      next_page: null,
+    };
+  }
+
   deleteVectorStoreFile(storeId, fileId) {
     const attached = this.getVectorStoreFile(storeId, fileId);
     if (!attached) return null;
@@ -287,6 +343,7 @@ class LocalFileSearchStore {
     return {
       ...store,
       bytes,
+      usage_bytes: bytes,
       file_counts: {
         in_progress: 0,
         completed: attached.length,
@@ -676,6 +733,19 @@ function paginateList(items, url) {
 
 function emptyFileCounts() {
   return { in_progress: 0, completed: 0, failed: 0, cancelled: 0, total: 0 };
+}
+
+function normalizeExpiresAfter(value) {
+  const days = Math.max(1, Math.min(Number(value.days || 1), 365));
+  return {
+    anchor: "last_active_at",
+    days: Math.trunc(days),
+  };
+}
+
+function expiresAtFromPolicy(policy, anchorTimestamp) {
+  const days = Math.max(1, Math.min(Number(policy?.days || 1), 365));
+  return Math.trunc(anchorTimestamp || nowSeconds()) + Math.trunc(days) * 86400;
 }
 
 function normalizeBatchFiles(body = {}) {
