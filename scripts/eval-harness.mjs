@@ -323,6 +323,40 @@ function buildSuites(defaultModel) {
           && !postDeleteList.data?.some((completion) => completion.id === json.id),
       },
       {
+        id: "chat-stream-lifecycle",
+        mode: "chat-stream-lifecycle",
+        updateMetadata: { suite: "chat-stream-life-updated", audit: "bridge-regression" },
+        request: {
+          model: defaultModel,
+          store: true,
+          stream: true,
+          stream_options: { include_usage: true },
+          metadata: { suite: "chat-stream-life-initial" },
+          messages: [{ role: "user", content: "Stream the exact string chat-stream-life-ok." }],
+          max_tokens: 128,
+        },
+        check: ({ id, text, fetched, updated, messages, list, oldList, deleted, afterDelete, postDeleteList }) => /chat-stream-life-ok/i.test(text)
+          && fetched?.object === "chat.completion"
+          && /chat-stream-life-ok/i.test(chatOutputText(fetched))
+          && (fetched?.usage?.total_tokens || 0) > 0
+          && updated?.metadata?.suite === "chat-stream-life-updated"
+          && updated?.metadata?.audit === "bridge-regression"
+          && updated?.metadata?.completion_id === id
+          && messages?.object === "list"
+          && messages.data?.some((message) => message.direction === "input" && message.role === "user")
+          && messages.data?.some((message) => message.direction === "output" && message.role === "assistant")
+          && list?.object === "list"
+          && list.data?.some((completion) => completion.id === id)
+          && oldList?.object === "list"
+          && !oldList.data?.some((completion) => completion.id === id)
+          && deleted?.object === "chat.completion.deleted"
+          && deleted?.id === id
+          && deleted?.deleted === true
+          && afterDelete?.status === 404
+          && postDeleteList?.object === "list"
+          && !postDeleteList.data?.some((completion) => completion.id === id),
+      },
+      {
         id: "responses-input-tokens",
         mode: "responses-input-tokens",
         request: {
@@ -1016,6 +1050,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "chat-lifecycle") {
       return await runChatLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "chat-stream-lifecycle") {
+      return await runChatStreamLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "responses-input-tokens") {
       return await runInputTokensCase(testCase, context, started);
     }
@@ -1198,6 +1235,97 @@ async function runChatLifecycleCase(testCase, context, started) {
     post_delete_list_status: postDeleteList.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
     list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
+  });
+}
+
+async function runChatStreamLifecycleCase(testCase, context, started) {
+  const createdResponse = await postJson(`${baseUrl}/v1/chat/completions`, testCase.request);
+  const createdBody = await createdResponse.text();
+  if (!createdResponse.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: createdResponse.status,
+      error: truncate(createdBody),
+    });
+  }
+
+  const events = parseSseEvents(createdBody);
+  const chunks = events
+    .map((event) => event.data)
+    .filter((data) => data?.object === "chat.completion.chunk");
+  const id = chunks.find((chunk) => chunk.id)?.id;
+  const text = chunks
+    .flatMap((chunk) => chunk.choices || [])
+    .map((choice) => choice.delta?.content || "")
+    .join("");
+
+  if (!id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: createdResponse.status,
+      error: "stream did not include a chat completion id",
+      output_text: truncate(text),
+      event_count: events.length,
+    });
+  }
+
+  const fetched = await getJson(`${baseUrl}/v1/chat/completions/${id}`);
+  let updated = { status: 0, ok: false, json: null, body: "" };
+  const updatedMetadata = testCase.updateMetadata
+    ? { ...testCase.updateMetadata, completion_id: id }
+    : null;
+  if (testCase.updateMetadata) {
+    const updatedResponse = await postJson(`${baseUrl}/v1/chat/completions/${id}`, {
+      metadata: updatedMetadata,
+    });
+    const updatedBody = await updatedResponse.text();
+    updated = {
+      status: updatedResponse.status,
+      ok: updatedResponse.ok,
+      json: parseJsonish(updatedBody),
+      body: updatedBody,
+    };
+  }
+  const messages = await getJson(`${baseUrl}/v1/chat/completions/${id}/messages?limit=20`);
+  const listUrl = updatedMetadata?.completion_id
+    ? `${baseUrl}/v1/chat/completions?metadata[completion_id]=${encodeURIComponent(updatedMetadata.completion_id)}&order=desc&limit=50`
+    : `${baseUrl}/v1/chat/completions?order=desc&limit=50`;
+  const list = await getJson(listUrl);
+  const oldList = await getJson(`${baseUrl}/v1/chat/completions?metadata[suite]=chat-stream-life-initial&order=desc&limit=50`);
+  const deletion = await deleteJson(`${baseUrl}/v1/chat/completions/${id}`);
+  const afterDelete = await getJson(`${baseUrl}/v1/chat/completions/${id}`);
+  const postDeleteList = await getJson(listUrl);
+
+  const ok = !!testCase.check({
+    id,
+    text,
+    events,
+    chunks,
+    fetched: fetched.json,
+    updated: updated.json,
+    messages: messages.json,
+    list: list.json,
+    oldList: oldList.json,
+    deleted: parseJsonish(deletion.body),
+    afterDelete,
+    postDeleteList: postDeleteList.json,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: createdResponse.status,
+    usage: chatUsage(fetched.json),
+    output_text: truncate(text),
+    fetched_status: fetched.status,
+    update_status: updated.status,
+    messages_status: messages.status,
+    list_status: list.status,
+    old_list_status: oldList.status,
+    delete_status: deletion.status,
+    post_delete_get_status: afterDelete.status,
+    post_delete_list_status: postDeleteList.status,
+    message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
+    list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
+    event_count: events.length,
   });
 }
 

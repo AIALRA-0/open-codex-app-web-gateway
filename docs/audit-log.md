@@ -2632,3 +2632,66 @@ Open follow-ups:
   - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
     193 GB filesystem with 39 GB available; bridge state is 1.1 MB and output
     artifacts are 4.5 MB.
+
+## 2026-06-10 Stored Streaming Chat Lifecycle
+
+- Closed a Chat Completions lifecycle gap: `POST /v1/chat/completions` now
+  stores streamed Chat completions when the incoming request sets both
+  `stream:true` and `store:true`.
+- Official source checked on 2026-06-10:
+  - OpenAI Chat Completions `POST /chat/completions` returns either a
+    `chat.completion` object or a streamed sequence of
+    `chat.completion.chunk` objects.
+  - OpenAI Chat Completions `GET /chat/completions` lists stored Chat
+    Completions, and only records created with `store:true` are returned.
+- Implemented streamed Chat reconstruction in the passthrough path:
+  - forwards upstream Chat SSE frames to the client while parsing them;
+  - reconstructs a terminal local `object:"chat.completion"` record from the
+    observed `chat.completion.chunk` stream;
+  - accumulates assistant text, streamed tool-call argument fragments,
+    annotations, refusal text, audio deltas, logprobs when present, finish
+    reasons, usage-bearing final chunks, service tier, system fingerprint, and
+    request metadata;
+  - stores normalized input/output messages so
+    `/v1/chat/completions/{completion_id}/messages` works for streamed records;
+  - keeps storage opt-in: ordinary streamed Chat passthrough requests without
+    `store:true` remain unpersisted.
+- Added local server coverage for streaming stored Chat:
+  - mock upstream streams two choices, text deltas, tool-call argument
+    fragments, logprobs, usage, service tier, and system fingerprint;
+  - the test verifies SSE passthrough, local retrieval, messages listing, and
+    metadata-filtered list behavior.
+- Added live `chat-stream-lifecycle` to `bridge-regression`; it streams through
+  DeepSeek, retrieves the stored completion, updates metadata, lists messages,
+  lists by metadata, deletes, and verifies 404 after deletion.
+- Updated the compatibility matrix and evaluation plan to document streaming
+  `store:true` support.
+- Verified:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm test`: 79/79 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-stream-lifecycle` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 2960 ms, output `chat-stream-life-ok`, 85 SSE
+    events, stored message count 2, and total usage 97 tokens.
+  - Full live `bridge-regression` passed 30/30 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1663 ms, P95 latency 4565 ms, and total usage
+    8569 tokens.
+  - Direct streamed Chat passthrough probe returned HTTP 200, 47 SSE frames,
+    `[DONE]`, output `direct-chat-stream-ok`, stored
+    `object:"chat.completion"`, message count 2, total usage 58 tokens, and
+    delete status 200.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq87y0wt`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 234 runtime candidates,
+    selected 6 old UI screenshots by retention policy, deleted 0, and reported
+    0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 39 GB available; bridge state is 1.2 MB and output
+    artifacts are 4.5 MB.

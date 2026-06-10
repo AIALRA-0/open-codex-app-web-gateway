@@ -3648,6 +3648,135 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
   });
 });
 
+test("POST /v1/chat/completions streams and stores reconstructed chat completion when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.equal(call.body.store, true);
+    assert.equal(call.body.stream, true);
+    assert.deepEqual(call.body.metadata, { suite: "chat-stream-list" });
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_store",
+      object: "chat.completion.chunk",
+      created: 1700000333,
+      model: "mock-stream-model",
+      system_fingerprint: "fp_chat_stream_store",
+      service_tier: "flex",
+      choices: [
+        {
+          index: 0,
+          delta: { role: "assistant", content: "stream-" },
+          finish_reason: null,
+        },
+        {
+          index: 1,
+          delta: {
+            role: "assistant",
+            tool_calls: [{
+              index: 0,
+              id: "call_stream_store",
+              type: "function",
+              function: { name: "record_result", arguments: "{" },
+            }],
+          },
+          finish_reason: null,
+        },
+      ],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_store",
+      object: "chat.completion.chunk",
+      model: "mock-stream-model",
+      choices: [
+        {
+          index: 0,
+          delta: { content: "store-ok" },
+          logprobs: { content: [{ token: "store-ok", logprob: -0.3, bytes: [115], top_logprobs: [] }] },
+          finish_reason: "stop",
+        },
+        {
+          index: 1,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              function: { arguments: "\"ok\":true}" },
+            }],
+          },
+          finish_reason: "tool_calls",
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        stream: true,
+        metadata: { suite: "chat-stream-list" },
+        messages: [{ role: "user", content: "stream and store" }],
+        tools: [{
+          type: "function",
+          function: {
+            name: "record_result",
+            parameters: { type: "object", properties: { ok: { type: "boolean" } } },
+          },
+        }],
+        stream_options: { include_usage: true },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+    assert.equal(events.slice(0, -1)
+      .flatMap((event) => event.data.choices || [])
+      .filter((choice) => choice.index === 0)
+      .map((choice) => choice.delta?.content || "")
+      .join(""), "stream-store-ok");
+
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/chatcmpl_stream_store`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.object, "chat.completion");
+    assert.equal(fetchedJson.created, 1700000333);
+    assert.equal(fetchedJson.model, "mock-stream-model");
+    assert.equal(fetchedJson.system_fingerprint, "fp_chat_stream_store");
+    assert.equal(fetchedJson.service_tier, "flex");
+    assert.deepEqual(fetchedJson.metadata, { suite: "chat-stream-list" });
+    assert.deepEqual(fetchedJson.usage, { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 });
+    assert.equal(fetchedJson.choices[0].message.content, "stream-store-ok");
+    assert.equal(fetchedJson.choices[0].finish_reason, "stop");
+    assert.equal(fetchedJson.choices[0].logprobs.content[0].token, "store-ok");
+    assert.equal(fetchedJson.choices[1].message.content, null);
+    assert.deepEqual(fetchedJson.choices[1].message.tool_calls, [{
+      id: "call_stream_store",
+      type: "function",
+      function: { name: "record_result", arguments: "{\"ok\":true}" },
+    }]);
+    assert.equal(fetchedJson.choices[1].finish_reason, "tool_calls");
+
+    const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/chatcmpl_stream_store/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.equal(messagesJson.data.length, 3);
+    assert.equal(messagesJson.data[0].direction, "input");
+    assert.equal(messagesJson.data[1].direction, "output");
+    assert.equal(messagesJson.data[1].content, "stream-store-ok");
+    assert.equal(messagesJson.data[2].tool_calls[0].function.arguments, "{\"ok\":true}");
+
+    const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-stream-list`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.data[0].id, "chatcmpl_stream_store");
+  });
+});
+
 test("Chat completion retrieval only returns explicitly stored chat completions", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

@@ -2135,6 +2135,11 @@ async function handleChatPassthrough(req, res, config, store) {
   const body = await readJson(req);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, body, req.headers);
   const headers = proxyResponseHeaders(upstream);
+  if (body.store === true && body.stream && upstream.ok && isEventStreamResponse(upstream)) {
+    await handleStoredChatStreamPassthrough(res, upstream, headers, body, store);
+    return;
+  }
+
   if (body.store === true && !body.stream && isJsonResponse(upstream)) {
     const text = await upstream.text();
     const json = parseJsonOrNull(text);
@@ -2157,8 +2162,39 @@ async function handleChatPassthrough(req, res, config, store) {
   res.end();
 }
 
+async function handleStoredChatStreamPassthrough(res, upstream, headers, request, store) {
+  const accumulator = createChatStreamAccumulator(request);
+  res.writeHead(upstream.status, headers);
+
+  try {
+    for await (const payload of iterateSseJson(upstream.body)) {
+      if (payload === "[DONE]") {
+        res.write("data: [DONE]\n\n");
+        break;
+      }
+      applyChatCompletionStreamChunk(accumulator, payload);
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    }
+
+    const completion = finalizeChatStreamCompletion(accumulator);
+    if (completion?.id) {
+      store.put(completion.id, {
+        chat_completion: completion,
+        chat_messages: normalizeStoredChatMessages(request.messages, completion),
+        chat_request: sanitizeChatRequest(request),
+      });
+    }
+  } finally {
+    res.end();
+  }
+}
+
 function isJsonResponse(upstream) {
   return (upstream.headers.get("content-type") || "").includes("application/json");
+}
+
+function isEventStreamResponse(upstream) {
+  return (upstream.headers.get("content-type") || "").includes("text/event-stream");
 }
 
 function parseJsonOrNull(text) {
@@ -2502,6 +2538,194 @@ function completionUsage(usage) {
 
 function writeLegacyCompletionSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+function createChatStreamAccumulator(request = {}) {
+  return {
+    id: null,
+    created: null,
+    model: request.model || null,
+    system_fingerprint: null,
+    service_tier: null,
+    usage: null,
+    choices: new Map(),
+    request,
+  };
+}
+
+function applyChatCompletionStreamChunk(accumulator, chunk) {
+  if (!isPlainObject(chunk)) return;
+  if (chunk.id) accumulator.id = accumulator.id || chunk.id;
+  if (Number.isFinite(Number(chunk.created))) accumulator.created = accumulator.created || Number(chunk.created);
+  if (chunk.model) accumulator.model = chunk.model;
+  if (chunk.system_fingerprint !== undefined) accumulator.system_fingerprint = chunk.system_fingerprint;
+  if (chunk.service_tier !== undefined) accumulator.service_tier = chunk.service_tier;
+  if (chunk.usage) accumulator.usage = clone(chunk.usage);
+
+  for (const choice of chunk.choices || []) {
+    const index = numericChoiceIndex(choice, accumulator.choices.size);
+    const state = chatStreamChoiceState(accumulator, index);
+    if (choice.finish_reason !== undefined) state.finish_reason = choice.finish_reason;
+    mergeChatStreamLogprobs(state, choice.logprobs);
+    mergeChatStreamDelta(state, choice.delta || {});
+    if (choice.message) mergeChatStreamDelta(state, choice.message);
+  }
+}
+
+function chatStreamChoiceState(accumulator, index) {
+  if (!accumulator.choices.has(index)) {
+    accumulator.choices.set(index, {
+      index,
+      role: "assistant",
+      content: "",
+      refusal: "",
+      annotations: [],
+      tool_calls: [],
+      function_call: null,
+      audio: null,
+      logprobs: null,
+      finish_reason: null,
+    });
+  }
+  return accumulator.choices.get(index);
+}
+
+function mergeChatStreamDelta(state, delta) {
+  if (!isPlainObject(delta)) return;
+  if (delta.role) state.role = delta.role;
+  if (delta.content !== undefined && delta.content !== null) {
+    state.content += chatContentToText(delta.content);
+  }
+  if (delta.refusal !== undefined && delta.refusal !== null) {
+    state.refusal += chatContentToText(delta.refusal);
+  }
+  if (Array.isArray(delta.annotations)) {
+    state.annotations.push(...clone(delta.annotations));
+  }
+  if (Array.isArray(delta.tool_calls)) {
+    mergeChatStreamToolCalls(state, delta.tool_calls);
+  }
+  if (isPlainObject(delta.function_call)) {
+    state.function_call = mergeChatStreamFunctionCall(state.function_call, delta.function_call);
+  }
+  if (delta.audio !== undefined) {
+    state.audio = mergeChatStreamObject(state.audio, delta.audio);
+  }
+}
+
+function mergeChatStreamToolCalls(state, deltas) {
+  for (const delta of deltas) {
+    if (!isPlainObject(delta)) continue;
+    const index = Number.isFinite(Number(delta.index)) ? Number(delta.index) : state.tool_calls.length;
+    const current = state.tool_calls[index] || { function: {} };
+    if (delta.id) current.id = delta.id;
+    if (delta.type) current.type = delta.type;
+    if (isPlainObject(delta.function)) {
+      current.function = mergeChatStreamFunctionCall(current.function, delta.function);
+    }
+    state.tool_calls[index] = current;
+  }
+}
+
+function mergeChatStreamFunctionCall(current, delta) {
+  const merged = current ? { ...current } : {};
+  if (delta.name !== undefined) merged.name = delta.name;
+  if (delta.arguments !== undefined) {
+    merged.arguments = `${merged.arguments || ""}${stringifyContent(delta.arguments)}`;
+  }
+  return merged;
+}
+
+function mergeChatStreamObject(current, delta) {
+  if (!isPlainObject(delta)) return clone(delta);
+  const merged = isPlainObject(current) ? clone(current) : {};
+  for (const [key, value] of Object.entries(delta)) {
+    if (value === undefined) continue;
+    if (typeof value === "string" && typeof merged[key] === "string") merged[key] += value;
+    else merged[key] = clone(value);
+  }
+  return merged;
+}
+
+function mergeChatStreamLogprobs(state, logprobs) {
+  if (!isPlainObject(logprobs)) return;
+  if (!state.logprobs) state.logprobs = {};
+  for (const key of ["content", "refusal"]) {
+    if (Array.isArray(logprobs[key])) {
+      if (!Array.isArray(state.logprobs[key])) state.logprobs[key] = [];
+      state.logprobs[key].push(...clone(logprobs[key]));
+    }
+  }
+}
+
+function finalizeChatStreamCompletion(accumulator) {
+  if (!accumulator.id) return null;
+  const completion = {
+    id: accumulator.id,
+    object: "chat.completion",
+    created: accumulator.created || nowSeconds(),
+    model: accumulator.model || accumulator.request?.model || "unknown",
+    choices: Array.from(accumulator.choices.values())
+      .sort((a, b) => a.index - b.index)
+      .map(finalizeChatStreamChoice),
+  };
+  if (accumulator.system_fingerprint !== null) completion.system_fingerprint = accumulator.system_fingerprint;
+  if (accumulator.service_tier !== null) completion.service_tier = accumulator.service_tier;
+  if (accumulator.usage) completion.usage = clone(accumulator.usage);
+  attachStoredChatRequestFields(completion, accumulator.request);
+  return completion;
+}
+
+function finalizeChatStreamChoice(state) {
+  const message = {
+    role: state.role || "assistant",
+    content: state.content || (state.tool_calls.length || state.function_call ? null : ""),
+  };
+  if (state.refusal) message.refusal = state.refusal;
+  if (state.annotations.length) message.annotations = clone(state.annotations);
+  const toolCalls = state.tool_calls.filter(Boolean).map(normalizeStreamToolCall);
+  if (toolCalls.length) message.tool_calls = toolCalls;
+  if (state.function_call) message.function_call = clone(state.function_call);
+  if (state.audio) message.audio = clone(state.audio);
+  return {
+    index: state.index,
+    message,
+    logprobs: state.logprobs || null,
+    finish_reason: state.finish_reason ?? null,
+  };
+}
+
+function normalizeStreamToolCall(toolCall) {
+  return {
+    id: toolCall.id || prefixedId("call"),
+    type: toolCall.type || "function",
+    function: {
+      name: toolCall.function?.name || "",
+      arguments: toolCall.function?.arguments || "",
+    },
+  };
+}
+
+function attachStoredChatRequestFields(completion, request = {}) {
+  const fields = [
+    "metadata",
+    "tool_choice",
+    "seed",
+    "top_p",
+    "temperature",
+    "presence_penalty",
+    "frequency_penalty",
+    "response_format",
+    "tools",
+    "user",
+  ];
+  for (const field of fields) {
+    if (request[field] !== undefined && completion[field] === undefined) {
+      completion[field] = clone(request[field]);
+    }
+  }
+  if (!completion.metadata && isPlainObject(request.metadata)) completion.metadata = clone(request.metadata);
+  if (!completion.metadata) completion.metadata = {};
 }
 
 function proxyResponseHeaders(upstream) {

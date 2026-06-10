@@ -183,7 +183,7 @@ stored Chat completion records.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers |
+| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers; non-streaming and streaming requests with `store:true` are recorded in the local Chat completion lifecycle store |
 | `GET /v1/chat/completions` | Implemented for local `store:true` records | Lists locally stored upstream Chat completion objects with `model`, `metadata[key]`, `limit`, `after`, and `order` filters |
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
 | `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions |
@@ -191,8 +191,14 @@ stored Chat completion records.
 | `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with `limit`, `after`, `before`, and `order` pagination |
 
 The bridge stores Chat completions only when the incoming Chat request sets
-`store:true`. This matches the stored-completion lifecycle intent and avoids
-unbounded state growth for ordinary passthrough Chat traffic.
+`store:true`. Non-streaming requests store the upstream `chat.completion`
+object directly. Streaming requests are forwarded as SSE and reconstructed from
+the observed `chat.completion.chunk` sequence into a local terminal
+`chat.completion`, including accumulated assistant text, streamed tool-call
+arguments, logprobs when present, terminal finish reasons, usage-bearing final
+chunks, request metadata, and message history. This matches the
+stored-completion lifecycle intent and avoids unbounded state growth for
+ordinary passthrough Chat traffic.
 
 ## Conversations Endpoint Coverage
 
