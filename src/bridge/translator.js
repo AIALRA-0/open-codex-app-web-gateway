@@ -668,6 +668,7 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   response.error = terminal.error;
   response.usage = mapUsage(chat.usage);
   if (chat.service_tier != null) response.service_tier = chat.service_tier;
+  if (chat.moderation !== undefined) response.moderation = clone(chat.moderation);
 
   return response;
 }
@@ -686,6 +687,7 @@ function chatCompatibilityMetadata(chat) {
     seed: "chat_seed",
     tool_choice: "chat_tool_choice",
     response_format: "chat_response_format",
+    moderation: "chat_moderation",
     temperature: "chat_temperature",
     top_p: "chat_top_p",
     presence_penalty: "chat_presence_penalty",

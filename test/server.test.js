@@ -464,6 +464,49 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
   }, { forwardChatNativeFields: false });
 });
 
+test("POST /v1/responses attaches local inline moderation when provider field is filtered", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.moderation, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_inline_moderation",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "calm output" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 2, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        instructions: "Safety check",
+        input: "I want to kill them.",
+        moderation: { input: true, output: true },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "calm output");
+    assert.equal(json.moderation.input.compatibility.provider, "local");
+    assert.equal(json.moderation.input.results[0].flagged, true);
+    assert.equal(json.moderation.input.results[0].categories.violence, true);
+    assert.equal(json.moderation.output.results[0].flagged, false);
+    assert.equal(json.metadata.compatibility.chat_native_fields.reason, "provider_unsupported");
+    assert.deepEqual(json.metadata.compatibility.chat_native_fields.filtered, ["moderation"]);
+    assert.equal(json.metadata.compatibility.local_moderation.provider, "local");
+    assert.equal(json.metadata.compatibility.local_moderation.input.flagged, true);
+    assert.equal(json.metadata.compatibility.local_moderation.output.flagged, false);
+  }, { forwardChatNativeFields: false });
+});
+
 test("POST /v1/responses filters stream_options for non-streaming requests", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);
@@ -977,6 +1020,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
         include: ["message.output_text.logprobs"],
         top_logprobs: 2,
         service_tier: "priority",
+        moderation: { output: true },
       }),
     });
 
@@ -1004,6 +1048,8 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.equal(completed.metadata.compatibility.chat_created, 1694268190);
     assert.equal(completed.metadata.compatibility.chat_model, "mock-stream-model");
     assert.equal(completed.metadata.compatibility.chat_system_fingerprint, "fp_stream");
+    assert.equal(completed.moderation.output.results[0].flagged, false);
+    assert.equal(completed.metadata.compatibility.local_moderation.output.flagged, false);
     assert.deepEqual(completed.metadata.compatibility.chat_choices, [
       { choice_index: 0, finish_reason: "stop" },
     ]);
@@ -3789,6 +3835,48 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     });
     assert.equal(repeatedDelete.status, 404);
   });
+});
+
+test("POST /v1/chat/completions attaches local inline moderation when provider field is filtered", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.moderation, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_inline_local",
+      object: "chat.completion",
+      created: 1700000400,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "I will kill you." },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        messages: [{ role: "user", content: "A calm user prompt." }],
+        moderation: { input: true, output: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.moderation.input.results[0].flagged, false);
+    assert.equal(json.moderation.output.results[0].flagged, true);
+    assert.equal(json.moderation.output.results[0].categories.violence, true);
+    assert.equal(json.moderation.output.compatibility.provider, "local");
+
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.moderation.output.results[0].flagged, true);
+    assert.equal(fetchedJson.moderation.output.compatibility.provider, "local");
+  }, { forwardChatNativeFields: false });
 });
 
 test("POST /v1/chat/completions streams and stores reconstructed chat completion when requested", async () => {

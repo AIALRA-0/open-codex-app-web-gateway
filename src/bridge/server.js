@@ -422,9 +422,14 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachShellOutput(response, localShell);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
+  const localModeration = attachLocalResponseInlineModeration(response, request, config);
   response.metadata = {
     ...(response.metadata || {}),
-    compatibility: mergeCompatibility(response.metadata?.compatibility, compatibility),
+    compatibility: mergeCompatibility(
+      response.metadata?.compatibility,
+      compatibility,
+      localModeration ? { local_moderation: localModeration } : {},
+    ),
     upstream_object: upstreamJson.object || null,
   };
 
@@ -546,9 +551,14 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     attachWebSearchOutput(response, localWebSearch);
     attachFileSearchOutput(response, localFileSearch);
     response.background = true;
+    const localModeration = attachLocalResponseInlineModeration(response, request, config);
     response.metadata = {
       ...(response.metadata || {}),
-      compatibility: mergeCompatibility(response.metadata?.compatibility, finalCompatibility),
+      compatibility: mergeCompatibility(
+        response.metadata?.compatibility,
+        finalCompatibility,
+        localModeration ? { local_moderation: localModeration } : {},
+      ),
       upstream_object: upstreamJson?.object || null,
     };
 
@@ -1657,6 +1667,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     response.service_tier = state.serviceTier;
     response.usage = state.usage;
     const refusalLogprobs = streamRefusalLogprobs(state);
+    const localModeration = attachLocalResponseInlineModeration(response, request, config);
     response.metadata = {
       ...(response.metadata || {}),
       compatibility: mergeCompatibility(
@@ -1666,7 +1677,10 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
           ...streamChoiceCompatibilityMetadata(state),
           ...chatUsageCompatibilityMetadata(state.chatUsage),
         },
-        refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {},
+        {
+          ...(refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {}),
+          ...(localModeration ? { local_moderation: localModeration } : {}),
+        },
       ),
       upstream_object: "chat.completion.chunk",
     };
@@ -2169,22 +2183,32 @@ async function* iterateSseJson(stream) {
 
 async function handleChatPassthrough(req, res, config, store) {
   const body = await readJson(req);
-  const upstream = await fetchProvider(config, config.chatCompletionsPath, body, req.headers);
+  const upstreamBody = chatPassthroughUpstreamBody(body, config);
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
   if (body.store === true && body.stream && upstream.ok && isEventStreamResponse(upstream)) {
     await handleStoredChatStreamPassthrough(res, upstream, headers, body, store);
     return;
   }
 
-  if (body.store === true && !body.stream && isJsonResponse(upstream)) {
+  const needsJsonPostProcessing = !body.stream
+    && isJsonResponse(upstream)
+    && (body.store === true || inlineModerationConfig(body.moderation).enabled);
+  if (needsJsonPostProcessing) {
     const text = await upstream.text();
     const json = parseJsonOrNull(text);
+    const localModeration = upstream.ok ? attachLocalChatInlineModeration(json, body, config) : null;
     if (upstream.ok && json?.id) {
       store.put(json.id, {
         chat_completion: json,
         chat_messages: normalizeStoredChatMessages(body.messages, json),
         chat_request: sanitizeChatRequest(body),
       });
+    }
+    if (localModeration && isPlainObject(json)) {
+      res.writeHead(upstream.status, headers);
+      res.end(`${JSON.stringify(json)}\n`);
+      return;
     }
     res.writeHead(upstream.status, headers);
     res.end(text);
@@ -2196,6 +2220,14 @@ async function handleChatPassthrough(req, res, config, store) {
     for await (const chunk of upstream.body) res.write(chunk);
   }
   res.end();
+}
+
+function chatPassthroughUpstreamBody(body, config) {
+  if (!isPlainObject(body)) return body;
+  if (body.moderation === undefined || config.forwardChatNativeFields !== false) return body;
+  const upstreamBody = clone(body);
+  delete upstreamBody.moderation;
+  return upstreamBody;
 }
 
 async function handleStoredChatStreamPassthrough(res, upstream, headers, request, store) {
@@ -3221,6 +3253,201 @@ function matchesAny(text, patterns) {
 
 function score(value) {
   return Number(Number(value || 0).toFixed(6));
+}
+
+function inlineModerationConfig(value) {
+  if (value === undefined || value === null || value === false) {
+    return { enabled: false, input: false, output: false };
+  }
+  if (value === true) return { enabled: true, input: true, output: true };
+  if (!isPlainObject(value)) return { enabled: false, input: false, output: false };
+
+  const input = value.input !== undefined ? value.input !== false && value.input !== null : false;
+  const output = value.output !== undefined ? value.output !== false && value.output !== null : false;
+  const enabled = input || output;
+  return { enabled, input, output };
+}
+
+function attachLocalResponseInlineModeration(response, request, config) {
+  if (!isPlainObject(response) || response.moderation !== undefined) return null;
+  const options = inlineModerationConfig(request?.moderation);
+  if (!options.enabled) return null;
+
+  const moderation = {};
+  const summary = {
+    provider: "local",
+    classifier: "deterministic-keyword-safety",
+    reason: "requested_inline_moderation",
+    requested: { input: options.input, output: options.output },
+  };
+  if (options.input) {
+    moderation.input = localModerationPayload(moderationInputFromResponsesRequest(request), config, "input");
+    summary.input = moderationSummary(moderation.input);
+  }
+  if (options.output) {
+    moderation.output = localModerationPayload(moderationInputFromResponseOutput(response), config, "output");
+    summary.output = moderationSummary(moderation.output);
+  }
+  response.moderation = moderation;
+  return summary;
+}
+
+function attachLocalChatInlineModeration(completion, request, config) {
+  if (!isPlainObject(completion) || completion.moderation !== undefined) return null;
+  const options = inlineModerationConfig(request?.moderation);
+  if (!options.enabled) return null;
+
+  const moderation = {};
+  const summary = {
+    provider: "local",
+    classifier: "deterministic-keyword-safety",
+    reason: "requested_inline_moderation",
+    requested: { input: options.input, output: options.output },
+  };
+  if (options.input) {
+    moderation.input = localModerationPayload(moderationInputFromChatMessages(request.messages), config, "input");
+    summary.input = moderationSummary(moderation.input);
+  }
+  if (options.output) {
+    moderation.output = localModerationPayload(moderationInputFromChatCompletionOutput(completion), config, "output");
+    summary.output = moderationSummary(moderation.output);
+  }
+  completion.moderation = moderation;
+  return summary;
+}
+
+function localModerationPayload(input, config, scope) {
+  return {
+    id: prefixedId("modr"),
+    model: config.moderationsModel || "omni-moderation-latest",
+    results: [classifyModerationInput(input)],
+    compatibility: {
+      provider: "local",
+      classifier: "deterministic-keyword-safety",
+      scope,
+      supports_image_inspection: false,
+    },
+  };
+}
+
+function moderationSummary(payload) {
+  const results = payload?.results || [];
+  return {
+    id: payload?.id || null,
+    model: payload?.model || null,
+    result_count: results.length,
+    flagged: results.some((result) => result?.flagged),
+  };
+}
+
+function moderationInputFromResponsesRequest(request = {}) {
+  const collector = createModerationCollector();
+  collectModerationValue(request.instructions, collector);
+  for (const item of normalizeStoredInputItems(request.input)) collectModerationValue(item, collector);
+  return moderationInputFromCollector(collector);
+}
+
+function moderationInputFromResponseOutput(response = {}) {
+  const collector = createModerationCollector();
+  collectModerationValue(response.output, collector);
+  return moderationInputFromCollector(collector);
+}
+
+function moderationInputFromChatMessages(messages = []) {
+  const collector = createModerationCollector();
+  collectModerationValue(messages, collector);
+  return moderationInputFromCollector(collector);
+}
+
+function moderationInputFromChatCompletionOutput(completion = {}) {
+  const collector = createModerationCollector();
+  for (const choice of completion.choices || []) {
+    collectModerationValue(choice?.message, collector);
+  }
+  return moderationInputFromCollector(collector);
+}
+
+function createModerationCollector() {
+  return { text: [], inputTypes: new Set() };
+}
+
+function moderationInputFromCollector(collector) {
+  const inputTypes = collector.inputTypes.size ? Array.from(collector.inputTypes) : ["text"];
+  return {
+    text: collector.text.filter(Boolean).join("\n"),
+    input_types: inputTypes,
+  };
+}
+
+function collectModerationValue(value, collector) {
+  if (value === undefined || value === null) return;
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    addModerationText(collector, stringifyContent(value));
+    return;
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) collectModerationValue(item, collector);
+    return;
+  }
+  if (!isPlainObject(value)) {
+    addModerationText(collector, stringifyContent(value));
+    return;
+  }
+
+  const type = value.type || "";
+  if (type === "image_url" || type === "input_image" || value.image_url != null) {
+    collector.inputTypes.add("image");
+    collectModerationValue(value.caption ?? value.alt_text ?? value.text, collector);
+    return;
+  }
+  if (type === "input_text" || type === "output_text" || type === "text") {
+    collectModerationValue(value.text ?? value.content, collector);
+    return;
+  }
+  if (type === "message" || value.role) {
+    collectModerationValue(value.content, collector);
+    if (value.refusal) collectModerationValue(value.refusal, collector);
+    if (value.reasoning_content) collectModerationValue(value.reasoning_content, collector);
+    if (value.tool_calls) collectModerationValue(value.tool_calls, collector);
+    if (value.function_call) collectModerationValue(value.function_call, collector);
+    return;
+  }
+  if (type === "reasoning") {
+    collectModerationValue(value.summary, collector);
+    return;
+  }
+  if (type === "summary_text") {
+    collectModerationValue(value.text, collector);
+    return;
+  }
+  if (type === "function_call" || type === "function") {
+    collectModerationValue(value.name, collector);
+    collectModerationValue(value.arguments ?? value.function?.arguments, collector);
+    return;
+  }
+  if (type === "function_call_output") {
+    collectModerationValue(value.output, collector);
+    return;
+  }
+  if (type === "refusal" || type === "output_refusal") {
+    collectModerationValue(value.refusal ?? value.text, collector);
+    return;
+  }
+  if (value.text !== undefined || value.content !== undefined) {
+    collectModerationValue(value.text ?? value.content, collector);
+    return;
+  }
+  if (value.arguments !== undefined) {
+    collectModerationValue(value.arguments, collector);
+    return;
+  }
+}
+
+function addModerationText(collector, text) {
+  const normalized = stringifyContent(text).trim();
+  if (!normalized) return;
+  collector.text.push(normalized);
+  collector.inputTypes.add("text");
 }
 
 function normalizeEmbeddingInputs(input) {

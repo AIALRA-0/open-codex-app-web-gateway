@@ -309,6 +309,24 @@ function buildSuites(defaultModel) {
           && json.compatibility?.provider === "local",
       },
       {
+        id: "responses-inline-moderation",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          input: "Return the exact string inline-moderation-ok.",
+          moderation: { input: true, output: true },
+          max_output_tokens: 64,
+          store: false,
+        },
+        check: ({ json, text }) => /inline-moderation-ok/i.test(text)
+          && json?.moderation?.input?.results?.length === 1
+          && json?.moderation?.output?.results?.length === 1
+          && json.moderation.input.compatibility?.provider === "local"
+          && json.moderation.output.compatibility?.provider === "local"
+          && json.metadata?.compatibility?.local_moderation?.input?.flagged === false
+          && json.metadata?.compatibility?.local_moderation?.output?.flagged === false,
+      },
+      {
         id: "batch-embeddings-local",
         mode: "batch-local",
         endpoint: "/v1/embeddings",

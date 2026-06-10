@@ -2911,3 +2911,68 @@ Open follow-ups:
   Future work should add provider-backed or specialized moderation models,
   multilingual safety evals, image inspection, and larger safety benchmark
   suites while preserving the local no-upstream fallback.
+
+## 2026-06-10 Inline Moderation Compatibility
+
+- Added local inline moderation compatibility for Chat-Completions-only
+  provider deployments.
+- Official source checked on 2026-06-10:
+  - OpenAI Chat Completions `create` exposes a `moderation` request
+    configuration for running moderation on request input and generated output.
+  - OpenAI Responses `create` exposes a `moderation` request configuration for
+    running moderation on the input and output of a response.
+- Implemented local inline moderation fallback:
+  - `/v1/responses` accepts `moderation:{input:true,output:true}` and attaches
+    local results to `response.moderation.input` and/or
+    `response.moderation.output` when the upstream Chat provider omits a native
+    moderation payload;
+  - `/v1/chat/completions` accepts the same field, strips it before upstream
+    calls when provider-native Chat fields are disabled for DeepSeek-style
+    compatibility, and attaches local `completion.moderation` results;
+  - stored Chat completions preserve local inline moderation on retrieval;
+  - streaming Responses attach local inline moderation to the terminal response
+    event; direct streaming Chat passthrough remains byte-preserving and does
+    not synthesize extra stream chunks;
+  - upstream Chat `moderation` payloads are now preserved on translated
+    Responses as `response.moderation` and
+    `metadata.compatibility.chat_moderation`.
+- Added unit tests for:
+  - Responses inline moderation with provider field filtering;
+  - streaming Responses terminal moderation metadata;
+  - direct Chat Completions inline moderation with stored retrieval;
+  - upstream Chat moderation preservation in the translator.
+- Added live `responses-inline-moderation` to `bridge-regression`.
+- Updated the compatibility matrix and evaluation plan.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: 59/59 passing tests.
+  - `node --test test/translator.test.js`: 25/25 passing tests.
+  - `npm test`: 87/87 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Direct local `/v1/responses` inline moderation probe returned HTTP 200 and
+    `response.moderation` with local input/output moderation results.
+  - Targeted live `responses-inline-moderation` passed 1/1, elapsed 1630 ms,
+    output `inline-moderation-ok`, and total usage 53 tokens.
+  - Full live `bridge-regression` passed 35/35 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1777 ms, P95 latency 4525 ms, and total usage
+    8644 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq89v04j`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 261 runtime candidates,
+    selected 12 old UI screenshots by retention policy, deleted 0, selected
+    705534 bytes, and reported 0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 41 GB available; bridge state is 1.6 MB and output
+    artifacts are 4.9 MB.
+- Remaining known gap: local inline moderation uses the same deterministic
+  compatibility classifier as `/v1/moderations`; it is not OpenAI's hosted
+  moderation model and direct streaming Chat passthrough remains byte-preserving
+  instead of appending synthetic moderation events.

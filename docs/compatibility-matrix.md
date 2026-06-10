@@ -78,7 +78,8 @@ implementations for those tools.
 | `max_tokens` | configured max token field | Legacy Chat-native alias accepted on `/v1/responses`; `max_output_tokens` takes precedence, then `max_completion_tokens`, and conflicts are recorded in `metadata.compatibility.max_tokens` |
 | `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
-| `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `moderation`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
+| `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
+| `moderation` | same-name Chat field plus local inline moderation fallback | Provider-aware Chat-native passthrough when supported; when the field is filtered or the upstream Chat provider returns no moderation payload, the bridge attaches local `input`/`output` moderation results to `response.moderation` and records `metadata.compatibility.local_moderation` |
 | `stream_options` with `stream:true` | `stream_options` | Direct; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage |
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
@@ -119,6 +120,7 @@ behavior.
 | `usage.completion_tokens` | `usage.output_tokens` | Direct |
 | `completion_tokens_details.reasoning_tokens` | `output_tokens_details.reasoning_tokens` | Direct when provider returns it |
 | `service_tier` | `service_tier` | Direct for non-streaming responses and streaming chunks when a Chat provider echoes the actual tier used |
+| `moderation` | `response.moderation` and `metadata.compatibility.chat_moderation` | Direct when an upstream Chat provider returns moderation; otherwise local inline moderation can synthesize `response.moderation.input` and/or `response.moderation.output` when the request asked for `moderation` |
 | `id` | `metadata.compatibility.chat_completion_id` | Preserved because the bridge must keep its own Responses `resp_*` id for storage and continuation |
 | `object`, `created`, `model` | `metadata.compatibility.chat_object`, `chat_created`, `chat_model` | Preserved for non-streaming responses and streaming chunks; Responses keeps its own object identity |
 | `system_fingerprint` | `metadata.compatibility.chat_system_fingerprint` | Preserved for non-streaming responses and streaming chunks, including explicit `null` values |
@@ -286,6 +288,27 @@ includes the current omni category set (`harassment`,
 `self-harm/instructions`, `sexual/minors`, `violence`, and
 `violence/graphic`) and defaults to
 `CODEXCOMPAT_MODERATIONS_MODEL=omni-moderation-latest`.
+
+### Inline Moderation
+
+OpenAI's current Chat Completions and Responses create operations also expose a
+`moderation` request configuration for running moderation on request input and
+generated output. The bridge accepts this field on both `/v1/responses` and
+`/v1/chat/completions`.
+
+- When a provider supports and returns a native Chat `moderation` payload, the
+  bridge preserves it as `response.moderation` and
+  `metadata.compatibility.chat_moderation` on Responses.
+- When the field is filtered for a Chat-only provider such as DeepSeek, or when
+  the upstream response omits moderation, the bridge runs the local moderation
+  adapter over the normalized request input and generated output text.
+- Local inline results use the same OpenAI-compatible moderation payload shape
+  as `/v1/moderations`, nested under `input` and/or `output`, and include
+  compatibility metadata noting the local deterministic classifier.
+- Streaming Responses attach local inline output moderation to the terminal
+  `response.completed`/`response.incomplete`/`response.failed` event. Direct
+  streaming Chat passthrough remains a byte-preserving upstream stream and does
+  not append synthetic moderation chunks.
 
 ## Batch Endpoint Coverage
 

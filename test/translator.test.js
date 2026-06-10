@@ -454,6 +454,10 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
     request_id: "req_123",
     input_user: "test-user",
     service_tier: "priority",
+    moderation: {
+      input: { results: [{ flagged: false }] },
+      output: { results: [{ flagged: false }] },
+    },
     choices: [{
       index: 0,
       message: {
@@ -519,6 +523,14 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.metadata.compatibility.chat_presence_penalty, 0.1);
   assert.equal(response.metadata.compatibility.chat_frequency_penalty, 0.3);
   assert.deepEqual(response.metadata.compatibility.chat_metadata, { upstream: "chat-meta" });
+  assert.deepEqual(response.metadata.compatibility.chat_moderation, {
+    input: { results: [{ flagged: false }] },
+    output: { results: [{ flagged: false }] },
+  });
+  assert.deepEqual(response.moderation, {
+    input: { results: [{ flagged: false }] },
+    output: { results: [{ flagged: false }] },
+  });
   assert.equal(response.metadata.compatibility.chat_usage.prompt_tokens_details.audio_tokens, 1);
   assert.equal(response.metadata.compatibility.chat_usage.completion_tokens_details.accepted_prediction_tokens, 3);
   assert.equal(response.metadata.compatibility.chat_usage.completion_tokens_details.rejected_prediction_tokens, 4);
