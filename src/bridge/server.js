@@ -167,6 +167,7 @@ async function handleResponses(req, res, config, store) {
   if (request.store !== false) {
     store.put(response.id, {
       response,
+      input_items: normalizeStoredInputItems(request.input),
       messages: [
         ...chat.messages,
         ...chatCompletionToReplayMessages(upstreamJson),
@@ -221,6 +222,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     if (request.store !== false) {
       store.put(response.id, {
         response,
+        input_items: normalizeStoredInputItems(request.input),
         messages: [
           ...chat.messages,
           ...streamStateToReplayMessages(state),
@@ -537,6 +539,140 @@ async function handleModels(req, res, config) {
   });
 }
 
+function handleResponseGet(res, store, responseId) {
+  const record = store.get(responseId);
+  if (!record?.response) {
+    sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  sendJson(res, 200, record.response);
+}
+
+function handleResponseDelete(res, store, responseId) {
+  const deleted = store.delete(responseId);
+  if (!deleted) {
+    sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  sendJson(res, 200, {
+    id: responseId,
+    object: "response.deleted",
+    deleted: true,
+  });
+}
+
+function handleResponseCancel(res, store, responseId) {
+  const record = store.get(responseId);
+  if (!record?.response) {
+    sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  const response = clone(record.response);
+  response.metadata = {
+    ...(response.metadata || {}),
+    compatibility_cancel: "local store only contains terminal responses; completed responses are returned as a no-op",
+  };
+  sendJson(res, 200, response);
+}
+
+function handleResponseInputItems(res, store, responseId, url) {
+  const record = store.get(responseId);
+  if (!record?.response) {
+    sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
+    return;
+  }
+
+  const items = Array.isArray(record.input_items)
+    ? record.input_items
+    : normalizeStoredInputItems(record.request?.input);
+  sendJson(res, 200, paginateInputItems(items, url));
+}
+
+function handleUnsupportedResponseEndpoint(res, name) {
+  sendError(res, 501, `${name} requires native Responses API semantics and is not emulated by this chat provider bridge yet`, {
+    type: "unsupported_compatibility_feature",
+    code: "unsupported_endpoint",
+  });
+}
+
+function normalizeStoredInputItems(input) {
+  if (input == null) return [];
+  if (typeof input === "string") {
+    return [{
+      id: "in_000000",
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: input }],
+    }];
+  }
+
+  const items = Array.isArray(input) ? input : [input];
+  return items.map((item, index) => normalizeStoredInputItem(item, index));
+}
+
+function normalizeStoredInputItem(item, index) {
+  const id = `in_${String(index).padStart(6, "0")}`;
+  if (typeof item === "string") {
+    return {
+      id,
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: item }],
+    };
+  }
+
+  if (!item || typeof item !== "object" || Array.isArray(item)) {
+    return {
+      id,
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: stringifyContent(item) }],
+    };
+  }
+
+  const stored = clone(item);
+  if (!stored.id) stored.id = id;
+  if (!stored.type && stored.role) stored.type = "message";
+  return stored;
+}
+
+function paginateInputItems(items, url) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const before = url.searchParams.get("before");
+  const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  if (before) {
+    const index = data.findIndex((item) => item.id === before);
+    data = index === -1 ? [] : data.slice(0, index);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    first_id: page[0]?.id || null,
+    last_id: page.at(-1)?.id || null,
+    has_more: data.length > page.length,
+  };
+}
+
+function parseLimit(value, fallback, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.trunc(parsed), max);
+}
+
 function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
 
@@ -562,6 +698,38 @@ function createServer(config = loadConfig()) {
       if (req.method === "POST" && url.pathname === "/v1/responses") {
         await handleResponses(req, res, config, store);
         return;
+      }
+
+      if (url.pathname === "/v1/responses/compact") {
+        handleUnsupportedResponseEndpoint(res, "response compaction");
+        return;
+      }
+
+      if (url.pathname === "/v1/responses/input_tokens") {
+        handleUnsupportedResponseEndpoint(res, "response input token estimation");
+        return;
+      }
+
+      const responseRoute = url.pathname.match(/^\/v1\/responses\/([^/]+)(?:\/([^/]+))?$/);
+      if (responseRoute) {
+        const responseId = decodeURIComponent(responseRoute[1]);
+        const action = responseRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleResponseGet(res, store, responseId);
+          return;
+        }
+        if (!action && req.method === "DELETE") {
+          handleResponseDelete(res, store, responseId);
+          return;
+        }
+        if (action === "cancel" && req.method === "POST") {
+          handleResponseCancel(res, store, responseId);
+          return;
+        }
+        if (action === "input_items" && req.method === "GET") {
+          handleResponseInputItems(res, store, responseId, url);
+          return;
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chat/completions") {

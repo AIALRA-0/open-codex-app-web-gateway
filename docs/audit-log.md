@@ -42,3 +42,23 @@ Open follow-ups:
   - HTTPS page returned 200 with certificate CN `opencodexapp.aialra.online`.
   - Playwright loaded the UI, completed onboarding, sent `请只回复 opencodex-ok`,
     and received `opencodex-ok` in the web UI with no console warnings/errors.
+
+## 2026-06-10 Responses Lifecycle Expansion
+
+- Added local lifecycle coverage for stored Responses objects:
+  - `GET /v1/responses/{response_id}`
+  - `DELETE /v1/responses/{response_id}`
+  - `POST /v1/responses/{response_id}/cancel`
+  - `GET /v1/responses/{response_id}/input_items`
+- Added explicit 501 compatibility errors for:
+  - `POST /v1/responses/compact`
+  - `POST /v1/responses/input_tokens`
+- Stored normalized response input items next to replay messages so later Codex
+  requests can inspect the conversation input surface without calling upstream.
+- Added mock-provider regression coverage for retrieval, deletion, input item
+  pagination, completed-response cancel no-op, and unsupported collection
+  endpoints.
+- Restarted `aialra-opencodexapp-bridge.service` and live-tested the lifecycle
+  path against DeepSeek through the local bridge:
+  create response, retrieve response, list input items, cancel completed
+  response, delete response, and confirm 404 after deletion.

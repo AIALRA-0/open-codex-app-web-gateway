@@ -46,6 +46,18 @@ class FileResponseStore {
     return Array.isArray(record?.messages) ? record.messages : [];
   }
 
+  delete(id) {
+    const filePath = this.filePath(id);
+    if (!filePath) return false;
+    try {
+      fs.unlinkSync(filePath);
+      return true;
+    } catch (error) {
+      if (error.code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
   put(id, record) {
     const filePath = this.filePath(id);
     if (!filePath) return;

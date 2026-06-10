@@ -69,6 +69,18 @@ paths remain configurable for other providers.
 | `finish_reason=length` | `status=incomplete` | Direct |
 | other finish reasons | `status=completed` | Direct |
 
+## Responses Endpoint Coverage
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/responses` | Implemented | Translates to upstream Chat Completions and stores replay state unless `store:false` |
+| `GET /v1/responses/{response_id}` | Implemented | Returns the locally stored Responses object |
+| `DELETE /v1/responses/{response_id}` | Implemented | Deletes the local replay record and returns a deletion marker |
+| `GET /v1/responses/{response_id}/input_items` | Implemented | Returns locally stored input items with `limit`, `after`, `before`, and `order` pagination |
+| `POST /v1/responses/{response_id}/cancel` | Compatibility no-op for completed records | The bridge only stores terminal responses today; completed records are returned unchanged with metadata explaining the no-op |
+| `POST /v1/responses/compact` | Explicit 501 | Requires native Responses compaction semantics or a local summarization policy |
+| `POST /v1/responses/input_tokens` | Explicit 501 | Requires provider-specific tokenizer accounting; planned for a tokenizer adapter layer |
+
 ## Streaming Mapping
 
 The bridge emits:

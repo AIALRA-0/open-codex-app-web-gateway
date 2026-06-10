@@ -129,6 +129,94 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
   });
 });
 
+test("Responses lifecycle endpoints retrieve input items, cancel completed records, and delete records", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_lifecycle",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "stored response" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 4, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "first" }],
+          },
+          {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: "second" }],
+          },
+        ],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+
+    const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.id, createdJson.id);
+    assert.equal(fetchedJson.output[0].content[0].text, "stored response");
+
+    const inputItems = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/input_items?limit=1`);
+    assert.equal(inputItems.status, 200);
+    const inputItemsJson = await inputItems.json();
+    assert.equal(inputItemsJson.object, "list");
+    assert.equal(inputItemsJson.data.length, 1);
+    assert.equal(inputItemsJson.data[0].id, "in_000000");
+    assert.equal(inputItemsJson.has_more, true);
+
+    const cancel = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/cancel`, { method: "POST" });
+    assert.equal(cancel.status, 200);
+    const cancelJson = await cancel.json();
+    assert.equal(cancelJson.id, createdJson.id);
+    assert.match(cancelJson.metadata.compatibility_cancel, /terminal responses/);
+
+    const deleted = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      id: createdJson.id,
+      object: "response.deleted",
+      deleted: true,
+    });
+
+    const missing = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+    assert.equal(missing.status, 404);
+  });
+});
+
+test("Responses collection endpoints that require native semantics return explicit compatibility errors", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500).end();
+  }, async ({ bridgeAddress }) => {
+    const compact = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/compact`, { method: "POST" });
+    assert.equal(compact.status, 501);
+    const compactJson = await compact.json();
+    assert.equal(compactJson.error.code, "unsupported_endpoint");
+
+    const inputTokens = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/input_tokens`, { method: "POST" });
+    assert.equal(inputTokens.status, 501);
+    const inputTokensJson = await inputTokens.json();
+    assert.equal(inputTokensJson.error.type, "unsupported_compatibility_feature");
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);
