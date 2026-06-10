@@ -306,6 +306,9 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
     object: "chat.completion",
     created: 123,
     model: "deepseek-chat",
+    system_fingerprint: null,
+    request_id: "req_123",
+    input_user: "test-user",
     service_tier: "priority",
     choices: [{
       index: 0,
@@ -350,6 +353,11 @@ test("maps chat completion content, tool calls, reasoning and usage back to Resp
   assert.equal(response.output[2].type, "function_call");
   assert.equal(response.output[2].call_id, "call_1");
   assert.equal(response.service_tier, "priority");
+  assert.equal(response.metadata.compatibility.chat_completion_id, "chatcmpl_1");
+  assert.equal(Object.prototype.hasOwnProperty.call(response.metadata.compatibility, "chat_system_fingerprint"), true);
+  assert.equal(response.metadata.compatibility.chat_system_fingerprint, null);
+  assert.equal(response.metadata.compatibility.chat_request_id, "req_123");
+  assert.equal(response.metadata.compatibility.chat_input_user, "test-user");
   assert.equal(response.usage.input_tokens_details.cached_tokens, 6);
   assert.equal(response.usage.output_tokens_details.reasoning_tokens, 2);
 });

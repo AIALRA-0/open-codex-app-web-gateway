@@ -436,6 +436,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
       id: "chatcmpl_stream",
       object: "chat.completion.chunk",
       service_tier: "flex",
+      system_fingerprint: "fp_stream",
       choices: [{
         index: 0,
         delta: { role: "assistant", content: "hel" },
@@ -482,6 +483,8 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     const events = parseSseEvents(text);
     const completed = events.find((event) => event.event === "response.completed").data.response;
     assert.equal(completed.service_tier, "flex");
+    assert.equal(completed.metadata.compatibility.chat_completion_id, "chatcmpl_stream");
+    assert.equal(completed.metadata.compatibility.chat_system_fingerprint, "fp_stream");
     assert.equal(completed.metadata.compatibility.stream_options.reason, "enabled_by_bridge");
   });
 });

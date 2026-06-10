@@ -956,3 +956,49 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7v403h` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Chat Response Metadata Preservation
+
+- Used the current OpenAI Chat Completions API reference to confirm Chat
+  response and streaming chunk metadata fields, especially `id` and
+  `system_fingerprint`, are part of the upstream Chat response surface:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create
+  and
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/streaming-events
+- Added Chat-to-Responses compatibility metadata preservation:
+  - non-streaming Chat `id` is preserved as
+    `metadata.compatibility.chat_completion_id`;
+  - non-streaming Chat `system_fingerprint`, including explicit `null`, is
+    preserved as `metadata.compatibility.chat_system_fingerprint`;
+  - stored Chat metadata fields `request_id` and `input_user` are preserved as
+    `metadata.compatibility.chat_request_id` and
+    `metadata.compatibility.chat_input_user` when returned by the provider;
+  - streaming Chat chunks now accumulate the same top-level metadata and expose
+    it on the terminal Responses event.
+- Kept the bridge-generated Responses `resp_*` id unchanged so storage,
+  `previous_response_id`, lifecycle retrieval, and cancellation semantics remain
+  local and stable.
+- Updated `docs/compatibility-matrix.md` with the new response metadata rows.
+- Added regression coverage for:
+  - non-streaming compatibility metadata preservation in
+    `chatCompletionToResponse`;
+  - streaming terminal `response.completed` preservation of Chat completion id
+    and `system_fingerprint`.
+- Verified:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `npm test`: 48/48 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; `systemctl is-active`
+    returned `active`.
+  - `curl -fsS http://127.0.0.1:12912/healthz` returned `ok:true`, provider
+    base `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1931 ms, P95 latency 4442 ms, total usage 2289 tokens.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7vdte4` appeared before reload and after reload, console errors
+    0, warnings 0.

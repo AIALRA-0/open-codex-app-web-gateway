@@ -30,6 +30,7 @@ const {
   shellOutputItems,
 } = require("./local_shell");
 const {
+  chatCompatibilityMetadata,
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
   createResponseSkeleton,
@@ -1131,10 +1132,11 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     const refusalLogprobs = streamRefusalLogprobs(state);
     response.metadata = {
       ...(response.metadata || {}),
-      compatibility: {
-        ...compatibility,
-        ...(refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {}),
-      },
+      compatibility: mergeCompatibility(
+        compatibility,
+        state.chatCompatibility,
+        refusalLogprobs.length ? { chat_refusal_logprobs: refusalLogprobs } : {},
+      ),
       upstream_object: "chat.completion.chunk",
     };
     const terminalEvent = terminalEventForResponseStatus(response.status);
@@ -1179,6 +1181,7 @@ function createStreamState(response, compatibility) {
     finishReasons: [],
     outputDone: new Set(),
     serviceTier: response.service_tier,
+    chatCompatibility: {},
     usage: null,
   };
 }
@@ -1352,6 +1355,7 @@ function applyChatStreamChunk(state, chunk) {
   const events = [];
   if (chunk.usage) state.usage = mapUsage(chunk.usage);
   if (chunk.service_tier != null) state.serviceTier = chunk.service_tier;
+  Object.assign(state.chatCompatibility, chatCompatibilityMetadata(chunk));
 
   for (const choice of chunk.choices || []) {
     if (choice.finish_reason) state.finishReasons.push(choice.finish_reason);

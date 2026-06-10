@@ -544,16 +544,10 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
     appendLegacyFunctionCallOutput(response, message.function_call, legacyFunctionCallId(chat, choice));
   }
 
+  const compatibilityMetadata = chatCompatibilityMetadata(chat);
   const refusalLogprobs = chatRefusalLogprobs(choices);
-  if (refusalLogprobs.length) {
-    response.metadata = {
-      ...(response.metadata || {}),
-      compatibility: {
-        ...(isPlainObject(response.metadata?.compatibility) ? response.metadata.compatibility : {}),
-        chat_refusal_logprobs: refusalLogprobs,
-      },
-    };
-  }
+  if (refusalLogprobs.length) compatibilityMetadata.chat_refusal_logprobs = refusalLogprobs;
+  attachResponseCompatibilityMetadata(response, compatibilityMetadata);
 
   const finishReasons = choices.map((choice) => choice.finish_reason).filter(Boolean);
   const terminal = responseTerminalStateFromFinishReasons(finishReasons);
@@ -565,6 +559,32 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
   if (chat.service_tier != null) response.service_tier = chat.service_tier;
 
   return response;
+}
+
+function chatCompatibilityMetadata(chat) {
+  if (!isPlainObject(chat)) return {};
+  const metadata = {};
+  const fieldMap = {
+    id: "chat_completion_id",
+    system_fingerprint: "chat_system_fingerprint",
+    request_id: "chat_request_id",
+    input_user: "chat_input_user",
+  };
+  for (const [source, target] of Object.entries(fieldMap)) {
+    if (Object.prototype.hasOwnProperty.call(chat, source)) metadata[target] = chat[source];
+  }
+  return metadata;
+}
+
+function attachResponseCompatibilityMetadata(response, compatibilityMetadata) {
+  if (!Object.keys(compatibilityMetadata).length) return;
+  response.metadata = {
+    ...(response.metadata || {}),
+    compatibility: {
+      ...(isPlainObject(response.metadata?.compatibility) ? response.metadata.compatibility : {}),
+      ...compatibilityMetadata,
+    },
+  };
 }
 
 function responseTerminalStateFromFinishReasons(finishReasons = []) {
@@ -754,6 +774,7 @@ function clone(value) {
 }
 
 module.exports = {
+  chatCompatibilityMetadata,
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
   createResponseSkeleton,
