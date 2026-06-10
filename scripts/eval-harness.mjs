@@ -137,19 +137,25 @@ function buildSuites(defaultModel) {
       {
         id: "chat-lifecycle",
         mode: "chat-lifecycle",
+        updateMetadata: { suite: "chat-life-updated", audit: "bridge-regression" },
         request: {
           model: defaultModel,
           store: true,
+          metadata: { suite: "chat-life-initial" },
           messages: [{ role: "user", content: "Return the exact string chat-life-ok." }],
           max_tokens: 96,
         },
-        check: ({ json, text, fetched, messages, list }) => /chat-life-ok/i.test(text)
+        check: ({ json, text, fetched, updated, messages, list, oldList }) => /chat-life-ok/i.test(text)
           && fetched?.id
+          && updated?.metadata?.suite === "chat-life-updated"
+          && updated?.metadata?.audit === "bridge-regression"
           && messages?.object === "list"
           && messages.data?.some((message) => message.role === "user")
           && messages.data?.some((message) => message.role === "assistant")
           && list?.object === "list"
-          && list.data?.some((completion) => completion.id === json.id),
+          && list.data?.some((completion) => completion.id === json.id)
+          && oldList?.object === "list"
+          && !oldList.data?.some((completion) => completion.id === json.id),
       },
       {
         id: "responses-input-tokens",
@@ -561,18 +567,45 @@ async function runChatLifecycleCase(testCase, context, started) {
 
   const created = JSON.parse(createdBody);
   const fetched = await getJson(`${baseUrl}/v1/chat/completions/${created.id}`);
+  let updated = { status: 0, ok: false, json: null, body: "" };
+  if (testCase.updateMetadata) {
+    const updatedResponse = await postJson(`${baseUrl}/v1/chat/completions/${created.id}`, {
+      metadata: testCase.updateMetadata,
+    });
+    const updatedBody = await updatedResponse.text();
+    updated = {
+      status: updatedResponse.status,
+      ok: updatedResponse.ok,
+      json: parseJsonish(updatedBody),
+      body: updatedBody,
+    };
+  }
   const messages = await getJson(`${baseUrl}/v1/chat/completions/${created.id}/messages?limit=20`);
-  const list = await getJson(`${baseUrl}/v1/chat/completions?order=desc&limit=50`);
+  const listUrl = testCase.updateMetadata?.suite
+    ? `${baseUrl}/v1/chat/completions?metadata[suite]=${encodeURIComponent(testCase.updateMetadata.suite)}&order=desc&limit=50`
+    : `${baseUrl}/v1/chat/completions?order=desc&limit=50`;
+  const list = await getJson(listUrl);
+  const oldList = await getJson(`${baseUrl}/v1/chat/completions?metadata[suite]=chat-life-initial&order=desc&limit=50`);
   const text = chatOutputText(created);
-  const ok = !!testCase.check({ json: created, text, fetched: fetched.json, messages: messages.json, list: list.json });
+  const ok = !!testCase.check({
+    json: created,
+    text,
+    fetched: fetched.json,
+    updated: updated.json,
+    messages: messages.json,
+    list: list.json,
+    oldList: oldList.json,
+  });
   return finishResult(testCase, context, started, {
     ok,
     status: createdResponse.status,
     usage: chatUsage(created),
     output_text: truncate(text),
     fetched_status: fetched.status,
+    update_status: updated.status,
     messages_status: messages.status,
     list_status: list.status,
+    old_list_status: oldList.status,
     message_count: Array.isArray(messages.json?.data) ? messages.json.data.length : 0,
     list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
   });

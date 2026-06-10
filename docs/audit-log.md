@@ -1232,3 +1232,49 @@ Open follow-ups:
     `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
     `ui-smoke-mq7wsw2n` appeared before reload and after reload, console errors
     0, warnings 0.
+
+## 2026-06-10 Stored Chat Completion Metadata Update
+
+- Used the current OpenAI Chat Completions docs/search index to identify the
+  stored completion update method:
+  https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/update
+- Added local support for `POST /v1/chat/completions/{completion_id}`:
+  - only locally stored `store:true` Chat completion records can be updated;
+  - only `{ "metadata": {...} }` is accepted, matching OpenAI's current
+    restriction that stored Chat completion updates modify metadata only;
+  - unsupported update fields return a `400 invalid_request_error` with
+    `code=unsupported_chat_completion_update`;
+  - the stored Chat completion and stored request metadata are both updated so
+    later `GET`, `LIST`, and `metadata[key]` filters observe the new metadata.
+- Extended the bridge regression harness:
+  - `chat-lifecycle` now creates a stored Chat completion, updates metadata,
+    fetches the completion, lists by the updated metadata filter, verifies the
+    old metadata filter no longer returns the same id, and retrieves stored
+    messages.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` with
+  the update endpoint and regression coverage.
+- Added regression coverage for:
+  - invalid non-metadata update rejection;
+  - successful metadata update response;
+  - refetch after update;
+  - list filtering by updated metadata and no match for prior metadata.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 54/54 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Full live `bridge-regression` against `deepseek-v4-pro` through
+    `http://127.0.0.1:12912` passed 17/17, pass rate 1.0, average latency
+    1899 ms, P95 latency 5580 ms, total usage 2323 tokens. The
+    `chat-lifecycle` case returned `update_status:200`, `list_count:1`, and
+    `old_list_status:200`.
+  - Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+    `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+    `ui-smoke-mq7x3zir` appeared before reload and after reload, console errors
+    0, warnings 0.

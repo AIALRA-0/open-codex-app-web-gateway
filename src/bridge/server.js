@@ -54,6 +54,10 @@ const {
 
 const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
 
+function isPlainObject(value) {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
 function parseBoolean(value, fallback = false) {
   if (value == null || value === "") return fallback;
   const normalized = String(value).trim().toLowerCase();
@@ -1906,6 +1910,41 @@ function handleChatCompletionGet(res, store, completionId) {
   sendJson(res, 200, record.chat_completion);
 }
 
+async function handleChatCompletionUpdate(req, res, store, completionId) {
+  const body = await readJson(req);
+  const record = store.get(completionId);
+  if (!record?.chat_completion) {
+    sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+
+  const keys = Object.keys(isPlainObject(body) ? body : {});
+  const unsupported = keys.filter((key) => key !== "metadata");
+  if (!keys.includes("metadata") || unsupported.length || !isPlainObject(body.metadata)) {
+    sendError(res, 400, "only metadata updates are supported for stored chat completions", {
+      type: "invalid_request_error",
+      param: unsupported[0] || "metadata",
+      code: "unsupported_chat_completion_update",
+    });
+    return;
+  }
+
+  const metadata = clone(body.metadata);
+  const updatedRecord = {
+    ...record,
+    chat_completion: {
+      ...record.chat_completion,
+      metadata,
+    },
+    chat_request: {
+      ...(record.chat_request || {}),
+      metadata,
+    },
+  };
+  store.put(completionId, updatedRecord);
+  sendJson(res, 200, updatedRecord.chat_completion);
+}
+
 function handleChatCompletionsList(res, store, url) {
   const model = url.searchParams.get("model");
   const metadataFilters = metadataFiltersFromUrl(url);
@@ -2249,6 +2288,10 @@ function createServer(config = loadConfig()) {
         const action = chatRoute[2] || "";
         if (!action && req.method === "GET") {
           handleChatCompletionGet(res, store, completionId);
+          return;
+        }
+        if (!action && req.method === "POST") {
+          await handleChatCompletionUpdate(req, res, store, completionId);
           return;
         }
         if (action === "messages" && req.method === "GET") {

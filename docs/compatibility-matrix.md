@@ -135,15 +135,18 @@ behavior.
 
 ## Chat Completions Endpoint Coverage
 
-OpenAI's current endpoint list includes `POST /v1/chat/completions`,
-`GET /v1/chat/completions`, `GET /v1/chat/completions/{completion_id}`, and
-`GET /v1/chat/completions/{completion_id}/messages`.
+OpenAI's current Chat Completions paths include `/v1/chat/completions`,
+`/v1/chat/completions/{completion_id}`, and
+`/v1/chat/completions/{completion_id}/messages`. The bridge implements create,
+list, retrieve, update metadata, and messages retrieval for locally stored Chat
+completion records.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers |
 | `GET /v1/chat/completions` | Implemented for local `store:true` records | Lists locally stored upstream Chat completion objects with `model`, `metadata[key]`, `limit`, `after`, and `order` filters |
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
+| `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions |
 | `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with `limit`, `after`, `before`, and `order` pagination |
 
 The bridge stores Chat completions only when the incoming Chat request sets

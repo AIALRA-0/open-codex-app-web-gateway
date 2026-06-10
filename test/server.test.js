@@ -1556,6 +1556,28 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     const fetchedJson = await fetched.json();
     assert.equal(fetchedJson.id, json.id);
 
+    const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "other-model" }),
+    });
+    assert.equal(invalidUpdate.status, 400);
+    assert.equal((await invalidUpdate.json()).error.param, "model");
+
+    const updated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "chat-updated", owner: "bridge-test" } }),
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.id, json.id);
+    assert.deepEqual(updatedJson.metadata, { suite: "chat-updated", owner: "bridge-test" });
+
+    const refetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(refetched.status, 200);
+    assert.deepEqual((await refetched.json()).metadata, { suite: "chat-updated", owner: "bridge-test" });
+
     const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?limit=1`);
     assert.equal(messages.status, 200);
     const messagesJson = await messages.json();
@@ -1565,16 +1587,21 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
-    const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?model=mock-model&metadata[suite]=chat-list&limit=10`);
+    const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?model=mock-model&metadata[suite]=chat-updated&limit=10`);
     assert.equal(listed.status, 200);
     const listedJson = await listed.json();
     assert.equal(listedJson.object, "list");
     assert.equal(listedJson.data.length, 1);
     assert.equal(listedJson.data[0].id, json.id);
-    assert.equal(listedJson.data[0].metadata.suite, "chat-list");
+    assert.equal(listedJson.data[0].metadata.suite, "chat-updated");
+    assert.equal(listedJson.data[0].metadata.owner, "bridge-test");
     assert.equal(listedJson.first_id, json.id);
     assert.equal(listedJson.last_id, json.id);
     assert.equal(listedJson.has_more, false);
+
+    const previousMetadata = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-list`);
+    assert.equal(previousMetadata.status, 200);
+    assert.equal((await previousMetadata.json()).data.length, 0);
 
     const filtered = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=other`);
     assert.equal(filtered.status, 200);
