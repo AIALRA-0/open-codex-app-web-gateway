@@ -5034,3 +5034,78 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 15 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Direct Chat custom tool filtering for DeepSeek
+
+- Documentation basis:
+  - OpenAI Chat Completions Create API documents Chat `tools` as either custom
+    tools or function tools, and includes OpenAI-only request fields such as
+    `n`.
+  - DeepSeek Create Chat Completion documents `tools` as function-only: the
+    tool type enum is `function`, and the docs state that only functions are
+    currently supported as tools.
+  - Sources: `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+    `https://developers.openai.com/api/docs/guides/function-calling`, and
+    `https://api-docs.deepseek.com/api/create-chat-completion`.
+- Found a direct Chat passthrough gap:
+  - direct `/v1/chat/completions` could forward OpenAI Chat custom tool entries
+    such as `type:"custom"` to DeepSeek, even though DeepSeek only documents
+    function tools;
+  - a custom `tool_choice` could also reach DeepSeek after unsupported tools
+    were filtered or when no forwardable function tool remained;
+  - direct Chat filtering also missed request-side `n`, while the compatibility
+    matrix already documented `n` as a provider-aware OpenAI Chat field.
+- Added provider-aware custom-tool filtering:
+  - introduced `CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS`, defaulting to `false`
+    for DeepSeek providers and `true` for other OpenAI-compatible providers;
+  - direct Chat passthrough now removes non-`function` tools when the upstream
+    provider is function-tool-only, keeps forwardable function tools, and
+    records compact tool descriptors under
+    `metadata.compatibility.chat_passthrough.custom_tools`;
+  - incompatible custom `tool_choice` values are removed, and `tool_choice` is
+    also removed when no forwardable function tools remain;
+  - direct Chat provider-field filtering now includes `n`.
+- Added regression coverage:
+  - server tests verify custom tools are filtered while function tools remain,
+    incompatible custom `tool_choice` is removed, and compatibility metadata
+    records forwarded and filtered tool descriptors;
+  - server tests verify direct Chat `n` is filtered for DeepSeek-compatible
+    providers;
+  - config tests verify DeepSeek defaults to `forwardChatCustomTools:false`
+    while generic OpenAI-compatible providers default to true;
+  - live `bridge-regression` now includes `chat-custom-tool-filter-compat` and
+    checks visible output plus compatibility metadata for all-custom tool
+    filtering.
+- Verification:
+  - `node --check src/bridge/server.js`, `node --check scripts/eval-harness.mjs`,
+    and `git diff --check`: passed.
+  - `node --test test/server.test.js --test-name-pattern "custom tools|normalizes OpenAI Chat fields|loadConfig filters"`:
+    93/93 passing tests.
+  - `npm test`: 130/130 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `chat-custom-tool-filter-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1002 ms, total usage 25 tokens, visible text
+    `chat-custom-tool-filter-ok`, and custom-tool compatibility metadata checks
+    passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 923 ms, P95 latency 960 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 49/49 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1028 ms, P95 latency 2115 ms, and total usage
+    9623 tokens.
+  - UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8nq5hy`, page load/authentication, sidebar controls, new
+    conversation submit, reload persistence, console errors 0, warnings 0, and
+    screenshot `output/playwright/ui-smoke-2026-06-10T22-45-31-606Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 590 runtime candidates,
+    selected 49 old UI screenshots by retention policy, deleted 0, selected
+    3877672 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 39 GB available; repository checkout
+    is 50 MB, `state/` is 5.2 MB, `output/` is 8.0 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 15 MB.
+  - No API keys, account credentials, or local secret files were committed.

@@ -631,6 +631,34 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.reasoning?.effort?.forwarded === false,
       },
       {
+        id: "chat-custom-tool-filter-compat",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          store: true,
+          metadata: { suite: "bridge-regression", feature: "custom-tool-filter" },
+          messages: [{ role: "user", content: "Return the exact string chat-custom-tool-filter-ok." }],
+          tools: [{
+            type: "custom",
+            custom: {
+              name: "emit_text",
+              description: "Emit free-form text.",
+            },
+          }],
+          tool_choice: { type: "custom", custom: { name: "emit_text" } },
+          reasoning_effort: "none",
+          max_completion_tokens: 64,
+        },
+        check: ({ json, text }) => {
+          const customTools = json.metadata?.compatibility?.chat_passthrough?.custom_tools;
+          return /chat-custom-tool-filter-ok/i.test(text)
+            && customTools?.reason === "provider_function_tools_only"
+            && customTools?.filtered?.some((tool) => tool.type === "custom" && tool.name === "emit_text")
+            && customTools?.tool_choice?.reason === "no_forwardable_tools"
+            && customTools?.tool_choice?.forwarded === false;
+        },
+      },
+      {
         id: "chat-lifecycle",
         mode: "chat-lifecycle",
         updateMetadata: { suite: "chat-life-updated", audit: "bridge-regression" },

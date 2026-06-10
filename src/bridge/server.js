@@ -252,6 +252,7 @@ function loadConfig(overrides = {}) {
     forwardStoredChatFields: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS, !deepseekProvider),
     forwardServiceTier: parseBoolean(process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER, !deepseekProvider),
     forwardChatNativeFields: parseBoolean(process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS, !deepseekProvider),
+    forwardChatCustomTools: parseBoolean(process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS, !deepseekProvider),
     forwardStreamOptions: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STREAM_OPTIONS, true),
     streamOptionFields: streamOptionFieldsFromEnv(deepseekProvider ? ["include_usage"] : null),
     streamIncludeUsage: parseBoolean(process.env.CODEXCOMPAT_STREAM_INCLUDE_USAGE, true),
@@ -3328,6 +3329,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const reasoningEffort = normalizeChatPassthroughReasoningEffort(upstreamBody, config);
   if (reasoningEffort) compatibility.reasoning_effort = reasoningEffort;
 
+  const customTools = filterChatPassthroughCustomTools(upstreamBody, config);
+  if (customTools) compatibility.custom_tools = customTools;
+
   const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
   if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
 
@@ -3564,6 +3568,105 @@ function normalizeChatPassthroughToolChoiceThinking(upstreamBody, config = {}) {
   };
 }
 
+function filterChatPassthroughCustomTools(upstreamBody, config = {}) {
+  if (config.forwardChatCustomTools !== false || !Array.isArray(upstreamBody.tools)) return null;
+
+  const forwarded = [];
+  const filtered = [];
+  const forwardableTools = [];
+  upstreamBody.tools.forEach((tool, index) => {
+    const descriptor = chatToolCompatibilityDescriptor(tool, index);
+    if (isPlainObject(tool) && tool.type === "function") {
+      forwardableTools.push(tool);
+      forwarded.push(descriptor);
+      return;
+    }
+    filtered.push(descriptor);
+  });
+
+  if (!filtered.length) return null;
+  if (forwardableTools.length) upstreamBody.tools = forwardableTools;
+  else delete upstreamBody.tools;
+
+  const toolChoice = filterChatPassthroughToolChoiceForForwardedTools(upstreamBody, forwardableTools);
+  return {
+    source: "tools",
+    ...(forwarded.length ? { forwarded } : {}),
+    filtered,
+    ...(toolChoice ? { tool_choice: toolChoice } : {}),
+    reason: "provider_function_tools_only",
+  };
+}
+
+function filterChatPassthroughToolChoiceForForwardedTools(upstreamBody, forwardableTools = []) {
+  if (upstreamBody.tool_choice === undefined) return null;
+  const value = clone(upstreamBody.tool_choice);
+  const forwardedFunctionNames = new Set(
+    forwardableTools
+      .map((tool) => stringifyOptional(tool.function?.name))
+      .filter(Boolean),
+  );
+
+  if (!forwardableTools.length) {
+    delete upstreamBody.tool_choice;
+    return {
+      source: "tool_choice",
+      value,
+      forwarded: false,
+      reason: "no_forwardable_tools",
+    };
+  }
+
+  if (typeof upstreamBody.tool_choice === "string") {
+    if (["auto", "none", "required"].includes(upstreamBody.tool_choice)) return null;
+    delete upstreamBody.tool_choice;
+    return {
+      source: "tool_choice",
+      value,
+      forwarded: false,
+      reason: "unsupported_tool_choice",
+    };
+  }
+
+  if (!isPlainObject(upstreamBody.tool_choice) || upstreamBody.tool_choice.type !== "function") {
+    delete upstreamBody.tool_choice;
+    return {
+      source: "tool_choice",
+      value,
+      forwarded: false,
+      reason: "provider_function_tools_only",
+    };
+  }
+
+  const name = stringifyOptional(upstreamBody.tool_choice.function?.name);
+  if (name && forwardedFunctionNames.has(name)) return null;
+
+  delete upstreamBody.tool_choice;
+  return {
+    source: "tool_choice",
+    value,
+    forwarded: false,
+    reason: "tool_choice_function_filtered",
+  };
+}
+
+function chatToolCompatibilityDescriptor(tool, index) {
+  const descriptor = {
+    index,
+    type: isPlainObject(tool) ? stringifyContent(tool.type || "unknown") : typeof tool,
+  };
+  const name = isPlainObject(tool)
+    ? stringifyOptional(tool.function?.name || tool.custom?.name || tool.name)
+    : null;
+  if (name) descriptor.name = name;
+  return descriptor;
+}
+
+function stringifyOptional(value) {
+  if (value == null || value === "") return null;
+  return stringifyContent(value);
+}
+
 function filterChatPassthroughServiceTier(upstreamBody, config = {}) {
   if (upstreamBody.service_tier === undefined || config.forwardServiceTier !== false) return null;
   const value = upstreamBody.service_tier;
@@ -3608,6 +3711,7 @@ function filterChatPassthroughNativeFields(upstreamBody, config = {}) {
     "modalities",
     "audio",
     "prediction",
+    "n",
     "parallel_tool_calls",
     "prompt_cache_key",
     "prompt_cache_retention",

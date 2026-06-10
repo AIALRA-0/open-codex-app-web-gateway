@@ -239,13 +239,16 @@ mapped to the configured provider max-token field (`max_tokens` for DeepSeek),
 conflicting legacy `max_tokens` values are withheld and audited, OpenAI Chat
 `reasoning:{effort}` / `reasoning_effort` values are mapped to DeepSeek
 `reasoning_effort` / `thinking`, unsupported Chat `reasoning` object sibling
-fields are filtered with compatibility metadata, `store` and `metadata` are
-kept as local stored-completion
+fields are filtered with compatibility metadata, OpenAI Chat custom tools are
+filtered by default for DeepSeek because DeepSeek currently documents only
+`type:"function"` tools, incompatible custom `tool_choice` values are removed
+while function tools remain forwardable, `store` and `metadata` are kept as
+local stored-completion
 semantics and filtered for DeepSeek upstream calls, `service_tier` is filtered
 when unsupported, `stream_options` are removed on non-streaming requests,
 provider-unsupported streaming subfields are filtered by
 `CODEXCOMPAT_STREAM_OPTION_FIELDS`, and configured OpenAI-only Chat fields such
-as `modalities`, `moderation`,
+as `modalities`, `moderation`, `n`,
 `prediction`, `parallel_tool_calls`, and legacy `functions` / `function_call`
 are filtered instead of being sent to the provider. Non-streaming JSON
 responses and stored reconstructed streaming responses record these actions under

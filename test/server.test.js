@@ -6080,6 +6080,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.service_tier, undefined);
     assert.equal(call.body.modalities, undefined);
     assert.equal(call.body.moderation, undefined);
+    assert.equal(call.body.n, undefined);
     assert.equal(call.body.parallel_tool_calls, undefined);
     assert.equal(call.body.stream_options, undefined);
     assert.equal(call.body.max_tokens, 32);
@@ -6118,6 +6119,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         service_tier: "flex",
         modalities: ["text"],
         moderation: { input: true },
+        n: 2,
         parallel_tool_calls: false,
         stream_options: { include_usage: true },
         max_completion_tokens: 32,
@@ -6151,7 +6153,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     );
     assert.deepEqual(
       json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
-      ["modalities", "moderation", "parallel_tool_calls"].sort(),
+      ["modalities", "moderation", "n", "parallel_tool_calls"].sort(),
     );
     assert.equal(json.moderation.input.results[0].flagged, false);
 
@@ -6325,6 +6327,93 @@ test("POST /v1/chat/completions prefers explicit reasoning_effort over reasoning
   }, {
     deepseekReasoningEffortCompat: true,
   });
+});
+
+test("POST /v1/chat/completions filters custom tools for function-only providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.tools, [{
+      type: "function",
+      function: {
+        name: "record_result",
+        description: "Record a benchmark result.",
+        parameters: {
+          type: "object",
+          properties: { ok: { type: "boolean" } },
+          required: ["ok"],
+          additionalProperties: false,
+        },
+      },
+    }]);
+    assert.equal(call.body.tool_choice, undefined);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_custom_tool_filter",
+      object: "chat.completion",
+      created: 1700000415,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-custom-tool-filter-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 11, completion_tokens: 5, total_tokens: 16 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-custom-tool-filter" },
+        messages: [{ role: "user", content: "Return chat-custom-tool-filter-ok." }],
+        tools: [
+          {
+            type: "custom",
+            custom: {
+              name: "emit_text",
+              description: "Emit free-form text.",
+            },
+          },
+          {
+            type: "function",
+            function: {
+              name: "record_result",
+              description: "Record a benchmark result.",
+              parameters: {
+                type: "object",
+                properties: { ok: { type: "boolean" } },
+                required: ["ok"],
+                additionalProperties: false,
+              },
+            },
+          },
+        ],
+        tool_choice: { type: "custom", custom: { name: "emit_text" } },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-custom-tool-filter-ok");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.custom_tools, {
+      source: "tools",
+      forwarded: [{ index: 1, type: "function", name: "record_result" }],
+      filtered: [{ index: 0, type: "custom", name: "emit_text" }],
+      tool_choice: {
+        source: "tool_choice",
+        value: { type: "custom", custom: { name: "emit_text" } },
+        forwarded: false,
+        reason: "provider_function_tools_only",
+      },
+      reason: "provider_function_tools_only",
+    });
+
+    const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.deepEqual(messagesJson.data[0].tools, undefined);
+  }, { forwardChatCustomTools: false });
 });
 
 test("POST /v1/chat/completions disables DeepSeek thinking for direct Chat tool_choice", async () => {
@@ -7048,22 +7137,26 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousServiceTier = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   const previousStoredChatFields = process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   const previousChatNativeFields = process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
+  const previousChatCustomTools = process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   const previousStreamOptionFields = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
+  delete process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
     assert.equal(deepseekConfig.forwardStoredChatFields, false);
     assert.equal(deepseekConfig.forwardChatNativeFields, false);
+    assert.equal(deepseekConfig.forwardChatCustomTools, false);
     assert.deepEqual(deepseekConfig.streamOptionFields, ["include_usage"]);
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
     assert.equal(openaiCompatibleConfig.forwardStoredChatFields, true);
     assert.equal(openaiCompatibleConfig.forwardChatNativeFields, true);
+    assert.equal(openaiCompatibleConfig.forwardChatCustomTools, true);
     assert.equal(openaiCompatibleConfig.streamOptionFields, null);
 
     process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
@@ -7081,6 +7174,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS = previousStoredChatFields;
     if (previousChatNativeFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
     else process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS = previousChatNativeFields;
+    if (previousChatCustomTools === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
+    else process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS = previousChatCustomTools;
     if (previousStreamOptionFields === undefined) delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
     else process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = previousStreamOptionFields;
   }
