@@ -217,6 +217,30 @@ test("Responses collection endpoints that require native semantics return explic
   });
 });
 
+test("POST /v1/chat/completions proxies chat responses with bridge-safe response headers", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_passthrough",
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "chat-ok" }, finish_reason: "stop" }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.has("content-length"), false);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-ok");
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);

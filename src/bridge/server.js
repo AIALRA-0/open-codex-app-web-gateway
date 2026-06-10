@@ -45,6 +45,7 @@ function loadConfig(overrides = {}) {
     requestTimeoutMs: numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000),
     deepseekReasoningEffortCompat: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT, true),
     deepseekThinkingMode: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_THINKING_MODE, false),
+    deepseekDisableThinkingForToolChoice: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };
@@ -501,11 +502,24 @@ async function* iterateSseJson(stream) {
 async function handleChatPassthrough(req, res, config) {
   const body = await readJson(req);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, body, req.headers);
-  res.writeHead(upstream.status, Object.fromEntries(upstream.headers.entries()));
+  res.writeHead(upstream.status, proxyResponseHeaders(upstream));
   if (upstream.body) {
     for await (const chunk of upstream.body) res.write(chunk);
   }
   res.end();
+}
+
+function proxyResponseHeaders(upstream) {
+  const contentType = upstream.headers.get("content-type") || "application/json; charset=utf-8";
+  const headers = {
+    "content-type": contentType,
+    "cache-control": "no-store",
+  };
+  if (contentType.includes("text/event-stream")) {
+    headers.connection = "keep-alive";
+    headers["x-accel-buffering"] = "no";
+  }
+  return headers;
 }
 
 async function handleModels(req, res, config) {

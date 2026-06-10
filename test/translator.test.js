@@ -71,6 +71,23 @@ test("maps Responses function tools and tool_choice", () => {
   });
 });
 
+test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Call the tool.",
+    tools: [{
+      type: "function",
+      name: "record_result",
+      parameters: { type: "object", properties: {}, additionalProperties: false },
+    }],
+    tool_choice: { type: "function", name: "record_result" },
+  }, [], { deepseekDisableThinkingForToolChoice: true });
+
+  assert.deepEqual(chat.tool_choice, { type: "function", function: { name: "record_result" } });
+  assert.deepEqual(chat.thinking, { type: "disabled" });
+  assert.equal(compatibility.deepseek_thinking, "disabled_for_tool_choice");
+});
+
 test("maps Responses structured output text.format to chat response_format", () => {
   const format = mapTextFormat({
     format: {

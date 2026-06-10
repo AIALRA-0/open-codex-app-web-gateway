@@ -293,9 +293,22 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   if (responseFormat) chat.response_format = responseFormat;
 
   Object.assign(chat, mapReasoning(request.reasoning, options));
+  const disableThinkingForToolChoice = !!(
+    options.deepseekDisableThinkingForToolChoice
+    && tools.length
+    && toolChoice !== undefined
+    && !options.deepseekThinkingMode
+  );
+  if (disableThinkingForToolChoice) chat.thinking = { type: "disabled" };
   if (options.deepseekThinkingMode && request.reasoning?.effort) chat.thinking = { type: "enabled" };
 
-  return { chat, compatibility: { unsupported_tools: unsupported } };
+  return {
+    chat,
+    compatibility: {
+      unsupported_tools: unsupported,
+      ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
+    },
+  };
 }
 
 function makeStructuredOutputMessage(text, options = {}) {

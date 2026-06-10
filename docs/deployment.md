@@ -68,6 +68,15 @@ path `/chat/completions`, and recommends `deepseek-v4-flash` or
 `deepseek-v4-pro`. The older `deepseek-chat` and `deepseek-reasoner` aliases are
 documented for deprecation on 2026-07-24 15:59 UTC.
 
+Useful bridge flags:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` | `true` | Maps OpenAI/Codex effort values to DeepSeek-supported values |
+| `CODEXCOMPAT_DEEPSEEK_THINKING_MODE` | `false` | Forces `thinking:{type:"enabled"}` when a request asks for reasoning effort |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` | `true` | Disables DeepSeek thinking mode for function-tool requests that also set `tool_choice` |
+| `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
+
 ## Systemd
 
 The repo provides these templates:
@@ -106,6 +115,8 @@ npm test
 npm run secret-scan
 curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
+npm run eval:protocol
+npm run eval:bridge -- --timeout-ms 45000
 curl http://127.0.0.1:12920/
 curl http://127.0.0.1:12923/login
 ```

@@ -62,3 +62,23 @@ Open follow-ups:
   path against DeepSeek through the local bridge:
   create response, retrieve response, list input items, cancel completed
   response, delete response, and confirm 404 after deletion.
+
+## 2026-06-10 Evaluation Harness Expansion
+
+- Expanded `scripts/eval-harness.mjs` from protocol-only smoke tests into a
+  repeatable bridge regression runner covering:
+  - Responses text
+  - Responses JSON schema compatibility
+  - Chat Completions passthrough
+  - Responses SSE event translation
+  - function-tool `tool_choice`
+  - `previous_response_id` replay
+- Added `npm run eval:protocol` and `npm run eval:bridge`.
+- Fixed Chat passthrough response header handling so bridge clients do not
+  inherit unsafe upstream transfer headers.
+- Added DeepSeek compatibility logic that disables thinking mode for function
+  tool requests with `tool_choice` by default; this fixed the live
+  `Thinking mode does not support this tool_choice` provider error.
+- Live result against `deepseek-v4-pro` on `http://127.0.0.1:12912`:
+  `bridge-regression` passed 6/6, pass rate 1.0, average latency 2303 ms,
+  P95 latency 3622 ms, total usage 873 tokens.

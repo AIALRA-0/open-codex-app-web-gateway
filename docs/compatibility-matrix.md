@@ -42,7 +42,7 @@ implementations for those tools.
 | `previous_response_id` | local replay store | Emulated locally |
 | `tools[type=function]` | chat function tools | Direct |
 | hosted tools | compatibility system notice | Requires local hosted-tool executor |
-| `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name |
+| `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
@@ -54,6 +54,14 @@ DeepSeek effort compatibility maps `minimal`, `low`, and `medium` to `high`, and
 `xhigh` to `max`, matching current DeepSeek docs. The DeepSeek default upstream
 path is `/chat/completions`, not `/v1/chat/completions`; OpenAI-style `/v1`
 paths remain configurable for other providers.
+
+DeepSeek thinking mode defaults to enabled in current DeepSeek docs. The bridge
+therefore disables thinking only for requests that include function tools and a
+`tool_choice`, because the live `deepseek-v4-pro` endpoint rejects that
+combination in thinking mode. Set
+`CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE=false` or force
+`CODEXCOMPAT_DEEPSEEK_THINKING_MODE=true` to override this compatibility
+behavior.
 
 ## Response Mapping
 

@@ -8,6 +8,8 @@
     "start": "node web-server.js",
     "start:bridge": "node src/bridge/server.js",
     "test": "node --test",
+    "eval:protocol": "node scripts/eval-harness.mjs --suite protocol-smoke",
+    "eval:bridge": "node scripts/eval-harness.mjs --suite bridge-regression",
     "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"
   },
