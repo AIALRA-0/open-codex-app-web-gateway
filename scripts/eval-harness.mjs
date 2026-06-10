@@ -199,6 +199,34 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-shell",
+        mode: "responses-shell",
+        container: { name: "bridge-shell-eval" },
+        request: ({ containerId }) => ({
+          model: defaultModel,
+          input: "Execute: printf shell-ok > /mnt/data/shell.txt && cat /mnt/data/shell.txt",
+          tools: [{
+            type: "shell",
+            environment: { type: "container_reference", container_id: containerId },
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, containerId, artifactText }) => {
+          const shellCall = (json.output || []).find((item) => item.type === "shell_call");
+          const shellOutput = (json.output || []).find((item) => item.type === "shell_call_output");
+          return !!shellCall
+            && shellCall.status === "completed"
+            && shellCall.container_id === containerId
+            && !!shellOutput
+            && shellOutput.status === "completed"
+            && shellOutput.outcome?.exit_code === 0
+            && /shell-ok/i.test(shellOutput.output?.[0]?.stdout || "")
+            && /shell-ok/i.test(artifactText || "")
+            && /shell-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-file-search",
         mode: "responses-file-search",
         file: {
@@ -365,6 +393,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-shell") {
+      return await runShellCase(testCase, context, started);
     }
     if (testCase.mode === "responses-file-search") {
       return await runFileSearchCase(testCase, context, started);
@@ -600,6 +631,56 @@ async function runFileSearchCase(testCase, context, started) {
   } finally {
     if (vectorStore?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
     if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
+  }
+}
+
+async function runShellCase(testCase, context, started) {
+  let container = null;
+  try {
+    const containerResponse = await postJson(`${baseUrl}/v1/containers`, testCase.container || {});
+    const containerBody = await containerResponse.text();
+    if (!containerResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: containerResponse.status,
+        error: truncate(containerBody),
+      });
+    }
+    container = JSON.parse(containerBody);
+
+    const request = resolveRequest(testCase.request, { ...context, containerId: container.id });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const files = await getJson(`${baseUrl}/v1/containers/${container.id}/files`);
+    const artifact = files.ok
+      ? files.json.data?.find((file) => file.path === "/shell.txt")
+      : null;
+    let artifactText = "";
+    if (artifact) {
+      const contentResponse = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${artifact.id}/content`);
+      if (contentResponse.ok) artifactText = await contentResponse.text();
+    }
+    const text = responseOutputText(json);
+    const ok = !!testCase.check({ json, text, containerId: container.id, artifactText });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      container_id: container.id,
+      artifact_text: truncate(artifactText),
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    if (container?.id) await deleteJson(`${baseUrl}/v1/containers/${container.id}`);
   }
 }
 

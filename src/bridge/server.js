@@ -16,6 +16,15 @@ const {
   prepareFileSearchContext,
 } = require("./local_file_search");
 const {
+  attachShellOutput,
+  injectShellMessages,
+  localShellToolTypes,
+  LocalContainerStore,
+  prepareShellContext,
+  shellCompatibility,
+  shellOutputItems,
+} = require("./local_shell");
+const {
   chatCompletionToReplayMessages,
   chatCompletionToResponse,
   createResponseSkeleton,
@@ -82,11 +91,21 @@ function loadConfig(overrides = {}) {
     fileSearchStateDir: process.env.CODEXCOMPAT_FILE_SEARCH_STATE_DIR || path.join(stateDir, "local-file-search"),
     fileSearchMaxResults: numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS", 5, 1, 20),
     fileSearchMaxFileBytes: numberFromEnv("CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES", 4 * 1024 * 1024, 1024, 64 * 1024 * 1024),
+    shellProvider: process.env.CODEXCOMPAT_SHELL_PROVIDER || "local",
+    shellStateDir: process.env.CODEXCOMPAT_SHELL_STATE_DIR || path.join(stateDir, "local-containers"),
+    shellCommandTimeoutMs: numberFromEnv("CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS", 10 * 1000, 1000, 120 * 1000),
+    shellMaxOutputBytes: numberFromEnv("CODEXCOMPAT_SHELL_MAX_OUTPUT_BYTES", 20 * 1024, 1024, 512 * 1024),
+    shellMaxFileBytes: numberFromEnv("CODEXCOMPAT_SHELL_MAX_FILE_BYTES", 16 * 1024 * 1024, 1024, 128 * 1024 * 1024),
+    shellMaxCommandChars: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS", 4000, 32, 20000),
+    shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
+    shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     deepseekReasoningEffortCompat: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT, true),
     deepseekThinkingMode: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_THINKING_MODE, false),
     deepseekDisableThinkingForToolChoice: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE, true),
+    deepseekDisableThinkingForCompaction: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_COMPACTION, true),
     deepseekDisableThinkingForLocalWebSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH, true),
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
+    deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
     ...overrides,
   };
@@ -211,13 +230,14 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore) {
+async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const previousMessages = request.previous_response_id ? store.getMessages(request.previous_response_id) : [];
   const localHostedTools = [
     ...localWebSearchToolTypes(request.tools || [], config),
     ...localFileSearchToolTypes(request.tools || [], config),
+    ...localShellToolTypes(request.tools || [], config),
   ];
   const { chat, compatibility } = responsesToChatRequest(
     request,
@@ -230,10 +250,14 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, {
       ...compatibility,
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, fileSearchStore);
+    }, fileSearchStore, containerStore);
     return;
   }
 
+  const localShell = await prepareShellContext(request, config, containerStore);
+  if (localShell) {
+    applyLocalShellToChat(chat, compatibility, localShell, config);
+  }
   const localWebSearch = await prepareWebSearchContext(request, config);
   if (localWebSearch) {
     applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config);
@@ -244,7 +268,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   }
 
   if (chat.stream) {
-    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch, localFileSearch);
+    await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch, localFileSearch, localShell);
     return;
   }
 
@@ -263,6 +287,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   }
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  attachShellOutput(response, localShell);
   attachWebSearchOutput(response, localWebSearch);
   attachFileSearchOutput(response, localFileSearch);
   response.metadata = {
@@ -285,7 +310,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   sendJson(res, 200, response);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, fileSearchStore, containerStore) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -330,17 +355,22 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     compatibility: backgroundCompatibility,
     incomingHeaders: req.headers,
     fileSearchStore,
+    containerStore,
   });
 
   sendJson(res, 200, response);
 }
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, fileSearchStore, containerStore }) {
   try {
-    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal });
+    const localShell = await prepareShellContext(request, config, containerStore);
     let finalCompatibility = compatibility;
+    if (localShell) {
+      finalCompatibility = applyLocalShellToChat(chat, { ...compatibility }, localShell, config);
+    }
+    const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal });
     if (localWebSearch) {
-      finalCompatibility = applyLocalWebSearchToChat(chat, { ...compatibility }, localWebSearch, config);
+      finalCompatibility = applyLocalWebSearchToChat(chat, { ...finalCompatibility }, localWebSearch, config);
     }
     const localFileSearch = await prepareFileSearchContext(request, config, fileSearchStore);
     if (localFileSearch) {
@@ -367,6 +397,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
     }
 
     const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+    attachShellOutput(response, localShell);
     attachWebSearchOutput(response, localWebSearch);
     attachFileSearchOutput(response, localFileSearch);
     response.background = true;
@@ -460,6 +491,19 @@ function applyLocalFileSearchToChat(chat, compatibility, localFileSearch, config
     compatibility.local_file_search = {
       ...(compatibility.local_file_search || {}),
       deepseek_thinking: "disabled_for_local_file_search",
+    };
+  }
+  return compatibility;
+}
+
+function applyLocalShellToChat(chat, compatibility, localShell, config) {
+  injectShellMessages(chat, localShell);
+  Object.assign(compatibility, shellCompatibility(localShell));
+  if (config.deepseekDisableThinkingForLocalShell && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_shell = {
+      ...(compatibility.local_shell || {}),
+      deepseek_thinking: "disabled_for_local_shell",
     };
   }
   return compatibility;
@@ -657,6 +701,107 @@ async function handleVectorStoreSearch(req, res, fileSearchStore, storeId) {
   sendJson(res, 200, page);
 }
 
+async function handleContainerCreate(req, res, containerStore) {
+  const body = await readJson(req);
+  sendJson(res, 200, containerStore.createContainer(body));
+}
+
+function handleContainersList(res, containerStore, url) {
+  sendJson(res, 200, containerStore.listContainers({
+    name: url.searchParams.get("name") || undefined,
+    url,
+  }));
+}
+
+function handleContainerGet(res, containerStore, containerId) {
+  const container = containerStore.getContainer(containerId);
+  if (!container) {
+    sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
+    return;
+  }
+  sendJson(res, 200, container);
+}
+
+function handleContainerDelete(res, containerStore, containerId) {
+  const deleted = containerStore.deleteContainer(containerId);
+  if (!deleted) {
+    sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function handleContainerFileCreate(req, res, config, containerStore, containerId) {
+  const upload = await readContainerFileCreateRequest(req, config);
+  const file = containerStore.createContainerFile(containerId, upload);
+  if (!file) {
+    sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
+    return;
+  }
+  sendJson(res, 200, file);
+}
+
+function handleContainerFilesList(res, containerStore, containerId, url) {
+  const page = containerStore.listContainerFiles(containerId, { url });
+  if (!page) {
+    sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
+    return;
+  }
+  sendJson(res, 200, page);
+}
+
+function handleContainerFileGet(res, containerStore, containerId, fileId) {
+  const file = containerStore.getContainerFile(containerId, fileId);
+  if (!file) {
+    sendError(res, 404, `container file not found: ${fileId}`, { code: "container_file_not_found" });
+    return;
+  }
+  sendJson(res, 200, file);
+}
+
+function handleContainerFileContent(res, containerStore, containerId, fileId) {
+  const file = containerStore.getContainerFile(containerId, fileId);
+  const content = file ? containerStore.getContainerFileContent(containerId, fileId) : null;
+  if (content == null) {
+    sendError(res, 404, `container file not found: ${fileId}`, { code: "container_file_not_found" });
+    return;
+  }
+  res.writeHead(200, {
+    "content-type": "application/octet-stream",
+    "cache-control": "no-store",
+    "x-container-file-path": file.path,
+  });
+  res.end(content);
+}
+
+function handleContainerFileDelete(res, containerStore, containerId, fileId) {
+  const deleted = containerStore.deleteContainerFile(containerId, fileId);
+  if (!deleted) {
+    sendError(res, 404, `container file not found: ${fileId}`, { code: "container_file_not_found" });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function readContainerFileCreateRequest(req, config) {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("application/json")) {
+    const body = await readJson(req);
+    return {
+      filename: body.filename || body.path || "upload.txt",
+      path: body.path,
+      content: body.content || "",
+    };
+  }
+
+  const body = await readRawBody(req, config.shellMaxFileBytes);
+  return {
+    filename: req.headers["x-filename"] || "upload.txt",
+    path: req.headers["x-path"] || req.headers["x-filename"] || "upload.txt",
+    content: body,
+  };
+}
+
 async function readFileCreateRequest(req, config) {
   const contentType = req.headers["content-type"] || "";
   if (contentType.includes("application/json")) {
@@ -741,6 +886,9 @@ function makeCompactionChatRequest(request, chat, config) {
     ],
   };
   compactChat[maxTokensField] = request.max_output_tokens || config.compactionMaxOutputTokens;
+  if (config.deepseekDisableThinkingForCompaction && !config.deepseekThinkingMode) {
+    compactChat.thinking = { type: "disabled" };
+  }
   return compactChat;
 }
 
@@ -850,7 +998,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   const state = createStreamState(response, compatibility);
 
@@ -863,6 +1011,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
 
   writeSse(res, "response.created", sequence(state, { type: "response.created", response: clone(response) }));
   writeSse(res, "response.in_progress", sequence(state, { type: "response.in_progress", response: clone(response) }));
+  emitShellStreamItems(res, state, localShell);
   emitWebSearchStreamItems(res, state, localWebSearch);
   emitFileSearchStreamItems(res, state, localFileSearch);
 
@@ -960,6 +1109,18 @@ function emitWebSearchStreamItems(res, state, context) {
 
 function emitFileSearchStreamItems(res, state, context) {
   for (const item of fileSearchOutputItems(context)) {
+    state.response.output.push(item);
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: state.response.output.length - 1,
+      item: clone(item),
+    }));
+  }
+}
+
+function emitShellStreamItems(res, state, context) {
+  for (const item of shellOutputItems(context)) {
     state.response.output.push(item);
     writeSse(res, "response.output_item.added", sequence(state, {
       type: "response.output_item.added",
@@ -1563,6 +1724,7 @@ function parseLimit(value, fallback, max) {
 function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
+  const containerStore = config.containerStore || new LocalContainerStore(config);
   const backgroundJobs = new Map();
 
   return http.createServer(async (req, res) => {
@@ -1582,6 +1744,57 @@ function createServer(config = loadConfig()) {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         await handleModels(req, res, config);
         return;
+      }
+
+      if (url.pathname === "/v1/containers") {
+        if (req.method === "GET") {
+          handleContainersList(res, containerStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleContainerCreate(req, res, containerStore);
+          return;
+        }
+      }
+
+      const containerFilesRoute = url.pathname.match(/^\/v1\/containers\/([^/]+)\/files(?:\/([^/]+)(?:\/(content))?)?$/);
+      if (containerFilesRoute) {
+        const containerId = decodeURIComponent(containerFilesRoute[1]);
+        const fileId = containerFilesRoute[2] ? decodeURIComponent(containerFilesRoute[2]) : "";
+        const action = containerFilesRoute[3] || "";
+        if (!fileId && req.method === "GET") {
+          handleContainerFilesList(res, containerStore, containerId, url);
+          return;
+        }
+        if (!fileId && req.method === "POST") {
+          await handleContainerFileCreate(req, res, config, containerStore, containerId);
+          return;
+        }
+        if (fileId && !action && req.method === "GET") {
+          handleContainerFileGet(res, containerStore, containerId, fileId);
+          return;
+        }
+        if (fileId && !action && req.method === "DELETE") {
+          handleContainerFileDelete(res, containerStore, containerId, fileId);
+          return;
+        }
+        if (fileId && action === "content" && req.method === "GET") {
+          handleContainerFileContent(res, containerStore, containerId, fileId);
+          return;
+        }
+      }
+
+      const containerRoute = url.pathname.match(/^\/v1\/containers\/([^/]+)$/);
+      if (containerRoute) {
+        const containerId = decodeURIComponent(containerRoute[1]);
+        if (req.method === "GET") {
+          handleContainerGet(res, containerStore, containerId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleContainerDelete(res, containerStore, containerId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/files") {
@@ -1672,7 +1885,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore);
+        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore);
         return;
       }
 

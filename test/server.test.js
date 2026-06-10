@@ -372,6 +372,88 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
   });
 });
 
+test("local Containers back Responses shell compatibility and artifacts", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses shell compatibility executed command output/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /artifact-ok/.test(message.content || "")));
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_shell",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "artifact-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdContainer = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "shell-fixture", memory_limit: "1g" }),
+    });
+    assert.equal(createdContainer.status, 200);
+    const container = await createdContainer.json();
+    assert.equal(container.object, "container");
+    assert.equal(container.status, "running");
+
+    const listed = await fetch(`${baseUrl}/v1/containers?name=shell-fixture`);
+    assert.equal(listed.status, 200);
+    assert.equal((await listed.json()).data[0].id, container.id);
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: printf artifact-ok > /mnt/data/artifact.txt && cat /mnt/data/artifact.txt",
+        tools: [{
+          type: "shell",
+          environment: { type: "container_reference", container_id: container.id },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "shell_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].container_id, container.id);
+    assert.match(json.output[0].action.command, /artifact-ok/);
+    assert.equal(json.output[1].type, "shell_call_output");
+    assert.equal(json.output[1].status, "completed");
+    assert.equal(json.output[1].outcome.exit_code, 0);
+    assert.equal(json.output[1].output[0].stdout, "artifact-ok");
+    assert.equal(json.output[2].type, "message");
+    assert.equal(json.output[2].content[0].text, "artifact-ok");
+    assert.equal(json.metadata.compatibility.local_shell.provider, "local");
+    assert.equal(json.metadata.compatibility.local_shell.status, "completed");
+    assert.equal(json.metadata.compatibility.local_shell.command_count, 1);
+    assert.equal(json.metadata.compatibility.local_shell.artifact_count, 1);
+    assert.equal(json.metadata.compatibility.local_shell.deepseek_thinking, "disabled_for_local_shell");
+
+    const files = await fetch(`${baseUrl}/v1/containers/${container.id}/files`);
+    assert.equal(files.status, 200);
+    const filesJson = await files.json();
+    assert.equal(filesJson.data[0].path, "/artifact.txt");
+
+    const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content`);
+    assert.equal(content.status, 200);
+    assert.equal(await content.text(), "artifact-ok");
+
+    const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.equal((await deleted.json()).deleted, true);
+  });
+});
+
 test("Responses lifecycle endpoints retrieve input items, cancel completed records, and delete records", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -553,6 +635,7 @@ test("POST /v1/responses/compact returns local compaction and replays it", async
   await withMockProvider(async (_req, res, call) => {
     res.writeHead(200, { "content-type": "application/json" });
     if (call.body.messages?.[0]?.content.includes("compact long-running agent conversations")) {
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
       res.end(JSON.stringify({
         id: "chatcmpl_compact",
         object: "chat.completion",

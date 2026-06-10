@@ -8,7 +8,9 @@ Primary sources:
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
+- OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
 - OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
+- OpenAI Containers reference: https://platform.openai.com/docs/api-reference/containers
 - OpenAI Files reference: https://platform.openai.com/docs/api-reference/files
 - OpenAI Vector Stores reference: https://platform.openai.com/docs/api-reference/vector-stores
 - Codex config reference: https://developers.openai.com/codex/config-reference
@@ -49,6 +51,8 @@ implementations for those tools.
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
+| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output` |
+| `tools[type=code_interpreter]` | local shell/container adapter | Compatibility alias; explicit Python code blocks are executed through `python3` in the local container workspace |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
 | `text.format.type=text` | omitted/default | Direct |
@@ -87,6 +91,7 @@ behavior.
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
+| local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
 
 ## Responses Endpoint Coverage
 
@@ -148,6 +153,24 @@ under the configured bridge state directory, not in Git.
 | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
 | `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, and simple metadata `filters` |
 
+## Containers Endpoint Coverage
+
+These endpoints back the local `shell` / `code_interpreter` compatibility
+adapter. Container files are stored under the configured bridge state directory,
+not in Git.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata |
+| `GET /v1/containers` | Implemented | Lists local containers with `name`, `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/containers/{container_id}` | Implemented | Returns local container metadata |
+| `DELETE /v1/containers/{container_id}` | Implemented | Deletes the local container workspace and artifacts |
+| `POST /v1/containers/{container_id}/files` | Implemented | Writes a local container file from JSON or raw body |
+| `GET /v1/containers/{container_id}/files` | Implemented | Lists files under the local `/mnt/data` workspace |
+| `GET /v1/containers/{container_id}/files/{file_id}` | Implemented | Returns local container file metadata |
+| `GET /v1/containers/{container_id}/files/{file_id}/content` | Implemented | Downloads local container file content |
+| `DELETE /v1/containers/{container_id}/files/{file_id}` | Implemented | Deletes a local container file |
+
 ## Streaming Mapping
 
 The bridge emits:
@@ -177,6 +200,8 @@ message content.
 When `file_search` is handled by the local adapter, the bridge emits a
 `file_search_call` output item before Chat text deltas and applies file citation
 annotations to the final message content.
+When `shell` is handled by the local adapter, the bridge emits completed
+`shell_call` and `shell_call_output` items before Chat text deltas.
 
 ## Local Web Search Adapter
 
@@ -228,13 +253,52 @@ retriever is intentionally local, auditable, and disk-bounded; it is not yet an
 embedding-based vector index and does not process binary PDFs, OCR, image files,
 asynchronous batch indexing, or OpenAI's complete ranking behavior.
 
+## Local Shell and Code Interpreter Adapter
+
+The bridge can emulate the Responses `shell` hosted tool and a `code_interpreter`
+compatibility alias for Chat-only providers by running explicit commands in a
+local container workspace. The adapter:
+
+- reserves `shell` and `code_interpreter` so they are not forwarded as
+  unsupported Chat tools;
+- extracts explicit `Execute:`, `Run:`, `Command:`, shell code block, or Python
+  code block commands;
+- creates or reuses local container workspaces through `container_auto` and
+  `container_reference`-style tool configuration;
+- maps `/mnt/data` in commands to the local container workspace;
+- emits paired `shell_call` and `shell_call_output` output items;
+- injects stdout, stderr, exit code, timeout status, and artifact list into the
+  upstream Chat prompt;
+- exposes generated files through the local Containers files endpoints.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_SHELL_PROVIDER` | `local` | Use `disabled` to leave shell/code-interpreter as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_SHELL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-containers` | Local container workspace path; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS` | `10000` | Per-command execution timeout |
+| `CODEXCOMPAT_SHELL_MAX_OUTPUT_BYTES` | `20480` | Captured stdout/stderr byte limit per stream |
+| `CODEXCOMPAT_SHELL_MAX_FILE_BYTES` | `16777216` | Container file upload/write limit |
+| `CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS` | `4000` | Maximum command text accepted from a prompt |
+| `CODEXCOMPAT_SHELL_MAX_COMMANDS` | `1` | Maximum extracted commands executed per response |
+| `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL` | `true` | Disables DeepSeek thinking mode for local shell requests so final text is visible under small output budgets |
+
+This is a bridge compatibility layer, not OpenAI hosted shell or a Docker/VM
+sandbox. It uses a local workspace, command timeouts, limited environment
+variables, output caps, and audit metadata, but it does not yet provide kernel,
+network, or filesystem isolation from the host. Full parity requires a hardened
+container runtime, network allowlist enforcement, domain secret sidecars,
+interactive service policies, and stronger artifact lifecycle controls.
+
 ## Known Gaps
 
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
-| `code_interpreter` | Requires sandboxed code runtime and artifact protocol | Add local sandbox executor with artifact storage |
+| OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |
 | `Conversations API` | Separate OpenAI object model | Emulate only if Codex requires it |

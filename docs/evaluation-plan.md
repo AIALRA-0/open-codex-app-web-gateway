@@ -40,7 +40,7 @@ larger agent evaluations.
 | Suite | Coverage |
 | --- | --- |
 | `protocol-smoke` | Responses text generation and JSON schema compatibility |
-| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle, Responses input-token counting, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
+| `bridge-regression` | Protocol smoke plus model retrieval, Chat passthrough, stored Chat lifecycle, Responses input-token counting, local background completion, local web-search citation mapping, local file-search/vector-store citation mapping, local shell/container artifact mapping, local compaction continuation, SSE events, function-tool `tool_choice`, and `previous_response_id` replay |
 | `code-benchmark` | Small issue-to-patch coding tasks that generate complete replacement files, apply them, and run tests |
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 
@@ -52,6 +52,7 @@ npm run eval:bridge -- --timeout-ms 45000
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
@@ -116,6 +117,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Background response polling and cancellation remain stable for in-process jobs.
 - Hosted-tool emulation returns auditable call items and citations for web search.
 - Hosted-tool emulation returns auditable call items and citations for file search.
+- Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.
 - State/log growth remains bounded under the configured cleanup policy.
 

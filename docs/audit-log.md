@@ -425,3 +425,74 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7qflpg` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Local Shell and Container Artifact Adapter
+
+- Used the current OpenAI shell/tools and Containers documentation to confirm:
+  - hosted shell is a Responses hosted tool, not a Chat Completions feature;
+  - local shell and hosted shell use paired `shell_call` and
+    `shell_call_output` output items;
+  - hosted containers expose `/mnt/data` for user-downloadable artifacts;
+  - reusable containers are created and referenced through the Containers API.
+- Added a local Containers state layer under the bridge state directory:
+  - `POST/GET/DELETE /v1/containers`;
+  - `POST/GET/DELETE /v1/containers/{id}/files`;
+  - `GET /v1/containers/{id}/files/{file_id}/content`.
+- Added a local hosted-tool adapter for Responses `shell` plus a
+  `code_interpreter` compatibility alias:
+  - reserves `shell` / `code_interpreter` so they are not forwarded as
+    unsupported Chat tools;
+  - extracts explicit `Execute:`, `Run:`, `Command:`, shell code block, and
+    Python code block commands;
+  - runs commands in a local per-container workspace with timeout and output
+    limits;
+  - maps `/mnt/data` to the local container artifact workspace;
+  - emits paired `shell_call` and `shell_call_output` items;
+  - injects stdout, stderr, exit code, timeout status, and artifact paths into
+    the upstream Chat Completion prompt;
+  - exposes generated artifacts through local container files endpoints;
+  - supports non-streaming, streaming, and background Responses paths.
+- Added local provider configuration:
+  - `CODEXCOMPAT_SHELL_PROVIDER=local|disabled`;
+  - `CODEXCOMPAT_SHELL_STATE_DIR`;
+  - command timeout, output cap, file cap, command length, and max command
+    count settings.
+- Added DeepSeek compatibility behavior that disables thinking mode for local
+  shell and local compaction requests by default. The compaction change fixes a
+  live failure where DeepSeek returned no visible summary content.
+- Caveat: this is not native OpenAI hosted shell and not a Docker/VM sandbox.
+  It is local, disk-bounded, timeout-bounded, and auditable, but full parity
+  still requires hardened container isolation, network allowlists, domain secret
+  sidecars, service support, and lifecycle garbage collection.
+- Added regression coverage for:
+  - local container CRUD/list endpoint shape;
+  - local shell hosted-tool reservation;
+  - `tool_choice:"required"` not being forwarded when only local hosted tools
+    are present;
+  - `shell_call` / `shell_call_output` output shape;
+  - `/mnt/data` artifact creation, listing, and download;
+  - DeepSeek `thinking:{type:"disabled"}` for shell and compaction requests.
+- Added `responses-shell` to live `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/local_shell.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 27/27 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live shell result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose`
+  passed 1/1, latency 3054 ms before the prompt tightening, artifact
+  `shell-ok`, total usage 258 tokens.
+- Live compaction stability check:
+  `npm run eval:bridge -- --case responses-compact-continuation --timeout-ms 90000 --verbose`
+  passed 1/1 after disabling DeepSeek thinking for compaction, latency 4299 ms,
+  total usage 267 tokens.
+- Full live `bridge-regression` passed 14/14, pass rate 1.0, average latency
+  2289 ms, P95 latency 4542 ms, total usage 1998 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7r8xft` appeared before reload and after reload, console errors
+  0, warnings 0.

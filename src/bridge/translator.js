@@ -311,9 +311,11 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const maxTokensField = options.maxTokensField || "max_tokens";
   if (request.max_output_tokens != null) chat[maxTokensField] = request.max_output_tokens;
 
-  if (tools.length) chat.tools = tools;
   const toolChoice = mapToolChoice(request.tool_choice);
-  if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+  if (tools.length) {
+    chat.tools = tools;
+    if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+  }
 
   const responseFormat = mapTextFormat(request.text, options);
   if (responseFormat) chat.response_format = responseFormat;
@@ -332,9 +334,17 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
     chat,
     compatibility: {
       unsupported_tools: unsupported,
+      ...(toolChoice !== undefined && !tools.length && hasLocalHostedToolRequest(request.tools, options)
+        ? { local_tool_choice: "handled_by_bridge" }
+        : {}),
       ...(disableThinkingForToolChoice ? { deepseek_thinking: "disabled_for_tool_choice" } : {}),
     },
   };
+}
+
+function hasLocalHostedToolRequest(tools = [], options = {}) {
+  const localHostedTools = new Set(options.localHostedTools || []);
+  return (tools || []).some((tool) => isPlainObject(tool) && localHostedTools.has(tool.type));
 }
 
 function makeStructuredOutputMessage(text, options = {}) {

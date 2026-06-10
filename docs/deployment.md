@@ -75,8 +75,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_DEEPSEEK_REASONING_EFFORT_COMPAT` | `true` | Maps OpenAI/Codex effort values to DeepSeek-supported values |
 | `CODEXCOMPAT_DEEPSEEK_THINKING_MODE` | `false` | Forces `thinking:{type:"enabled"}` when a request asks for reasoning effort |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` | `true` | Disables DeepSeek thinking mode for function-tool requests that also set `tool_choice` |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_COMPACTION` | `true` | Disables DeepSeek thinking mode for local `/v1/responses/compact` summarization so visible compaction content is returned reliably |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH` | `true` | Disables DeepSeek thinking mode when the bridge injects local web-search context, preventing reasoning-only completions from exhausting the output budget |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH` | `true` | Disables DeepSeek thinking mode when the bridge injects local file-search context, preventing citation-only or empty visible completions under small output budgets |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL` | `true` | Disables DeepSeek thinking mode when the bridge injects local shell execution context, preventing empty visible completions under small output budgets |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content`; keep outside Git and mode `0600` |
@@ -89,6 +91,14 @@ Useful bridge flags:
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local text files |
+| `CODEXCOMPAT_SHELL_PROVIDER` | `local` | Local Responses `shell` / `code_interpreter` adapter provider. Use `disabled` to leave it unsupported |
+| `CODEXCOMPAT_SHELL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-containers` | Local container workspace/artifact path; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS` | `10000` | Per-command local shell timeout |
+| `CODEXCOMPAT_SHELL_MAX_OUTPUT_BYTES` | `20480` | Captured stdout/stderr byte limit per stream |
+| `CODEXCOMPAT_SHELL_MAX_FILE_BYTES` | `16777216` | Maximum local container file size |
+| `CODEXCOMPAT_SHELL_MAX_COMMAND_CHARS` | `4000` | Maximum extracted shell command length |
+| `CODEXCOMPAT_SHELL_MAX_COMMANDS` | `1` | Maximum extracted shell commands executed per response |
+| `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
 
 ## Systemd
 
@@ -130,6 +140,7 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000

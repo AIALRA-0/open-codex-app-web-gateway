@@ -95,6 +95,24 @@ test("can reserve file_search for local bridge execution", () => {
   assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
 });
 
+test("can reserve shell and code_interpreter for local bridge execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Execute locally.",
+    tools: [
+      { type: "shell", environment: { type: "container_auto" } },
+      { type: "code_interpreter", container: { type: "auto" } },
+    ],
+    tool_choice: "required",
+  }, [], { localHostedTools: ["shell", "code_interpreter"] });
+
+  assert.equal(chat.tools, undefined);
+  assert.equal(chat.tool_choice, undefined);
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.equal(compatibility.local_tool_choice, "handled_by_bridge");
+  assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+});
+
 test("can disable DeepSeek thinking mode when tool_choice is forced", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",
