@@ -4792,3 +4792,84 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 14 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Stored Chat Fields Provider Filtering
+
+- Re-checked current request-field expectations:
+  - OpenAI Chat Completions documents `metadata` as object metadata for stored
+    and queryable records and `store` as the stored-chat output retention
+    switch.
+  - DeepSeek's official Create Chat Completion reference documents its request
+    fields for `/chat/completions`, including `messages`, `model`, `thinking`,
+    `reasoning_effort`, `max_tokens`, `response_format`, `stream_options`,
+    `tools`, `tool_choice`, `logprobs`, `top_logprobs`, and `user_id`, but not
+    OpenAI stored-chat `store` / `metadata`.
+- Found a provider-profile gap:
+  - Responses translation copied `metadata` and `store` directly into upstream
+    Chat requests even though the bridge already implements local Responses
+    storage and metadata semantics;
+  - direct Chat passthrough used `store:true` and `metadata` for the local
+    stored Chat lifecycle, but also forwarded them upstream unless the provider
+    happened to ignore unsupported fields;
+  - `background:true` forced local store correctly, but also forced
+    `chat.store=true` on the upstream request path.
+- Added provider-aware stored-chat handling:
+  - introduced `CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS`, defaulting to `false`
+    for DeepSeek providers and `true` for other OpenAI-compatible Chat
+    providers;
+  - moved Responses `metadata` / `store` into a dedicated stored-chat
+    passthrough/filtering step, recording
+    `metadata.compatibility.stored_chat_fields`;
+  - added direct Chat filtering that preserves local `store:true` and metadata
+    behavior while omitting unsupported upstream fields and recording
+    `metadata.compatibility.chat_passthrough.stored_chat_fields`;
+  - made background Responses keep local durable storage without sending
+    `store` to DeepSeek when stored-chat forwarding is disabled.
+- Added regression coverage:
+  - translator tests now assert provider-supported profiles forward `metadata`
+    and `store`, while unsupported profiles filter them and preserve explicit
+    compatibility metadata;
+  - server tests now cover Responses filtering, direct Chat passthrough
+    filtering, DeepSeek default config behavior, and background local-store
+    filtering;
+  - live eval harness now checks stored-chat filtering in
+    `responses-inline-moderation` and `chat-developer-compat`.
+- Verification:
+  - `node --check src/bridge/translator.js`, `node --check src/bridge/server.js`,
+    and `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "Chat-native request fields|stored"`:
+    34/34 passing tests.
+  - `node --test test/server.test.js --test-name-pattern "Chat-native request fields|normalizes OpenAI Chat fields|background keeps local store"`:
+    90/90 passing tests, including the new background local-store case.
+  - `npm test`: 127/127 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-inline-moderation` passed 1/1 against
+    `deepseek-v4-pro`, latency 1603 ms, total usage 54 tokens, visible text
+    `inline-moderation-ok`, and Responses stored-chat filtering metadata checks
+    passed.
+  - Targeted live `chat-developer-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1092 ms, total usage 31 tokens, visible text
+    `chat-developer-ok`, and direct Chat stored-chat filtering metadata checks
+    passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1329 ms, P95 latency 1579 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 47/47 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1220 ms, P95 latency 2266 ms, and total usage
+    9749 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8m57ha`, sidebar controls, new
+    conversation submit, reload persistence, console errors 0, warnings 0, and
+    screenshot `output/playwright/ui-smoke-2026-06-10T22-01-14-782Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 510 runtime candidates,
+    selected 46 old UI screenshots by retention policy, deleted 0, selected
+    3615921 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 41 GB available; repository checkout
+    is 48 MB, `state/` is 4.5 MB, `output/` is 7.8 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 14 MB.
+  - No API keys, account credentials, or local secret files were committed.

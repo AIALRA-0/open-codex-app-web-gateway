@@ -316,6 +316,7 @@ function buildSuites(defaultModel) {
         request: {
           model: defaultModel,
           input: "Return the exact string inline-moderation-ok.",
+          metadata: { suite: "responses-inline-moderation" },
           moderation: { input: true, output: true },
           parallel_tool_calls: false,
           max_output_tokens: 64,
@@ -328,6 +329,9 @@ function buildSuites(defaultModel) {
           && json.moderation.output.compatibility?.provider === "local"
           && json.metadata?.compatibility?.local_moderation?.input?.flagged === false
           && json.metadata?.compatibility?.local_moderation?.output?.flagged === false
+          && json.metadata?.suite === "responses-inline-moderation"
+          && json.metadata?.compatibility?.stored_chat_fields?.filtered?.includes("metadata")
+          && json.metadata?.compatibility?.stored_chat_fields?.filtered?.includes("store")
           && json.metadata?.compatibility?.chat_native_fields?.filtered?.includes("parallel_tool_calls"),
       },
       {
@@ -528,6 +532,7 @@ function buildSuites(defaultModel) {
         mode: "chat",
         request: {
           model: defaultModel,
+          store: true,
           metadata: { suite: "chat-developer-compat" },
           messages: [
             { role: "developer", content: "You must answer with the exact requested marker and no prose." },
@@ -550,6 +555,8 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.max_completion_tokens?.forwarded === true
           && json.metadata?.compatibility?.chat_passthrough?.reasoning_effort?.value === "none"
           && json.metadata?.compatibility?.chat_passthrough?.reasoning_effort?.reason === "deepseek_thinking_disabled"
+          && json.metadata?.compatibility?.chat_passthrough?.stored_chat_fields?.filtered?.includes("metadata")
+          && json.metadata?.compatibility?.chat_passthrough?.stored_chat_fields?.filtered?.includes("store")
           && json.metadata?.compatibility?.chat_passthrough?.service_tier?.forwarded === false
           && json.metadata?.compatibility?.chat_passthrough?.stream_options?.reason === "stream_required"
           && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("modalities")

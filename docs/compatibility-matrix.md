@@ -86,7 +86,8 @@ implementations for those tools.
 | `max_output_tokens` | `max_tokens` | Configurable via `CODEXCOMPAT_MAX_TOKENS_FIELD` |
 | `max_completion_tokens` | configured max token field | Chat-native alias accepted on `/v1/responses` and direct `/v1/chat/completions`; `max_output_tokens` takes precedence on Responses requests, and conflicts are recorded in compatibility metadata |
 | `max_tokens` | configured max token field | Legacy Chat-native alias accepted on `/v1/responses` and direct `/v1/chat/completions`; `max_output_tokens` takes precedence on Responses requests, then `max_completion_tokens`, and conflicts are recorded in compatibility metadata |
-| `temperature`, `top_p`, penalties, `seed`, `user`, `metadata`, `store` | same-name fields | Provider-dependent |
+| `temperature`, `top_p`, penalties, `seed`, `user` | same-name fields | Provider-dependent |
+| `metadata`, `store` | local Responses/Chat storage semantics plus optional upstream Chat stored-completion fields | Provider-aware stored-chat passthrough. The bridge always preserves local `metadata` on Responses and stored Chat records and uses `store` for local replay/list/retrieve behavior; DeepSeek defaults to filtering these unsupported upstream fields and records `metadata.compatibility.stored_chat_fields` / `metadata.compatibility.chat_passthrough.stored_chat_fields` |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
 | `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
 | `moderation` | same-name Chat field plus local inline moderation fallback | Provider-aware Chat-native passthrough when supported; when the field is filtered or the upstream Chat provider returns no moderation payload, the bridge attaches local `input`/`output` moderation results to `response.moderation` and records `metadata.compatibility.local_moderation` |
@@ -237,12 +238,13 @@ normalized into DeepSeek `user_id`, OpenAI Chat `max_completion_tokens` is
 mapped to the configured provider max-token field (`max_tokens` for DeepSeek),
 conflicting legacy `max_tokens` values are withheld and audited, OpenAI Chat
 `reasoning_effort` values are mapped to DeepSeek `reasoning_effort` /
-`thinking`, `service_tier` is filtered when unsupported, `stream_options` are
-removed on non-streaming requests, and configured
-OpenAI-only Chat fields such as `modalities`, `moderation`, `prediction`, and
-legacy `functions` / `function_call` are filtered instead of being sent to the
-provider. Non-streaming JSON responses and stored reconstructed streaming
-responses record these actions under
+`thinking`, `store` and `metadata` are kept as local stored-completion
+semantics and filtered for DeepSeek upstream calls, `service_tier` is filtered
+when unsupported, `stream_options` are removed on non-streaming requests, and
+configured OpenAI-only Chat fields such as `modalities`, `moderation`,
+`prediction`, `parallel_tool_calls`, and legacy `functions` / `function_call`
+are filtered instead of being sent to the provider. Non-streaming JSON
+responses and stored reconstructed streaming responses record these actions under
 `metadata.compatibility.chat_passthrough`, while stored Chat messages preserve
 the original client request shape for `/messages` retrieval.
 
@@ -845,7 +847,7 @@ capture, secrets isolation, per-session cleanup, and multi-action loop control.
 | Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; text-only providers such as DeepSeek do not natively understand audio input and do not return audio payloads for the bridge to synthesize | Add optional provider/model adapters for audio-capable Chat or Realtime models and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
-| Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests, token aliases, reasoning effort, DeepSeek `user_id`, direct Chat `tool_choice` thinking compatibility, and filters known unsupported OpenAI-only fields such as `parallel_tool_calls` for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |
+| Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests, token aliases, reasoning effort, DeepSeek `user_id`, local stored-chat `store`/`metadata` semantics, direct Chat `tool_choice` thinking compatibility, and filters known unsupported OpenAI-only fields such as `parallel_tool_calls` for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |
 
 ## Reference Projects Reviewed
 

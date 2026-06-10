@@ -367,6 +367,8 @@ test("forwards provider-supported Chat-native request fields", () => {
   const request = {
     model: "mock-model",
     input: "Use Chat-native options.",
+    metadata: { trace: "stored-chat" },
+    store: true,
     logit_bias: { "42": -3 },
     modalities: ["text", "audio"],
     audio: { voice: "alloy", format: "wav" },
@@ -384,6 +386,8 @@ test("forwards provider-supported Chat-native request fields", () => {
   };
   const { chat, compatibility } = responsesToChatRequest(request, [], { forwardChatNativeFields: true });
 
+  assert.deepEqual(chat.metadata, { trace: "stored-chat" });
+  assert.equal(chat.store, true);
   assert.deepEqual(chat.logit_bias, { "42": -3 });
   assert.deepEqual(chat.modalities, ["text", "audio"]);
   assert.deepEqual(chat.audio, { voice: "alloy", format: "wav" });
@@ -398,6 +402,8 @@ test("forwards provider-supported Chat-native request fields", () => {
   assert.deepEqual(chat.web_search_options, { search_context_size: "low" });
   assert.deepEqual(chat.functions, request.functions);
   assert.equal(chat.function_call, "auto");
+  assert.equal(compatibility.stored_chat_fields.reason, "stored_chat_passthrough");
+  assert.deepEqual(compatibility.stored_chat_fields.forwarded.sort(), ["metadata", "store"]);
   assert.equal(compatibility.chat_native_fields.reason, "chat_native_passthrough");
   assert.deepEqual(compatibility.chat_native_fields.forwarded.sort(), [
     "audio",
@@ -421,12 +427,16 @@ test("filters Chat-native request fields for unsupported providers", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",
     input: "Filter unsupported Chat-native options.",
+    metadata: { trace: "local-only" },
+    store: true,
     logit_bias: { "1": 2 },
     modalities: ["audio"],
     n: 2,
     parallel_tool_calls: false,
-  }, [], { forwardChatNativeFields: false });
+  }, [], { forwardChatNativeFields: false, forwardStoredChatFields: false });
 
+  assert.equal(chat.metadata, undefined);
+  assert.equal(chat.store, undefined);
   assert.equal(chat.logit_bias, undefined);
   assert.equal(chat.modalities, undefined);
   assert.equal(chat.n, undefined);
@@ -438,6 +448,8 @@ test("filters Chat-native request fields for unsupported providers", () => {
     "parallel_tool_calls",
   ].sort());
   assert.equal(compatibility.chat_native_fields.reason, "provider_unsupported");
+  assert.deepEqual(compatibility.stored_chat_fields.filtered.sort(), ["metadata", "store"]);
+  assert.equal(compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
 });
 
 test("requests streaming usage from Chat stream options by default", () => {

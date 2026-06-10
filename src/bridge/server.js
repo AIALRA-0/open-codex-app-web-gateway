@@ -236,6 +236,7 @@ function loadConfig(overrides = {}) {
       process.env.CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT,
       deepseekProvider,
     ),
+    forwardStoredChatFields: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS, !deepseekProvider),
     forwardServiceTier: parseBoolean(process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER, !deepseekProvider),
     forwardChatNativeFields: parseBoolean(process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS, !deepseekProvider),
     forwardStreamOptions: parseBoolean(process.env.CODEXCOMPAT_FORWARD_STREAM_OPTIONS, true),
@@ -539,7 +540,11 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     store: true,
   };
   chat.stream = false;
-  chat.store = true;
+  if (config.forwardStoredChatFields === false) {
+    delete chat.store;
+  } else {
+    chat.store = true;
+  }
 
   const response = createResponseSkeleton(backgroundRequest, {
     id: responseId,
@@ -3309,6 +3314,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
   if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
 
+  const storedChatFields = filterChatPassthroughStoredFields(upstreamBody, config);
+  if (storedChatFields) compatibility.stored_chat_fields = storedChatFields;
+
   const serviceTier = filterChatPassthroughServiceTier(upstreamBody, config);
   if (serviceTier) compatibility.service_tier = serviceTier;
 
@@ -3321,6 +3329,23 @@ function chatPassthroughUpstreamBody(body, config) {
   return {
     upstreamBody,
     compatibility: Object.keys(compatibility).length ? compatibility : null,
+  };
+}
+
+function filterChatPassthroughStoredFields(upstreamBody, config = {}) {
+  if (config.forwardStoredChatFields !== false) return null;
+  const filterable = ["metadata", "store"];
+  const filtered = [];
+  for (const field of filterable) {
+    if (Object.prototype.hasOwnProperty.call(upstreamBody, field) && upstreamBody[field] !== undefined) {
+      filtered.push(field);
+      delete upstreamBody[field];
+    }
+  }
+  if (!filtered.length) return null;
+  return {
+    filtered,
+    reason: "provider_unsupported_local_semantics",
   };
 }
 

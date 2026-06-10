@@ -4,6 +4,7 @@ const crypto = require("node:crypto");
 
 const DEFAULT_TEXT = Object.freeze({ format: { type: "text" } });
 const DEFAULT_REASONING = Object.freeze({ effort: null, summary: null });
+const STORED_CHAT_PASSTHROUGH_FIELDS = Object.freeze(["metadata", "store"]);
 const CHAT_NATIVE_PASSTHROUGH_FIELDS = Object.freeze([
   "logit_bias",
   "modalities",
@@ -486,11 +487,10 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "presence_penalty");
   copyIfPresent(request, chat, "seed");
   copyIfPresent(request, chat, "user");
-  copyIfPresent(request, chat, "metadata");
-  copyIfPresent(request, chat, "store");
   copyIfPresent(request, chat, "top_logprobs");
   copyIfPresent(request, chat, "stop");
 
+  const storedChatFieldsCompatibility = mapStoredChatFields(request, chat, options);
   const serviceTierCompatibility = mapServiceTier(request, chat, options);
   const streamOptionsCompatibility = mapStreamOptions(request, chat, options);
   const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
@@ -536,6 +536,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
           : {}),
       ...(reasoningEffortCompatibility ? { reasoning_effort: reasoningEffortCompatibility } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
+      ...(storedChatFieldsCompatibility ? { stored_chat_fields: storedChatFieldsCompatibility } : {}),
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
@@ -543,6 +544,32 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(maxTokensCompatibility || {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
+  };
+}
+
+function mapStoredChatFields(request, chat, options = {}) {
+  const present = STORED_CHAT_PASSTHROUGH_FIELDS.filter((field) => (
+    Object.prototype.hasOwnProperty.call(request, field)
+    && request[field] !== undefined
+  ));
+  if (!present.length) return null;
+
+  const forwarded = [];
+  const filtered = [];
+  const forward = options.forwardStoredChatFields !== false;
+  for (const field of present) {
+    if (forward) {
+      chat[field] = clone(request[field]);
+      forwarded.push(field);
+    } else {
+      filtered.push(field);
+    }
+  }
+
+  return {
+    ...(forwarded.length ? { forwarded } : {}),
+    ...(filtered.length ? { filtered } : {}),
+    reason: forward ? "stored_chat_passthrough" : "provider_unsupported_local_semantics",
   };
 }
 

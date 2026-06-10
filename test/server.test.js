@@ -532,6 +532,8 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
 
 test("POST /v1/responses filters Chat-native request fields when configured", async () => {
   await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.metadata, undefined);
+    assert.equal(call.body.store, undefined);
     assert.equal(call.body.logit_bias, undefined);
     assert.equal(call.body.n, undefined);
     assert.equal(call.body.parallel_tool_calls, undefined);
@@ -555,6 +557,8 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
       body: JSON.stringify({
         model: "mock-model",
         input: "Filter Chat-native fields.",
+        metadata: { suite: "stored-local-only" },
+        store: true,
         logit_bias: { "8": -4 },
         n: 3,
         parallel_tool_calls: false,
@@ -564,13 +568,20 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
     assert.equal(response.status, 200);
     const json = await response.json();
     assert.equal(json.output[0].content[0].text, "filtered ok");
+    assert.equal(json.metadata.suite, "stored-local-only");
+    assert.equal(json.store, true);
+    assert.equal(json.metadata.compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
+    assert.deepEqual(json.metadata.compatibility.stored_chat_fields.filtered.sort(), [
+      "metadata",
+      "store",
+    ].sort());
     assert.equal(json.metadata.compatibility.chat_native_fields.reason, "provider_unsupported");
     assert.deepEqual(json.metadata.compatibility.chat_native_fields.filtered.sort(), [
       "logit_bias",
       "n",
       "parallel_tool_calls",
     ].sort());
-  }, { forwardChatNativeFields: false });
+  }, { forwardChatNativeFields: false, forwardStoredChatFields: false });
 });
 
 test("POST /v1/responses attaches local inline moderation when provider field is filtered", async () => {
@@ -4209,6 +4220,66 @@ test("POST /v1/responses with background true returns in_progress and later comp
   });
 });
 
+test("POST /v1/responses background keeps local store without forwarding stored Chat fields", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, false);
+    assert.equal(call.body.store, undefined);
+    assert.equal(call.body.metadata, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_background_local_store",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "background local store done" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 5, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "run in background with local-only storage",
+        background: true,
+        store: false,
+        metadata: { suite: "background-local-store" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.status, "in_progress");
+    assert.equal(createdJson.store, true);
+    assert.equal(createdJson.metadata.suite, "background-local-store");
+    assert.equal(createdJson.metadata.compatibility.background, "local_store_forced");
+    assert.equal(createdJson.metadata.compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
+    assert.deepEqual(createdJson.metadata.compatibility.stored_chat_fields.filtered.sort(), [
+      "metadata",
+      "store",
+    ].sort());
+
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(requests.length, 1);
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.output[0].content[0].text, "background local store done");
+    assert.equal(finalJson.metadata.suite, "background-local-store");
+    assert.equal(finalJson.metadata.compatibility.background, "local_store_forced");
+    assert.equal(finalJson.metadata.compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
+  }, { forwardStoredChatFields: false });
+});
+
 test("POST /v1/responses/{id}/cancel cancels an in-progress background response", async () => {
   await withMockProvider(async (_req, res) => {
     await sleep(200);
@@ -6010,6 +6081,8 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.max_completion_tokens, undefined);
     assert.equal(call.body.reasoning_effort, undefined);
     assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.equal(call.body.store, undefined);
+    assert.equal(call.body.metadata, undefined);
 
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -6066,6 +6139,11 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.reason, "deepseek_thinking_disabled");
     assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
+    assert.equal(json.metadata.compatibility.chat_passthrough.stored_chat_fields.reason, "provider_unsupported_local_semantics");
+    assert.deepEqual(
+      json.metadata.compatibility.chat_passthrough.stored_chat_fields.filtered.sort(),
+      ["metadata", "store"].sort(),
+    );
     assert.deepEqual(
       json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
       ["modalities", "moderation", "parallel_tool_calls"].sort(),
@@ -6085,6 +6163,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
   }, {
     chatDeveloperRoleCompat: true,
     deepseekUserIdCompat: true,
+    forwardStoredChatFields: false,
     forwardChatNativeFields: false,
     forwardServiceTier: false,
   });
@@ -6848,20 +6927,26 @@ test("GET /healthz does not require a provider key", async () => {
 
 test("loadConfig filters provider-specific Chat fields for DeepSeek providers by default", () => {
   const previousServiceTier = process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  const previousStoredChatFields = process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   const previousChatNativeFields = process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
+  delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
+    assert.equal(deepseekConfig.forwardStoredChatFields, false);
     assert.equal(deepseekConfig.forwardChatNativeFields, false);
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
+    assert.equal(openaiCompatibleConfig.forwardStoredChatFields, true);
     assert.equal(openaiCompatibleConfig.forwardChatNativeFields, true);
   } finally {
     if (previousServiceTier === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
     else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previousServiceTier;
+    if (previousStoredChatFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
+    else process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS = previousStoredChatFields;
     if (previousChatNativeFields === undefined) delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
     else process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS = previousChatNativeFields;
   }
