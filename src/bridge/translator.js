@@ -10,6 +10,7 @@ const CHAT_NATIVE_PASSTHROUGH_FIELDS = Object.freeze([
   "audio",
   "prediction",
   "n",
+  "parallel_tool_calls",
   "prompt_cache_key",
   "prompt_cache_retention",
   "safety_identifier",
@@ -487,7 +488,6 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   copyIfPresent(request, chat, "user");
   copyIfPresent(request, chat, "metadata");
   copyIfPresent(request, chat, "store");
-  copyIfPresent(request, chat, "parallel_tool_calls");
   copyIfPresent(request, chat, "top_logprobs");
   copyIfPresent(request, chat, "stop");
 

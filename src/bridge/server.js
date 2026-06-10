@@ -3510,6 +3510,7 @@ function filterChatPassthroughNativeFields(upstreamBody, config = {}) {
     "modalities",
     "audio",
     "prediction",
+    "parallel_tool_calls",
     "prompt_cache_key",
     "prompt_cache_retention",
     "safety_identifier",

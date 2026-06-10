@@ -83,7 +83,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT` | auto for `*.deepseek.com` | Maps Responses/OpenAI identity fields to DeepSeek `user_id`; invalid DeepSeek characters are replaced with a stable SHA-256 identifier |
 | `CODEXCOMPAT_MAX_TOKENS_FIELD` | `max_tokens` | Provider field used for Responses `max_output_tokens`, Chat `max_completion_tokens`, and legacy `max_tokens` aliases; DeepSeek documents `max_tokens` |
 | `CODEXCOMPAT_FORWARD_SERVICE_TIER` | auto: `false` for DeepSeek, `true` otherwise | Forwards Responses/OpenAI `service_tier` to upstream Chat providers that support it; filtered requests are recorded in compatibility metadata |
-| `CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS` | auto: `false` for DeepSeek, `true` otherwise | Forwards Chat-native request fields such as `logit_bias`, `modalities`, `prediction`, `n`, prompt-cache hints, `web_search_options`, and legacy `functions/function_call`; filtered requests are recorded in compatibility metadata |
+| `CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS` | auto: `false` for DeepSeek, `true` otherwise | Forwards Chat-native request fields such as `logit_bias`, `modalities`, `prediction`, `n`, `parallel_tool_calls`, prompt-cache hints, `web_search_options`, and legacy `functions/function_call`; filtered requests are recorded in compatibility metadata |
 | `CODEXCOMPAT_FORWARD_STREAM_OPTIONS` | `true` | Forwards Chat-native `stream_options` when a Responses request uses `stream:true` |
 | `CODEXCOMPAT_STREAM_INCLUDE_USAGE` | `true` | Adds `stream_options.include_usage=true` to streaming upstream Chat requests unless the caller sets it explicitly |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |

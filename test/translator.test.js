@@ -372,6 +372,7 @@ test("forwards provider-supported Chat-native request fields", () => {
     audio: { voice: "alloy", format: "wav" },
     prediction: { type: "content", content: "draft" },
     n: 2,
+    parallel_tool_calls: false,
     prompt_cache_key: "cache-key",
     prompt_cache_retention: "24h",
     safety_identifier: "safe-user",
@@ -388,6 +389,7 @@ test("forwards provider-supported Chat-native request fields", () => {
   assert.deepEqual(chat.audio, { voice: "alloy", format: "wav" });
   assert.deepEqual(chat.prediction, { type: "content", content: "draft" });
   assert.equal(chat.n, 2);
+  assert.equal(chat.parallel_tool_calls, false);
   assert.equal(chat.prompt_cache_key, "cache-key");
   assert.equal(chat.prompt_cache_retention, "24h");
   assert.equal(chat.safety_identifier, "safe-user");
@@ -405,6 +407,7 @@ test("forwards provider-supported Chat-native request fields", () => {
     "modalities",
     "moderation",
     "n",
+    "parallel_tool_calls",
     "prediction",
     "prompt_cache_key",
     "prompt_cache_retention",
@@ -421,15 +424,18 @@ test("filters Chat-native request fields for unsupported providers", () => {
     logit_bias: { "1": 2 },
     modalities: ["audio"],
     n: 2,
+    parallel_tool_calls: false,
   }, [], { forwardChatNativeFields: false });
 
   assert.equal(chat.logit_bias, undefined);
   assert.equal(chat.modalities, undefined);
   assert.equal(chat.n, undefined);
+  assert.equal(chat.parallel_tool_calls, undefined);
   assert.deepEqual(compatibility.chat_native_fields.filtered.sort(), [
     "logit_bias",
     "modalities",
     "n",
+    "parallel_tool_calls",
   ].sort());
   assert.equal(compatibility.chat_native_fields.reason, "provider_unsupported");
 });

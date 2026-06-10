@@ -317,6 +317,7 @@ function buildSuites(defaultModel) {
           model: defaultModel,
           input: "Return the exact string inline-moderation-ok.",
           moderation: { input: true, output: true },
+          parallel_tool_calls: false,
           max_output_tokens: 64,
           store: false,
         },
@@ -326,7 +327,8 @@ function buildSuites(defaultModel) {
           && json.moderation.input.compatibility?.provider === "local"
           && json.moderation.output.compatibility?.provider === "local"
           && json.metadata?.compatibility?.local_moderation?.input?.flagged === false
-          && json.metadata?.compatibility?.local_moderation?.output?.flagged === false,
+          && json.metadata?.compatibility?.local_moderation?.output?.flagged === false
+          && json.metadata?.compatibility?.chat_native_fields?.filtered?.includes("parallel_tool_calls"),
       },
       {
         id: "responses-prompt-template-local",
@@ -535,6 +537,7 @@ function buildSuites(defaultModel) {
           service_tier: "flex",
           modalities: ["text"],
           moderation: { input: true },
+          parallel_tool_calls: false,
           stream_options: { include_usage: true },
           reasoning_effort: "none",
           max_completion_tokens: 64,
@@ -551,6 +554,7 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.stream_options?.reason === "stream_required"
           && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("modalities")
           && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("moderation")
+          && json.metadata?.compatibility?.chat_passthrough?.chat_native_fields?.filtered?.includes("parallel_tool_calls")
           && json.moderation?.input?.results?.[0]?.flagged === false,
       },
       {

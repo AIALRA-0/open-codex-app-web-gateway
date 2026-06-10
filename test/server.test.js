@@ -480,6 +480,7 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
     assert.equal(call.body.max_tokens, 6);
     assert.deepEqual(call.body.logit_bias, { "7": -2 });
     assert.equal(call.body.n, 2);
+    assert.equal(call.body.parallel_tool_calls, false);
     assert.deepEqual(call.body.prediction, { type: "content", content: "cached draft" });
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -504,6 +505,7 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
         max_tokens: 6,
         logit_bias: { "7": -2 },
         n: 2,
+        parallel_tool_calls: false,
         prediction: { type: "content", content: "cached draft" },
       }),
     });
@@ -522,6 +524,7 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
     assert.deepEqual(json.metadata.compatibility.chat_native_fields.forwarded.sort(), [
       "logit_bias",
       "n",
+      "parallel_tool_calls",
       "prediction",
     ].sort());
   });
@@ -531,6 +534,7 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logit_bias, undefined);
     assert.equal(call.body.n, undefined);
+    assert.equal(call.body.parallel_tool_calls, undefined);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_chat_native_filtered",
@@ -553,6 +557,7 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
         input: "Filter Chat-native fields.",
         logit_bias: { "8": -4 },
         n: 3,
+        parallel_tool_calls: false,
       }),
     });
 
@@ -563,6 +568,7 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
     assert.deepEqual(json.metadata.compatibility.chat_native_fields.filtered.sort(), [
       "logit_bias",
       "n",
+      "parallel_tool_calls",
     ].sort());
   }, { forwardChatNativeFields: false });
 });
@@ -5998,6 +6004,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.service_tier, undefined);
     assert.equal(call.body.modalities, undefined);
     assert.equal(call.body.moderation, undefined);
+    assert.equal(call.body.parallel_tool_calls, undefined);
     assert.equal(call.body.stream_options, undefined);
     assert.equal(call.body.max_tokens, 32);
     assert.equal(call.body.max_completion_tokens, undefined);
@@ -6033,6 +6040,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         service_tier: "flex",
         modalities: ["text"],
         moderation: { input: true },
+        parallel_tool_calls: false,
         stream_options: { include_usage: true },
         max_completion_tokens: 32,
         max_tokens: 96,
@@ -6060,7 +6068,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
     assert.deepEqual(
       json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
-      ["modalities", "moderation"].sort(),
+      ["modalities", "moderation", "parallel_tool_calls"].sort(),
     );
     assert.equal(json.moderation.input.results[0].flagged, false);
 

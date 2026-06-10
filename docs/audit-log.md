@@ -4719,3 +4719,76 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 48 KB, and
     `/srv/aialra/logs/opencodexapp` is 14 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-10 Chat Native Parallel Tool Calls Filtering
+
+- Re-checked current field expectations before changing provider profiles:
+  - OpenAI developer docs / OpenAPI for `POST /v1/chat/completions` document
+    Chat `parallel_tool_calls` as the switch for parallel function calling
+    during tool use.
+  - DeepSeek's official Create Chat Completion reference documents `tools`,
+    `tool_choice`, `logprobs`, `top_logprobs`, `user_id`, and other supported
+    request fields, but does not list `parallel_tool_calls`.
+- Found a provider-profile gap:
+  - direct `POST /v1/chat/completions` passthrough filtered several
+    OpenAI-only Chat fields for DeepSeek, but not `parallel_tool_calls`;
+  - Responses-to-Chat translation copied `parallel_tool_calls` before the
+    provider-aware Chat-native field filter, so DeepSeek could still receive an
+    unsupported OpenAI Chat parameter through `/v1/responses`.
+- Added provider-aware filtering:
+  - moved Responses `parallel_tool_calls` handling into the shared
+    Chat-native passthrough field list, so supported providers still receive it
+    and DeepSeek defaults to filtering it with
+    `metadata.compatibility.chat_native_fields.filtered`;
+  - added `parallel_tool_calls` to direct Chat passthrough filtering when
+    `CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS=false`;
+  - updated deployment, compatibility, and evaluation docs to list
+    `parallel_tool_calls` in the DeepSeek-filtered Chat-native field matrix.
+- Added regression coverage:
+  - translator unit tests now assert `parallel_tool_calls:false` is forwarded
+    for provider-supported profiles and filtered for unsupported profiles;
+  - server unit tests now cover both `/v1/responses` translation and direct
+    `/v1/chat/completions` passthrough filtering;
+  - live `bridge-regression` now exercises the field in
+    `responses-inline-moderation` and `chat-developer-compat`, proving both
+    public paths record the DeepSeek filter metadata while still completing.
+- Verification:
+  - `node --check src/bridge/translator.js`, `node --check src/bridge/server.js`,
+    and `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "Chat-native request fields|unsupported providers"`:
+    34/34 passing tests, including the `parallel_tool_calls` forwarding and
+    filtering assertions.
+  - `node --test test/server.test.js --test-name-pattern "Chat-native request fields|normalizes OpenAI Chat fields"`:
+    89/89 passing tests, including Responses and direct Chat filtering.
+  - `npm test`: 126/126 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-inline-moderation` passed 1/1 against
+    `deepseek-v4-pro`, latency 1168 ms, total usage 46 tokens, visible text
+    `inline-moderation-ok`, and Responses `parallel_tool_calls` filter metadata
+    checks passed.
+  - Targeted live `chat-developer-compat` passed 1/1 against
+    `deepseek-v4-pro`, latency 1032 ms, total usage 31 tokens, visible text
+    `chat-developer-ok`, and direct Chat `parallel_tool_calls` filter metadata
+    checks passed.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1035 ms, P95 latency 1117 ms, and total usage 99 tokens.
+  - Full live `bridge-regression` passed 47/47 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1090 ms, P95 latency 2099 ms, and total usage
+    9717 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8lii3p`, sidebar controls, new
+    conversation submit, reload persistence, console errors 0, warnings 0, and
+    screenshot `output/playwright/ui-smoke-2026-06-10T21-43-35-461Z.png`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 498 runtime candidates,
+    selected 45 old UI screenshots by retention policy, deleted 0, selected
+    3528992 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 42 GB available; repository checkout
+    is 47 MB, `state/` is 4.4 MB, `output/` is 7.7 MB,
+    `/srv/aialra/data/opencodexapp` is 48 KB, and
+    `/srv/aialra/logs/opencodexapp` is 14 MB.
+  - No API keys, account credentials, or local secret files were committed.
