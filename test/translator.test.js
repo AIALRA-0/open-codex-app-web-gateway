@@ -95,7 +95,7 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
       role: "user",
       content: [
         { type: "input_text", text: "Describe this" },
-        { type: "input_image", image_url: "https://example.test/a.png" },
+        { type: "input_image", image_url: { url: "https://example.test/a.png", detail: "high" } },
         { type: "input_audio", input_audio: { data: "UklGRg==", format: "wav", transcript: "hello audio" } },
       ],
     },
@@ -105,8 +105,28 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
     role: "user",
     content: [
       { type: "text", text: "Describe this" },
-      { type: "image_url", image_url: { url: "https://example.test/a.png" } },
+      { type: "image_url", image_url: { url: "https://example.test/a.png", detail: "high" } },
       { type: "input_audio", input_audio: { data: "UklGRg==", format: "wav", transcript: "hello audio" } },
+    ],
+  }]);
+});
+
+test("maps image detail and base64 image data to Chat image content parts", () => {
+  const messages = responseInputToChatMessages([
+    {
+      role: "user",
+      content: [
+        { type: "input_image", image_url: "data:image/jpeg;base64,AAAA", detail: "low" },
+        { type: "input_image", file_data: "BBBB", media_type: "image/webp", detail: "auto" },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(messages, [{
+    role: "user",
+    content: [
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,AAAA", detail: "low" } },
+      { type: "image_url", image_url: { url: "data:image/webp;base64,BBBB", detail: "auto" } },
     ],
   }]);
 });

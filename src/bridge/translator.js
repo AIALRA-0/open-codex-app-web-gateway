@@ -66,11 +66,11 @@ function normalizeContentParts(content, role = "user") {
     }
 
     if (part.type === "input_image" || part.type === "image_url") {
-      const url = part.image_url?.url || part.image_url || part.url;
-      if (role === "user" && url) {
-        parts.push({ type: "image_url", image_url: { url } });
+      const image = normalizeInputImageContentPart(part);
+      if (role === "user" && image) {
+        parts.push(image);
       } else {
-        textFallback.push(`[image:${url || part.file_id || "inline"}]`);
+        textFallback.push(inputImageFallbackText(part, image));
       }
       continue;
     }
@@ -106,6 +106,51 @@ function normalizeContentParts(content, role = "user") {
   }
 
   return textFallback.join("\n");
+}
+
+function normalizeInputImageContentPart(part) {
+  if (!isPlainObject(part)) return null;
+  const imageUrlObject = isPlainObject(part.image_url) ? part.image_url : null;
+  const source = imageUrlObject || part;
+  const directImageUrl = imageUrlObject ? undefined : part.image_url;
+  const url = source.url ?? directImageUrl ?? part.url ?? inputImageDataUrl(part);
+  if (url == null || url === "") return null;
+  const imageUrl = {
+    url: stringifyContent(url),
+  };
+  const detail = part.detail ?? source.detail;
+  if (detail != null) imageUrl.detail = stringifyContent(detail);
+  return {
+    type: "image_url",
+    image_url: imageUrl,
+  };
+}
+
+function inputImageDataUrl(part) {
+  const source = isPlainObject(part.file_data) || isPlainObject(part.data) || isPlainObject(part.image_data)
+    ? part.file_data || part.data || part.image_data
+    : null;
+  const data = source?.data ?? source?.file_data ?? part.file_data ?? part.data ?? part.image_data;
+  if (data == null) return "";
+  const text = stringifyContent(data);
+  if (!text || text.startsWith("data:")) return text;
+  const mediaType = stringifyContent(
+    source?.media_type
+      || source?.mime_type
+      || part.media_type
+      || part.mime_type
+      || "image/png",
+  );
+  return `data:${mediaType};base64,${text}`;
+}
+
+function inputImageFallbackText(part, image) {
+  const imageUrlObject = isPlainObject(part.image_url) ? part.image_url : null;
+  const source = imageUrlObject || part;
+  const directImageUrl = imageUrlObject ? undefined : part.image_url;
+  const url = image?.image_url?.url || source.url || directImageUrl || part.url || part.file_id || "inline";
+  const detail = image?.image_url?.detail || part.detail || source.detail;
+  return `[image:${stringifyContent(url)}]${detail ? `\ndetail: ${stringifyContent(detail)}` : ""}`;
 }
 
 function normalizeInputAudioContentPart(part) {

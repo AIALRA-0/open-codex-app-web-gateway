@@ -56,7 +56,7 @@ implementations for those tools.
 | string `input` | `messages: [{role:"user"}]` | Direct |
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
-| `input_image` | chat `image_url` content part | Provider-dependent |
+| `input_image` | chat `image_url` content part | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...`. `file_id` image inputs still fall back to an explicit marker unless a future image-file resolver is enabled |
 | `input_audio` | chat `input_audio` content part | Direct for audio-capable Chat providers using `input_audio:{data,format}`. The bridge also accepts compatible top-level `data`, `audio_data`, or `file_data` shapes and preserves extra audio fields. Non-user or non-forwardable audio becomes an explicit text marker with any transcript; text-only providers such as DeepSeek do not natively understand audio input |
 | `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
 | prior `message` output item | assistant chat message | Direct |

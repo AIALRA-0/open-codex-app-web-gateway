@@ -654,6 +654,63 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
   });
 });
 
+test("POST /v1/responses maps input_image detail to Chat image content parts", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, [{
+      role: "user",
+      content: [
+        { type: "text", text: "Inspect this image." },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://example.test/vision.png",
+            detail: "high",
+          },
+        },
+      ],
+    }]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_detail",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image detail ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "Inspect this image." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/vision.png",
+                detail: "high",
+              },
+            },
+          ],
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "image detail ok");
+  });
+});
+
 test("POST /v1/responses maps input_audio content to Chat content parts", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [{

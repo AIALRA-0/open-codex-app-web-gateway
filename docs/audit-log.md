@@ -3703,3 +3703,53 @@ Open follow-ups:
     `/srv/aialra/logs` are on a 193 GB filesystem with 38 GB available;
     repository checkout is 40 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
     and `/srv/aialra/logs/opencodexapp` is 12 MB.
+
+## 2026-06-10 Image Detail Content-Part Mapping
+
+- Checked the current official OpenAI Images and Vision guide through the
+  OpenAI developer-docs MCP. The guide states that image inputs can be provided
+  as URLs, base64 data URLs, or Files API file IDs, and that the `detail`
+  parameter has the same meaning for Responses and Chat Completions.
+- Tightened Responses-to-Chat image input normalization:
+  - user `input_image` parts now normalize through a dedicated image helper;
+  - `image_url` strings and `image_url:{url,detail}` objects both map to Chat
+    `type:"image_url"` content parts;
+  - top-level Responses `detail` is preserved under Chat `image_url.detail`;
+  - compatible inline `file_data`, `data`, or `image_data` payloads are turned
+    into `data:<media_type>;base64,...` URLs for vision-capable Chat providers;
+  - non-user or non-forwardable image parts continue to become explicit text
+    markers without accidentally stringifying a malformed `image_url` object.
+- Added tests for:
+  - translator mapping of `input_image.detail` and existing data URLs;
+  - translator conversion of inline base64 image payloads into Chat data URLs;
+  - mock `/v1/responses` forwarding that proves upstream Chat receives
+    `messages[].content[]` with `image_url.detail`.
+- Updated `docs/compatibility-matrix.md` and `docs/evaluation-plan.md` to
+  document image detail/data-URL coverage and the remaining `file_id` image
+  resolver gap.
+- Verified:
+  - `node --check src/bridge/server.js src/bridge/translator.js src/bridge/local_computer.js scripts/eval-harness.mjs test/server.test.js test/translator.test.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/translator.test.js test/server.test.js`: 112/112 passing
+    tests.
+  - `npm test`: 115/115 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`. Public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1553 ms, P95 latency 1702 ms, and total usage 186 tokens.
+  - Full live `bridge-regression` passed 40/40 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1317 ms, P95 latency 2935 ms, and total usage
+    9021 tokens.
+  - UI smoke passed with marker `ui-smoke-mq8fkhyo`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 353 runtime candidates,
+    selected 27 old UI screenshots by retention policy, deleted 0, selected
+    1976924 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`.
+  - Disk/storage check: `/srv/aialra/apps`, `/srv/aialra/data`, and
+    `/srv/aialra/logs` are on a 193 GB filesystem with 42 GB available;
+    repository checkout is 40 MB, `/srv/aialra/data/opencodexapp` is 48 KB,
+    and `/srv/aialra/logs/opencodexapp` is 12 MB.
