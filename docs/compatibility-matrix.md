@@ -8,6 +8,9 @@ Primary sources:
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
+- OpenAI file search guide: https://developers.openai.com/api/docs/guides/tools-file-search
+- OpenAI Files reference: https://platform.openai.com/docs/api-reference/files
+- OpenAI Vector Stores reference: https://platform.openai.com/docs/api-reference/vector-stores
 - Codex config reference: https://developers.openai.com/codex/config-reference
 - DeepSeek Chat Completion docs: https://api-docs.deepseek.com/api/create-chat-completion
 - DeepSeek Token & Token Usage docs: https://api-docs.deepseek.com/quick_start/token_usage
@@ -44,6 +47,8 @@ implementations for those tools.
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution |
 | `tools[type=function]` | chat function tools | Direct |
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` and `url_citation` annotations |
+| `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
+| `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` when tool choice is present unless overridden |
 | `text.format.type=text` | omitted/default | Direct |
@@ -81,6 +86,7 @@ behavior.
 | other finish reasons | `status=completed` | Direct |
 | local background job state | `background`, `status`, `completed_at`, `error` | Emulated for `in_progress`, `completed`, `failed`, and `cancelled` |
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses |
+| local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 
 ## Responses Endpoint Coverage
 
@@ -120,6 +126,28 @@ OpenAI's current endpoint list includes `GET /v1/models` and
 | `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns the configured default bridge model |
 | `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to the configured default model only when the requested ID matches it |
 
+## Files and Vector Stores Endpoint Coverage
+
+These endpoints back the local `file_search` adapter. File content is stored
+under the configured bridge state directory, not in Git.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/files` | Implemented | Accepts JSON `{filename,purpose,content,metadata}`, basic multipart upload, or raw body with `x-filename`; stores text content locally |
+| `GET /v1/files` | Implemented | Lists local files with `purpose`, `limit`, `after`, `before`, and `order` pagination |
+| `GET /v1/files/{file_id}` | Implemented | Returns local file metadata |
+| `GET /v1/files/{file_id}/content` | Implemented | Returns stored text content |
+| `DELETE /v1/files/{file_id}` | Implemented | Deletes the file and detaches it from all local vector stores |
+| `POST /v1/vector_stores` | Implemented | Creates a local vector-store record with `file_counts` and metadata |
+| `GET /v1/vector_stores` | Implemented | Lists local vector stores with pagination |
+| `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata and live file counts |
+| `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |
+| `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering |
+| `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with pagination |
+| `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Returns local vector-store file metadata |
+| `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
+| `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Lexical chunk search with `query`, `max_num_results`, and simple metadata `filters` |
+
 ## Streaming Mapping
 
 The bridge emits:
@@ -146,6 +174,9 @@ kept in the replay store so later tool turns can pass the reasoning content back
 When `web_search_preview` is handled by the local adapter, the bridge emits a
 `web_search_call` output item and applies URL citation annotations to the final
 message content.
+When `file_search` is handled by the local adapter, the bridge emits a
+`file_search_call` output item before Chat text deltas and applies file citation
+annotations to the final message content.
 
 ## Local Web Search Adapter
 
@@ -167,12 +198,42 @@ This is a bridge compatibility layer, not native OpenAI web search. Full parity
 still requires a production-grade web index/provider, citation policy, and page
 open/find support.
 
+## Local File Search Adapter
+
+The bridge can emulate the Responses `file_search` hosted tool for Chat-only
+providers by keeping a local Files/Vector Stores state tree and running bounded
+lexical search over uploaded text. The adapter:
+
+- reserves `file_search` so it is not forwarded as an unsupported Chat tool;
+- searches `vector_store_ids` from the tool or `tool_resources.file_search`;
+- injects retrieved chunks into the upstream Chat prompt as source material;
+- emits `file_search_call` output items with queries, vector store IDs, and
+  optional results when `include:["file_search_call.results"]` is requested;
+- annotates final message text with `file_citation` entries;
+- supports simple metadata filters such as `{type:"eq",key:"suite",value:"x"}`
+  over file metadata and vector-store-file attributes.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_FILE_SEARCH_PROVIDER` | `local` | Use `disabled` to leave `file_search` as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local file/vector-store state path; keep outside Git |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum retrieved chunks injected into Chat context |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local text files |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH` | `true` | Disables DeepSeek thinking mode for local file-search requests to avoid reasoning-only completions exhausting small output budgets |
+
+This is a bridge compatibility layer, not native OpenAI file search. The current
+retriever is intentionally local, auditable, and disk-bounded; it is not yet an
+embedding-based vector index and does not process binary PDFs, OCR, image files,
+asynchronous batch indexing, or OpenAI's complete ranking behavior.
+
 ## Known Gaps
 
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search and cite, but the default no-key provider is Wikipedia-only and does not support OpenAI page open/find actions | Add production web-search provider support, page open/find actions, and stronger citation ranking |
-| `file_search` | Requires vector store semantics absent from generic chat | Add local retrieval service and file citation mapping |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, text upload, vector-store lifecycle, lexical retrieval, simple filters, and citations, but it is not OpenAI's managed vector search | Add embedding/vector indexing, file parsers, async batches, expiration policy, richer filters, reranking, and larger eval sets |
 | `code_interpreter` | Requires sandboxed code runtime and artifact protocol | Add local sandbox executor with artifact storage |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |
 | `image_generation` | Requires image API/provider adapter | Add provider-specific image tool |

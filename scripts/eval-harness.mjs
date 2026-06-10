@@ -199,6 +199,42 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-file-search",
+        mode: "responses-file-search",
+        file: {
+          filename: "bridge-file-search.txt",
+          purpose: "assistants",
+          content: "Bridge file search fixture. The exact file search answer is file-search-ok. When asked for the exact answer, return file-search-ok [1].",
+        },
+        vectorStore: { name: "bridge-file-search-eval" },
+        vectorFile: { attributes: { suite: "bridge-regression" } },
+        request: ({ vectorStoreId }) => ({
+          model: defaultModel,
+          input: "File search for file-search-ok. Using the file search result, return exactly this text and nothing else: file-search-ok [1]",
+          tools: [{
+            type: "file_search",
+            vector_store_ids: [vectorStoreId],
+            max_num_results: 3,
+            filters: { type: "eq", key: "suite", value: "bridge-regression" },
+          }],
+          include: ["file_search_call.results"],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, fileId, vectorStoreId }) => {
+          const call = (json.output || []).find((item) => item.type === "file_search_call");
+          const annotations = (json.output || [])
+            .flatMap((item) => item.content || [])
+            .flatMap((part) => part.annotations || []);
+          return !!call
+            && call.status === "completed"
+            && call.vector_store_ids?.includes(vectorStoreId)
+            && call.results?.some((result) => result.file_id === fileId)
+            && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === fileId)
+            && /file-search-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-compact-continuation",
         mode: "responses-compact",
         request: {
@@ -329,6 +365,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-file-search") {
+      return await runFileSearchCase(testCase, context, started);
     }
     if (testCase.mode === "responses-compact") {
       return await runCompactionCase(testCase, context, started);
@@ -497,6 +536,73 @@ async function runBackgroundCase(testCase, context, started) {
   });
 }
 
+async function runFileSearchCase(testCase, context, started) {
+  let file = null;
+  let vectorStore = null;
+  try {
+    const fileResponse = await postJson(`${baseUrl}/v1/files`, testCase.file);
+    const fileBody = await fileResponse.text();
+    if (!fileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fileResponse.status,
+        error: truncate(fileBody),
+      });
+    }
+    file = JSON.parse(fileBody);
+
+    const storeResponse = await postJson(`${baseUrl}/v1/vector_stores`, testCase.vectorStore || {});
+    const storeBody = await storeResponse.text();
+    if (!storeResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: storeResponse.status,
+        error: truncate(storeBody),
+      });
+    }
+    vectorStore = JSON.parse(storeBody);
+
+    const attachResponse = await postJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      file_id: file.id,
+      ...(testCase.vectorFile || {}),
+    });
+    const attachBody = await attachResponse.text();
+    if (!attachResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: attachResponse.status,
+        error: truncate(attachBody),
+      });
+    }
+
+    const request = resolveRequest(testCase.request, { ...context, fileId: file.id, vectorStoreId: vectorStore.id });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const ok = !!testCase.check({ json, text, fileId: file.id, vectorStoreId: vectorStore.id });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      file_id: file.id,
+      vector_store_id: vectorStore.id,
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    if (vectorStore?.id) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
+  }
+}
+
 async function runCompactionCase(testCase, context, started) {
   const compactResponse = await postJson(`${baseUrl}/v1/responses/compact`, testCase.request);
   const compactBody = await compactResponse.text();
@@ -649,6 +755,23 @@ async function getJson(url) {
       json: parseJsonish(body),
       body,
     };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function deleteJson(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { method: "DELETE", signal: controller.signal });
+    return {
+      status: response.status,
+      ok: response.ok,
+      body: await response.text(),
+    };
+  } catch {
+    return { status: 0, ok: false, body: "" };
   } finally {
     clearTimeout(timeout);
   }

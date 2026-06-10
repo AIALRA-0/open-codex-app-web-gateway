@@ -76,6 +76,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_DEEPSEEK_THINKING_MODE` | `false` | Forces `thinking:{type:"enabled"}` when a request asks for reasoning effort |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_TOOL_CHOICE` | `true` | Disables DeepSeek thinking mode for function-tool requests that also set `tool_choice` |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_WEB_SEARCH` | `true` | Disables DeepSeek thinking mode when the bridge injects local web-search context, preventing reasoning-only completions from exhausting the output budget |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH` | `true` | Disables DeepSeek thinking mode when the bridge injects local file-search context, preventing citation-only or empty visible completions under small output budgets |
 | `CODEXCOMPAT_JSON_SCHEMA_MODE` | `json_object` | Downgrades Responses JSON Schema output to JSON object mode plus an explicit schema instruction |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content`; keep outside Git and mode `0600` |
@@ -84,6 +85,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS` | `10000` | Timeout for local web-search provider requests |
 | `CODEXCOMPAT_WEB_SEARCH_STATIC_RESULTS` | empty | JSON array of `{title,url,snippet}` results for the `static` provider; keep large/private fixtures outside Git |
 | `CODEXCOMPAT_WEB_SEARCH_WIKIPEDIA_ENDPOINT` | `https://en.wikipedia.org/w/api.php` | Override endpoint for the no-key Wikipedia fallback |
+| `CODEXCOMPAT_FILE_SEARCH_PROVIDER` | `local` | Local Responses `file_search` adapter provider. Use `disabled` to leave it unsupported |
+| `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local text files |
 
 ## Systemd
 
@@ -125,6 +130,7 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 npm run smoke:ui -- --timeout-ms 180000

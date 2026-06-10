@@ -237,6 +237,141 @@ test("POST /v1/responses streams local web_search_preview call and citations", a
   });
 });
 
+test("local Files and Vector Stores back Responses file_search compatibility", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses file_search compatibility results/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /File Search Fixture/.test(message.content || "")));
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_file_search",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "file-search-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdFile = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "fixture.txt",
+        purpose: "assistants",
+        content: "File Search Fixture says the exact marker is file-search-ok.",
+      }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+    assert.equal(file.object, "file");
+    assert.equal(file.filename, "fixture.txt");
+
+    const content = await fetch(`${baseUrl}/v1/files/${file.id}/content`);
+    assert.equal(content.status, 200);
+    assert.match(await content.text(), /file-search-ok/);
+
+    const createdStore = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "fixture-store" }),
+    });
+    assert.equal(createdStore.status, 200);
+    const vectorStore = await createdStore.json();
+    assert.equal(vectorStore.object, "vector_store");
+
+    const attached = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: file.id, attributes: { suite: "server-test" } }),
+    });
+    assert.equal(attached.status, 200);
+    const vectorFile = await attached.json();
+    assert.equal(vectorFile.object, "vector_store.file");
+    assert.equal(vectorFile.status, "completed");
+
+    const search = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "file-search-ok",
+        max_num_results: 3,
+        filters: { type: "eq", key: "suite", value: "server-test" },
+      }),
+    });
+    assert.equal(search.status, 200);
+    const searchJson = await search.json();
+    assert.equal(searchJson.object, "vector_store.search_results.page");
+    assert.equal(searchJson.data[0].file_id, file.id);
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "File search for file-search-ok and return file-search-ok [1].",
+        tools: [{
+          type: "file_search",
+          vector_store_ids: [vectorStore.id],
+          max_num_results: 3,
+          filters: { type: "eq", key: "suite", value: "server-test" },
+        }],
+        include: ["file_search_call.results"],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "file_search_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].queries[0], "file-search-ok");
+    assert.deepEqual(json.output[0].vector_store_ids, [vectorStore.id]);
+    assert.equal(json.output[0].results[0].file_id, file.id);
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "file-search-ok [1]");
+    assert.deepEqual(json.output[1].content[0].annotations, [{
+      type: "file_citation",
+      index: 15,
+      file_id: file.id,
+      filename: "fixture.txt",
+    }]);
+    assert.equal(json.metadata.compatibility.local_file_search.provider, "local");
+    assert.equal(json.metadata.compatibility.local_file_search.result_count, 1);
+    assert.equal(json.metadata.compatibility.local_file_search.deepseek_thinking, "disabled_for_local_file_search");
+
+    const genericResponse = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Using the file search result, return exactly this text and nothing else: file-search-ok [1]",
+        tools: [{
+          type: "file_search",
+          vector_store_ids: [vectorStore.id],
+          max_num_results: 3,
+          filters: { type: "eq", key: "suite", value: "server-test" },
+        }],
+        include: ["file_search_call.results"],
+        store: false,
+      }),
+    });
+    assert.equal(genericResponse.status, 200);
+    const genericJson = await genericResponse.json();
+    assert.equal(genericJson.output[0].queries[0], "file-search-ok");
+    assert.equal(genericJson.output[0].results[0].file_id, file.id);
+
+    const listed = await fetch(`${baseUrl}/v1/files?purpose=assistants`);
+    assert.equal(listed.status, 200);
+    assert.equal((await listed.json()).data[0].id, file.id);
+  });
+});
+
 test("Responses lifecycle endpoints retrieve input items, cancel completed records, and delete records", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

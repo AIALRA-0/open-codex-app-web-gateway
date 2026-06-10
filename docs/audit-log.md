@@ -363,3 +363,65 @@ Open follow-ups:
   `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
   `ui-smoke-mq7pjgyb` appeared before reload and after reload, console errors
   0, warnings 0.
+
+## 2026-06-10 Local File Search Hosted Tool Adapter
+
+- Used the current OpenAI file-search, Files, and Vector Stores documentation to
+  confirm the expected bridge-facing shapes:
+  - `file_search` is a Responses hosted tool backed by vector stores;
+  - file-search output includes `file_search_call` items;
+  - message output can include `file_citation` annotations;
+  - setup flows through file upload, vector-store creation, file attachment,
+    and search.
+- Added a local Files/Vector Stores state layer under the bridge state
+  directory:
+  - `POST/GET/DELETE /v1/files`;
+  - `GET /v1/files/{file_id}/content`;
+  - `POST/GET/DELETE /v1/vector_stores`;
+  - `POST/GET/DELETE /v1/vector_stores/{id}/files`;
+  - `POST /v1/vector_stores/{id}/search`.
+- Added a local hosted-tool adapter for Responses `file_search`:
+  - reserves `file_search` so it is not forwarded as an unsupported Chat tool;
+  - searches local vector stores with bounded lexical chunk retrieval;
+  - supports simple metadata filters over file metadata and attachment
+    attributes;
+  - injects retrieved chunks into the upstream Chat Completion prompt;
+  - emits `file_search_call` output with query, vector store IDs, and optional
+    results for `include:["file_search_call.results"]`;
+  - adds `file_citation` annotations to final Responses message text;
+  - supports non-streaming, streaming, and background Responses paths.
+- Added DeepSeek compatibility behavior that disables thinking mode for local
+  file-search requests by default. This avoids reasoning-only completions or
+  citation-only visible output under small `max_output_tokens` budgets.
+- Caveat: this is not native OpenAI managed file search. The local retriever is
+  text-only and lexical; full parity still requires embedding/vector indexing,
+  richer file parsers, async file batches, expiration policy, reranking, and
+  larger RAG eval sets.
+- Added regression coverage for:
+  - Files and Vector Stores CRUD/search endpoint shape;
+  - vector-store-file attributes and simple filter matching;
+  - local hosted-tool reservation for `file_search`;
+  - injected local retrieval context in upstream Chat messages;
+  - `file_search_call` output shape including vector store IDs and results;
+  - `file_citation` annotations;
+  - natural-language query extraction that avoids treating `result/results` as
+    the search query.
+- Added `responses-file-search` to live `bridge-regression`.
+- Verified:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/local_file_search.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: 25/25 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+- Live result against `deepseek-v4-pro` through
+  `http://127.0.0.1:12912`:
+  `npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose`
+  passed 1/1, latency 1284 ms, output `file-search-ok [1]`, total usage
+  177 tokens.
+- Full live `bridge-regression` passed 13/13, pass rate 1.0, average latency
+  2018 ms, P95 latency 6197 ms, total usage 1965 tokens.
+- Post-change UI smoke against `https://opencodexapp.aialra.online` passed:
+  `npm run smoke:ui -- --timeout-ms 180000` returned `ok:true`, marker
+  `ui-smoke-mq7qflpg` appeared before reload and after reload, console errors
+  0, warnings 0.
