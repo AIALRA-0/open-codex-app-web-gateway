@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import fs from "node:fs";
+import http from "node:http";
 import { performance } from "node:perf_hooks";
 
 const args = parseArgs(process.argv.slice(2));
@@ -344,6 +345,34 @@ function buildSuites(defaultModel) {
           store: false,
         }),
         check: ({ json, text }) => /input-file-ok/i.test(text)
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
+      },
+      {
+        id: "responses-input-file-url",
+        mode: "responses-input-file-url",
+        fileUrl: {
+          filename: "bridge-input-url.txt",
+          contentType: "text/plain",
+          content: "Bridge URL input file fixture. The exact answer is url-input-ok.",
+        },
+        request: ({ fileUrl }) => ({
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "bridge-input-url.txt",
+                file_url: fileUrl,
+              },
+              { type: "input_text", text: "Using the URL input file content, return exactly this text and nothing else: url-input-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text }) => /url-input-ok/i.test(text)
           && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
       },
@@ -799,6 +828,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-input-file") {
       return await runInputFileCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-input-file-url") {
+      return await runInputFileUrlCase(testCase, context, started);
     }
     if (testCase.mode === "responses-background") {
       return await runBackgroundCase(testCase, context, started);
@@ -1386,6 +1418,43 @@ async function runInputFileCase(testCase, context, started) {
   }
 }
 
+async function runInputFileUrlCase(testCase, context, started) {
+  const fixture = testCase.fileUrl || {};
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { "content-type": fixture.contentType || "text/plain" });
+    res.end(fixture.content || "");
+  });
+
+  try {
+    const address = await listenServer(server);
+    const fileUrl = `http://127.0.0.1:${address.port}/${encodeURIComponent(fixture.filename || "fixture.txt")}`;
+    const request = resolveRequest(testCase.request, { ...context, fileUrl });
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        file_url: fileUrl,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const ok = !!testCase.check({ json, text, fileUrl });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      file_url: fileUrl,
+      usage: responseUsage(json),
+      output_text: truncate(text),
+    });
+  } finally {
+    await closeServer(server);
+  }
+}
+
 async function runShellCase(testCase, context, started) {
   let container = null;
   try {
@@ -1616,6 +1685,21 @@ function sleep(ms) {
 
 function resolveRequest(request, context) {
   return typeof request === "function" ? request(context) : request;
+}
+
+function listenServer(server) {
+  return new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      server.off("error", reject);
+      resolve(server.address());
+    });
+  });
+}
+
+function closeServer(server) {
+  if (!server.listening) return Promise.resolve();
+  return new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 }
 
 function finishResult(testCase, context, started, extra) {

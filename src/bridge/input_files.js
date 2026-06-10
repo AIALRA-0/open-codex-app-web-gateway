@@ -185,7 +185,7 @@ async function resolveFileUrl(part, config = {}, options = {}) {
       signal: controller.signal,
     });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const buffer = Buffer.from(await readResponseLimited(response, config.inputFileMaxBytes || 4 * 1024 * 1024));
+    const { buffer, truncated } = await readResponseLimited(response, config.inputFileMaxBytes || 4 * 1024 * 1024);
     return fileRecordToInputFile({
       source: "file_url",
       file_url: String(url),
@@ -193,6 +193,7 @@ async function resolveFileUrl(part, config = {}, options = {}) {
       media_type: part.media_type || response.headers.get("content-type") || guessMediaType(String(url)),
       buffer,
       config,
+      truncated,
     });
   } catch (error) {
     return {
@@ -211,20 +212,25 @@ async function resolveFileUrl(part, config = {}, options = {}) {
 async function readResponseLimited(response, maxBytes) {
   const chunks = [];
   let size = 0;
+  let truncated = false;
   for await (const chunk of response.body) {
     const buffer = Buffer.from(chunk);
-    size += buffer.length;
-    if (size > maxBytes) {
-      const error = new Error(`file_url exceeds local limit of ${maxBytes} bytes`);
-      error.status = 413;
-      throw error;
+    if (size + buffer.length > maxBytes) {
+      const remaining = Math.max(0, maxBytes - size);
+      if (remaining > 0) {
+        chunks.push(buffer.subarray(0, remaining));
+        size += remaining;
+      }
+      truncated = true;
+      break;
     }
+    size += buffer.length;
     chunks.push(buffer);
   }
-  return Buffer.concat(chunks);
+  return { buffer: Buffer.concat(chunks), truncated };
 }
 
-function fileRecordToInputFile({ source, file_id, file_url, filename, media_type, buffer, config }) {
+function fileRecordToInputFile({ source, file_id, file_url, filename, media_type, buffer, config, truncated = false }) {
   const maxBytes = config.inputFileMaxBytes || 4 * 1024 * 1024;
   if (buffer.length > maxBytes) {
     return {
@@ -249,7 +255,7 @@ function fileRecordToInputFile({ source, file_id, file_url, filename, media_type
     bytes: buffer.length,
     status: extracted.content ? "completed" : "failed",
     content: extracted.content,
-    truncated: extracted.truncated,
+    truncated: Boolean(truncated || extracted.truncated),
     ...(extracted.method ? { extraction_method: extracted.method } : {}),
     ...(extracted.error ? { error: extracted.error } : {}),
   };

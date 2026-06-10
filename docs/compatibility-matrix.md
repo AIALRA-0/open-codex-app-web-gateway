@@ -344,7 +344,8 @@ upstream Chat prompt. It supports the three official Responses input styles:
 
 - `file_id` from the local Files API;
 - inline base64 `file_data`, including `data:<media>;base64,...` URLs;
-- HTTP(S) `file_url` when URL fetching is enabled.
+- HTTP(S) `file_url` when URL fetching is enabled; remote bodies that exceed
+  the local byte cap are truncated and marked in compatibility metadata.
 
 Configuration:
 
@@ -352,7 +353,7 @@ Configuration:
 | --- | --- | --- |
 | `CODEXCOMPAT_INPUT_FILE_PROVIDER` | `local` | Use `disabled` to leave `input_file` as a marker-only compatibility fallback |
 | `CODEXCOMPAT_INPUT_FILE_MAX_FILES` | `8` | Maximum input files extracted per request |
-| `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` | `4194304` | Maximum bytes read from each local, inline, or remote input file; the loader caps this at OpenAI's documented 50 MB per-file ceiling |
+| `CODEXCOMPAT_INPUT_FILE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local or inline input file, and maximum bytes retained from each remote `file_url`; the loader caps this at OpenAI's documented 50 MB per-file ceiling |
 | `CODEXCOMPAT_INPUT_FILE_MAX_TEXT_CHARS` | `200000` | Maximum extracted text injected per file |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_URLS` | `true` | Allows HTTP(S) `file_url` fetching with size and timeout caps |
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote input file fetches |
@@ -369,8 +370,11 @@ read from Word XML parts, `.xlsx` shared strings and worksheet rows are rendered
 as tab-separated text, and `.pptx` slide text is extracted from slide XML. Scanned
 PDF images, OCR, PDF page rendering, legacy binary Office formats, embedded
 Office media, and complex workbook formulas/macros are still reported with
-metadata unless a future parser extracts text safely. For large files, prefer
-the local `file_search` adapter.
+metadata unless a future parser extracts text safely. Remote `file_url` inputs
+that exceed the byte cap keep the prefix that fits in budget, set
+`truncated: true` in the injected prompt, and increment
+`metadata.compatibility.local_input_files.truncated_count`. For large files,
+prefer the local `file_search` adapter.
 
 ## Local File Search Adapter
 

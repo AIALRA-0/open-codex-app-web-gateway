@@ -1739,6 +1739,76 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
   });
 });
 
+test("Responses input_file file_url truncates remote files for Chat compatibility", async () => {
+  const remoteBody = "Remote URL fixture says url-ok.\n" + "padding ".repeat(80);
+  const remote = http.createServer((req, res) => {
+    assert.equal(req.url, "/fixture.txt");
+    res.writeHead(200, { "content-type": "text/plain" });
+    res.end(remoteBody);
+  });
+  const remoteAddress = await listen(remote);
+
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
+      assert.match(prompt, /Local Responses input_file compatibility extracted file inputs/);
+      assert.match(prompt, /source: file_url/);
+      assert.match(prompt, /file_url: http:\/\/127\.0\.0\.1:\d+\/fixture\.txt/);
+      assert.match(prompt, /Remote URL fixture says url-ok/);
+      assert.match(prompt, /truncated: true/);
+      assert.doesNotMatch(prompt, /padding (?:padding ){70}/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_input_file_url",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "url-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 },
+      }));
+    }, async ({ bridgeAddress }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: [{
+            role: "user",
+            content: [
+              {
+                type: "input_file",
+                filename: "fixture.txt",
+                file_url: `http://127.0.0.1:${remoteAddress.port}/fixture.txt`,
+              },
+              { type: "input_text", text: "Return url-ok." },
+            ],
+          }],
+          store: false,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.output[0].content[0].text, "url-ok");
+      assert.equal(json.metadata.compatibility.local_input_files.status, "completed");
+      assert.equal(json.metadata.compatibility.local_input_files.file_count, 1);
+      assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+      assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+      assert.equal(json.metadata.compatibility.local_input_files.truncated_count, 1);
+    }, {
+      inputFileMaxBytes: 96,
+      inputFileMaxTextChars: 4096,
+    });
+  } finally {
+    await close(remote);
+  }
+});
+
 test("Responses input_file Office documents are extracted for Chat compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");

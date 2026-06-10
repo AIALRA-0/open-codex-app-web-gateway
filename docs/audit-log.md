@@ -1936,3 +1936,52 @@ Open follow-ups:
   - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - UI smoke passed with marker `ui-smoke-mq820iqn`, reload persistence
     confirmed, console errors 0, warnings 0.
+
+## 2026-06-10 Bounded Input File URL Truncation
+
+- Closed a local `input_file` reliability gap where remote HTTP(S)
+  `file_url` inputs that exceeded the byte cap failed the entire local file
+  extraction path instead of providing any usable prefix context to Chat-only
+  providers.
+- Remote `file_url` fetches now retain bytes up to
+  `CODEXCOMPAT_INPUT_FILE_MAX_BYTES`, continue normal text/PDF/OOXML extraction
+  on that bounded prefix, set `truncated: true` in the injected file context,
+  and increment `metadata.compatibility.local_input_files.truncated_count`.
+- Local Files API `file_id` and inline base64 `file_data` inputs still fail
+  when their buffers exceed the local byte cap, preserving strict behavior for
+  caller-controlled complete files.
+- Extended the live bridge regression harness with `responses-input-file-url`,
+  which serves a deterministic local HTTP fixture and verifies that the running
+  bridge fetches it through a real `file_url` request path.
+- Official source checked on 2026-06-10:
+  `https://developers.openai.com/api/docs/guides/file-inputs`, which documents
+  Responses `input_file` support for base64 data, Files API file IDs, and
+  external URLs, plus file-type processing and size-limit considerations.
+- Updated `docs/compatibility-matrix.md`, `docs/evaluation-plan.md`, and
+  `docs/deployment.md`.
+- Remaining known gap: this remains a bounded local text-extraction adapter,
+  not OpenAI's native file pipeline. PDF page images, OCR, full spreadsheet
+  augmentation, richer document parsing, and complete remote files above the
+  local cap still require future work or the local `file_search` path.
+- Verified:
+  - `node --check src/bridge/input_files.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Targeted local `input_file` server tests passed 3/3, including the new
+    remote URL truncation case.
+  - `npm test`: 68/68 passing tests.
+  - `npm run secret-scan`: passed.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were active.
+  - Healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Targeted live `responses-input-file-url` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1278 ms, output `url-input-ok`, and total usage
+    165 tokens.
+  - Full live `bridge-regression` passed 23/23 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1760 ms, P95 latency 4229 ms, and total usage
+    7068 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - UI smoke passed with marker `ui-smoke-mq82b356`, reload persistence
+    confirmed, console errors 0, warnings 0.
