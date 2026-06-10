@@ -3406,6 +3406,95 @@ test("POST /v1/responses/input_tokens returns upstream prompt token usage", asyn
   });
 });
 
+test("POST /v1/embeddings returns deterministic local OpenAI-compatible vectors", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "embeddings should not call upstream" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: ["alpha beta", "vehicle repair"],
+        dimensions: 16,
+        encoding_format: "float",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.object, "list");
+    assert.equal(json.model, "text-embedding-3-small");
+    assert.equal(json.data.length, 2);
+    assert.equal(json.data[0].object, "embedding");
+    assert.equal(json.data[0].index, 0);
+    assert.equal(json.data[0].embedding.length, 16);
+    assert.equal(json.data[1].index, 1);
+    assert.equal(json.data[1].embedding.length, 16);
+    assert.notDeepEqual(json.data[0].embedding, json.data[1].embedding);
+    assert.equal(json.usage.prompt_tokens, 7);
+    assert.equal(json.usage.total_tokens, 7);
+    assert.equal(json.compatibility.provider, "local");
+    assert.equal(json.compatibility.dimensions, 16);
+    assert.equal(requests.length, 0);
+
+    const repeated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: ["alpha beta", "vehicle repair"],
+        dimensions: 16,
+      }),
+    });
+    assert.equal(repeated.status, 200);
+    assert.deepEqual((await repeated.json()).data, json.data);
+  });
+});
+
+test("POST /v1/embeddings supports base64 token inputs and validates parameters", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "embeddings should not call upstream" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input: [[101, 202, 303], [404, 505]],
+        dimensions: 8,
+        encoding_format: "base64",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.model, "hashed-semantic-256");
+    assert.equal(json.data.length, 2);
+    assert.equal(typeof json.data[0].embedding, "string");
+    assert.equal(Buffer.from(json.data[0].embedding, "base64").length, 8 * 4);
+    assert.equal(json.usage.prompt_tokens, 5);
+    assert.equal(requests.length, 0);
+
+    const invalidDimensions = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "bad dimensions", dimensions: 0 }),
+    });
+    assert.equal(invalidDimensions.status, 400);
+    assert.equal((await invalidDimensions.json()).error.param, "dimensions");
+
+    const invalidEncoding = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "bad encoding", encoding_format: "hex" }),
+    });
+    assert.equal(invalidEncoding.status, 400);
+    assert.equal((await invalidEncoding.json()).error.param, "encoding_format");
+  });
+});
+
 test("POST /v1/completions maps legacy prompts to Chat Completions", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

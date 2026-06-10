@@ -11,6 +11,7 @@ Primary sources:
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
+- OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
@@ -242,6 +243,25 @@ OpenAI's current endpoint list includes `GET /v1/models` and
 | --- | --- | --- |
 | `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns the configured default bridge model |
 | `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to the configured default model only when the requested ID matches it |
+
+## Embeddings Endpoint Coverage
+
+OpenAI's `POST /v1/embeddings` operation returns `object:"list"` containing
+`object:"embedding"` data items plus prompt-token usage. The bridge implements
+a local deterministic compatibility adapter so OpenAI SDKs, retrieval tests,
+and lightweight evaluation tools can request embedding-shaped vectors even when
+the upstream provider only exposes Chat Completions.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/embeddings` | Implemented locally | Accepts string input, arrays of strings/items, token id arrays, `dimensions`, and `encoding_format:"float"` or `"base64"`; returns deterministic normalized hashed-semantic vectors with OpenAI-style `object`, `data`, `model`, and `usage` fields |
+
+This is not a hosted OpenAI embedding model. It uses the same local
+hashed-semantic feature space used by the local vector-store search adapter,
+defaults to `CODEXCOMPAT_EMBEDDINGS_MODEL=hashed-semantic-256` and
+`CODEXCOMPAT_EMBEDDINGS_DIMENSIONS=256`, and caps requested dimensions at 3072.
+The `model` response field echoes the request model when provided so SDKs that
+require a model id can still validate the response shape.
 
 ## Uploads, Files and Vector Stores Endpoint Coverage
 
@@ -514,6 +534,8 @@ Configuration:
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local file/vector-store state path; keep outside Git |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum retrieved chunks injected into Chat context; direct vector-store search defaults to 10 and accepts up to 50 via `max_num_results` |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local text files |
+| `CODEXCOMPAT_EMBEDDINGS_MODEL` | `hashed-semantic-256` | Model id returned by local `/v1/embeddings` when the request omits `model` |
+| `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` | `256` | Default local `/v1/embeddings` vector dimensions; requests may override `dimensions` from 1 to 3072 |
 | `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git and prune with runtime policy if needed |
 | `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at the official 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
 | `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at the official 64 MB Part limit |
@@ -585,7 +607,7 @@ interactive service policies, and stronger artifact lifecycle controls.
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
-| OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, and citations, but it is not OpenAI's managed semantic vector search, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | `computer_use` | Requires computer-use action loop | Add explicit local tool bridge if Codex exposes this over Responses |

@@ -272,6 +272,26 @@ function buildSuites(defaultModel) {
         check: ({ json }) => json?.object === "model" && json.id === defaultModel,
       },
       {
+        id: "embeddings-local",
+        mode: "embeddings",
+        request: {
+          model: "text-embedding-3-small",
+          input: ["bridge embedding alpha", "bridge embedding vehicle repair"],
+          dimensions: 32,
+          encoding_format: "float",
+        },
+        check: ({ json }) => json?.object === "list"
+          && json.model === "text-embedding-3-small"
+          && json.data?.length === 2
+          && json.data.every((item, index) => item.object === "embedding"
+            && item.index === index
+            && Array.isArray(item.embedding)
+            && item.embedding.length === 32)
+          && json.data[0].embedding.some((value) => value !== 0)
+          && json.usage?.total_tokens > 0
+          && json.compatibility?.provider === "local",
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -334,6 +354,8 @@ function buildSuites(defaultModel) {
           metadata: { suite: "chat-stream-life-initial" },
           messages: [{ role: "user", content: "Stream the exact string chat-stream-life-ok." }],
           max_tokens: 128,
+          temperature: 0,
+          thinking: { type: "disabled" },
         },
         check: ({ id, text, fetched, updated, messages, list, oldList, deleted, afterDelete, postDeleteList }) => /chat-stream-life-ok/i.test(text)
           && fetched?.object === "chat.completion"
@@ -1088,6 +1110,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "chat") {
       return await runJsonCase(testCase, context, started, "/v1/chat/completions", chatOutputText, chatUsage);
+    }
+    if (testCase.mode === "embeddings") {
+      return await runJsonCase(testCase, context, started, "/v1/embeddings", embeddingOutputText, embeddingUsage);
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
@@ -2266,6 +2291,10 @@ function completionOutputText(response) {
     .join("");
 }
 
+function embeddingOutputText(response) {
+  return `embeddings:${response?.data?.length || 0}x${response?.data?.[0]?.embedding?.length || 0}`;
+}
+
 function responseUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -2289,6 +2318,15 @@ function completionUsage(response) {
   return {
     input_tokens: usage.prompt_tokens || 0,
     output_tokens: usage.completion_tokens || 0,
+    total_tokens: usage.total_tokens || 0,
+  };
+}
+
+function embeddingUsage(response) {
+  const usage = response?.usage || {};
+  return {
+    input_tokens: usage.prompt_tokens || 0,
+    output_tokens: 0,
     total_tokens: usage.total_tokens || 0,
   };
 }

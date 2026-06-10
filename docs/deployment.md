@@ -113,6 +113,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output; configurable up to 50 |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local Files API content; bytes are preserved and text-like files are indexed for local file search |
+| `CODEXCOMPAT_EMBEDDINGS_MODEL` | `hashed-semantic-256` | Model id returned by local `/v1/embeddings` when the request omits `model` |
+| `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` | `256` | Default local `/v1/embeddings` vector dimensions; requests may override `dimensions` from 1 to 3072 |
 | `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at OpenAI's 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
 | `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at OpenAI's 64 MB Part limit |

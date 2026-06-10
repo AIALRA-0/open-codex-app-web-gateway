@@ -15,6 +15,7 @@ const {
   prepareInputFileContext,
 } = require("./input_files");
 const {
+  LOCAL_EMBEDDING_DIMENSIONS,
   annotateFileSearchResponse,
   attachFileSearchOutput,
   fileSearchCompatibility,
@@ -23,6 +24,7 @@ const {
   localFileSearchToolTypes,
   LocalFileSearchStore,
   prepareFileSearchContext,
+  semanticVector,
 } = require("./local_file_search");
 const {
   LocalUploadStore,
@@ -111,6 +113,8 @@ function loadConfig(overrides = {}) {
     providerApiKey: process.env[apiKeyEnv] || process.env.CODEXCOMPAT_PROVIDER_API_KEY || "",
     providerApiKeyEnv: apiKeyEnv,
     defaultModel: process.env.CODEXCOMPAT_DEFAULT_MODEL || "deepseek-v4-pro",
+    embeddingsModel: process.env.CODEXCOMPAT_EMBEDDINGS_MODEL || "hashed-semantic-256",
+    embeddingsDimensions: numberFromEnv("CODEXCOMPAT_EMBEDDINGS_DIMENSIONS", LOCAL_EMBEDDING_DIMENSIONS, 1, 3072),
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     stateDir,
@@ -2875,6 +2879,138 @@ function localModelObject(modelId) {
   };
 }
 
+async function handleEmbeddings(req, res, config) {
+  const request = await readJson(req);
+  let inputs = [];
+  try {
+    inputs = normalizeEmbeddingInputs(request.input);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message, {
+      type: "invalid_request_error",
+      code: error.code || "invalid_embedding_input",
+      param: "input",
+    });
+    return;
+  }
+
+  const dimensions = normalizeRequestedEmbeddingDimensions(request.dimensions, config);
+  if (!dimensions.ok) {
+    sendError(res, 400, dimensions.error, {
+      type: "invalid_request_error",
+      code: "invalid_embedding_dimensions",
+      param: "dimensions",
+    });
+    return;
+  }
+
+  const encodingFormat = request.encoding_format || "float";
+  if (!["float", "base64"].includes(encodingFormat)) {
+    sendError(res, 400, "encoding_format must be float or base64", {
+      type: "invalid_request_error",
+      code: "invalid_embedding_encoding_format",
+      param: "encoding_format",
+    });
+    return;
+  }
+
+  const model = request.model || config.embeddingsModel || `hashed-semantic-${dimensions.value}`;
+  const data = inputs.map((input, index) => {
+    const vector = normalizedEmbeddingVector(input.text, dimensions.value);
+    return {
+      object: "embedding",
+      embedding: encodingFormat === "base64" ? embeddingVectorToBase64(vector) : vector,
+      index,
+    };
+  });
+  const promptTokens = inputs.reduce((sum, input) => sum + input.tokens, 0);
+
+  sendJson(res, 200, {
+    object: "list",
+    data,
+    model,
+    usage: {
+      prompt_tokens: promptTokens,
+      total_tokens: promptTokens,
+    },
+    compatibility: {
+      provider: "local",
+      model: "hashed-semantic",
+      dimensions: dimensions.value,
+      encoding_format: encodingFormat,
+      reason: "chat_provider_embedding_compatibility",
+    },
+  });
+}
+
+function normalizeEmbeddingInputs(input) {
+  if (input === undefined || input === null) {
+    const error = new Error("input is required");
+    error.status = 400;
+    throw error;
+  }
+
+  if (Array.isArray(input)) {
+    if (!input.length) {
+      const error = new Error("input array must not be empty");
+      error.status = 400;
+      throw error;
+    }
+    if (input.every((item) => Number.isInteger(item))) {
+      return [embeddingInputFromTokenIds(input)];
+    }
+    return input.map((item) => Array.isArray(item) && item.every((token) => Number.isInteger(token))
+      ? embeddingInputFromTokenIds(item)
+      : embeddingInputFromText(item));
+  }
+
+  return [embeddingInputFromText(input)];
+}
+
+function embeddingInputFromTokenIds(tokens) {
+  return {
+    text: tokens.map((token) => String(token)).join(" "),
+    tokens: tokens.length,
+  };
+}
+
+function embeddingInputFromText(value) {
+  const text = stringifyContent(value);
+  return {
+    text,
+    tokens: estimateEmbeddingTokens(text),
+  };
+}
+
+function estimateEmbeddingTokens(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return 0;
+  const words = normalized.split(/\s+/).filter(Boolean).length;
+  return Math.max(1, Math.max(words, Math.ceil(normalized.length / 4)));
+}
+
+function normalizeRequestedEmbeddingDimensions(value, config) {
+  const fallback = Number(config.embeddingsDimensions || LOCAL_EMBEDDING_DIMENSIONS);
+  if (value == null) return { ok: true, value: fallback };
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 1 || parsed > 3072 || Math.trunc(parsed) !== parsed) {
+    return { ok: false, error: "dimensions must be an integer between 1 and 3072" };
+  }
+  return { ok: true, value: parsed };
+}
+
+function normalizedEmbeddingVector(text, dimensions) {
+  const vector = semanticVector(text, dimensions);
+  const norm = Math.sqrt(vector.reduce((sum, value) => sum + value * value, 0));
+  if (!norm) return vector.map(() => 0);
+  return vector.map((value) => Number((value / norm).toFixed(8)));
+}
+
+function embeddingVectorToBase64(vector) {
+  const buffer = Buffer.alloc(vector.length * 4);
+  vector.forEach((value, index) => buffer.writeFloatLE(value, index * 4));
+  return buffer.toString("base64");
+}
+
 function handleResponseGet(res, store, responseId) {
   const record = store.get(responseId);
   if (!record?.response) {
@@ -3255,6 +3391,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "GET" && url.pathname === "/v1/models") {
         await handleModels(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/embeddings") {
+        await handleEmbeddings(req, res, config);
         return;
       }
 

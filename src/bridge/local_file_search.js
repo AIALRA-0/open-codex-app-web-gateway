@@ -906,15 +906,22 @@ function scoreSemanticText(query, text) {
   return cosineSimilarity(semanticVector(query), semanticVector(text));
 }
 
-function semanticVector(value) {
-  const vector = new Array(LOCAL_EMBEDDING_DIMENSIONS).fill(0);
+function semanticVector(value, dimensions = LOCAL_EMBEDDING_DIMENSIONS) {
+  const size = normalizeEmbeddingDimensions(dimensions);
+  const vector = new Array(size).fill(0);
   for (const feature of semanticFeatures(value)) {
     const hash = hashFeature(feature);
-    const index = Math.abs(hash) % LOCAL_EMBEDDING_DIMENSIONS;
+    const index = Math.abs(hash) % size;
     const sign = hash & 1 ? -1 : 1;
     vector[index] += sign;
   }
   return vector;
+}
+
+function normalizeEmbeddingDimensions(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return LOCAL_EMBEDDING_DIMENSIONS;
+  return Math.max(1, Math.min(3072, Math.trunc(parsed)));
 }
 
 function semanticFeatures(value) {
@@ -1522,6 +1529,7 @@ function parseLimit(value, fallback, max) {
 }
 
 module.exports = {
+  LOCAL_EMBEDDING_DIMENSIONS,
   LocalFileSearchStore,
   annotateFileSearchResponse,
   attachFileSearchOutput,
@@ -1530,4 +1538,5 @@ module.exports = {
   injectFileSearchMessages,
   localFileSearchToolTypes,
   prepareFileSearchContext,
+  semanticVector,
 };

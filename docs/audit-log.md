@@ -2695,3 +2695,74 @@ Open follow-ups:
   - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
     193 GB filesystem with 39 GB available; bridge state is 1.2 MB and output
     artifacts are 4.5 MB.
+
+## 2026-06-10 Local Embeddings Endpoint
+
+- Added local OpenAI-compatible `POST /v1/embeddings` coverage so clients,
+  retrieval tests, and evaluation tooling can request embedding-shaped vectors
+  even when the upstream provider only exposes Chat Completions.
+- Official source checked on 2026-06-10:
+  - OpenAI OpenAPI operation `createEmbedding` at `/v1/embeddings` creates an
+    embedding vector representing input text and returns `object:"list"` with
+    `object:"embedding"` data items, `index`, `model`, and prompt-token usage.
+- Implemented a deterministic local adapter:
+  - accepts single string input, arrays of strings/items, token id arrays, and
+    arrays of token id arrays;
+  - supports `dimensions` from 1 to 3072;
+  - supports `encoding_format:"float"` and `encoding_format:"base64"`;
+  - returns normalized hashed-semantic vectors using the same local feature
+    space as the Vector Store hybrid search adapter;
+  - returns OpenAI-style `object`, `data`, `model`, and `usage` fields plus a
+    `compatibility` block that makes the local provider boundary explicit;
+  - adds `CODEXCOMPAT_EMBEDDINGS_MODEL` and
+    `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` configuration.
+- Added local server tests for deterministic float vectors, batched inputs,
+  base64 token inputs, parameter validation, and no upstream provider calls.
+- Added live `embeddings-local` to `bridge-regression`.
+- Updated the compatibility matrix, deployment docs, and evaluation plan.
+- Tightened the live `chat-stream-lifecycle` eval request with
+  `temperature:0` and `thinking:{type:"disabled"}` after one full-regression
+  attempt showed DeepSeek could spend the entire Chat stream budget without
+  ordinary content deltas when thinking mode was left implicit. The bridge
+  behavior was not changed; the eval now tests protocol lifecycle rather than
+  provider sampling variance.
+- Verified:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/local_file_search.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm test`: 81/81 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `embeddings-local` passed 1/1, elapsed 47 ms, output
+    `embeddings:2x32`, and local usage 14 prompt tokens.
+  - Targeted live `chat-stream-lifecycle` passed 1/1 after eval hardening,
+    elapsed 1438 ms, output `chat-stream-life-ok`, and total usage 19 tokens.
+  - First full live `bridge-regression` attempt passed 30/31; only
+    `chat-stream-lifecycle` failed because the model emitted no ordinary
+    content deltas before hitting its output cap with implicit thinking mode.
+  - Full live `bridge-regression` after eval hardening passed 31/31 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1600 ms, P95 latency
+    3820 ms, and total usage 8490 tokens.
+  - Direct `/v1/embeddings` float probe returned HTTP 200,
+    `object:"list"`, two 24-dimensional vectors, model
+    `text-embedding-3-small`, and usage 12 prompt tokens.
+  - Direct `/v1/embeddings` base64 token probe returned HTTP 200,
+    `object:"list"`, 12 dimensions encoded as 48 bytes, and usage 3 prompt
+    tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq88bold`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 239 runtime candidates,
+    selected 7 old UI screenshots by retention policy, deleted 0, and reported
+    0 errors.
+  - Disk/storage check: `/srv/aialra/apps` and `/srv/aialra/data` are on a
+    193 GB filesystem with 39 GB available; bridge state is 1.3 MB and output
+    artifacts are 4.6 MB.
+- Remaining known gap: local `/v1/embeddings` is deterministic compatibility
+  infrastructure, not a hosted/model-backed OpenAI embedding model. Future
+  work should add provider-backed embeddings and ANN indexing while preserving
+  this local fallback for no-key and disk-bounded tests.
