@@ -10,6 +10,7 @@
     "test": "node --test",
     "eval:protocol": "node scripts/eval-harness.mjs --suite protocol-smoke",
     "eval:bridge": "node scripts/eval-harness.mjs --suite bridge-regression",
+    "smoke:ui": "node scripts/ui-smoke.mjs",
     "smoke:bridge": "node scripts/smoke-test-bridge.mjs",
     "secret-scan": "node scripts/secret-scan.mjs"
   },

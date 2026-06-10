@@ -15,8 +15,12 @@ Codex/OpenAI Responses behavior.
 2. UI and workflow correctness
 
 - Browser smoke test for `opencodexapp.aialra.online`.
-- Cover login, dashboard, project open, thread create, prompt send, streaming,
-  stop/retry, file upload, generated image/file display, and page reload.
+- `npm run smoke:ui -- --session default --timeout-ms 180000` covers app load,
+  authenticated session reuse, sidebar/search/settings controls, prompt send,
+  model response visibility, console errors, screenshot capture, and reload
+  persistence.
+- Expand coverage for login from a clean browser, project open, stop/retry,
+  file upload, generated image/file display, and complete page switching.
 - Record screenshots and console logs under ignored `output/playwright/`.
 
 3. Agent task quality

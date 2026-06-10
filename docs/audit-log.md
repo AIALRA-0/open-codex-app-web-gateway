@@ -104,3 +104,21 @@ Open follow-ups:
   200, and 2 stored messages.
 - Full `bridge-regression` passed 7/7, pass rate 1.0, average latency 2013 ms,
   P95 latency 3636 ms, total usage 913 tokens.
+
+## 2026-06-10 UI Workflow Smoke Automation
+
+- Added `scripts/ui-smoke.mjs` and `npm run smoke:ui`.
+- The script uses the local Playwright CLI wrapper instead of adding Playwright
+  as a repository dependency.
+- It verifies:
+  - app load with an authenticated Playwright session
+  - sidebar/search/settings controls
+  - prompt submission from the composer
+  - visible model response marker
+  - reload persistence
+  - console error/warning collection
+  - screenshot artifact capture under ignored `output/playwright/`
+- Live result against `https://opencodexapp.aialra.online`:
+  `smoke:ui -- --session default --timeout-ms 180000` passed, marker
+  `ui-smoke-mq7mzhmo` appeared twice before reload and once after reload,
+  console errors 0, warnings 0.

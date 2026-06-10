@@ -117,9 +117,13 @@ curl http://127.0.0.1:12912/healthz
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+npm run smoke:ui -- --session default --timeout-ms 180000
 curl http://127.0.0.1:12920/
 curl http://127.0.0.1:12923/login
 ```
 
-Then test the browser UI with Playwright: login, create thread, send prompt,
-upload file, switch pages, interrupt a turn, resume a turn, and reload.
+`smoke:ui` uses the local Playwright CLI wrapper and expects the selected
+Playwright session to already be authenticated. It writes screenshots under the
+ignored `output/playwright/` directory. Broader manual/automated UI coverage
+still needs upload, interrupt/resume, generated artifact display, and full page
+switching checks.
