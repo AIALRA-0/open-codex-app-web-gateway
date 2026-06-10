@@ -111,6 +111,7 @@ class LocalUploadStore {
       filename: upload.filename,
       purpose: upload.purpose,
       content,
+      mime_type: upload.mime_type,
       metadata: {
         upload_id: upload.id,
         mime_type: upload.mime_type,

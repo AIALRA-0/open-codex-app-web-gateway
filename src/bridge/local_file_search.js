@@ -116,9 +116,15 @@ class LocalFileSearchStore {
     this.maxFileBytes = config.fileSearchMaxFileBytes || 4 * 1024 * 1024;
   }
 
-  createFile({ filename, purpose = "assistants", content = "", metadata = {} }) {
-    const body = Buffer.isBuffer(content) ? content.toString("utf8") : stringifyContent(content);
-    const bytes = Buffer.byteLength(body);
+  createFile({ filename, purpose = "assistants", content = "", metadata = {}, mime_type, mimeType }) {
+    const safeFilename = sanitizeFilename(filename || "upload.txt");
+    const mediaType = mime_type || mimeType || metadata?.mime_type || metadata?.mimeType || "";
+    const fileMetadata = isPlainObject(metadata) ? {
+      ...metadata,
+      ...(mediaType && !metadata.mime_type ? { mime_type: String(mediaType) } : {}),
+    } : (mediaType ? { mime_type: String(mediaType) } : {});
+    const buffer = contentToBuffer(content);
+    const bytes = buffer.length;
     if (bytes > this.maxFileBytes) {
       const error = new Error(`file exceeds local limit of ${this.maxFileBytes} bytes`);
       error.status = 413;
@@ -130,12 +136,19 @@ class LocalFileSearchStore {
       object: "file",
       bytes,
       created_at: nowSeconds(),
-      filename: sanitizeFilename(filename || "upload.txt"),
+      filename: safeFilename,
       purpose: purpose || "assistants",
-      metadata: isPlainObject(metadata) ? metadata : {},
+      metadata: fileMetadata,
       status: "processed",
     };
-    this.writeJson(this.fileJsonPath(file.id), { file, content: body });
+    const record = {
+      file,
+      content_base64: buffer.toString("base64"),
+      content_encoding: "base64",
+    };
+    const text = textContentForStorage(buffer, safeFilename, mediaType);
+    if (text != null) record.content = text;
+    this.writeJson(this.fileJsonPath(file.id), record);
     return file;
   }
 
@@ -157,7 +170,11 @@ class LocalFileSearchStore {
 
   getFileContent(fileId) {
     const record = this.getFileRecord(fileId);
-    return typeof record?.content === "string" ? record.content : null;
+    return recordTextContent(record);
+  }
+
+  getFileContentBuffer(fileId) {
+    return recordContentBuffer(this.getFileRecord(fileId));
   }
 
   deleteFile(fileId) {
@@ -358,8 +375,9 @@ class LocalFileSearchStore {
     const attached = this.getVectorStoreFile(storeId, fileId);
     if (!attached) return null;
     const record = this.getFileRecord(fileId);
-    if (!record?.file || typeof record.content !== "string") return null;
-    const chunks = chunkText(record.content, attached.chunking_strategy);
+    const text = recordTextContent(record);
+    if (!record?.file || typeof text !== "string") return null;
+    const chunks = chunkText(text, attached.chunking_strategy);
     const content = chunks.map((chunk) => ({ type: "text", text: chunk.text }));
     return {
       object: "vector_store.file_content.page",
@@ -395,7 +413,8 @@ class LocalFileSearchStore {
 
     for (const item of attached) {
       const record = this.getFileRecord(item.id);
-      if (!record?.file || typeof record.content !== "string") continue;
+      const text = recordTextContent(record);
+      if (!record?.file || typeof text !== "string") continue;
       const attributes = {
         ...(record.file.metadata || {}),
         ...(item.attributes || {}),
@@ -404,7 +423,7 @@ class LocalFileSearchStore {
         purpose: record.file.purpose,
       };
       if (!matchesMetadataFilter(filters, attributes)) continue;
-      for (const chunk of chunkText(record.content, item.chunking_strategy)) {
+      for (const chunk of chunkText(text, item.chunking_strategy)) {
         const scoredQueries = scoreQueries(queries, chunk.text, record.file.filename, rankingOptions);
         const score = scoredQueries[0]?.score || 0;
         if (score <= 0 || score < rankingOptions.score_threshold) continue;
@@ -1418,6 +1437,64 @@ function normalizeBatchFiles(body = {}) {
     }
   }
   return entries;
+}
+
+function contentToBuffer(content) {
+  if (Buffer.isBuffer(content)) return content;
+  if (content instanceof Uint8Array) return Buffer.from(content);
+  if (content && typeof content === "object" && content.type === "Buffer" && Array.isArray(content.data)) {
+    return Buffer.from(content.data);
+  }
+  return Buffer.from(stringifyContent(content), "utf8");
+}
+
+function recordContentBuffer(record) {
+  if (!record) return null;
+  if (typeof record.content_base64 === "string") {
+    try {
+      return Buffer.from(record.content_base64, "base64");
+    } catch {
+      return null;
+    }
+  }
+  if (typeof record.content === "string") return Buffer.from(record.content, "utf8");
+  return null;
+}
+
+function recordTextContent(record) {
+  if (typeof record?.content === "string") return record.content;
+  return null;
+}
+
+function textContentForStorage(buffer, filename, mediaType) {
+  if (!isTextStorageCandidate(filename, mediaType)) return null;
+  const text = buffer.toString("utf8");
+  if (text.includes("\uFFFD")) return null;
+  return text.replace(/\u0000/g, "");
+}
+
+function isTextStorageCandidate(filename, mediaType) {
+  const media = String(mediaType || "").toLowerCase().split(";")[0].trim();
+  if (media.startsWith("text/")) return true;
+  if ([
+    "application/json",
+    "application/jsonl",
+    "application/x-jsonlines",
+    "application/javascript",
+    "application/typescript",
+    "application/xml",
+    "application/x-yaml",
+    "application/yaml",
+    "application/x-ndjson",
+  ].includes(media)) return true;
+  const extension = path.extname(String(filename || "")).toLowerCase();
+  return new Set([
+    ".txt", ".md", ".markdown", ".json", ".jsonl", ".ndjson", ".csv", ".tsv",
+    ".xml", ".html", ".htm", ".css", ".js", ".jsx", ".ts", ".tsx", ".mjs",
+    ".cjs", ".py", ".rb", ".go", ".rs", ".java", ".c", ".h", ".cpp", ".hpp",
+    ".cs", ".php", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".sql", ".yaml",
+    ".yml", ".toml", ".ini", ".env", ".log",
+  ]).has(extension);
 }
 
 function nowSeconds() {

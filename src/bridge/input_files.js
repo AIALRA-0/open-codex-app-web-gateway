@@ -105,8 +105,12 @@ async function resolveInputFile(part, config = {}, fileStore, options = {}) {
 
 function resolveFileId(part, config = {}, fileStore) {
   const file = fileStore?.getFile?.(part.file_id);
-  const content = fileStore?.getFileContent?.(part.file_id);
-  if (!file || content == null) {
+  const fallbackContent = fileStore?.getFileContent?.(part.file_id);
+  const buffer = fileStore?.getFileContentBuffer?.(part.file_id)
+    || (fallbackContent != null
+      ? Buffer.from(fallbackContent, "utf8")
+      : null);
+  if (!file || buffer == null) {
     return {
       source: "file_id",
       file_id: part.file_id,
@@ -119,8 +123,8 @@ function resolveFileId(part, config = {}, fileStore) {
     source: "file_id",
     file_id: part.file_id,
     filename: part.filename || file.filename,
-    media_type: part.media_type || file.mime_type || guessMediaType(file.filename),
-    buffer: Buffer.from(content, "utf8"),
+    media_type: part.media_type || file.mime_type || file.metadata?.mime_type || guessMediaType(file.filename),
+    buffer,
     config,
   });
 }

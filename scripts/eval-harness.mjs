@@ -376,6 +376,35 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
       },
       {
+        id: "responses-upload-input-file-pdf",
+        mode: "responses-upload-input-file",
+        upload: {
+          filename: "bridge-upload-input-file.pdf",
+          purpose: "user_data",
+          mime_type: "application/pdf",
+          content_base64: tinyPdfBase64("Bridge Uploads PDF fixture. The exact answer is upload-pdf-ok."),
+        },
+        request: ({ fileId }) => ({
+          model: defaultModel,
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_file", file_id: fileId },
+              { type: "input_text", text: "Using the uploaded PDF content, return exactly this text and nothing else: upload-pdf-ok" },
+            ],
+          }],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, upload, fileId }) => /upload-pdf-ok/i.test(text)
+          && upload?.status === "completed"
+          && upload?.file?.id === fileId
+          && upload?.file?.metadata?.mime_type === "application/pdf"
+          && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
+          && json.metadata?.compatibility?.local_input_files?.failed_count === 0
+          && json.metadata?.compatibility?.local_input_files?.pdf_extracted_count === 1,
+      },
+      {
         id: "responses-input-file-url",
         mode: "responses-input-file-url",
         fileUrl: {
@@ -1629,14 +1658,16 @@ async function runUploadInputFileCase(testCase, context, started) {
   let file = null;
   try {
     const fixture = testCase.upload || {};
-    const content = String(fixture.content || "");
-    const splitAt = Math.max(1, Math.floor(content.length / 2));
-    const firstChunk = content.slice(0, splitAt);
-    const secondChunk = content.slice(splitAt);
+    const contentBuffer = fixture.content_base64
+      ? Buffer.from(String(fixture.content_base64), "base64")
+      : Buffer.from(String(fixture.content || ""), "utf8");
+    const splitAt = Math.max(1, Math.floor(contentBuffer.length / 2));
+    const firstChunk = contentBuffer.subarray(0, splitAt);
+    const secondChunk = contentBuffer.subarray(splitAt);
     const uploadResponse = await postJson(`${baseUrl}/v1/uploads`, {
       filename: fixture.filename || "bridge-upload.txt",
       purpose: fixture.purpose || "user_data",
-      bytes: Buffer.byteLength(content, "utf8"),
+      bytes: contentBuffer.length,
       mime_type: fixture.mime_type || "text/plain",
       expires_after: { anchor: "created_at", seconds: 3600 },
     });
@@ -1651,7 +1682,7 @@ async function runUploadInputFileCase(testCase, context, started) {
     const upload = JSON.parse(uploadBody);
 
     const secondPartResponse = await postJson(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
-      data_base64: Buffer.from(secondChunk, "utf8").toString("base64"),
+      data_base64: secondChunk.toString("base64"),
     });
     const secondPartBody = await secondPartResponse.text();
     if (!secondPartResponse.ok) {
@@ -1664,7 +1695,11 @@ async function runUploadInputFileCase(testCase, context, started) {
     }
     const secondPart = JSON.parse(secondPartBody);
 
-    const firstPartResponse = await postRaw(`${baseUrl}/v1/uploads/${upload.id}/parts`, firstChunk, "text/plain");
+    const firstPartResponse = await postRaw(
+      `${baseUrl}/v1/uploads/${upload.id}/parts`,
+      firstChunk,
+      fixture.mime_type || "application/octet-stream",
+    );
     const firstPartBody = await firstPartResponse.text();
     if (!firstPartResponse.ok) {
       return finishResult(testCase, context, started, {

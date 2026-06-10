@@ -884,13 +884,18 @@ function handleFileGet(res, fileSearchStore, fileId) {
 }
 
 function handleFileContent(res, fileSearchStore, fileId) {
-  const content = fileSearchStore.getFileContent(fileId);
-  if (content == null) {
+  const file = fileSearchStore.getFile(fileId);
+  const fallbackContent = fileSearchStore.getFileContent(fileId);
+  const content = fileSearchStore.getFileContentBuffer?.(fileId)
+    || (fallbackContent != null
+      ? Buffer.from(fallbackContent, "utf8")
+      : null);
+  if (!file || content == null) {
     sendError(res, 404, `file not found: ${fileId}`, { code: "file_not_found" });
     return;
   }
   res.writeHead(200, {
-    "content-type": "text/plain; charset=utf-8",
+    "content-type": file.mime_type || file.metadata?.mime_type || "application/octet-stream",
     "cache-control": "no-store",
   });
   res.end(content);
@@ -1289,30 +1294,36 @@ async function readFileCreateRequest(req, config) {
   const contentType = req.headers["content-type"] || "";
   if (contentType.includes("application/json")) {
     const body = await readJson(req);
+    const content = typeof body.content_base64 === "string"
+      ? decodeBase64Payload(body.content_base64)
+      : body.content || "";
     return {
       filename: body.filename || "upload.txt",
       purpose: body.purpose || "assistants",
-      content: body.content || "",
+      content,
       metadata: body.metadata || {},
+      mime_type: body.mime_type || body.mimeType,
     };
   }
 
   if (contentType.includes("multipart/form-data")) {
-    const form = parseMultipartForm(await readRawBody(req, config.fileSearchMaxFileBytes + 1024 * 1024), contentType);
-    const file = form.files[0];
+    const form = parseMultipartFormBinary(await readRawBody(req, config.fileSearchMaxFileBytes + 1024 * 1024), contentType);
+    const file = form.files.find((item) => item.name === "file") || form.files[0];
     return {
       filename: file?.filename || form.fields.filename || "upload.txt",
       purpose: form.fields.purpose || "assistants",
       content: file?.content || form.fields.content || "",
       metadata: parseJsonOrNull(form.fields.metadata) || {},
+      mime_type: form.fields.mime_type || file?.content_type,
     };
   }
 
-  const body = await readBody(req, config.fileSearchMaxFileBytes);
+  const body = await readRawBody(req, config.fileSearchMaxFileBytes);
   return {
     filename: req.headers["x-filename"] || "upload.txt",
     purpose: req.headers["x-purpose"] || "assistants",
     content: body,
+    mime_type: req.headers["content-type"],
   };
 }
 
@@ -1418,10 +1429,12 @@ function parseMultipartFormBinary(buffer, contentType) {
     const rawHeaders = part.subarray(0, separator).toString("utf8");
     const content = part.subarray(separator + separatorLength);
     const disposition = rawHeaders.split(/\r?\n/).find((line) => /^content-disposition:/i.test(line)) || "";
+    const partContentType = rawHeaders.split(/\r?\n/).find((line) => /^content-type:/i.test(line)) || "";
     const name = disposition.match(/name="([^"]+)"/)?.[1];
     const filename = disposition.match(/filename="([^"]*)"/)?.[1];
+    const contentTypeHeader = partContentType.replace(/^content-type:\s*/i, "").trim();
     if (!name) continue;
-    if (filename != null) files.push({ name, filename, content });
+    if (filename != null) files.push({ name, filename, content, content_type: contentTypeHeader || undefined });
     else fields[name] = content.toString("utf8");
   }
 

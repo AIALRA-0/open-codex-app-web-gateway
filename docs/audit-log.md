@@ -2511,3 +2511,65 @@ Open follow-ups:
   - `npm run prune:runtime -- --dry-run` scanned 222 runtime candidates,
     selected 2 old UI screenshots by retention policy, deleted 0, and reported
     0 errors.
+
+## 2026-06-10 Binary-Safe Local Files and Upload Completion
+
+- Closed the next Uploads/Files fidelity gap: completed Uploads and direct
+  Files API uploads now preserve original bytes instead of converting every
+  payload through UTF-8 text.
+- Official sources checked on 2026-06-10:
+  - OpenAI Files API accepts multipart file uploads for use across endpoints;
+    the hosted limit is up to 512 MB per file, while this bridge keeps a much
+    smaller local default for `/srv/aialra/apps` disk safety.
+  - The Files API returns File objects with `id`, `object:"file"`, `bytes`,
+    `created_at`, `filename`, and `purpose`; file content is later retrieved
+    from `/v1/files/{file_id}/content`.
+  - OpenAI Upload completion creates a regular File object from the ordered
+    parts; that File must be usable by the rest of the platform.
+- Updated the local Files store so new records include `content_base64` and
+  `content_encoding:"base64"` for byte preservation. Text-like files also keep
+  the previous `content` text field for local file-search indexing and
+  backwards compatibility with existing records.
+- Updated direct Files API ingestion:
+  - multipart parsing now uses the binary parser and preserves each file
+    part's content type;
+  - raw uploads use `Buffer` content instead of `readBody()` UTF-8 text;
+  - JSON uploads accept `content_base64` for binary fixtures and still accept
+    legacy `content` strings.
+- Updated `/v1/files/{file_id}/content` to return stored bytes with the best
+  local content type instead of always returning `text/plain`.
+- Updated Responses `input_file.file_id` resolution to read
+  `getFileContentBuffer()` first, so completed Upload PDFs can flow through
+  the existing local PDF text-layer extractor.
+- Added live `responses-upload-input-file-pdf` to `bridge-regression`; it
+  uploads a tiny PDF through the Uploads API in two parts, completes it into a
+  File, and verifies the model sees the extracted PDF text via Responses
+  `input_file`.
+- Updated the compatibility matrix, deployment docs, and evaluation plan to
+  distinguish byte-preserving Files/Uploads from local text-only file-search
+  indexing.
+- Verified:
+  - `node --check` passed for `src/bridge/local_file_search.js`,
+    `src/bridge/input_files.js`, `src/bridge/server.js`, and
+    `scripts/eval-harness.mjs`.
+  - Targeted local Uploads server tests passed inside the full server test run,
+    covering text Uploads, binary PDF Uploads, byte-for-byte content download,
+    PDF `input_file` extraction, cancel blocking, and byte mismatch errors.
+  - `npm test`: 76/76 passing tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-upload-input-file-pdf` passed 1/1 against
+    `deepseek-v4-pro`, elapsed 1359 ms, output `upload-pdf-ok`, and total
+    usage 173 tokens.
+  - Full live `bridge-regression` passed 28/28 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1970 ms, P95 latency 4945 ms, and total usage
+    8445 tokens.
+  - Public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - Bridge, web, and app-server services were all active.
+  - UI smoke passed with marker `ui-smoke-mq874lt8`, reload persistence
+    confirmed, console errors 0, warnings 0.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 229 runtime candidates,
+    selected 5 old UI screenshots by retention policy, deleted 0, and reported
+    0 errors.

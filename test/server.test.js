@@ -1924,6 +1924,99 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
   });
 });
 
+test("local Uploads and Files preserve binary bytes for PDF input_file extraction", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Binary Upload PDF says binary-upload-ok/.test(message.content || "")));
+    assert.ok(call.body.messages.some((message) => /extraction_method: pdftotext/.test(message.content || "")));
+    assert.ok(!call.body.messages.some((message) => /%PDF-1\.4/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_binary_upload_input_file",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "binary-upload-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const pdf = tinyPdfBuffer("Binary Upload PDF says binary-upload-ok.");
+    const splitAt = Math.floor(pdf.length / 2);
+
+    const createdUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "binary-upload.pdf",
+        purpose: "user_data",
+        bytes: pdf.length,
+        mime_type: "application/pdf",
+      }),
+    });
+    assert.equal(createdUploadResponse.status, 200);
+    const upload = await createdUploadResponse.json();
+
+    const partTwoResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data_base64: pdf.subarray(splitAt).toString("base64"),
+      }),
+    });
+    assert.equal(partTwoResponse.status, 200);
+    const partTwo = await partTwoResponse.json();
+
+    const partOneResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: pdf.subarray(0, splitAt),
+    });
+    assert.equal(partOneResponse.status, 200);
+    const partOne = await partOneResponse.json();
+
+    const completedResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [partOne.id, partTwo.id] }),
+    });
+    assert.equal(completedResponse.status, 200);
+    const completed = await completedResponse.json();
+    assert.equal(completed.file.bytes, pdf.length);
+    assert.equal(completed.file.metadata.mime_type, "application/pdf");
+
+    const contentResponse = await fetch(`${baseUrl}/v1/files/${completed.file.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.equal(contentResponse.headers.get("content-type"), "application/pdf");
+    assert.deepEqual(Buffer.from(await contentResponse.arrayBuffer()), pdf);
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_file", file_id: completed.file.id },
+            { type: "input_text", text: "Using the uploaded PDF, return exactly this text and nothing else: binary-upload-ok" },
+          ],
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "binary-upload-ok");
+    assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+    assert.equal(json.metadata.compatibility.local_input_files.pdf_extracted_count, 1);
+  });
+});
+
 test("local Vector Store file batches attach files and expose batch lifecycle", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
