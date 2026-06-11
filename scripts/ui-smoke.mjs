@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { chromium } from "playwright";
 
 const args = parseArgs(process.argv.slice(2));
@@ -18,9 +19,12 @@ const activePrompt = String(args.get("active-prompt") || process.env.UI_SMOKE_AC
 ].join(" "));
 const outputDir = path.resolve(String(args.get("output-dir") || process.env.UI_SMOKE_OUTPUT_DIR || "output/playwright"));
 const stateDir = path.resolve(String(args.get("state-dir") || process.env.UI_SMOKE_STATE_DIR || "state"));
+const codexHome = path.resolve(String(args.get("codex-home") || process.env.UI_SMOKE_CODEX_HOME || defaultUiSmokeCodexHome()));
+const codexStateDb = path.resolve(String(args.get("codex-state-db") || process.env.UI_SMOKE_CODEX_STATE_DB || path.join(codexHome, "state_5.sqlite")));
 const screenshotPath = path.join(outputDir, `ui-smoke-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
 const username = process.env.UI_SMOKE_USERNAME || process.env.CODEXAPP_USERNAME || "";
 const password = process.env.UI_SMOKE_PASSWORD || process.env.CODEXAPP_PASSWORD || "";
+const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
 
 fs.mkdirSync(outputDir, { recursive: true });
 
@@ -45,6 +49,8 @@ const result = await runWorkflow(page, {
   activePrompt,
   outputDir,
   stateDir,
+  codexHome,
+  codexStateDb,
   screenshotPath,
   username,
   password,
@@ -82,6 +88,12 @@ function parsePositiveInt(value, fallback) {
 function parseBoolean(value, fallback = false) {
   if (value == null || value === "") return fallback;
   return /^(1|true|yes|on)$/i.test(String(value));
+}
+
+function defaultUiSmokeCodexHome() {
+  const deploymentCodexHome = "/srv/aialra/state/opencodexapp-codex-home";
+  if (fs.existsSync(deploymentCodexHome)) return deploymentCodexHome;
+  return process.env.CODEXAPP_CODEX_HOME || process.env.CODEX_HOME || path.join(process.env.HOME || "/tmp", ".codex");
 }
 
 async function runWorkflow(page, config) {
@@ -232,6 +244,66 @@ async function runWorkflow(page, config) {
   async function mainSnippet(max = 240) {
     const text = await mainText();
     return text.replace(/\s+/g, " ").trim().slice(0, max);
+  }
+
+  async function findThreadRecordForMarker(markerValue, timeout = 15000) {
+    const deadline = Date.now() + timeout;
+    do {
+      const thread = queryThreadRecordForMarker(config.codexStateDb, markerValue);
+      if (thread?.rollout_path) return thread;
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(500);
+    } while (true);
+    return null;
+  }
+
+  async function openSidebarThreadByMarker(markerValue) {
+    if (!(await ensureSidebarVisible())) throw new Error("sidebar is not visible before opening generated artifact thread");
+    const opened = await page.evaluate((marker) => {
+      const main = document.querySelector("main");
+      const visible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== "hidden"
+          && style.display !== "none";
+      };
+      const labelFor = (element) => (
+        element.getAttribute("aria-label")
+        || element.getAttribute("title")
+        || element.innerText
+        || element.textContent
+        || ""
+      ).replace(/\s+/g, " ").trim();
+      const candidates = Array.from(document.querySelectorAll("button, a, [role='button']"))
+        .filter((element) => (!main || !main.contains(element)) && visible(element))
+        .map((element) => ({ element, label: labelFor(element), rect: element.getBoundingClientRect() }))
+        .filter((entry) => entry.label.includes(marker));
+      if (candidates.length === 0) return null;
+      candidates.sort((left, right) => left.rect.top - right.rect.top);
+      const target = candidates[0].element;
+      target.scrollIntoView({ block: "center", inline: "nearest" });
+      const rect = target.getBoundingClientRect();
+      target.dispatchEvent(new MouseEvent("mouseover", { bubbles: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+      target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+      target.dispatchEvent(new MouseEvent("mouseup", { bubbles: true, clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 }));
+      target.click();
+      return {
+        tag: target.tagName.toLowerCase(),
+        role: target.getAttribute("role") || "",
+        label: labelFor(target).slice(0, 160),
+        rect: {
+          x: Math.round(rect.x),
+          y: Math.round(rect.y),
+          w: Math.round(rect.width),
+          h: Math.round(rect.height),
+        },
+      };
+    }, markerValue);
+    if (!opened) throw new Error(`thread with marker ${markerValue} was not visible in sidebar`);
+    await page.waitForTimeout(1000);
+    return opened;
   }
 
   async function clickSidebarButtonAndWait(target) {
@@ -537,6 +609,103 @@ async function runWorkflow(page, config) {
     return { page_switches: visited, returned_to_new_chat: true };
   }
 
+  async function exerciseGeneratedImageArtifactDisplay() {
+    const thread = await findThreadRecordForMarker(config.marker);
+    if (!thread?.rollout_path) throw new Error(`no thread rollout found for marker ${config.marker}`);
+
+    const rolloutPath = path.resolve(thread.rollout_path);
+    const sessionsRoot = path.resolve(config.codexHome, "sessions");
+    if (!isPathWithin(rolloutPath, sessionsRoot)) {
+      throw new Error(`thread rollout is outside Codex sessions root: ${rolloutPath}`);
+    }
+    const stat = fs.statSync(rolloutPath);
+    if (!stat.isFile()) throw new Error(`thread rollout is not a file: ${rolloutPath}`);
+    const originalSize = stat.size;
+    const imageCallId = `ui_smoke_generated_image_${safeBridgeId(config.marker)}`;
+    const event = {
+      timestamp: new Date().toISOString(),
+      type: "event_msg",
+      payload: {
+        type: "image_generation_end",
+        call_id: imageCallId,
+        status: "completed",
+        revised_prompt: `UI smoke generated image ${config.marker}`,
+        result: tinyPngBase64,
+      },
+    };
+
+    let details = null;
+    let cleanup = { rollout_truncated: false, original_size: originalSize };
+    try {
+      fs.appendFileSync(rolloutPath, `${JSON.stringify(event)}\n`);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: config.timeoutMs });
+      await waitForAppShell();
+      await page.waitForTimeout(750);
+      const openedThread = await openSidebarThreadByMarker(config.marker);
+      await page.waitForFunction(() => {
+        const main = document.querySelector("main") || document.body;
+        return Array.from(main.querySelectorAll("img")).some((img) => {
+          const src = img.getAttribute("src") || "";
+          const alt = img.getAttribute("alt") || "";
+          const rect = img.getBoundingClientRect();
+          return src.startsWith("data:image/")
+            && /已生成图像|generated image/i.test(alt)
+            && rect.width > 0
+            && rect.height > 0;
+        });
+      }, undefined, { timeout: 15000 });
+
+      const artifact = await page.evaluate(() => {
+        const main = document.querySelector("main") || document.body;
+        const images = Array.from(main.querySelectorAll("img")).map((img) => {
+          const rect = img.getBoundingClientRect();
+          return {
+            alt: img.getAttribute("alt") || "",
+            src_prefix: (img.getAttribute("src") || "").slice(0, 30),
+            natural_width: img.naturalWidth || 0,
+            natural_height: img.naturalHeight || 0,
+            rect: {
+              x: Math.round(rect.x),
+              y: Math.round(rect.y),
+              w: Math.round(rect.width),
+              h: Math.round(rect.height),
+            },
+          };
+        }).filter((img) => img.src_prefix.startsWith("data:image/"));
+        const generated = images.find((img) => /已生成图像|generated image/i.test(img.alt)) || images[0] || null;
+        return {
+          image_count: images.length,
+          generated_image: generated,
+          snippet: (main.innerText || "").replace(/\s+/g, " ").trim().slice(0, 240),
+        };
+      });
+
+      details = {
+        generated_artifact_displayed: true,
+        generated_artifact_call_id: imageCallId,
+        generated_artifact_thread_id: thread.id,
+        generated_artifact_opened_thread: openedThread,
+        generated_artifact_rollout: rolloutPath,
+        generated_artifact_image_count: artifact.image_count,
+        generated_artifact_image: artifact.generated_image,
+        generated_artifact_snippet: artifact.snippet,
+        generated_artifact_cleanup: cleanup,
+      };
+    } finally {
+      try {
+        fs.truncateSync(rolloutPath, originalSize);
+        cleanup.rollout_truncated = true;
+      } catch (error) {
+        cleanup.error = error.message;
+      }
+      if (cleanup.rollout_truncated) {
+        await page.reload({ waitUntil: "domcontentloaded", timeout: config.timeoutMs }).catch(() => {});
+        await waitForAppShell().catch(() => {});
+      }
+    }
+    return details;
+  }
+
   async function exerciseSavedProjectOpen() {
     const projectName = `UI smoke saved ${safeBridgeId(config.marker)}`;
     let savedProjectSnippet = "";
@@ -737,6 +906,8 @@ async function runWorkflow(page, config) {
       return { marker_occurrences_after_reload: await markerCount() };
     });
 
+    await recordStep("inject and display generated image artifact", exerciseGeneratedImageArtifactDisplay);
+
     if (config.exerciseActiveControls) {
       await recordStep("actively interrupt and recover from a model turn", exerciseActiveInterruptAndRecover);
     }
@@ -767,6 +938,41 @@ function safeBridgeId(value) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function sqlString(value) {
+  return `'${String(value).replaceAll("'", "''")}'`;
+}
+
+function queryThreadRecordForMarker(dbPath, markerValue) {
+  if (!fs.existsSync(dbPath)) return null;
+  const like = `%${String(markerValue)}%`;
+  const sql = [
+    "SELECT id, rollout_path, title, preview, first_user_message, updated_at_ms",
+    "FROM threads",
+    "WHERE title LIKE", sqlString(like),
+    "OR preview LIKE", sqlString(like),
+    "OR first_user_message LIKE", sqlString(like),
+    "ORDER BY updated_at_ms DESC, id DESC",
+    "LIMIT 1",
+  ].join(" ");
+  try {
+    const output = execFileSync("sqlite3", ["-json", dbPath, sql], {
+      encoding: "utf8",
+      timeout: 5000,
+      maxBuffer: 1024 * 1024,
+    });
+    const rows = JSON.parse(output || "[]");
+    return rows[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function isPathWithin(candidate, root) {
+  const resolvedCandidate = path.resolve(candidate);
+  const resolvedRoot = path.resolve(root);
+  return resolvedCandidate === resolvedRoot || resolvedCandidate.startsWith(`${resolvedRoot}${path.sep}`);
 }
 
 async function cleanupSavedUiSmokeProject(page, stateDir, projectName) {

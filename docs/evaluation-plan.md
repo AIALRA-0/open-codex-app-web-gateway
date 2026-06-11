@@ -22,8 +22,9 @@ Codex/OpenAI Responses behavior.
   verification, project writable-root add/clear, core page switching through
   plugins/automation/mobile views and back to new chat, prompt send, model
   response visibility, stop/retry control discovery, saved project create,
-  reopen-from-sidebar, and cleanup through the browser bridge, console errors,
-  screenshot capture, and reload persistence.
+  reopen-from-sidebar, cleanup through the browser bridge, generated image
+  artifact display via a temporary rollout event that is truncated after the
+  assertion, console errors, screenshot capture, and reload persistence.
 - `npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls` extends
   that browser path with an active long-running model turn, clicks the visible
   stop/interrupt control when exposed, records a composer-action fallback if
@@ -31,8 +32,8 @@ Codex/OpenAI Responses behavior.
   clears, records whether retry/regenerate/continue is exposed after
   interruption, and submits a recovery prompt to prove the conversation remains
   usable.
-- Expand coverage for generated image/file display and a dedicated
-  retry/regenerate path when the UI exposes that action for completed turns.
+- Expand coverage for a dedicated retry/regenerate path when the UI exposes
+  that action for completed turns.
 - Treat audio-capable Chat providers as provider-specific protocol coverage:
   unit and mock-provider tests must map Responses `input_audio` into Chat
   `input_audio` content parts, preserve `message.audio` and streaming

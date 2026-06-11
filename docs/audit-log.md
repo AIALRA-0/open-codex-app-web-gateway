@@ -5436,3 +5436,58 @@ Open follow-ups:
     5.4 MB, `output/` is 11 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 19 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Generated image artifact UI smoke coverage
+
+- Extended the default `scripts/ui-smoke.mjs` browser workflow with generated
+  image artifact display coverage:
+  - resolves the newly created smoke thread from the isolated deployment
+    `state_5.sqlite`;
+  - validates the rollout path stays under the deployment Codex sessions root;
+  - appends a temporary `image_generation_end` event with a tiny PNG data
+    payload;
+  - reopens the matching thread from the sidebar and asserts the page renders a
+    visible generated-image `data:image/*` artifact;
+  - truncates the rollout back to its original byte size in `finally`, including
+    failure paths.
+- Hardened the sidebar thread selection used by this path:
+  - the smoke now searches only visible sidebar/non-main interactive elements
+    containing the marker;
+  - the result records the clicked element tag, role, label, and rectangle so
+    later regressions have enough DOM context to diagnose.
+- Updated deployment and evaluation docs:
+  - default UI smoke now documents generated image artifact display coverage;
+  - the remaining documented automated UI gap is a dedicated completed-turn
+    retry/regenerate path when that action is visible.
+- Verification:
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - `git diff --check`: passed.
+  - Default UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8rlbzo`: generated artifact step rendered one image with alt
+    `已生成图像 1`, `src_prefix:"data:image/png;base64,iVBORw0K"`,
+    natural size `1x1`, rendered rectangle `{x:422,y:263,w:178,h:178}`, and
+    `rollout_truncated:true`; console errors 0, warnings 0; screenshot
+    `output/playwright/ui-smoke-2026-06-11T00-33-45-204Z.png`.
+  - Active UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8rno9i`: generated artifact rendering also passed, active stop
+    clicked with control name `停止`, `stop_cleared:true`,
+    `retry_control_status:"not_visible_after_interrupt"`, recovery marker
+    occurrences 2, saved project cleanup `bridge_updated:true`, console errors
+    0, warnings 0; screenshot
+    `output/playwright/ui-smoke-2026-06-11T00-35-34-422Z.png`.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 916 ms, P95 latency 1016 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 626 runtime candidates,
+    selected 78 old UI screenshots by retention policy, deleted 0, selected
+    6382278 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 43 GB available; `state/` is
+    5.4 MB, `output/` is 11 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 20 MB.
+  - No API keys, account credentials, or local secret files were committed.
