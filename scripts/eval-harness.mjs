@@ -557,6 +557,22 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-background-call",
+        mode: "responses-mcp-remote",
+        remoteCall: true,
+        background: true,
+        request: {
+          model: defaultModel,
+          instructions: "You have an MCP dice tool exposed as a function tool. Call it with expression 2d4+1, then answer exactly this text and nothing else: mcp-remote-background-call-ok.",
+          input: "Use the remote MCP roll tool with expression 2d4+1 in the background, then return mcp-remote-background-call-ok.",
+          reasoning: { effort: "none" },
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          background: true,
+          store: false,
+        },
+      },
+      {
         id: "responses-mcp-remote-approval",
         mode: "responses-mcp-remote",
         remoteApproval: true,
@@ -3253,6 +3269,7 @@ async function runMcpRemoteCase(testCase, context, started) {
   const wantsCall = !!testCase.remoteCall;
   const wantsApproval = !!testCase.remoteApproval;
   const approvalApprove = testCase.remoteApprovalApprove !== false;
+  const wantsBackground = !!testCase.background || !!testCase.request?.background;
   const records = [];
   const mcpServer = http.createServer((req, res) => {
     const chunks = [];
@@ -3351,7 +3368,7 @@ async function runMcpRemoteCase(testCase, context, started) {
         server_label: "remote_eval",
         server_url: `http://127.0.0.1:${address.port}/mcp`,
         authorization: authValue,
-        headers: { "x-eval-mcp": wantsApproval ? "remote-approval" : wantsCall ? "remote-call" : "remote-list" },
+        headers: { "x-eval-mcp": wantsApproval ? "remote-approval" : wantsBackground ? "remote-background-call" : wantsCall ? "remote-call" : "remote-list" },
         require_approval: wantsApproval ? "always" : "never",
         allowed_tools: ["roll"],
       }],
@@ -3366,7 +3383,25 @@ async function runMcpRemoteCase(testCase, context, started) {
       });
     }
 
-    const json = JSON.parse(body);
+    let json = JSON.parse(body);
+    const backgroundHistory = wantsBackground ? [json.status] : [];
+    if (wantsBackground && json.status === "in_progress" && json.id) {
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        await sleep(1000);
+        const fetched = await getJson(`${baseUrl}/v1/responses/${json.id}`);
+        if (!fetched.ok) {
+          return finishResult(testCase, context, started, {
+            ok: false,
+            status: fetched.status,
+            background_status_history: backgroundHistory,
+            error: truncate(fetched.body),
+          });
+        }
+        json = fetched.json;
+        backgroundHistory.push(json.status);
+        if (["completed", "failed", "cancelled", "incomplete"].includes(json.status)) break;
+      }
+    }
     const text = responseOutputText(json);
     const serialized = JSON.stringify(json);
     const mcpList = (json.output || []).find((item) => item.type === "mcp_list_tools");
@@ -3503,7 +3538,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       && methods.includes("notifications/initialized")
       && methods.includes("tools/list")
       && initializeRecord.headers?.authorization === `Bearer ${authValue}`
-      && initializeRecord.headers?.["x-eval-mcp"] === (wantsCall ? "remote-call" : "remote-list")
+      && initializeRecord.headers?.["x-eval-mcp"] === (wantsBackground ? "remote-background-call" : wantsCall ? "remote-call" : "remote-list")
       && /application\/json/.test(String(initializeRecord.headers?.accept || ""))
       && /text\/event-stream/.test(String(initializeRecord.headers?.accept || ""))
       && toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
@@ -3511,7 +3546,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       && !serialized.includes("hidden_tool");
     const ok = commonOk && (
       wantsCall
-        ? /mcp-remote-call-ok/i.test(text)
+        ? (wantsBackground ? /mcp-remote-background-call-ok/i.test(text) : /mcp-remote-call-ok/i.test(text))
           && mcpCall?.server_label === "remote_eval"
           && mcpCall?.name === "roll"
           && mcpCall?.output === "7"
@@ -3538,6 +3573,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       status: response.status,
       usage: responseUsage(json),
       output_text: text,
+      background_status_history: backgroundHistory.length ? backgroundHistory : undefined,
       remote_import_success_count: localMcp.remote_import_success_count || 0,
       imported_tool_count: localMcp.imported_tool_count || 0,
       remote_call_success_count: localMcp.remote_call_success_count || 0,

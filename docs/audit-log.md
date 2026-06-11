@@ -4369,6 +4369,92 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Background remote MCP call-loop compatibility
+
+- Extended the remote MCP call bridge from foreground non-streaming Responses
+  to active `background:true` Responses jobs:
+  - background preparation now keeps the live MCP context and shared
+    `max_tool_calls` budget through the provider phase;
+  - auto-approved remote MCP Chat proxy tool calls can execute remote
+    `tools/call`, inject Chat `tool` messages, and perform the follow-up
+    provider call before storing the completed background Response;
+  - `mcp_call` output items and `metadata.compatibility.local_mcp` counters are
+    recomputed after the background call loop so final stored output reflects
+    the remote execution;
+  - approved `mcp_approval_response` continuations now also work with
+    `background:true` after the previous response's `mcp_approval_request` is
+    replayed.
+- Added fail-closed restart behavior for provider-pending background jobs that
+  still need ephemeral remote MCP function-tool context. These jobs contain
+  per-request remote MCP authorization/session state in memory, so startup
+  reconciliation now refuses to resume them after process restart and reports
+  `interrupted_provider_pending_ephemeral_mcp_context` instead of replaying a
+  partial provider request without the original MCP context.
+- Kept the security boundary explicit:
+  - per-request MCP `authorization` continues to be stripped from public
+    Responses output and persisted background snapshots;
+  - outbound authorization is forwarded only to the mock/remote MCP server
+    during `initialize`, `tools/list`, or `tools/call`;
+  - no API keys, account credentials, provider headers, or env files were added
+    to the repository.
+- Added coverage:
+  - unit/mock-provider coverage for background auto-approved remote MCP
+    `tools/call`, including two upstream provider turns, remote session-id
+    forwarding, `Authorization` forwarding only to MCP, `mcp_call` output
+    persistence, budget accounting, and background snapshot redaction;
+  - unit/mock-provider coverage for background approved
+    `mcp_approval_response` continuation, including previous-response replay,
+    actual remote `tools/call`, provider-pending snapshot redaction, final
+    `mcp_call` output, and local MCP compatibility counters;
+  - startup reconciliation coverage for provider-pending background responses
+    with ephemeral MCP context, proving they fail closed with
+    `interrupted_provider_pending_ephemeral_mcp_context`;
+  - live bridge regression case `responses-mcp-remote-background-call`, backed
+    by a local mock MCP server and the deployed DeepSeek bridge.
+- Updated the compatibility matrix, deployment docs, and evaluation plan to
+  document that remote MCP auto-approved calls and approval continuations are
+  supported for non-streaming and active background requests, while streaming
+  call loops and restart-resumable per-request connector credentials remain
+  future work.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused MCP/background server tests passed, including the new background
+    auto-approved remote MCP call and background approved approval-response
+    continuation cases.
+  - `npm test`: passed 174/174.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `responses-mcp-remote-background-call`: passed 1/1 against
+    `deepseek-v4-pro`, output `mcp-remote-background-call-ok`, status history
+    reached `completed`, remote MCP methods were `initialize`,
+    `notifications/initialized`, `tools/list`, and `tools/call`, and both MCP
+    authorization and session forwarding were confirmed.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: 78/78 passing
+    cases, pass rate 1.0, average latency 1594 ms, P95 latency 4462 ms, total
+    usage 17248 tokens.
+  - `npm run eval:protocol`: 2/2 passing protocol-smoke cases, pass rate 1.0.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against `https://opencodexapp.aialra.online`;
+    navigation, sidebar controls, project dialog, host upload service, prompt
+    submission, completed-turn actions, reload persistence, generated image
+    artifact display, saved-project reopen/cleanup, and console checks all
+    succeeded.
+  - `npm run prune:runtime -- --dry-run`: scanned 971 runtime candidates,
+    selected 1 old UI smoke screenshot, selected 84985 bytes, and reported 0
+    errors.
+  - `npm run prune:runtime -- --apply`: deleted 1 file, freed 84985 bytes, and
+    reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem has 40 GB available;
+    `state/` is 13 MB, `output/` is 4.8 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+
 ## 2026-06-11 - Remote MCP approval flow compatibility
 
 - Used current official OpenAI MCP/Connectors Responses docs through the

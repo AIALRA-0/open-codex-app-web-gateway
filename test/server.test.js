@@ -3055,6 +3055,213 @@ test("POST /v1/responses executes auto-approved remote MCP tools/call through Ch
   ]);
 });
 
+test("POST /v1/responses background executes auto-approved remote MCP tools/call", async () => {
+  const authValue = "redaction-fixture-value-for-background-remote-mcp-call";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_background_remote_mcp_call_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "background-remote-mcp-call-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice remotely in background",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers["mcp-session-id"], "sess_background_remote_mcp_call_test");
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "unexpected mcp method" }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      if (call.body.messages.some((message) => message.role === "tool")) {
+        assert.equal(call.body.tool_choice, "none");
+        const toolMessage = call.body.messages.find((message) => message.role === "tool");
+        assert.equal(toolMessage.content, "7");
+        assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_background_remote_mcp_final",
+          object: "chat.completion",
+          created: 302,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "background-remote-call-ok" },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 13, completion_tokens: 4, total_tokens: 17 },
+        }));
+        return;
+      }
+
+      assert.equal(call.body.tools.length, 1);
+      const toolName = call.body.tools[0].function.name;
+      assert.match(toolName, /^mcp_background_remote_call_roll_/);
+      assert.equal(call.body.tool_choice, "auto");
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_background_remote_mcp_call",
+        object: "chat.completion",
+        created: 301,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_background_roll_remote",
+              type: "function",
+              function: {
+                name: toolName,
+                arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+      }));
+    }, async ({ bridgeAddress, requests, stateDir }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const created = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Roll 2d4+1 in the background with remote MCP and return background-remote-call-ok.",
+          background: true,
+          tools: [{
+            type: "mcp",
+            server_label: "background_remote_call",
+            server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+            authorization: authValue,
+            require_approval: "never",
+            allowed_tools: ["roll"],
+          }],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(created.status, 200);
+      const createdJson = await created.json();
+      assert.equal(createdJson.status, "in_progress");
+      assert.doesNotMatch(JSON.stringify(createdJson), new RegExp(authValue));
+
+      const store = new FileResponseStore({ dir: stateDir });
+      let queuedRecord = null;
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        queuedRecord = store.get(createdJson.id);
+        if (queuedRecord?.background_job?.request) break;
+        await sleep(20);
+      }
+      assert.ok(queuedRecord?.background_job?.request);
+      assert.equal(queuedRecord.background_job.request.tools[0].authorization, undefined);
+      assert.doesNotMatch(JSON.stringify(queuedRecord), new RegExp(authValue));
+
+      let finalJson = null;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await sleep(25);
+        const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+        finalJson = await fetched.json();
+        if (finalJson.status === "completed") break;
+      }
+
+      assert.equal(finalJson.status, "completed");
+      assert.equal(requests.length, 2);
+      assert.equal(finalJson.output[0].type, "mcp_list_tools");
+      assert.equal(finalJson.output[1].type, "mcp_call");
+      assert.equal(finalJson.output[1].server_label, "background_remote_call");
+      assert.equal(finalJson.output[1].name, "roll");
+      assert.equal(finalJson.output[1].output, "7");
+      assert.equal(finalJson.output[1].error, null);
+      assert.equal(finalJson.output[2].content[0].text, "background-remote-call-ok");
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_tool_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_attempt_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.boundary, "remote_list_tools_and_call_execution");
+      assert.deepEqual(finalJson.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(finalJson), new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+  ]);
+});
+
 test("POST /v1/responses requests approval then executes approved remote MCP call", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-approval";
   const mcpRequests = [];
@@ -3265,6 +3472,255 @@ test("POST /v1/responses requests approval then executes approved remote MCP cal
       assert.doesNotMatch(JSON.stringify(second), new RegExp(authValue));
     }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000 });
   } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+  ]);
+});
+
+test("POST /v1/responses background executes approved remote MCP approval response", async () => {
+  const authValue = "redaction-fixture-value-for-background-remote-mcp-approval";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_background_remote_mcp_approval_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "background-remote-mcp-approval-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after background approval",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers["mcp-session-id"], "sess_background_remote_mcp_approval_test");
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "unexpected mcp method" }));
+  });
+  const mcpAddress = await listen(mcpServer);
+  let releaseProvider;
+  const providerRelease = new Promise((resolve) => {
+    releaseProvider = resolve;
+  });
+
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      if (/MCP call output items produced by the bridge/.test(prompt)) {
+        assert.equal(call.body.tools, undefined);
+        assert.match(prompt, /output: 7/);
+        assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+        await providerRelease;
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_background_remote_mcp_approval_final",
+          object: "chat.completion",
+          created: 402,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "background-approved-call-ok" },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 14, completion_tokens: 4, total_tokens: 18 },
+        }));
+        return;
+      }
+
+      assert.equal(call.body.tools.length, 1);
+      const toolName = call.body.tools[0].function.name;
+      assert.match(toolName, /^mcp_background_remote_approval_roll_/);
+      assert.equal(call.body.tool_choice, "auto");
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_background_remote_mcp_approval_request",
+        object: "chat.completion",
+        created: 401,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_background_roll_approval",
+              type: "function",
+              function: {
+                name: toolName,
+                arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+      }));
+    }, async ({ bridgeAddress, requests, stateDir }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const tool = {
+        type: "mcp",
+        server_label: "background_remote_approval",
+        server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+        authorization: authValue,
+        require_approval: "always",
+        allowed_tools: ["roll"],
+      };
+      const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Roll 2d4+1 with approval before the background continuation.",
+          tools: [tool],
+          max_tool_calls: 2,
+        }),
+      });
+
+      assert.equal(firstResponse.status, 200);
+      const first = await firstResponse.json();
+      assert.equal(requests.length, 1);
+      assert.equal(first.output[0].type, "mcp_list_tools");
+      assert.equal(first.output[1].type, "mcp_approval_request");
+      assert.equal(first.output[1].server_label, "background_remote_approval");
+      assert.equal(first.output[1].name, "roll");
+      assert.equal(first.output[1].arguments, "{\"diceRollExpression\":\"2d4+1\"}");
+      assert.equal(first.metadata.compatibility.local_mcp.remote_approval_request_count, 1);
+      assert.doesNotMatch(JSON.stringify(first), new RegExp(authValue));
+
+      const approval = first.output[1];
+      const secondResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          previous_response_id: first.id,
+          input: [{
+            type: "mcp_approval_response",
+            approve: true,
+            approval_request_id: approval.id,
+          }],
+          tools: [tool],
+          max_tool_calls: 2,
+          background: true,
+          store: false,
+        }),
+      });
+
+      assert.equal(secondResponse.status, 200);
+      const created = await secondResponse.json();
+      assert.equal(created.status, "in_progress");
+      assert.doesNotMatch(JSON.stringify(created), new RegExp(authValue));
+
+      const store = new FileResponseStore({ dir: stateDir });
+      let pendingRecord = null;
+      try {
+        for (let attempt = 0; attempt < 60; attempt += 1) {
+          pendingRecord = store.get(created.id);
+          if (pendingRecord?.background_job?.stage === "provider_pending") break;
+          await sleep(25);
+        }
+        assert.equal(pendingRecord?.background_job?.stage, "provider_pending");
+        assert.equal(pendingRecord.background_job.request.tools[0].authorization, undefined);
+        assert.doesNotMatch(JSON.stringify(pendingRecord), new RegExp(authValue));
+      } finally {
+        releaseProvider();
+      }
+
+      let finalJson = null;
+      for (let attempt = 0; attempt < 60; attempt += 1) {
+        await sleep(25);
+        const fetched = await fetch(`${baseUrl}/v1/responses/${created.id}`);
+        finalJson = await fetched.json();
+        if (finalJson.status === "completed") break;
+      }
+
+      assert.equal(finalJson.status, "completed");
+      assert.equal(requests.length, 2);
+      assert.equal(finalJson.output[0].type, "mcp_list_tools");
+      assert.equal(finalJson.output[1].type, "mcp_call");
+      assert.equal(finalJson.output[1].approval_request_id, approval.id);
+      assert.equal(finalJson.output[1].server_label, "background_remote_approval");
+      assert.equal(finalJson.output[1].name, "roll");
+      assert.equal(finalJson.output[1].output, "7");
+      assert.equal(finalJson.output[1].error, null);
+      assert.equal(finalJson.output[2].content[0].text, "background-approved-call-ok");
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_approval_response_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_approval_approved_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(finalJson.metadata.compatibility.local_mcp.boundary, "remote_list_tools_and_call_execution");
+      assert.deepEqual(finalJson.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(finalJson), new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000 });
+  } finally {
+    releaseProvider();
     await close(mcpServer);
   }
 
@@ -6815,6 +7271,85 @@ test("server startup resumes provider-pending background responses", async () =>
   } finally {
     await close(bridge);
     await close(provider);
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  }
+});
+
+test("server startup fails provider-pending background responses with ephemeral MCP context closed", async () => {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-bridge-ephemeral-mcp-background-"));
+  const responseId = "resp_ephemeral_mcp_background";
+  const store = new FileResponseStore({ dir: stateDir });
+  store.put(responseId, {
+    response: {
+      id: responseId,
+      object: "response",
+      created_at: 100,
+      model: "mock-model",
+      background: true,
+      status: "in_progress",
+      output: [],
+      metadata: {
+        compatibility: {
+          background: "local_async",
+          local_mcp: { provider: "local" },
+        },
+      },
+    },
+    input_items: [{ id: "item_ephemeral_mcp", type: "message", role: "user", content: "resume remote mcp background" }],
+    messages: [{ role: "user", content: "resume remote mcp background" }],
+    background_job: {
+      version: 1,
+      stage: "provider_pending",
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      request: {
+        model: "mock-model",
+        input: "resume remote mcp background",
+        background: true,
+        stream: false,
+        store: true,
+      },
+      chat: {
+        model: "mock-model",
+        messages: [{ role: "user", content: "resume remote mcp background" }],
+        stream: false,
+        store: true,
+      },
+      compatibility: {
+        background: "local_async",
+        local_mcp: { provider: "local" },
+      },
+      previous_messages: [],
+      conversation: null,
+      local_output_items: [],
+      mcp_ephemeral_context: true,
+    },
+  });
+
+  const config = loadConfig({
+    providerBaseUrl: "http://127.0.0.1:9",
+    providerApiKey: "test-key",
+    defaultModel: "mock-model",
+    stateDir,
+  });
+  const bridge = createServer(config);
+  const bridgeAddress = await listen(bridge);
+
+  try {
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${responseId}`);
+    assert.equal(fetched.status, 200);
+    const json = await fetched.json();
+    assert.equal(json.status, "failed");
+    assert.equal(json.background, true);
+    assert.equal(json.error.type, "compatibility_bridge_error");
+    assert.equal(json.error.code, "background_job_interrupted_by_restart");
+    assert.equal(json.metadata.compatibility.background, "local_async");
+    assert.equal(json.metadata.compatibility.local_mcp.provider, "local");
+    assert.equal(json.metadata.compatibility.background_restart, "marked_failed_on_startup");
+    assert.equal(json.metadata.compatibility.background_restart_reason, "interrupted_provider_pending_ephemeral_mcp_context");
+    assert.equal(store.get(responseId).background_job, undefined);
+  } finally {
+    await close(bridge);
     fs.rmSync(stateDir, { recursive: true, force: true });
   }
 });

@@ -547,9 +547,9 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, localMcp, toolBudget) {
+async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, localMcp, toolBudget, options = {}) {
   const usageParts = [];
-  let current = await fetchProviderJson(config, chat, incomingHeaders);
+  let current = await fetchProviderJson(config, chat, incomingHeaders, options);
   if (!current.ok) return current;
   if (current.json?.usage) usageParts.push(current.json.usage);
 
@@ -563,7 +563,7 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
     }
     chat.messages.push(...execution.messages);
     if (round + 1 >= maxRounds) chat.tool_choice = "none";
-    current = await fetchProviderJson(config, chat, incomingHeaders);
+    current = await fetchProviderJson(config, chat, incomingHeaders, options);
     if (!current.ok) return current;
     if (current.json?.usage) usageParts.push(current.json.usage);
   }
@@ -574,8 +574,8 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
   return current;
 }
 
-async function fetchProviderJson(config, chat, incomingHeaders) {
-  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders);
+async function fetchProviderJson(config, chat, incomingHeaders, options = {}) {
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, options);
   const text = await upstream.text();
   const json = parseJsonOrNull(text);
   return {
@@ -868,6 +868,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
         conversationStore,
         conversation,
         localOutputItems,
+        toolBudget,
       });
       return;
     }
@@ -903,6 +904,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       compatibility: preparedRequest.compatibility,
       local_output_items: preparedRequest.localOutputItems,
       conversation,
+      mcp_ephemeral_context: hasBackgroundEphemeralMcpContext(preparedRequest.contexts),
     }, job);
 
     await runPreparedBackgroundProviderResponse({
@@ -917,6 +919,8 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       conversationStore,
       conversation,
       localOutputItems: preparedRequest.localOutputItems,
+      contexts: preparedRequest.contexts,
+      toolBudget,
     });
   } catch (error) {
     if (job.deleted) return;
@@ -984,6 +988,8 @@ async function prepareBackgroundProviderRequest({ config, store, job, request, c
     chat: runtime.chat,
     compatibility: runtime.compatibility,
     localOutputItems: backgroundPreparationOutputItems(runtime.contexts),
+    contexts: runtime.contexts,
+    toolBudget: runtime.toolBudget,
   };
 }
 
@@ -1016,10 +1022,13 @@ async function runBackgroundPrepareStep(step, { config, store, job, request, pre
   }
 
   if (step === "mcp") {
-    const localMcp = await prepareMcpContext(request, config, { toolBudget: runtime.toolBudget });
+    const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
+    const localMcp = await prepareMcpContext(request, config, { toolBudget: runtime.toolBudget, previousResponse });
     runtime.contexts.mcp = localMcp;
     if (localMcp) {
+      const approvedMcp = await executeApprovedMcpApprovalResponses(localMcp, config, { toolBudget: runtime.toolBudget });
       runtime.compatibility = applyLocalMcpToChat(runtime.chat, { ...runtime.compatibility }, localMcp, config);
+      if (!approvedMcp.handled) injectMcpChatTools(runtime.chat, localMcp, config, { toolBudget: runtime.toolBudget });
     }
     return {};
   }
@@ -1105,6 +1114,10 @@ function backgroundPreparationOutputItems(contexts = {}) {
   ];
 }
 
+function hasBackgroundEphemeralMcpContext(contexts = {}) {
+  return !!contexts?.mcp?.chat_tool_map;
+}
+
 function validBackgroundPrepareStep(step) {
   return step == null || BACKGROUND_PREPARE_STEPS.includes(step);
 }
@@ -1115,29 +1128,33 @@ function nextBackgroundPrepareStep(step) {
   return BACKGROUND_PREPARE_STEPS[index + 1] || null;
 }
 
-async function runPreparedBackgroundProviderResponse({ config, store, job, request, chat, responseId, compatibility, incomingHeaders = {}, conversationStore, conversation, localOutputItems = [] }) {
-  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders, {
+async function runPreparedBackgroundProviderResponse({ config, store, job, request, chat, responseId, compatibility, incomingHeaders = {}, conversationStore, conversation, localOutputItems = [], contexts = null, toolBudget = null }) {
+  const providerResult = await fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, contexts?.mcp, toolBudget, {
     controller: job.controller,
     onTimeout: () => {
       job.timed_out = true;
     },
   });
-  const upstreamText = await upstream.text();
-  const upstreamJson = parseJsonOrNull(upstreamText);
   if (job.deleted) return;
   if (job.controller.signal.aborted) {
     storeCancelledBackgroundResponse(store, responseId, "cancelled");
     return;
   }
 
-  if (!upstream.ok) {
-    storeFailedBackgroundResponse(store, responseId, upstreamText, upstream.status, upstreamJson);
+  if (!providerResult.ok) {
+    storeFailedBackgroundResponse(store, responseId, providerResult.text, providerResult.status, providerResult.json);
     return;
   }
 
+  const upstreamJson = providerResult.json;
+  const finalLocalOutputItems = contexts ? backgroundPreparationOutputItems(contexts) : localOutputItems;
+  const finalCompatibility = { ...(compatibility || {}) };
+  if (contexts?.mcp) mergeLocalMcpCompatibility(finalCompatibility, mcpCompatibility(contexts.mcp));
+  Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
+
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
   attachConversationToResponse(response, conversation);
-  prependLocalOutputItems(response, localOutputItems);
+  prependLocalOutputItems(response, finalLocalOutputItems);
   response.background = true;
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config, { force: true });
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
@@ -1150,7 +1167,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     compatibility: mergeCompatibility(
       responseMetadata.compatibility,
       storedMetadata.compatibility,
-      compatibility,
+      finalCompatibility,
       {
         ...(localReasoningEncryptedContent ? { local_reasoning_encrypted_content: localReasoningEncryptedContent } : {}),
         ...(localModeration ? { local_moderation: localModeration } : {}),
@@ -1641,6 +1658,7 @@ function backgroundJobValidationFailureReason(error) {
 function canResumePreparedBackgroundJob(jobState) {
   return isPlainObject(jobState)
     && jobState.stage === "provider_pending"
+    && jobState.mcp_ephemeral_context !== true
     && isPlainObject(jobState.request)
     && isPlainObject(jobState.chat)
     && Array.isArray(jobState.chat.messages);
@@ -1675,6 +1693,9 @@ function restartFailureReason(jobState) {
       return `interrupted_during_local_preparation_${stringifyContent(jobState.prepare.current_step || "unknown").slice(0, 80)}`;
     }
     return "interrupted_during_local_preparation";
+  }
+  if (jobState.stage === "provider_pending" && jobState.mcp_ephemeral_context === true) {
+    return "interrupted_provider_pending_ephemeral_mcp_context";
   }
   return `unresumable_stage_${stringifyContent(jobState.stage || "unknown").slice(0, 80)}`;
 }
