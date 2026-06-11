@@ -530,6 +530,19 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-list",
+        mode: "responses-mcp-remote",
+        request: {
+          model: defaultModel,
+          instructions: "The bridge imported a remote MCP tools/list result. Return exactly this text and nothing else: mcp-remote-ok.",
+          input: "Inspect the imported MCP tool summary and return mcp-remote-ok.",
+          reasoning: { effort: "none" },
+          max_tool_calls: 1,
+          max_output_tokens: 64,
+          store: false,
+        },
+      },
+      {
         id: "responses-reasoning-none",
         mode: "responses",
         request: {
@@ -2359,6 +2372,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "responses-compact") {
       return await runCompactionCase(testCase, context, started);
     }
+    if (testCase.mode === "responses-mcp-remote") {
+      return await runMcpRemoteCase(testCase, context, started);
+    }
     if (testCase.mode === "model-get") {
       return await runModelGetCase(testCase, context, started);
     }
@@ -3187,6 +3203,152 @@ async function runChatStreamLifecycleCase(testCase, context, started) {
     list_count: Array.isArray(list.json?.data) ? list.json.data.length : 0,
     event_count: events.length,
   });
+}
+
+async function runMcpRemoteCase(testCase, context, started) {
+  const authValue = "eval-remote-mcp-token";
+  const records = [];
+  const mcpServer = http.createServer((req, res) => {
+    const chunks = [];
+    req.on("data", (chunk) => chunks.push(chunk));
+    req.on("end", () => {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const rpc = parseJsonish(raw) || {};
+      records.push({
+        method: rpc.method || null,
+        id: rpc.id,
+        headers: req.headers,
+      });
+      if (rpc.method === "initialize") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "mcp-session-id": "sess_eval_remote_mcp",
+        });
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result: {
+            protocolVersion: "2025-03-26",
+            capabilities: { tools: {} },
+            serverInfo: { name: "eval-remote-mcp", version: "1.0.0" },
+          },
+        }));
+        return;
+      }
+      if (rpc.method === "notifications/initialized") {
+        res.writeHead(202, { "content-type": "application/json" });
+        res.end("");
+        return;
+      }
+      if (rpc.method === "tools/list") {
+        const payload = {
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result: {
+            tools: [
+              {
+                name: "roll",
+                description: "Roll dice remotely",
+                inputSchema: {
+                  type: "object",
+                  properties: {
+                    expression: { type: "string" },
+                  },
+                  required: ["expression"],
+                  additionalProperties: false,
+                },
+                annotations: { readOnlyHint: true },
+              },
+              {
+                name: "hidden_tool",
+                description: "Filtered by allowed_tools",
+                inputSchema: { type: "object" },
+              },
+            ],
+          },
+        };
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
+        return;
+      }
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ error: "unknown_method", method: rpc.method }));
+    });
+  });
+
+  try {
+    const address = await listenServer(mcpServer);
+    const request = {
+      ...resolveRequest(testCase.request, {}),
+      tools: [{
+        type: "mcp",
+        server_label: "remote_eval",
+        server_url: `http://127.0.0.1:${address.port}/mcp`,
+        authorization: authValue,
+        headers: { "x-eval-mcp": "remote-list" },
+        require_approval: "never",
+        allowed_tools: ["roll"],
+      }],
+    };
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    if (!response.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: response.status,
+        error: truncate(body),
+      });
+    }
+
+    const json = JSON.parse(body);
+    const text = responseOutputText(json);
+    const serialized = JSON.stringify(json);
+    const mcpList = (json.output || []).find((item) => item.type === "mcp_list_tools");
+    const localMcp = json.metadata?.compatibility?.local_mcp || {};
+    const methods = records.map((record) => record.method);
+    const initializeRecord = records.find((record) => record.method === "initialize") || {};
+    const toolsListRecord = records.find((record) => record.method === "tools/list") || {};
+    const ok = /mcp-remote-ok/i.test(text)
+      && mcpList?.server_label === "remote_eval"
+      && mcpList.tools?.length === 1
+      && mcpList.tools?.[0]?.name === "roll"
+      && mcpList.tools?.[0]?.description === "Roll dice remotely"
+      && mcpList.tools?.[0]?.input_schema?.properties?.expression?.type === "string"
+      && mcpList.tools?.[0]?.annotations?.readOnlyHint === true
+      && localMcp.provider === "local"
+      && localMcp.remote_server_count === 1
+      && localMcp.remote_import_attempt_count === 1
+      && localMcp.remote_import_success_count === 1
+      && localMcp.remote_import_failed_count === 0
+      && localMcp.imported_tool_count === 1
+      && localMcp.authorization_redacted_count === 1
+      && localMcp.boundary === "remote_list_tools_without_call_execution"
+      && json.metadata?.compatibility?.local_tool_budget?.used === 1
+      && methods.includes("initialize")
+      && methods.includes("notifications/initialized")
+      && methods.includes("tools/list")
+      && initializeRecord.headers?.authorization === `Bearer ${authValue}`
+      && initializeRecord.headers?.["x-eval-mcp"] === "remote-list"
+      && /application\/json/.test(String(initializeRecord.headers?.accept || ""))
+      && /text\/event-stream/.test(String(initializeRecord.headers?.accept || ""))
+      && toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
+      && !serialized.includes(authValue)
+      && !serialized.includes("hidden_tool");
+    return finishResult(testCase, context, started, {
+      ok,
+      status: response.status,
+      usage: responseUsage(json),
+      output_text: text,
+      remote_import_success_count: localMcp.remote_import_success_count || 0,
+      imported_tool_count: localMcp.imported_tool_count || 0,
+      mcp_methods: methods,
+      mcp_auth_forwarded: initializeRecord.headers?.authorization === `Bearer ${authValue}`,
+      session_forwarded: toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp",
+      error: ok ? undefined : truncate(serialized),
+    });
+  } finally {
+    await closeServer(mcpServer);
+  }
 }
 
 async function runModelGetCase(testCase, context, started) {

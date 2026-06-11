@@ -6712,3 +6712,84 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 23 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Remote MCP tools/list import compatibility
+
+- Used current official OpenAI MCP/Connectors Responses docs through the
+  OpenAI developer-docs MCP to refine the next compatibility boundary. The
+  relevant documented shape remains `tools:[{type:"mcp"}]` with
+  `server_label`, remote `server_url` or connector `connector_id`, optional
+  per-request `authorization`, `require_approval`, `allowed_tools`, and
+  `defer_loading`; Responses output can include `mcp_list_tools`, `mcp_call`,
+  and `mcp_approval_request`, while approval responses can be sent as later
+  input items.
+- Extended the local MCP adapter from protocol-context only to bounded remote
+  list-tools import:
+  - remote `server_url` tools without explicit local definitions now run
+    JSON-RPC `initialize`, `notifications/initialized`, and paginated
+    `tools/list`;
+  - remote responses can be `application/json` or `text/event-stream`;
+  - returned `inputSchema` / `input_schema`, `annotations`, `description`, and
+    `name` are normalized into Responses-style `mcp_list_tools.tools`;
+  - `allowed_tools` filters the imported remote tool list;
+  - returned `mcp-session-id` values are carried on later remote list requests;
+  - timeout, response-byte, max-tool, protocol-version, and client-name knobs
+    are configurable through `CODEXCOMPAT_MCP_*` env vars.
+- Kept MCP secret handling explicit:
+  - request `authorization` is used only to form the outbound remote MCP
+    `Authorization` header for that request;
+  - caller-supplied `headers.Authorization` still conflicts with top-level
+    `authorization`;
+  - public Responses output, stored snapshots, compatibility metadata, and eval
+    reports do not contain the authorization value.
+- Added coverage:
+  - unit/mock-provider coverage for remote MCP `initialize` /
+    `notifications/initialized` / SSE `tools/list`, session-id forwarding,
+    `allowed_tools` filtering, normalized schemas, annotations, budget
+    consumption, prompt context, and authorization redaction;
+  - a live bridge regression case, `responses-mcp-remote-list`, that starts a
+    local mock MCP server, verifies the deployed bridge performs the remote
+    MCP list-tools round trip, then sends the imported context through
+    DeepSeek.
+- Updated `.env.example`, compatibility matrix, deployment docs, evaluation
+  plan, unit tests, and the bridge regression harness.
+- Kept the compatibility boundary explicit: this imports remote MCP tool
+  definitions and emits `mcp_list_tools`, but still does not execute remote
+  `mcp_call`, run approval loops, or provide OpenAI hosted connector
+  OAuth/token sidecars.
+- Verification:
+  - `node --check src/bridge/local_mcp.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused MCP/background server tests passed through `test/server.test.js`,
+    including the remote MCP Streamable HTTP/SSE `tools/list` import case.
+  - `npm test`: passed 168/168.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - A pre-restart live `responses-mcp-remote-list` check correctly showed the
+    old running bridge was still using placeholder-only MCP behavior; after
+    restart, the same live case passed 1/1 against `deepseek-v4-pro`, latency
+    1667 ms, output `mcp-remote-ok`, 287 total tokens, and confirmed remote
+    `initialize`, `notifications/initialized`, `tools/list`, authorization
+    forwarding, and session forwarding.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` after bridge
+    restart: 74/74 passing cases, pass rate 1.0, average latency 1191 ms, P95
+    latency 3074 ms, and total usage 11735 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 858 runtime
+    candidates, selected 0 files, deleted 0 files, selected 0 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 858 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem has 39 GB available;
+    `state/` is 11 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

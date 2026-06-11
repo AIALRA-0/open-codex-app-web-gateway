@@ -172,6 +172,12 @@ Useful bridge flags:
 | `CODEXCOMPAT_SHELL_MAX_COMMANDS` | `1` | Maximum extracted shell commands executed per response |
 | `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
 | `CODEXCOMPAT_MCP_PROVIDER` | `local` | Local Responses `mcp` protocol-context adapter provider. Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS` | `true` | Enables bounded remote MCP `initialize` / `tools/list` imports for `server_url` tools without explicit local definitions |
+| `CODEXCOMPAT_MCP_TIMEOUT_MS` | `5000` | Timeout for each remote MCP HTTP request |
+| `CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES` | `1048576` | Maximum bytes read from one remote MCP HTTP/SSE response |
+| `CODEXCOMPAT_MCP_MAX_TOOLS` | `128` | Maximum remote tools imported per MCP server |
+| `CODEXCOMPAT_MCP_PROTOCOL_VERSION` | `2025-03-26` | Protocol version sent in the remote MCP `initialize` request |
+| `CODEXCOMPAT_MCP_CLIENT_NAME` | `open-codex-responses-bridge` | Client name sent in the remote MCP `initialize` request |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_MCP` | `true` | Disables DeepSeek thinking mode for local MCP-context requests so final text is visible under small output budgets |
 | `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload size |
@@ -233,6 +239,7 @@ npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-mcp-local --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case responses-mcp-remote-list --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

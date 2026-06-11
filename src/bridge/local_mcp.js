@@ -11,6 +11,11 @@ const MCP_CONTEXT_ITEM_TYPES = new Set([
   "mcp_approval_response",
 ]);
 const MAX_PROMPT_TEXT = 4000;
+const DEFAULT_MCP_TIMEOUT_MS = 5000;
+const DEFAULT_MCP_MAX_RESPONSE_BYTES = 1024 * 1024;
+const DEFAULT_MCP_MAX_TOOLS = 128;
+const DEFAULT_MCP_PROTOCOL_VERSION = "2025-03-26";
+const DEFAULT_MCP_CLIENT_NAME = "open-codex-responses-bridge";
 
 function isPlainObject(value) {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -51,7 +56,8 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
   };
   const labels = new Set();
 
-  tools.forEach((tool, index) => {
+  for (let index = 0; index < tools.length; index += 1) {
+    const tool = tools[index];
     const server = normalizeMcpServer(tool, index);
     if (labels.has(server.server_label)) {
       server.duplicate_label = true;
@@ -71,7 +77,29 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
         server_label: server.server_label,
         reason: "max_tool_calls_exhausted",
       });
-      return;
+      continue;
+    }
+
+    if (shouldImportRemoteTools(tool, server, config)) {
+      const remoteImport = await importRemoteMcpTools(tool, server, config);
+      server.remote_import_attempted = true;
+      server.remote_import_status = remoteImport.status;
+      server.remote_import_protocol_version = remoteImport.protocol_version || "";
+      server.remote_import_remote_tool_count = remoteImport.remote_tool_count || 0;
+      server.remote_import_session = remoteImport.session ? "established" : "";
+      if (remoteImport.ok) {
+        server.imported_tools = remoteImport.tools;
+        server.import_source = "remote_tools_list";
+        server.import_error = null;
+      } else {
+        server.imported_tools = [];
+        server.import_source = "remote_tools_list_failed";
+        server.import_error = {
+          code: remoteImport.code || "mcp_remote_list_tools_failed",
+          message: remoteImport.message || "remote MCP tools/list failed",
+        };
+        context.warnings.push(`${server.server_label} remote tools/list failed: ${server.import_error.code}`);
+      }
     }
 
     context.list_tools_items.push({
@@ -81,7 +109,7 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
       tools: server.imported_tools.map((toolDefinition) => clone(toolDefinition)),
       ...(server.import_error ? { error: server.import_error } : {}),
     });
-  });
+  }
 
   if (context.warnings.length && context.status === "completed") context.status = "warning";
   return context;
@@ -108,11 +136,305 @@ function normalizeMcpServer(tool = {}, index = 0) {
     allowed_tools: allowedToolNames,
     defer_loading: !!tool.defer_loading,
     imported_tools: importedTools,
+    import_source: explicitToolDefinitions.length
+      ? "explicit_tool_definitions"
+      : tool.defer_loading
+        ? "deferred"
+        : allowedToolNames.length
+          ? "allowed_tools_synthetic"
+          : "empty",
+    explicit_tool_count: explicitToolDefinitions.length,
     import_error: hasLocation ? null : {
       code: "mcp_server_location_missing",
       message: "mcp tool requires server_url or connector_id for hosted execution",
     },
   };
+}
+
+function shouldImportRemoteTools(tool, server, config = {}) {
+  return config.mcpRemoteListTools !== false
+    && server.server_kind === "remote_mcp"
+    && !!tool.server_url
+    && !tool.connector_id
+    && !server.defer_loading
+    && !server.explicit_tool_count;
+}
+
+async function importRemoteMcpTools(tool, server, config = {}) {
+  const session = {
+    id: null,
+  };
+  try {
+    const initialize = await sendMcpJsonRpc(tool, config, {
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: config.mcpProtocolVersion || DEFAULT_MCP_PROTOCOL_VERSION,
+        capabilities: {},
+        clientInfo: {
+          name: config.mcpClientName || DEFAULT_MCP_CLIENT_NAME,
+          version: "0.2.0",
+        },
+      },
+    }, session);
+    if (initialize.error) throw jsonRpcError("mcp_initialize_failed", initialize.error);
+
+    await sendMcpNotification(tool, config, {
+      method: "notifications/initialized",
+    }, session);
+
+    const allowed = new Set(server.allowed_tools || []);
+    const tools = [];
+    let seenToolCount = 0;
+    let cursor = null;
+    let pages = 0;
+    const maxTools = boundedNumber(config.mcpMaxTools, DEFAULT_MCP_MAX_TOOLS, 1, 1000);
+    do {
+      const response = await sendMcpJsonRpc(tool, config, {
+        id: 2 + pages,
+        method: "tools/list",
+        ...(cursor ? { params: { cursor } } : {}),
+      }, session);
+      if (response.error) throw jsonRpcError("mcp_tools_list_failed", response.error);
+      const result = isPlainObject(response.result) ? response.result : {};
+      const pageTools = Array.isArray(result.tools) ? result.tools : [];
+      for (const item of pageTools) {
+        seenToolCount += 1;
+        const normalized = normalizeRemoteToolDefinition(item);
+        if (!normalized) continue;
+        if (!normalized.name) continue;
+        if (allowed.size && !allowed.has(normalized.name)) continue;
+        tools.push(normalized);
+        if (tools.length >= maxTools) break;
+      }
+      cursor = stringifyOptional(result.nextCursor || result.next_cursor);
+      pages += 1;
+    } while (cursor && tools.length < maxTools && pages < 20);
+
+    return {
+      ok: true,
+      status: "completed",
+      tools,
+      remote_tool_count: seenToolCount,
+      protocol_version: stringifyOptional(initialize.result?.protocolVersion),
+      session: !!session.id,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      status: "failed",
+      code: error.code || (error.name === "AbortError" ? "mcp_remote_timeout" : "mcp_remote_list_tools_failed"),
+      message: safeErrorMessage(error),
+      session: !!session.id,
+    };
+  }
+}
+
+async function sendMcpJsonRpc(tool, config, request, session) {
+  const response = await fetchMcpEndpoint(tool, config, request, session);
+  const payload = await readMcpResponsePayload(response, config, request.id);
+  const message = findJsonRpcResponse(payload, request.id);
+  if (!message) {
+    const error = new Error(`MCP server did not return JSON-RPC response for id ${request.id}`);
+    error.code = "mcp_remote_missing_jsonrpc_response";
+    throw error;
+  }
+  return message;
+}
+
+async function sendMcpNotification(tool, config, notification, session) {
+  const response = await fetchMcpEndpoint(tool, config, {
+    jsonrpc: "2.0",
+    ...notification,
+  }, session);
+  if (!response.ok) {
+    const error = new Error(`MCP notification failed with HTTP ${response.status}`);
+    error.code = "mcp_remote_notification_failed";
+    throw error;
+  }
+}
+
+async function fetchMcpEndpoint(tool, config, message, session) {
+  const url = remoteMcpUrl(tool.server_url);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), boundedNumber(config.mcpTimeoutMs, DEFAULT_MCP_TIMEOUT_MS, 500, 60000));
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: remoteMcpHeaders(tool, session?.id),
+      body: JSON.stringify(message.jsonrpc ? message : { jsonrpc: "2.0", ...message }),
+      signal: controller.signal,
+    });
+    const sessionId = response.headers.get("mcp-session-id");
+    if (session && sessionId) session.id = sessionId;
+    if (!response.ok) {
+      const error = new Error(`MCP server returned HTTP ${response.status}`);
+      error.code = "mcp_remote_http_error";
+      throw error;
+    }
+    return response;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+function remoteMcpUrl(value) {
+  let url;
+  try {
+    url = new URL(String(value || ""));
+  } catch {
+    const error = new Error("MCP server_url is not a valid URL");
+    error.code = "mcp_remote_invalid_server_url";
+    throw error;
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    const error = new Error("MCP server_url must use http or https");
+    error.code = "mcp_remote_invalid_server_url";
+    throw error;
+  }
+  return url.toString();
+}
+
+function remoteMcpHeaders(tool, sessionId = null) {
+  const headers = {
+    "content-type": "application/json",
+    "accept": "application/json, text/event-stream",
+  };
+  if (isPlainObject(tool.headers)) {
+    for (const [key, value] of Object.entries(tool.headers)) {
+      const normalized = key.toLowerCase();
+      if (["host", "content-length", "connection"].includes(normalized)) continue;
+      if (value == null) continue;
+      headers[key] = String(value);
+    }
+  }
+  if (tool.authorization != null) {
+    if (hasAuthorizationHeader(tool.headers)) {
+      const error = new Error("MCP tool cannot include both authorization and headers.Authorization");
+      error.code = "mcp_authorization_conflict";
+      throw error;
+    }
+    headers.authorization = authorizationHeaderValue(tool.authorization);
+  }
+  if (sessionId) headers["mcp-session-id"] = sessionId;
+  return headers;
+}
+
+function authorizationHeaderValue(value) {
+  const text = stringifyOptional(value).trim();
+  if (!text) return "";
+  return /^bearer\s+/i.test(text) ? text : `Bearer ${text}`;
+}
+
+async function readMcpResponsePayload(response, config, requestId) {
+  const contentType = response.headers.get("content-type") || "";
+  const text = await readBoundedResponseText(response, boundedNumber(config.mcpMaxResponseBytes, DEFAULT_MCP_MAX_RESPONSE_BYTES, 4096, 8 * DEFAULT_MCP_MAX_RESPONSE_BYTES));
+  if (!text.trim()) {
+    const error = new Error(`MCP server returned an empty response for id ${requestId}`);
+    error.code = "mcp_remote_empty_response";
+    throw error;
+  }
+  if (/text\/event-stream/i.test(contentType)) {
+    return parseSseJsonMessages(text);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    error.code = "mcp_remote_invalid_json";
+    throw error;
+  }
+}
+
+async function readBoundedResponseText(response, maxBytes) {
+  if (!response.body?.getReader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text, "utf8") > maxBytes) {
+      const error = new Error("MCP response exceeded byte limit");
+      error.code = "mcp_remote_response_too_large";
+      throw error;
+    }
+    return text;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    total += value.length;
+    if (total > maxBytes) {
+      const error = new Error("MCP response exceeded byte limit");
+      error.code = "mcp_remote_response_too_large";
+      throw error;
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+function parseSseJsonMessages(text) {
+  const messages = [];
+  for (const frame of text.split(/\n\n/)) {
+    if (!frame.trim()) continue;
+    const data = frame
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).trimStart())
+      .join("\n");
+    if (!data || data === "[DONE]") continue;
+    const parsed = JSON.parse(data);
+    if (Array.isArray(parsed)) messages.push(...parsed);
+    else messages.push(parsed);
+  }
+  return messages;
+}
+
+function findJsonRpcResponse(payload, id) {
+  const values = Array.isArray(payload) ? payload : [payload];
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      const nested = findJsonRpcResponse(value, id);
+      if (nested) return nested;
+      continue;
+    }
+    if (isPlainObject(value) && value.id === id) return value;
+  }
+  return null;
+}
+
+function jsonRpcError(code, error) {
+  const thrown = new Error(error?.message || code);
+  thrown.code = code;
+  thrown.remote_error = isPlainObject(error) ? clone(error) : error;
+  return thrown;
+}
+
+function normalizeRemoteToolDefinition(definition = {}) {
+  if (!isPlainObject(definition)) return null;
+  const schema = isPlainObject(definition.inputSchema)
+    ? definition.inputSchema
+    : isPlainObject(definition.input_schema)
+      ? definition.input_schema
+      : isPlainObject(definition.parameters)
+        ? definition.parameters
+        : { type: "object", additionalProperties: true };
+  return {
+    annotations: definition.annotations ?? null,
+    description: stringifyOptional(definition.description),
+    input_schema: clone(schema),
+    name: stringifyOptional(definition.name),
+  };
+}
+
+function boundedNumber(value, fallback, min, max) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.max(min, Math.min(max, Math.trunc(parsed)));
+}
+
+function safeErrorMessage(error) {
+  const message = String(error?.message || error || "remote MCP tools/list failed");
+  return message.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]").slice(0, 500);
 }
 
 function explicitTools(tool = {}) {
@@ -201,6 +523,7 @@ function mcpOutputItems(context) {
 function mcpCompatibility(context) {
   if (!context) return {};
   const servers = context.servers || [];
+  const remoteImportAttempts = servers.filter((server) => server.remote_import_attempted);
   return {
     local_mcp: {
       provider: context.provider || "local",
@@ -212,9 +535,14 @@ function mcpCompatibility(context) {
       imported_tool_count: servers.reduce((sum, server) => sum + (server.imported_tools?.length || 0), 0),
       deferred_count: servers.filter((server) => server.defer_loading).length,
       authorization_redacted_count: servers.filter((server) => server.has_authorization).length,
+      remote_import_attempt_count: remoteImportAttempts.length,
+      remote_import_success_count: remoteImportAttempts.filter((server) => server.remote_import_status === "completed").length,
+      remote_import_failed_count: remoteImportAttempts.filter((server) => server.remote_import_status === "failed").length,
       input_item_count: context.input_items?.length || 0,
       skipped_count: context.skipped_calls?.length || 0,
-      boundary: "local_protocol_context_only",
+      boundary: remoteImportAttempts.length
+        ? "remote_list_tools_without_call_execution"
+        : "local_protocol_context_only",
       ...(context.warnings?.length ? { warnings: context.warnings.slice(0, 5) } : {}),
     },
   };
@@ -223,7 +551,7 @@ function mcpCompatibility(context) {
 function mcpPrompt(context) {
   const sections = [
     "Local Responses MCP compatibility is active.",
-    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It does not execute remote MCP or connector calls in this local mode.",
+    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured, but it does not yet execute remote MCP tool calls or hosted connector calls.",
     "Never infer private connector data. Use only visible MCP context items, user input, and other provided evidence.",
   ];
 
@@ -240,6 +568,10 @@ function mcpPrompt(context) {
         server.defer_loading ? "  defer_loading: true" : null,
         server.allowed_tools?.length ? `  allowed_tools: ${server.allowed_tools.join(", ")}` : null,
         server.imported_tools?.length ? `  imported_tools: ${server.imported_tools.map((tool) => tool.name).join(", ")}` : null,
+        server.remote_import_attempted ? `  remote_import: ${server.remote_import_status || "unknown"}` : null,
+        server.remote_import_attempted && server.remote_import_remote_tool_count ? `  remote_tool_count: ${server.remote_import_remote_tool_count}` : null,
+        server.remote_import_protocol_version ? `  remote_protocol_version: ${server.remote_import_protocol_version}` : null,
+        server.remote_import_session ? `  remote_session: ${server.remote_import_session}` : null,
         server.has_authorization ? "  authorization: provided but redacted by bridge" : null,
         server.import_error ? `  import_error: ${server.import_error.code}` : null,
       ].filter(Boolean).join("\n")),
