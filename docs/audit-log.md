@@ -4369,6 +4369,84 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants function-tool required-action compatibility
+
+- Extended the local deprecated Assistants/Threads compatibility layer so
+  Chat function-tool calls now map to Assistants `requires_action` runs:
+  - Assistant `tools:[{type:"function"}]` are forwarded as Chat Completions
+    function tools, with provider filtering still handled by the existing Chat
+    passthrough compatibility layer;
+  - upstream Chat `choices[].message.tool_calls[]` and legacy
+    `message.function_call` are normalized into
+    `required_action.type:"submit_tool_outputs"`;
+  - local Runs now persist `tool_calls` Run Steps as well as
+    `message_creation` Run Steps;
+  - `POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs` accepts
+    required tool outputs, replays the assistant `tool_calls` plus Chat `tool`
+    messages upstream, aggregates usage, and completes the run or enters
+    another `requires_action` round;
+  - submitting tool outputs to a non-required-action run remains a compatibility
+    no-op that records metadata and returns the existing run;
+  - Assistants SSE event-shape output now emits
+    `thread.run.requires_action` for streamed runs that pause for tool outputs.
+- Updated docs and evaluation coverage:
+  - compatibility matrix now marks function-tool `requires_action` /
+    `submit_tool_outputs` as implemented and narrows remaining Assistants gaps
+    to hosted Code Interpreter/File Search behavior, exact streamed text/tool
+    deltas, and async thread locks;
+  - evaluation plan and deployment docs now include
+    `assistants-required-action`;
+  - bridge regression harness now creates a live Assistant with a function
+    tool, verifies the first run enters `requires_action`, submits tool
+    outputs, and checks that the final assistant message contains
+    `assistants-tool-ok`.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 2/2.
+  - `npm test`: passed 179/179.
+  - Restarted `aialra-opencodexapp-bridge.service`; service stayed active,
+    bridge healthz on `127.0.0.1:12912` returned `ok:true`, provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Focused live
+    `npm run eval:bridge -- --case assistants-required-action --timeout-ms 90000 --verbose`:
+    passed 1/1, latency 3792 ms, first status `requires_action`, final status
+    `completed`, 1 tool call, 2 run steps, 2 messages, output
+    `assistants-tool-ok`, and 784 total tokens.
+  - First full live `npm run eval:bridge -- --timeout-ms 180000`: passed
+    83/84; the new Assistants cases both passed, while the existing
+    `responses-mcp-remote-approval` case showed a transient model-output
+    mismatch.
+  - Focused rerun of `responses-mcp-remote-approval`: passed 1/1, confirming
+    that failure was transient rather than caused by this Assistants change.
+  - Second full live `npm run eval:bridge -- --timeout-ms 180000`: passed
+    84/84, pass rate 1.0, average latency 1407 ms, P95 latency 3992 ms, and
+    20519 total tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1241 ms, P95 latency 1257 ms, and 99 total tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering auth/load, sidebar
+    controls, page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, and saved-project cleanup with no console errors or warnings.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1239 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 100908 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    100908 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 40 GB available;
+    `state/` was 17 MB, `output/` was 4.7 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 24 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants API local lifecycle compatibility
 
 - Evidence checked from official OpenAI documentation before implementation:

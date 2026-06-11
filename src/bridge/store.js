@@ -630,6 +630,32 @@ class FileAssistantStore {
     return cloneJson(step);
   }
 
+  createToolCallsStep(run, toolCalls = [], usage = null) {
+    const now = nowSeconds();
+    const step = {
+      id: `step_${randomToken(18)}`,
+      object: "thread.run.step",
+      created_at: now,
+      assistant_id: run.assistant_id,
+      thread_id: run.thread_id,
+      run_id: run.id,
+      type: "tool_calls",
+      status: "completed",
+      cancelled_at: null,
+      completed_at: now,
+      expires_at: null,
+      failed_at: null,
+      last_error: null,
+      step_details: {
+        type: "tool_calls",
+        tool_calls: normalizeAssistantToolCallsForStep(toolCalls),
+      },
+      usage: usage || null,
+    };
+    this.writeJson(this.stepPath(run.thread_id, run.id, step.id), { step });
+    return cloneJson(step);
+  }
+
   listRunSteps(threadId, runId) {
     if (!this.getRun(threadId, runId)) return null;
     return this.listJson(this.stepsDir(threadId, runId))
@@ -1031,6 +1057,20 @@ function normalizeAssistantMessageContent(content) {
       annotations: [],
     },
   }];
+}
+
+function normalizeAssistantToolCallsForStep(toolCalls = []) {
+  return (Array.isArray(toolCalls) ? toolCalls : [])
+    .filter(isPlainObject)
+    .map((toolCall) => ({
+      id: String(toolCall.id || ""),
+      type: String(toolCall.type || "function") || "function",
+      function: {
+        name: String(toolCall.function?.name || ""),
+        arguments: String(toolCall.function?.arguments ?? ""),
+        output: toolCall.function?.output == null ? null : String(toolCall.function.output),
+      },
+    }));
 }
 
 module.exports = {

@@ -240,6 +240,7 @@ npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-url --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case assistants-lifecycle --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case assistants-required-action --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose

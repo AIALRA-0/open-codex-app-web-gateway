@@ -9121,30 +9121,28 @@ function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
   sendJson(res, 200, run);
 }
 
-async function handleAssistantRunSubmitToolOutputs(req, res, assistantStore, threadId, runId) {
+async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId) {
   const body = await readJson(req);
-  const run = assistantStore.updateRun(threadId, runId, (existing) => ({
-    ...existing,
-    metadata: {
-      ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
-      compatibility: mergeCompatibility(existing.metadata?.compatibility, {
-        local_assistants: {
-          provider: "local",
-          submit_tool_outputs: "no_op_without_required_action",
-          tool_output_count: Array.isArray(body.tool_outputs) ? body.tool_outputs.length : 0,
-        },
-      }),
-    },
-  }));
-  if (!run) {
-    sendError(res, 404, `No run found for id '${runId}'`, {
-      type: "invalid_request_error",
-      code: "run_not_found",
-      param: "run_id",
+  const result = await submitAssistantToolOutputs({
+    body,
+    config,
+    assistantStore,
+    threadId,
+    runId,
+    incomingHeaders: req.headers,
+  });
+  if (!result.ok) {
+    sendJson(res, result.status, result.error);
+    return;
+  }
+  if (body.stream === true) {
+    writeAssistantRunStream(res, result.thread, result.initialRun, result.run, result.message, result.step, {
+      includeThreadCreated: false,
+      includeRunCreated: false,
     });
     return;
   }
-  sendJson(res, 200, run);
+  sendJson(res, 200, result.run);
 }
 
 function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) {
@@ -9213,19 +9211,129 @@ async function createAndCompleteAssistantRun({ body, config, assistantStore, thr
 
   const initialRun = assistantStore.createRun(threadId, body, assistant);
   const startedAt = nowSeconds();
-  assistantStore.updateRun(threadId, initialRun.id, { ...initialRun, status: "in_progress", started_at: startedAt });
+  const inProgressRun = assistantStore.updateRun(threadId, initialRun.id, {
+    ...initialRun,
+    status: "in_progress",
+    started_at: startedAt,
+  });
   const messages = assistantStore.listMessages(threadId) || [];
-  const chat = assistantRunToChatRequest(initialRun, messages, config);
+  return runAssistantChatTurn({
+    config,
+    assistantStore,
+    thread,
+    initialRun,
+    run: inProgressRun || { ...initialRun, status: "in_progress", started_at: startedAt },
+    messages,
+    incomingHeaders,
+  });
+}
+
+async function submitAssistantToolOutputs({ body, config, assistantStore, threadId, runId, incomingHeaders }) {
+  const thread = assistantStore.getThread(threadId);
+  const existingRun = assistantStore.getRun(threadId, runId);
+  if (!existingRun) {
+    return {
+      ok: false,
+      status: 404,
+      error: openAiError(`No run found for id '${runId}'`, {
+        type: "invalid_request_error",
+        code: "run_not_found",
+        param: "run_id",
+      }),
+    };
+  }
+
+  const requiredToolCalls = assistantRequiredActionToolCalls(existingRun);
+  const toolOutputs = normalizeAssistantSubmittedToolOutputs(body.tool_outputs);
+  if (existingRun.status !== "requires_action" || !requiredToolCalls.length) {
+    const run = assistantStore.updateRun(threadId, runId, (existing) => ({
+      ...existing,
+      metadata: {
+        ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+        compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+          local_assistants: {
+            provider: "local",
+            submit_tool_outputs: "no_op_without_required_action",
+            tool_output_count: toolOutputs.length,
+          },
+        }),
+      },
+    }));
+    return { ok: true, thread, initialRun: existingRun, run, message: null, step: null };
+  }
+
+  const outputsById = new Map(toolOutputs.map((output) => [output.tool_call_id, output]));
+  const missingIds = requiredToolCalls
+    .map((toolCall) => toolCall.id)
+    .filter((id) => !outputsById.has(id));
+  if (missingIds.length) {
+    return {
+      ok: false,
+      status: 400,
+      error: openAiError(`Missing tool outputs for tool calls: ${missingIds.join(", ")}`, {
+        type: "invalid_request_error",
+        code: "missing_tool_outputs",
+        param: "tool_outputs",
+      }),
+    };
+  }
+
+  const startedAt = existingRun.started_at || nowSeconds();
+  const inProgressRun = assistantStore.updateRun(threadId, runId, (existing) => ({
+    ...existing,
+    status: "in_progress",
+    started_at: startedAt,
+    required_action: null,
+    last_error: null,
+    metadata: {
+      ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+      compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+        local_assistants: {
+          provider: "local",
+          submit_tool_outputs: "accepted",
+          tool_output_count: toolOutputs.length,
+        },
+      }),
+    },
+  })) || { ...existingRun, status: "in_progress", started_at: startedAt, required_action: null };
+
+  const messages = assistantStore.listMessages(threadId) || [];
+  return runAssistantChatTurn({
+    config,
+    assistantStore,
+    thread,
+    initialRun: existingRun,
+    run: inProgressRun,
+    messages,
+    incomingHeaders,
+    chatOptions: {
+      requiredToolCalls,
+      toolOutputs,
+    },
+  });
+}
+
+async function runAssistantChatTurn({
+  config,
+  assistantStore,
+  thread,
+  initialRun,
+  run,
+  messages,
+  incomingHeaders,
+  chatOptions = {},
+}) {
+  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
   const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(chat, config);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, incomingHeaders);
   const text = await upstream.text();
   const upstreamJson = parseJsonOrNull(text);
   if (!upstream.ok) {
     const failedAt = nowSeconds();
-    const failedRun = assistantStore.updateRun(threadId, initialRun.id, {
-      ...initialRun,
+    const failedRun = assistantStore.updateRun(run.thread_id, run.id, {
+      ...run,
       status: "failed",
-      started_at: startedAt,
+      started_at: run.started_at || nowSeconds(),
       failed_at: failedAt,
       expires_at: null,
       last_error: {
@@ -9243,36 +9351,62 @@ async function createAndCompleteAssistantRun({ body, config, assistantStore, thr
     };
   }
 
+  const usage = assistantRunUsage(upstreamJson?.usage);
+  const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
+  if (toolCalls.length) {
+    const step = assistantStore.createToolCallsStep(run, toolCalls, usage);
+    const pendingRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
+      ...existing,
+      status: "requires_action",
+      expires_at: existing.expires_at || nowSeconds() + 600,
+      required_action: assistantRequiredAction(toolCalls),
+      usage: aggregateAssistantRunUsage(existing.usage, usage),
+      metadata: {
+        ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+        compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+          local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+            run_mode: "required_action",
+            required_action: "submit_tool_outputs",
+            tool_call_count: toolCalls.length,
+            ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+          }),
+        }),
+      },
+    }));
+    return {
+      ok: true,
+      thread,
+      initialRun,
+      run: pendingRun,
+      message: null,
+      step,
+    };
+  }
+
   const assistantText = extractChatCompletionText(upstreamJson) || "";
-  const message = assistantStore.createMessage(threadId, {
+  const message = assistantStore.createMessage(run.thread_id, {
     role: "assistant",
     content: assistantText,
   }, {
-    assistant_id: assistant.id,
-    run_id: initialRun.id,
+    assistant_id: run.assistant_id,
+    run_id: run.id,
   });
-  const step = assistantStore.createMessageCreationStep(initialRun, message.id, assistantRunUsage(upstreamJson?.usage));
+  const step = assistantStore.createMessageCreationStep(run, message.id, usage);
   const completedAt = nowSeconds();
-  const completedRun = assistantStore.updateRun(threadId, initialRun.id, {
-    ...initialRun,
+  const completedRun = assistantStore.updateRun(run.thread_id, run.id, {
+    ...run,
     status: "completed",
-    started_at: startedAt,
+    started_at: run.started_at || nowSeconds(),
     expires_at: null,
     completed_at: completedAt,
-    usage: assistantRunUsage(upstreamJson?.usage),
+    usage: aggregateAssistantRunUsage(run.usage, usage),
     metadata: {
-      ...(isPlainObject(initialRun.metadata) ? initialRun.metadata : {}),
-      compatibility: mergeCompatibility(initialRun.metadata?.compatibility, {
-        local_assistants: {
-          provider: "local",
-          upstream: "chat_completions",
-          upstream_model: upstreamJson?.model || null,
-          run_mode: "synchronous",
-          tool_count: Array.isArray(initialRun.tools) ? initialRun.tools.length : 0,
-          tool_calls_supported: false,
-          streaming_supported: "event_shape_only",
-          ...(compatibility ? { chat_passthrough: compatibility } : {}),
-        },
+      ...(isPlainObject(run.metadata) ? run.metadata : {}),
+      compatibility: mergeCompatibility(run.metadata?.compatibility, {
+        local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+          run_mode: chatOptions.toolOutputs ? "submit_tool_outputs" : "synchronous",
+          ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+        }),
       }),
     },
   });
@@ -9286,7 +9420,7 @@ async function createAndCompleteAssistantRun({ body, config, assistantStore, thr
   };
 }
 
-function assistantRunToChatRequest(run, threadMessages, config) {
+function assistantRunToChatRequest(run, threadMessages, config, options = {}) {
   const messages = [];
   const instructions = stringifyContent(run.instructions).trim();
   if (instructions) messages.push({ role: "system", content: instructions });
@@ -9294,6 +9428,20 @@ function assistantRunToChatRequest(run, threadMessages, config) {
     const role = message.role === "assistant" ? "assistant" : "user";
     const content = assistantMessageContentText(message.content);
     if (content) messages.push({ role, content });
+  }
+  if (Array.isArray(options.requiredToolCalls) && options.requiredToolCalls.length) {
+    messages.push({
+      role: "assistant",
+      content: null,
+      tool_calls: options.requiredToolCalls.map(assistantToolCallToChatToolCall),
+    });
+    for (const output of options.toolOutputs || []) {
+      messages.push({
+        role: "tool",
+        tool_call_id: output.tool_call_id,
+        content: output.output,
+      });
+    }
   }
   if (!messages.some((message) => message.role !== "system")) {
     messages.push({ role: "user", content: "Continue the assistant thread." });
@@ -9307,7 +9455,162 @@ function assistantRunToChatRequest(run, threadMessages, config) {
   };
   if (run.max_completion_tokens != null) chat.max_completion_tokens = run.max_completion_tokens;
   if (run.response_format && run.response_format !== "auto") chat.response_format = run.response_format;
+  const toolMapping = assistantFunctionToolMapping(run.tools);
+  if (toolMapping.tools.length) {
+    chat.tools = toolMapping.tools;
+    const toolChoice = assistantChatToolChoice(run.tool_choice);
+    if (toolChoice !== undefined) chat.tool_choice = toolChoice;
+    if (run.parallel_tool_calls !== undefined) chat.parallel_tool_calls = run.parallel_tool_calls;
+  }
   return chat;
+}
+
+function assistantFunctionToolMapping(tools = []) {
+  const mapped = [];
+  const unsupported = [];
+  for (const tool of Array.isArray(tools) ? tools : []) {
+    if (!isPlainObject(tool)) continue;
+    if (tool.type !== "function") {
+      unsupported.push(stringifyContent(tool.type || "unknown"));
+      continue;
+    }
+    const fn = isPlainObject(tool.function) ? tool.function : tool;
+    const name = stringifyContent(fn.name || "");
+    if (!name) {
+      unsupported.push("function_without_name");
+      continue;
+    }
+    mapped.push({
+      type: "function",
+      function: {
+        name,
+        description: stringifyContent(fn.description || ""),
+        parameters: isPlainObject(fn.parameters) ? clone(fn.parameters) : { type: "object", properties: {} },
+        ...(fn.strict != null ? { strict: fn.strict } : {}),
+      },
+    });
+  }
+  return { tools: mapped, unsupported };
+}
+
+function assistantChatToolChoice(toolChoice) {
+  if (toolChoice == null) return undefined;
+  if (typeof toolChoice === "string") return toolChoice;
+  if (!isPlainObject(toolChoice)) return undefined;
+  if (toolChoice.type === "function") {
+    const name = stringifyContent(toolChoice.function?.name || toolChoice.name || "");
+    if (name) return { type: "function", function: { name } };
+  }
+  return toolChoice;
+}
+
+function assistantChatToolCallsFromCompletion(completion) {
+  const calls = [];
+  for (const choice of completion?.choices || []) {
+    const message = choice?.message || {};
+    if (Array.isArray(message.tool_calls)) {
+      for (const toolCall of message.tool_calls) {
+        const normalized = normalizeAssistantToolCall(toolCall);
+        if (normalized) calls.push(normalized);
+      }
+    } else if (isPlainObject(message.function_call) && message.function_call.name) {
+      const normalized = normalizeAssistantToolCall({
+        id: prefixedId("call"),
+        type: "function",
+        function: message.function_call,
+      });
+      if (normalized) calls.push(normalized);
+    }
+  }
+  return calls;
+}
+
+function normalizeAssistantToolCall(toolCall) {
+  if (!isPlainObject(toolCall)) return null;
+  const fn = isPlainObject(toolCall.function) ? toolCall.function : {};
+  const name = stringifyContent(fn.name || "");
+  if (!name) return null;
+  return {
+    id: stringifyContent(toolCall.id || prefixedId("call")),
+    type: stringifyContent(toolCall.type || "function") || "function",
+    function: {
+      name,
+      arguments: stringifyContent(fn.arguments ?? ""),
+    },
+  };
+}
+
+function assistantToolCallToChatToolCall(toolCall) {
+  return {
+    id: stringifyContent(toolCall.id || prefixedId("call")),
+    type: stringifyContent(toolCall.type || "function") || "function",
+    function: {
+      name: stringifyContent(toolCall.function?.name || ""),
+      arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+    },
+  };
+}
+
+function assistantRequiredAction(toolCalls = []) {
+  return {
+    type: "submit_tool_outputs",
+    submit_tool_outputs: {
+      tool_calls: toolCalls.map((toolCall) => ({
+        id: stringifyContent(toolCall.id || ""),
+        type: stringifyContent(toolCall.type || "function") || "function",
+        function: {
+          name: stringifyContent(toolCall.function?.name || ""),
+          arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+        },
+      })),
+    },
+  };
+}
+
+function assistantRequiredActionToolCalls(run) {
+  const toolCalls = run?.required_action?.submit_tool_outputs?.tool_calls;
+  return (Array.isArray(toolCalls) ? toolCalls : [])
+    .map(normalizeAssistantToolCall)
+    .filter(Boolean);
+}
+
+function normalizeAssistantSubmittedToolOutputs(toolOutputs) {
+  return (Array.isArray(toolOutputs) ? toolOutputs : [])
+    .filter(isPlainObject)
+    .map((output) => ({
+      tool_call_id: stringifyContent(output.tool_call_id || ""),
+      output: stringifyContent(output.output ?? ""),
+    }))
+    .filter((output) => output.tool_call_id);
+}
+
+function aggregateAssistantRunUsage(previous, next) {
+  if (!previous) return next || null;
+  if (!next) return previous;
+  const promptTokens = Number(previous.prompt_tokens || 0) + Number(next.prompt_tokens || 0);
+  const completionTokens = Number(previous.completion_tokens || 0) + Number(next.completion_tokens || 0);
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: Number(previous.total_tokens || 0) + Number(next.total_tokens || 0),
+  };
+}
+
+function assistantRunCompatibility(run, upstreamJson, chatPassthrough, extra = {}) {
+  const toolMapping = assistantFunctionToolMapping(run.tools);
+  return {
+    provider: "local",
+    upstream: "chat_completions",
+    upstream_model: upstreamJson?.model || null,
+    run_mode: "synchronous",
+    tool_count: Array.isArray(run.tools) ? run.tools.length : 0,
+    function_tool_count: toolMapping.tools.length,
+    ...(toolMapping.unsupported.length ? { unsupported_tool_types: Array.from(new Set(toolMapping.unsupported)) } : {}),
+    tool_calls_supported: true,
+    streaming_supported: "event_shape_only",
+    ...(chatPassthrough ? { chat_passthrough: chatPassthrough } : {}),
+    ...extra,
+  };
 }
 
 function assistantMessageContentText(content) {
@@ -9337,19 +9640,27 @@ function assistantRunUsage(usage) {
   };
 }
 
-function writeAssistantRunStream(res, thread, initialRun, completedRun, message, step) {
+function writeAssistantRunStream(res, thread, initialRun, completedRun, message, step, options = {}) {
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-store",
     connection: "keep-alive",
   });
-  writeSse(res, "thread.created", thread);
-  writeSse(res, "thread.run.created", initialRun);
-  writeSse(res, "thread.run.queued", initialRun);
-  writeSse(res, "thread.run.in_progress", { ...initialRun, status: "in_progress", started_at: completedRun.started_at });
-  writeSse(res, "thread.message.completed", message);
-  writeSse(res, "thread.run.step.completed", step);
-  writeSse(res, "thread.run.completed", completedRun);
+  if (options.includeThreadCreated !== false && thread) writeSse(res, "thread.created", thread);
+  if (options.includeRunCreated !== false && initialRun) {
+    writeSse(res, "thread.run.created", initialRun);
+    writeSse(res, "thread.run.queued", initialRun);
+  }
+  if (initialRun) {
+    writeSse(res, "thread.run.in_progress", {
+      ...initialRun,
+      status: "in_progress",
+      started_at: completedRun.started_at,
+    });
+  }
+  if (message) writeSse(res, "thread.message.completed", message);
+  if (step) writeSse(res, "thread.run.step.completed", step);
+  writeSse(res, `thread.run.${completedRun.status || "completed"}`, completedRun);
   res.write("event: done\n");
   res.write("data: [DONE]\n\n");
   res.end();
@@ -9741,7 +10052,7 @@ function createServer(config = loadConfig()) {
           handleAssistantRunCancel(res, assistantStore, threadId, runId);
           return;
         }
-        await handleAssistantRunSubmitToolOutputs(req, res, assistantStore, threadId, runId);
+        await handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId);
         return;
       }
 

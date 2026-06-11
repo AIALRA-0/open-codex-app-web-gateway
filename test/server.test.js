@@ -1653,6 +1653,147 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
   });
 });
 
+test("Assistants API required_action submits tool outputs through upstream Chat", async () => {
+  await withMockProvider((_req, res, request) => {
+    const lastMessage = request.body.messages.at(-1);
+    res.writeHead(200, { "content-type": "application/json" });
+    if (lastMessage?.role === "tool") {
+      assert.equal(lastMessage.tool_call_id, "call_lookup_1");
+      assert.equal(lastMessage.content, "weather=clear");
+      const assistantToolCallMessage = request.body.messages.find((message) => message.role === "assistant" && message.tool_calls);
+      assert.equal(assistantToolCallMessage.tool_calls[0].id, "call_lookup_1");
+      assert.equal(assistantToolCallMessage.tool_calls[0].function.name, "lookup_weather");
+      res.end(JSON.stringify({
+        id: "chatcmpl_assistant_tool_final",
+        object: "chat.completion",
+        created: 1700000001,
+        model: request.body.model,
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "tool-output-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+      }));
+      return;
+    }
+
+    assert.equal(request.body.tools[0].function.name, "lookup_weather");
+    assert.equal(request.body.tool_choice, "auto");
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistant_tool_request",
+      object: "chat.completion",
+      created: 1700000000,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_lookup_1",
+            type: "function",
+            function: {
+              name: "lookup_weather",
+              arguments: "{\"city\":\"Berlin\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use tools when needed, then answer with the result marker.",
+        tools: [{
+          type: "function",
+          function: {
+            name: "lookup_weather",
+            description: "Lookup weather for a city.",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Use lookup_weather for Berlin." }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "requires_action");
+    assert.equal(run.required_action.type, "submit_tool_outputs");
+    assert.equal(run.required_action.submit_tool_outputs.tool_calls[0].id, "call_lookup_1");
+    assert.equal(run.required_action.submit_tool_outputs.tool_calls[0].function.name, "lookup_weather");
+    assert.equal(run.metadata.compatibility.local_assistants.tool_calls_supported, true);
+    assert.equal(run.metadata.compatibility.local_assistants.run_mode, "required_action");
+    assert.deepEqual(run.usage, { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 });
+
+    const missingSubmit = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool_outputs: [] }),
+    });
+    assert.equal(missingSubmit.status, 400);
+    assert.equal((await missingSubmit.json()).error.code, "missing_tool_outputs");
+
+    const submitResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        tool_outputs: [{ tool_call_id: "call_lookup_1", output: "weather=clear" }],
+      }),
+    });
+    assert.equal(submitResponse.status, 200);
+    const completedRun = await submitResponse.json();
+    assert.equal(completedRun.status, "completed");
+    assert.equal(completedRun.required_action, null);
+    assert.deepEqual(completedRun.usage, { prompt_tokens: 22, completion_tokens: 5, total_tokens: 27 });
+    assert.equal(completedRun.metadata.compatibility.local_assistants.run_mode, "submit_tool_outputs");
+    assert.equal(completedRun.metadata.compatibility.local_assistants.submitted_tool_output_count, 1);
+
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests[1].body.messages.map((message) => message.role), ["system", "user", "assistant", "tool"]);
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps`);
+    assert.equal(listedSteps.status, 200);
+    const listedStepsJson = await listedSteps.json();
+    assert.deepEqual(listedStepsJson.data.map((step) => step.type).sort(), ["message_creation", "tool_calls"]);
+    const toolStep = listedStepsJson.data.find((step) => step.type === "tool_calls");
+    assert.equal(toolStep.step_details.tool_calls[0].id, "call_lookup_1");
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const listedMessagesJson = await listedMessages.json();
+    const assistantMessage = listedMessagesJson.data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.content[0].text.value, "tool-output-ok");
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);

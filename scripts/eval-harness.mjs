@@ -397,6 +397,23 @@ function buildSuites(defaultModel) {
           && /assistants-stream-ok/i.test(streamMessage?.content?.[0]?.text?.value || ""),
       },
       {
+        id: "assistants-required-action",
+        mode: "assistants-required-action",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ assistant, thread, firstRun, finalRun, messages, steps, toolCallCount }) => assistant?.id?.startsWith("asst_")
+          && thread?.id?.startsWith("thread_")
+          && firstRun?.status === "requires_action"
+          && finalRun?.status === "completed"
+          && finalRun.metadata?.compatibility?.local_assistants?.upstream === "chat_completions"
+          && finalRun.metadata?.compatibility?.local_assistants?.tool_calls_supported === true
+          && toolCallCount >= 1
+          && messages?.data?.some((message) => message.role === "assistant" && /assistants-tool-ok/i.test(message.content?.[0]?.text?.value || ""))
+          && steps?.data?.some((step) => step.type === "tool_calls")
+          && steps?.data?.some((step) => step.type === "message_creation"),
+      },
+      {
         id: "evals-lifecycle",
         mode: "evals-lifecycle",
         request: {
@@ -2562,6 +2579,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-lifecycle") {
       return await runAssistantsLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-required-action") {
+      return await runAssistantsRequiredActionCase(testCase, context, started);
+    }
     if (testCase.mode === "evals-lifecycle") {
       return await runEvalsLifecycleCase(testCase, context, started);
     }
@@ -2925,6 +2945,142 @@ async function runAssistantsLifecycleCase(testCase, context, started) {
         steps: steps.json,
         step: step.json,
         streamEvents,
+      })),
+    });
+  } finally {
+    for (const threadId of threadIds) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsRequiredActionCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  const threadIds = new Set();
+  let firstRun = null;
+  let finalRun = null;
+  let toolCallCount = 0;
+  try {
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: [
+        "You must call the marker_tool function before answering.",
+        "After tool output is provided, return that tool output exactly and with no extra words.",
+      ].join(" "),
+      tools: [{
+        type: "function",
+        function: {
+          name: "marker_tool",
+          description: "Returns a marker string to verify Assistants required_action compatibility.",
+          parameters: {
+            type: "object",
+            properties: {
+              marker: { type: "string" },
+            },
+            required: ["marker"],
+          },
+        },
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: "Call marker_tool with marker assistants-tool-ok, then return the tool output.",
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        error: truncate(thread.body),
+      });
+    }
+    threadIds.add(thread.json.id);
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${thread.json.id}/runs`, {
+      assistant_id: assistantId,
+      tool_choice: "auto",
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        error: truncate(run.body),
+      });
+    }
+    firstRun = run.json;
+    finalRun = run.json;
+
+    for (let round = 0; finalRun?.status === "requires_action" && round < 3; round += 1) {
+      const toolCalls = finalRun.required_action?.submit_tool_outputs?.tool_calls || [];
+      toolCallCount += toolCalls.length;
+      const submit = await postJsonCapture(`${baseUrl}/v1/threads/${thread.json.id}/runs/${finalRun.id}/submit_tool_outputs`, {
+        tool_outputs: toolCalls.map((toolCall) => ({
+          tool_call_id: toolCall.id,
+          output: "assistants-tool-ok",
+        })),
+      });
+      if (!submit.ok) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: submit.status,
+          assistant_id: assistantId,
+          thread_id: thread.json.id,
+          run_id: finalRun.id,
+          tool_call_count: toolCallCount,
+          error: truncate(submit.body),
+        });
+      }
+      finalRun = submit.json;
+    }
+
+    const messages = await getJson(`${baseUrl}/v1/threads/${thread.json.id}/messages?order=asc&limit=20`);
+    const steps = finalRun?.id
+      ? await getJson(`${baseUrl}/v1/threads/${thread.json.id}/runs/${finalRun.id}/steps?limit=20`)
+      : { status: 0, json: null };
+
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      firstRun,
+      finalRun,
+      messages: messages.json,
+      steps: steps.json,
+      toolCallCount,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: finalRun?.status || run.status,
+      assistant_id: assistantId,
+      thread_id: thread.json.id,
+      run_id: finalRun?.id || run.json.id,
+      first_status: firstRun?.status,
+      final_status: finalRun?.status,
+      tool_call_count: toolCallCount,
+      step_count: steps.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
+      usage: assistantsUsage(finalRun),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        firstRun,
+        finalRun,
+        messages: messages.json,
+        steps: steps.json,
+        toolCallCount,
       })),
     });
   } finally {
