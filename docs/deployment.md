@@ -109,10 +109,13 @@ Useful bridge flags:
 | `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` adapter provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation; keep provider-specific endpoints and secrets outside Git |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed calls |
+| `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for provider-backed `action:"edit"`, input-image reference, and mask workflows |
 | `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
 | `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override such as `b64_json` for providers/models that require it |
 | `CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS` | `120000` | Timeout for provider-backed image generation requests; complex image prompts can take longer than text requests |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES` | `52428800` | Maximum bytes per edit input image or mask before the bridge fails the local `image_generation_call` |
+| `CODEXCOMPAT_IMAGE_GENERATION_INPUT_FETCH_TIMEOUT_MS` | `10000` | Timeout for bounded HTTP(S) image URL fetches used by provider-backed edits |
 | `CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE` | `96` | Pixel width/height for the deterministic placeholder PNG; bounded from 16 to 512 |
 | `CODEXCOMPAT_WEB_SEARCH_PROVIDER` | `wikipedia` | Local `web_search_preview` adapter provider. Use `disabled`, `static`, or `wikipedia` |
 | `CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS` | `5` | Maximum local web-search results injected into Chat context and citation output |

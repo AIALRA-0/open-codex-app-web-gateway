@@ -54,9 +54,18 @@ function expireVectorStoreForTest(stateDir, storeId) {
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
-    let body = "";
-    for await (const chunk of req) body += chunk;
-    requests.push({ req, body: body ? JSON.parse(body) : null });
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const rawBody = Buffer.concat(chunks).toString("utf8");
+    let body = null;
+    if (rawBody) {
+      try {
+        body = JSON.parse(rawBody);
+      } catch {
+        body = null;
+      }
+    }
+    requests.push({ req, body, rawBody });
     await handler(req, res, requests.at(-1));
   });
   const providerAddress = await listen(provider);
@@ -2629,6 +2638,265 @@ test("POST /v1/responses can back image_generation with an OpenAI-compatible Ima
     imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
     imageGenerationModel: "gpt-image-test",
     imageGenerationResponseFormat: "b64_json",
+  }));
+});
+
+test("POST /v1/responses can edit image_generation inputs with an OpenAI-compatible Images API", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  const editedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8DwQACfsD/QVQH6UAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    if (req.url === "/images/edits") {
+      assert.equal(req.headers.authorization, "Bearer image-test-key");
+      assert.match(req.headers["content-type"], /^multipart\/form-data; boundary=/);
+      assert.equal(call.body, null);
+      assert.match(call.rawBody, /name="model"/);
+      assert.match(call.rawBody, /gpt-image-test/);
+      assert.match(call.rawBody, /name="prompt"/);
+      assert.match(call.rawBody, /replace the terminal background/);
+      assert.match(call.rawBody, /name="quality"/);
+      assert.match(call.rawBody, /high/);
+      assert.match(call.rawBody, /name="size"/);
+      assert.match(call.rawBody, /1024x1024/);
+      assert.match(call.rawBody, /name="response_format"/);
+      assert.match(call.rawBody, /b64_json/);
+      assert.match(call.rawBody, /name="image\[\]"; filename="source\.png"/);
+      assert.match(call.rawBody, /name="mask"; filename="mask\.png"/);
+      assert.match(call.rawBody, /Content-Type: image\/png/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        created: 100,
+        model: "gpt-image-test",
+        data: [{
+          b64_json: editedPng,
+          revised_prompt: "Provider revised edit prompt.",
+        }],
+      }));
+      return;
+    }
+
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    const chatMessages = JSON.stringify(call.body.messages);
+    assert.doesNotMatch(chatMessages, /"image_url"/);
+    assert.match(chatMessages, /image input consumed by local image_generation edit/);
+    assert.match(prompt, /Resolved mode: edit/);
+    assert.match(prompt, /Resolved edit images: 1/);
+    assert.match(prompt, /Mask resolved: yes/);
+    assert.match(prompt, /Provider revised edit prompt/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_edit_provider",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-provider-edit-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 3, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const sourceResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "source.png",
+        purpose: "vision",
+        content_base64: sourcePng,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(sourceResponse.status, 200);
+    const source = await sourceResponse.json();
+    const maskResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "mask.png",
+        purpose: "vision",
+        content_base64: maskPng,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(maskResponse.status, 200);
+    const mask = await maskResponse.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "replace the terminal background with a soft grid" },
+            { type: "input_image", file_id: source.id },
+          ],
+        }],
+        tools: [{
+          type: "image_generation",
+          action: "edit",
+          quality: "high",
+          size: "1024x1024",
+          input_image_mask: { file_id: mask.id },
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].result, editedPng);
+    assert.equal(json.output[0].revised_prompt, "Provider revised edit prompt.");
+    assert.equal(json.output[1].content[0].text, "image-provider-edit-ok");
+    assert.equal(json.metadata.compatibility.local_image_generation.provider, "openai-compatible");
+    assert.equal(json.metadata.compatibility.local_image_generation.mode, "edit");
+    assert.equal(json.metadata.compatibility.local_image_generation.resolved_image_count, 1);
+    assert.equal(json.metadata.compatibility.local_image_generation.input_image_mask, true);
+    assert.equal(json.metadata.compatibility.local_image_generation.input_image_mask_resolved, true);
+    assert.equal(json.metadata.compatibility.local_image_generation.model, "gpt-image-test");
+    assert.ok(requests.some((request) => request.req.url === "/images/edits"));
+    assert.equal(requests.some((request) => request.req.url === "/images/generations"), false);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationEditPath: "/images/edits",
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
+    imageGenerationResponseFormat: "b64_json",
+  }));
+});
+
+test("POST /v1/responses fails image_generation edits when requested masks are unresolved", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/chat/completions");
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /did not complete image generation/);
+    assert.match(prompt, /input_image_mask could not be resolved/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_edit_missing_mask",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-edit-missing-mask-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const sourceResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "source.png",
+        purpose: "vision",
+        content_base64: sourcePng,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(sourceResponse.status, 200);
+    const source = await sourceResponse.json();
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "edit with a missing mask" },
+            { type: "input_image", file_id: source.id },
+          ],
+        }],
+        tools: [{
+          type: "image_generation",
+          action: "edit",
+          input_image_mask: { file_id: "file_missing_mask" },
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "failed");
+    assert.match(json.output[0].error, /input_image_mask could not be resolved/);
+    assert.equal(json.output[1].content[0].text, "image-edit-missing-mask-ok");
+    assert.equal(json.metadata.compatibility.local_image_generation.mode, "edit");
+    assert.equal(json.metadata.compatibility.local_image_generation.resolved_image_count, 1);
+    assert.equal(json.metadata.compatibility.local_image_generation.input_image_mask, true);
+    assert.equal(json.metadata.compatibility.local_image_generation.input_image_mask_resolved, false);
+    assert.equal(json.metadata.compatibility.local_image_generation.image_resolution_error_count, 1);
+    assert.equal(requests.some((request) => request.req.url === "/images/edits"), false);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
+  }));
+});
+
+test("POST /v1/responses fails forced image_generation edits without input images", async () => {
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/chat/completions");
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /did not complete image generation/);
+    assert.match(prompt, /requires at least one input image/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_edit_missing_image",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-edit-missing-input-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Edit the image, but no image is attached.",
+        tools: [{ type: "image_generation", action: "edit" }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "failed");
+    assert.match(json.output[0].error, /requires at least one input image/);
+    assert.equal(json.output[1].content[0].text, "image-edit-missing-input-ok");
+    assert.equal(json.metadata.compatibility.local_image_generation.provider, "openai-compatible");
+    assert.equal(json.metadata.compatibility.local_image_generation.mode, "edit");
+    assert.equal(json.metadata.compatibility.local_image_generation.resolved_image_count, 0);
+    assert.equal(json.metadata.compatibility.local_image_generation.status, "failed");
+    assert.equal(requests.some((request) => request.req.url === "/images/edits"), false);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
   }));
 });
 

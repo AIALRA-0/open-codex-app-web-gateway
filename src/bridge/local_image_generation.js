@@ -11,6 +11,9 @@ const MAX_REVISED_PROMPT_CHARS = 1000;
 const PROVIDER_IMAGE_GENERATION_TYPES = new Set(["openai", "openai-compatible", "images"]);
 const DEFAULT_IMAGE_GENERATION_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_IMAGE_GENERATION_PATH = "/images/generations";
+const DEFAULT_IMAGE_GENERATION_EDIT_PATH = "/images/edits";
+const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
+const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -37,6 +40,18 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
   const prompt = extractImagePrompt(request) || "Generate an image.";
   const inputImages = extractInputImages(request.input);
   const priorImageCalls = extractPriorImageGenerationCalls(request.input);
+  const mode = imageGenerationModeFor(action, inputImages, priorImageCalls, tool);
+  const editInput = mode === "edit"
+    ? await resolveImageEditInput({
+      config,
+      fileStore: options.fileSearchStore,
+      inputImages,
+      priorImageCalls,
+      signal: options.signal,
+      tool,
+      fetch: options.fetch,
+    })
+    : emptyImageEditInput();
   const partialImages = normalizePartialImageCount(tool.partial_images);
   const context = {
     provider,
@@ -46,11 +61,16 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
     skipped_calls: [],
     prompt,
     action,
+    mode,
     partial_image_count: partialImages,
     requested: requestedImageOptions(tool),
     input_image_count: inputImages.length,
     prior_image_call_count: priorImageCalls.length,
     input_image_mask: !!tool.input_image_mask,
+    resolved_image_count: editInput.images.length,
+    input_image_mask_resolved: !!editInput.mask,
+    image_resolution_error_count: editInput.errors.length,
+    image_resolution_errors: editInput.errors.map((error) => imageResolutionErrorSummary(error)),
   };
 
   if (!reserveToolCall(options.toolBudget, {
@@ -74,6 +94,7 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
       action,
       config,
       context,
+      editInput,
       prompt,
       tool,
       signal: options.signal,
@@ -87,6 +108,7 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
 
 function injectImageGenerationMessages(chat, context) {
   if (!context) return;
+  sanitizeImageGenerationInputsForChat(chat, context);
   chat.messages.push({
     role: "system",
     content: imageGenerationPrompt(context),
@@ -117,6 +139,20 @@ function imageGenerationPartialImages(context) {
   }));
 }
 
+function sanitizeImageGenerationInputsForChat(chat, context) {
+  if (context?.mode !== "edit") return;
+  for (const message of chat.messages || []) {
+    if (!Array.isArray(message.content)) continue;
+    message.content = message.content.map((part) => {
+      if (!isPlainObject(part) || part.type !== "image_url") return part;
+      return {
+        type: "text",
+        text: "[image input consumed by local image_generation edit]",
+      };
+    });
+  }
+}
+
 function imageGenerationCompatibility(context) {
   if (!context) return {};
   return {
@@ -125,16 +161,23 @@ function imageGenerationCompatibility(context) {
       status: context.status || "completed",
       tool_types: context.tool_types || [],
       action: context.action || "auto",
+      mode: context.mode || context.action || "auto",
       call_count: context.calls?.length || 0,
       skipped_count: context.skipped_calls?.length || 0,
       partial_image_count: context.partial_image_count || 0,
       input_image_count: context.input_image_count || 0,
       prior_image_call_count: context.prior_image_call_count || 0,
       input_image_mask: !!context.input_image_mask,
+      resolved_image_count: context.resolved_image_count || 0,
+      input_image_mask_resolved: !!context.input_image_mask_resolved,
+      image_resolution_error_count: context.image_resolution_error_count || 0,
       requested: context.requested || {},
       ...(context.model ? { model: context.model } : {}),
       ...(context.warning ? { warning: context.warning } : {}),
       ...(context.error ? { error: context.error } : {}),
+      ...(context.image_resolution_errors?.length
+        ? { image_resolution_errors: context.image_resolution_errors }
+        : {}),
       ...(String(context.provider || "placeholder").toLowerCase() === "placeholder"
         ? { placeholder: true }
         : {}),
@@ -156,8 +199,18 @@ function imageGenerationPrompt(context) {
     "Local Responses image_generation compatibility is active.",
     "The bridge has already produced Responses image_generation_call output for the client; do not include base64 image data in natural-language text.",
     `Requested action: ${context.action || "auto"}.`,
+    `Resolved mode: ${context.mode || context.action || "auto"}.`,
     `Input images in request: ${context.input_image_count || 0}. Prior image_generation_call references: ${context.prior_image_call_count || 0}.`,
   ];
+  if (context.mode === "edit") {
+    sections.push(`Resolved edit images: ${context.resolved_image_count || 0}. Mask resolved: ${context.input_image_mask_resolved ? "yes" : "no"}.`);
+  }
+  if (context.image_resolution_errors?.length) {
+    sections.push([
+      "Image input resolution warnings:",
+      ...context.image_resolution_errors.map((error) => `- ${error.source || "input"}: ${error.error || "failed"}`),
+    ].join("\n"));
+  }
 
   if (calls.length) {
     sections.push([
@@ -177,6 +230,15 @@ function normalizeAction(value) {
   const action = String(value || "auto").toLowerCase();
   if (["auto", "generate", "edit"].includes(action)) return action;
   return "auto";
+}
+
+function imageGenerationModeFor(action, inputImages = [], priorImageCalls = [], tool = {}) {
+  if (action === "generate") return "generate";
+  if (action === "edit") return "edit";
+  if (tool.input_image_mask) return "edit";
+  if (inputImages.length) return "edit";
+  if (priorImageCalls.some((call) => call.file_id || imageDataCandidate(call))) return "edit";
+  return "generate";
 }
 
 function normalizePartialImageCount(value) {
@@ -204,10 +266,29 @@ function requestedImageOptions(tool = {}) {
   return options;
 }
 
-async function imageGenerationCallPayload({ action, config, context, prompt, signal, tool }) {
+async function imageGenerationCallPayload({ action, config, context, editInput, prompt, signal, tool }) {
+  if (context.mode === "edit" && !editInput?.images?.length) {
+    context.error = imageEditInputError(editInput);
+    return {
+      status: "failed",
+      revised_prompt: revisedPromptFor(prompt, action),
+      error: context.error,
+    };
+  }
+  if (context.mode === "edit" && editInput?.mask_required && !editInput.mask) {
+    context.error = imageEditMaskError(editInput);
+    return {
+      status: "failed",
+      revised_prompt: revisedPromptFor(prompt, action),
+      error: context.error,
+    };
+  }
+
   if (PROVIDER_IMAGE_GENERATION_TYPES.has(context.provider)) {
     try {
-      const generated = await generateWithImageProvider({ config, prompt, signal, tool });
+      const generated = context.mode === "edit"
+        ? await editWithImageProvider({ config, editInput, prompt, signal, tool })
+        : await generateWithImageProvider({ config, prompt, signal, tool });
       context.model = generated.model || config.imageGenerationModel || "";
       return {
         status: "completed",
@@ -238,6 +319,46 @@ async function generateWithImageProvider({ config = {}, prompt, signal, tool = {
   }
 
   const body = imageGenerationProviderBody({ config, prompt, tool });
+  return requestImageProvider({
+    config,
+    signal,
+    url: imageGenerationProviderUrl(config),
+    fetchOptions: {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+    fallbackModel: body.model,
+  });
+}
+
+async function editWithImageProvider({ config = {}, editInput, prompt, signal, tool = {} }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw new Error(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`);
+  }
+  if (!editInput?.images?.length) throw new Error(imageEditInputError(editInput));
+
+  const form = imageGenerationProviderEditForm({ config, editInput, prompt, tool });
+  return requestImageProvider({
+    config,
+    signal,
+    url: imageGenerationEditProviderUrl(config),
+    fetchOptions: {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+      },
+      body: form,
+    },
+    fallbackModel: config.imageGenerationModel || "gpt-image-2",
+  });
+}
+
+async function requestImageProvider({ config = {}, fallbackModel, fetchOptions, signal, url }) {
   const controller = new AbortController();
   const timeoutMs = config.imageGenerationTimeoutMs || 120000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -248,15 +369,7 @@ async function generateWithImageProvider({ config = {}, prompt, signal, tool = {
   }
 
   try {
-    const response = await fetch(imageGenerationProviderUrl(config), {
-      method: "POST",
-      headers: {
-        "authorization": `Bearer ${apiKey}`,
-        "content-type": "application/json",
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
+    const response = await fetch(url, { ...fetchOptions, signal: controller.signal });
     const text = await response.text();
     const json = parseJson(text);
     if (!response.ok) {
@@ -276,7 +389,7 @@ async function generateWithImageProvider({ config = {}, prompt, signal, tool = {
     return {
       b64_json: stringifyContent(b64),
       revised_prompt: stringifyOptional(first?.revised_prompt),
-      model: stringifyOptional(json?.model || body.model),
+      model: stringifyOptional(json?.model || fallbackModel),
     };
   } catch (error) {
     if (error?.name === "AbortError") throw new Error("image provider request timed out");
@@ -306,13 +419,54 @@ function imageGenerationProviderBody({ config = {}, prompt, tool = {} }) {
   return body;
 }
 
+function imageGenerationProviderEditForm({ config = {}, editInput = {}, prompt, tool = {} }) {
+  const form = new FormData();
+  appendFormValue(form, "model", config.imageGenerationModel || "gpt-image-2");
+  appendFormValue(form, "prompt", prompt);
+  appendFormValue(form, "n", 1);
+  appendImageProviderFormOption(tool, form, "background");
+  appendImageProviderFormOption(tool, form, "input_fidelity");
+  appendImageProviderFormOption(tool, form, "moderation");
+  appendImageProviderFormOption(tool, form, "output_compression");
+  appendImageProviderFormOption(tool, form, "output_format");
+  appendImageProviderFormOption(tool, form, "quality");
+  appendImageProviderFormOption(tool, form, "size");
+  if (config.imageGenerationResponseFormat) {
+    appendFormValue(form, "response_format", config.imageGenerationResponseFormat);
+  }
+  if (config.imageGenerationUser) appendFormValue(form, "user", config.imageGenerationUser);
+  for (const image of editInput.images || []) appendImageBlob(form, "image[]", image);
+  if (editInput.mask) appendImageBlob(form, "mask", editInput.mask);
+  return form;
+}
+
 function copyImageProviderOption(source, target, key) {
   if (source?.[key] !== undefined) target[key] = source[key];
+}
+
+function appendImageProviderFormOption(source, form, key) {
+  if (source?.[key] !== undefined) appendFormValue(form, key, source[key]);
+}
+
+function appendFormValue(form, key, value) {
+  if (value === undefined || value === null || value === "") return;
+  form.append(key, stringifyContent(value));
+}
+
+function appendImageBlob(form, key, image) {
+  const mediaType = normalizeImageMediaType(image.media_type) || "application/octet-stream";
+  form.append(key, new Blob([image.buffer], { type: mediaType }), image.filename || `${key}.png`);
 }
 
 function imageGenerationProviderUrl(config = {}) {
   const base = trimTrailingSlash(config.imageGenerationBaseUrl || DEFAULT_IMAGE_GENERATION_BASE_URL);
   const route = normalizeRoute(config.imageGenerationPath || DEFAULT_IMAGE_GENERATION_PATH);
+  return `${base}${route}`;
+}
+
+function imageGenerationEditProviderUrl(config = {}) {
+  const base = trimTrailingSlash(config.imageGenerationBaseUrl || DEFAULT_IMAGE_GENERATION_BASE_URL);
+  const route = normalizeRoute(config.imageGenerationEditPath || DEFAULT_IMAGE_GENERATION_EDIT_PATH);
   return `${base}${route}`;
 }
 
@@ -337,6 +491,398 @@ function parseJson(text) {
 function stringifyOptional(value) {
   if (value == null) return "";
   return stringifyContent(value);
+}
+
+function emptyImageEditInput() {
+  return { images: [], mask: null, mask_required: false, mask_error: null, errors: [] };
+}
+
+async function resolveImageEditInput({
+  config = {},
+  fetch,
+  fileStore,
+  inputImages = [],
+  priorImageCalls = [],
+  signal,
+  tool = {},
+}) {
+  const options = {
+    config,
+    fetch,
+    fileStore,
+    maxBytes: Number(config.imageGenerationMaxInputImageBytes || DEFAULT_MAX_EDIT_IMAGE_BYTES),
+    signal,
+  };
+  const editInput = emptyImageEditInput();
+  for (const part of [...inputImages, ...priorImageCalls]) {
+    const image = await resolveEditableImagePart(part, options, "image");
+    if (image.status === "completed") editInput.images.push(image);
+    else editInput.errors.push(image);
+  }
+
+  if (tool.input_image_mask) {
+    editInput.mask_required = true;
+    const mask = await resolveEditableImagePart(tool.input_image_mask, options, "mask");
+    if (mask.status === "completed") editInput.mask = mask;
+    else {
+      editInput.mask_error = mask;
+      editInput.errors.push(mask);
+    }
+  }
+
+  return editInput;
+}
+
+async function resolveEditableImagePart(part, options = {}, role = "image") {
+  if (!isPlainObject(part)) {
+    return failedEditableImage({
+      source: role,
+      filename: `${role}.png`,
+      error: `${role} input must be an object`,
+    });
+  }
+  if (part.file_id) return resolveEditableImageFileId(part, options, role);
+
+  const candidate = imageDataCandidate(part);
+  if (!candidate) {
+    return failedEditableImage({
+      source: role,
+      filename: filenameForImagePart(part, role),
+      error: `${role} input requires file_id, data URL, base64 data, or http(s) image_url`,
+    });
+  }
+
+  if (isRemoteImageUrl(candidate.value)) {
+    return resolveEditableImageUrl(part, candidate, options, role);
+  }
+
+  const parsed = parseInlineImageData(candidate.value, imageMediaTypeHint(part));
+  if (!parsed) {
+    return failedEditableImage({
+      source: candidate.source,
+      filename: filenameForImagePart(part, role),
+      error: `${role} inline image data is not valid base64`,
+    });
+  }
+
+  return completedEditableImage({
+    source: candidate.source,
+    file_id: part.file_id,
+    filename: filenameForImagePart(part, role, parsed.media_type),
+    media_type: parsed.media_type || imageMediaTypeHint(part),
+    buffer: parsed.buffer,
+    maxBytes: options.maxBytes,
+  });
+}
+
+function resolveEditableImageFileId(part, options = {}, role = "image") {
+  const file = options.fileStore?.getFile?.(part.file_id);
+  const buffer = options.fileStore?.getFileContentBuffer?.(part.file_id);
+  const filename = filenameForImagePart(part, role, imageMediaTypeHint(part) || file?.mime_type || file?.metadata?.mime_type, file?.filename);
+  const mediaType = imageMediaTypeHint(part)
+    || normalizeImageMediaType(file?.mime_type || file?.metadata?.mime_type)
+    || guessImageMediaType(filename)
+    || sniffImageMediaType(buffer);
+
+  if (!file || !buffer) {
+    return failedEditableImage({
+      source: "file_id",
+      file_id: part.file_id,
+      filename,
+      media_type: mediaType,
+      error: `file not found: ${part.file_id}`,
+    });
+  }
+
+  return completedEditableImage({
+    source: "file_id",
+    file_id: part.file_id,
+    filename,
+    media_type: mediaType,
+    buffer,
+    maxBytes: options.maxBytes,
+  });
+}
+
+async function resolveEditableImageUrl(part, candidate, options = {}, role = "image") {
+  let url;
+  try {
+    url = new URL(candidate.value);
+  } catch {
+    return failedEditableImage({
+      source: candidate.source,
+      filename: filenameForImagePart(part, role),
+      error: `${role} image_url is invalid`,
+    });
+  }
+  if (!["http:", "https:"].includes(url.protocol)) {
+    return failedEditableImage({
+      source: candidate.source,
+      filename: filenameForImagePart(part, role),
+      error: `${role} image_url must use http or https`,
+    });
+  }
+
+  const controller = new AbortController();
+  const abortFromParent = () => controller.abort();
+  if (options.signal?.aborted) controller.abort();
+  else options.signal?.addEventListener?.("abort", abortFromParent, { once: true });
+  const timeout = setTimeout(() => controller.abort(), Number(options.config?.imageGenerationInputFetchTimeoutMs || DEFAULT_REMOTE_IMAGE_TIMEOUT_MS));
+  try {
+    const response = await (options.fetch || globalThis.fetch)(String(url), {
+      headers: { "accept": "image/*" },
+      signal: controller.signal,
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const contentLength = Number(response.headers.get("content-length"));
+    if (Number.isFinite(contentLength) && contentLength > options.maxBytes) {
+      throw new Error(`image_url exceeds local limit of ${options.maxBytes} bytes`);
+    }
+    const { buffer, truncated } = await readResponseLimited(response, options.maxBytes);
+    if (truncated) throw new Error(`image_url exceeds local limit of ${options.maxBytes} bytes`);
+    return completedEditableImage({
+      source: candidate.source,
+      filename: filenameForImagePart(part, role, response.headers.get("content-type"), filenameFromUrl(String(url))),
+      media_type: imageMediaTypeHint(part)
+        || normalizeImageMediaType(response.headers.get("content-type"))
+        || guessImageMediaType(String(url))
+        || sniffImageMediaType(buffer),
+      buffer,
+      maxBytes: options.maxBytes,
+    });
+  } catch (error) {
+    return failedEditableImage({
+      source: candidate.source,
+      filename: filenameForImagePart(part, role, imageMediaTypeHint(part), filenameFromUrl(String(url))),
+      error: error.name === "AbortError" ? `${role} image_url fetch timed out` : error.message,
+    });
+  } finally {
+    options.signal?.removeEventListener?.("abort", abortFromParent);
+    clearTimeout(timeout);
+  }
+}
+
+function completedEditableImage({ source, file_id, filename, media_type, buffer, maxBytes }) {
+  const mediaType = normalizeImageMediaType(media_type) || sniffImageMediaType(buffer);
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    return failedEditableImage({ source, file_id, filename, media_type: mediaType, error: "image input is empty" });
+  }
+  if (buffer.length > maxBytes) {
+    return failedEditableImage({
+      source,
+      file_id,
+      filename,
+      media_type: mediaType,
+      bytes: buffer.length,
+      error: `image input exceeds local limit of ${maxBytes} bytes`,
+    });
+  }
+  if (!mediaType) {
+    return failedEditableImage({
+      source,
+      file_id,
+      filename,
+      bytes: buffer.length,
+      error: "image input requires an image media type",
+    });
+  }
+  return {
+    source,
+    file_id,
+    filename: safeImageFilename(filename, mediaType, "image"),
+    media_type: mediaType,
+    bytes: buffer.length,
+    status: "completed",
+    buffer,
+  };
+}
+
+function failedEditableImage({ source, file_id, filename, media_type, bytes, error }) {
+  return {
+    source,
+    ...(file_id ? { file_id } : {}),
+    filename,
+    ...(media_type ? { media_type: normalizeImageMediaType(media_type) || stringifyContent(media_type) } : {}),
+    ...(bytes ? { bytes } : {}),
+    status: "failed",
+    error,
+  };
+}
+
+function imageDataCandidate(part) {
+  if (part.type === "image_generation_call" && part.result) {
+    return { source: "image_generation_call.result", value: part.result };
+  }
+  const imageUrl = isPlainObject(part.image_url) ? part.image_url.url : part.image_url;
+  if (typeof imageUrl === "string" && imageUrl) return { source: "image_url", value: imageUrl };
+  if (typeof part.url === "string" && part.url) return { source: "url", value: part.url };
+  for (const key of ["file_data", "data", "image_data", "b64_json", "result"]) {
+    if (typeof part[key] === "string" && part[key]) return { source: key, value: part[key] };
+  }
+  return null;
+}
+
+function parseInlineImageData(value, mediaHint = "") {
+  const text = String(value || "").trim();
+  const match = text.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/is);
+  if (match) {
+    const buffer = decodeBase64(match[2]);
+    if (!buffer) return null;
+    return {
+      buffer,
+      media_type: normalizeImageMediaType(match[1]) || normalizeImageMediaType(mediaHint) || sniffImageMediaType(buffer),
+    };
+  }
+
+  const buffer = decodeBase64(text);
+  if (!buffer) return null;
+  return {
+    buffer,
+    media_type: normalizeImageMediaType(mediaHint) || sniffImageMediaType(buffer),
+  };
+}
+
+function decodeBase64(value) {
+  const normalized = String(value || "").replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return null;
+  const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+  try {
+    const buffer = Buffer.from(padded, "base64");
+    return buffer.length ? buffer : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRemoteImageUrl(value) {
+  return /^https?:\/\//i.test(String(value || "").trim());
+}
+
+async function readResponseLimited(response, maxBytes) {
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    return {
+      buffer: buffer.length > maxBytes ? buffer.subarray(0, maxBytes) : buffer,
+      truncated: buffer.length > maxBytes,
+    };
+  }
+  const chunks = [];
+  let size = 0;
+  let truncated = false;
+  for await (const chunk of response.body) {
+    const buffer = Buffer.from(chunk);
+    if (size + buffer.length > maxBytes) {
+      const remaining = Math.max(0, maxBytes - size);
+      if (remaining > 0) {
+        chunks.push(buffer.subarray(0, remaining));
+        size += remaining;
+      }
+      truncated = true;
+      break;
+    }
+    size += buffer.length;
+    chunks.push(buffer);
+  }
+  return { buffer: Buffer.concat(chunks), truncated };
+}
+
+function imageMediaTypeHint(part) {
+  return normalizeImageMediaType(part?.media_type || part?.mime_type || part?.type_hint || "");
+}
+
+function normalizeImageMediaType(value) {
+  const mediaType = String(value || "").split(";")[0].trim().toLowerCase();
+  if (!mediaType.startsWith("image/")) return "";
+  if (mediaType === "image/jpg") return "image/jpeg";
+  return mediaType;
+}
+
+function guessImageMediaType(filename) {
+  const lower = String(filename || "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
+  if (lower.endsWith(".webp")) return "image/webp";
+  if (lower.endsWith(".gif")) return "image/gif";
+  return "";
+}
+
+function sniffImageMediaType(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 4) return "";
+  if (buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) return "image/png";
+  if (buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff) return "image/jpeg";
+  if (buffer.subarray(0, 4).toString("ascii") === "GIF8") return "image/gif";
+  if (buffer.length >= 12
+    && buffer.subarray(0, 4).toString("ascii") === "RIFF"
+    && buffer.subarray(8, 12).toString("ascii") === "WEBP") {
+    return "image/webp";
+  }
+  return "";
+}
+
+function filenameForImagePart(part, role, mediaType = "", fallback = "") {
+  const fromImageUrl = isPlainObject(part?.image_url) ? part.image_url.url : part?.image_url;
+  return safeImageFilename(
+    part?.filename || part?.name || fallback || filenameFromUrl(fromImageUrl || part?.url) || part?.file_id || `${role}.png`,
+    mediaType || imageMediaTypeHint(part) || guessImageMediaType(fallback || fromImageUrl || part?.url),
+    role,
+  );
+}
+
+function filenameFromUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(value);
+    const pathname = decodeURIComponent(url.pathname || "");
+    return pathname.split("/").filter(Boolean).pop() || "";
+  } catch {
+    return "";
+  }
+}
+
+function safeImageFilename(filename, mediaType = "", fallback = "image") {
+  const ext = imageExtension(mediaType);
+  let name = String(filename || "").split(/[\\/]/).pop().trim();
+  if (!name) name = `${fallback}${ext || ".png"}`;
+  name = name.replace(/[^\w.\-()+ ]+/g, "_").slice(0, 160);
+  if (!pathHasExtension(name) && ext) name += ext;
+  return name || `${fallback}${ext || ".png"}`;
+}
+
+function pathHasExtension(filename) {
+  return /\.[A-Za-z0-9]{1,8}$/.test(String(filename || ""));
+}
+
+function imageExtension(mediaType) {
+  const normalized = normalizeImageMediaType(mediaType);
+  if (normalized === "image/png") return ".png";
+  if (normalized === "image/jpeg") return ".jpg";
+  if (normalized === "image/webp") return ".webp";
+  if (normalized === "image/gif") return ".gif";
+  return "";
+}
+
+function imageEditInputError(editInput) {
+  if (!editInput?.errors?.length) {
+    return "image_generation action edit requires at least one input image in context";
+  }
+  const first = editInput.errors.find((error) => error.error)?.error;
+  return `image_generation edit requires at least one resolved input image${first ? ` (${first})` : ""}`;
+}
+
+function imageEditMaskError(editInput) {
+  const detail = editInput?.mask_error?.error;
+  return `image_generation input_image_mask could not be resolved${detail ? ` (${detail})` : ""}`;
+}
+
+function imageResolutionErrorSummary(error) {
+  return {
+    source: error.source || "input",
+    ...(error.file_id ? { file_id: error.file_id } : {}),
+    ...(error.filename ? { filename: error.filename } : {}),
+    ...(error.media_type ? { media_type: error.media_type } : {}),
+    ...(error.bytes ? { bytes: error.bytes } : {}),
+    error: error.error || "failed",
+  };
 }
 
 function extractImagePrompt(request = {}) {

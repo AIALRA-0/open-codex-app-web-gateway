@@ -262,6 +262,8 @@ function buildSuites(defaultModel) {
       check: ({ text }) => jsonHas(text, "ok", true),
     },
   ];
+  const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const tinyMaskPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
 
   return {
     "protocol-smoke": protocolSmoke,
@@ -1281,6 +1283,51 @@ function buildSuites(defaultModel) {
             && localImage.placeholder === true
             && localImage.call_count === 1
             && localImage.partial_image_count === 1
+            && localImage.deepseek_thinking === "disabled_for_local_image_generation"
+            && json.metadata?.compatibility?.local_tool_choice === "handled_by_bridge";
+        },
+      },
+      {
+        id: "responses-image-edit",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          instructions: "The local bridge handles image_generation edits. Return exactly this text and nothing else: image-edit-ok.",
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_text", text: "Edit the attached tiny image by changing the background color." },
+              { type: "input_image", filename: "eval-source.png", image_url: `data:image/png;base64,${tinyPngBase64}` },
+            ],
+          }],
+          tools: [{
+            type: "image_generation",
+            action: "edit",
+            input_image_mask: {
+              filename: "eval-mask.png",
+              image_url: `data:image/png;base64,${tinyMaskPngBase64}`,
+            },
+          }],
+          tool_choice: { type: "image_generation" },
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const call = (json.output || []).find((item) => item.type === "image_generation_call");
+          const localImage = json.metadata?.compatibility?.local_image_generation || {};
+          return call?.status === "completed"
+            && /^ig_/.test(call?.id || "")
+            && /^iVBORw0KGgo/.test(call?.result || "")
+            && /Edit the supplied image using this instruction/.test(call?.revised_prompt || "")
+            && text.trim().length > 0
+            && localImage.provider === "placeholder"
+            && localImage.placeholder === true
+            && localImage.mode === "edit"
+            && localImage.call_count === 1
+            && localImage.resolved_image_count === 1
+            && localImage.input_image_mask === true
+            && localImage.input_image_mask_resolved === true
             && localImage.deepseek_thinking === "disabled_for_local_image_generation"
             && json.metadata?.compatibility?.local_tool_choice === "handled_by_bridge";
         },

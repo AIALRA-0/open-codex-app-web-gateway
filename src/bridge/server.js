@@ -244,12 +244,15 @@ function loadConfig(overrides = {}) {
     imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
     imageGenerationBaseUrl: trimTrailingSlash(process.env.CODEXCOMPAT_IMAGE_GENERATION_BASE_URL || "https://api.openai.com/v1"),
     imageGenerationPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_PATH || "/images/generations"),
+    imageGenerationEditPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH || "/images/edits"),
     imageGenerationApiKey: process.env[imageGenerationApiKeyEnv] || process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY || "",
     imageGenerationApiKeyEnv,
     imageGenerationModel: process.env.CODEXCOMPAT_IMAGE_GENERATION_MODEL || "gpt-image-2",
     imageGenerationResponseFormat: process.env.CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT || "",
     imageGenerationUser: process.env.CODEXCOMPAT_IMAGE_GENERATION_USER || "",
     imageGenerationTimeoutMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS", 120 * 1000, 1000, 10 * 60 * 1000),
+    imageGenerationMaxInputImageBytes: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    imageGenerationInputFetchTimeoutMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_INPUT_FETCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     imageGenerationPlaceholderSize: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE", 96, 16, 512),
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
@@ -495,7 +498,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localComputer) {
     applyLocalComputerToChat(chat, compatibility, localComputer, config);
   }
-  const localImageGeneration = await prepareImageGenerationContext(request, config, { toolBudget });
+  const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, toolBudget });
   if (localImageGeneration) {
     applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config);
   }
@@ -821,7 +824,7 @@ async function runBackgroundPrepareStep(step, { config, job, request, previousMe
   }
 
   if (step === "image_generation") {
-    const localImageGeneration = await prepareImageGenerationContext(request, config, { toolBudget: runtime.toolBudget });
+    const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, toolBudget: runtime.toolBudget });
     runtime.contexts.image_generation = localImageGeneration;
     if (localImageGeneration) {
       runtime.compatibility = applyLocalImageGenerationToChat(runtime.chat, { ...runtime.compatibility }, localImageGeneration, config);

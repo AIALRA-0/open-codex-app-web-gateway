@@ -5618,6 +5618,76 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Provider-backed image_generation edits and masks
+
+- Extended the local Responses `image_generation` adapter to cover edit and
+  mask workflows in addition to generation:
+  - `action:"edit"` now requires at least one resolved input image and returns
+    a failed `image_generation_call` when no image is available, matching the
+    documented hosted Responses behavior;
+  - `action:"auto"` chooses edit when current input images or masks are present
+    while avoiding a forced edit for prior `image_generation_call.id` references
+    that do not yet have locally persisted image bytes;
+  - provider-backed edit mode calls a configurable multipart endpoint,
+    defaulting to `POST /images/edits`;
+  - maps resolved input images to `image[]` and a resolved
+    `input_image_mask` to `mask`;
+  - fails requested-mask edits when the mask cannot be resolved instead of
+    silently editing without the requested mask;
+  - resolves edit inputs from local Files API `file_id`, data URLs, inline
+    base64 image fields, HTTP(S) image URLs with bounded timeout/byte limits,
+    and inline `image_generation_call.result` bytes;
+  - records edit mode, resolved image count, mask resolution, and image
+    resolution failures in compatibility metadata without storing image bytes;
+  - replaces consumed Chat `image_url` content parts with a text marker during
+    local edit mode so text-only providers such as DeepSeek do not reject the
+    upstream Chat request after the bridge has already handled the image.
+- Added configuration and docs:
+  - `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_INPUT_FETCH_TIMEOUT_MS`;
+  - compatibility/deployment docs now describe provider-backed multipart edits,
+    mask mapping, forced-edit failure behavior, and the text-only provider
+    sanitization boundary;
+  - `scripts/eval-harness.mjs` now includes a `responses-image-edit`
+    bridge-regression case.
+- Verification:
+  - Official OpenAI image-generation docs were checked via the OpenAI docs MCP:
+    the Images API has `/images/generations` and `/images/edits`, edit requests
+    use multipart `image[]` plus optional `mask`, and forced Responses
+    `action:"edit"` without an image returns an error.
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused image-generation tests passed 9/9:
+    `node --test --test-name-pattern='image_generation|Images API|image provider|reserve image_generation' test/translator.test.js test/server.test.js`.
+  - `npm test`: 139/139 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1082 ms, P95 latency 1160 ms, and total usage 99 tokens.
+  - Live `responses-image-generation` bridge-regression case passed 1/1
+    against `deepseek-v4-pro` after deployment restart, latency 1238 ms, and
+    total usage 188 tokens.
+  - Live `responses-image-edit` bridge-regression case initially exposed a
+    DeepSeek `image_url` content-part rejection; after adding edit-input
+    sanitization it passed 1/1 against `deepseek-v4-pro`, latency 1343 ms, and
+    total usage 215 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed with exit code 0; latest dry
+    run reported response records scanned 479, selected 0, deleted 0, and no
+    errors. Earlier full summary still selected 89 old UI screenshots by
+    retention policy, deleted 0, selected 7324221 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`; bridge healthz returned `ok:true`, DeepSeek
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 40 GB available; `state/` is
+    5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+  - No API keys, account credentials, or local secret files were committed.
+
 ## 2026-06-11 - Provider-backed image_generation adapter
 
 - Extended the local Responses `image_generation` hosted-tool adapter from

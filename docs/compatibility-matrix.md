@@ -860,6 +860,18 @@ generation calls `POST /images/generations`, requests one image, maps
 `data[0].b64_json` into `image_generation_call.result`, preserves
 provider `revised_prompt` when present, and surfaces provider failures as
 failed `image_generation_call` output items instead of fabricating an image.
+When `action:"edit"` is forced, or `action:"auto"` has input images or an
+`input_image_mask`, provider-backed mode calls `POST /images/edits` with
+multipart form data. It resolves `input_image.file_id`, data URLs, inline
+base64 image fields, HTTP(S) image URLs, and `input_image_mask.file_id` into
+`image[]` / `mask` uploads. A forced edit with no resolved input image returns a
+failed `image_generation_call`, matching the hosted Responses requirement that
+edit mode needs an image in context. If `input_image_mask` is supplied but
+cannot be resolved, the call fails instead of silently editing without the
+requested mask.
+After the local edit adapter consumes those image inputs, the bridge replaces
+the corresponding upstream Chat `image_url` content parts with a text marker so
+text-only providers such as DeepSeek do not reject the request.
 
 Configuration:
 
@@ -868,10 +880,13 @@ Configuration:
 | `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled` |
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path |
+| `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for `action:"edit"` and image-reference workflows |
 | `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
 | `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override, for example `b64_json` for providers/models that require it |
 | `CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS` | `120000` | Timeout for provider-backed image generation requests |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES` | `52428800` | Maximum local bytes per edit input image or mask, aligned to the documented 50MB Images edit limit |
+| `CODEXCOMPAT_IMAGE_GENERATION_INPUT_FETCH_TIMEOUT_MS` | `10000` | Timeout for bounded HTTP(S) input image URL fetches before multipart edits |
 | `CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE` | `96` | Pixel width/height for the deterministic local PNG placeholder, bounded from 16 to 512 |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_IMAGE_GENERATION` | `true` | Disables DeepSeek thinking mode when the bridge injects local image-generation context so visible text still returns under small output budgets |
 
@@ -888,7 +903,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
-| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, provider-backed Images API generations, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, and UI/SDK workflow compatibility. It does not yet perform multipart edit requests for `action:"edit"` / masks, true upstream streaming partial-image relay, OpenAI hosted model-side prompt rewriting, or high-fidelity multi-turn image persistence | Add image edit/mask adapters, real streaming relay, moderation/error-detail parity, multi-turn image persistence, and image-quality evals |
+| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, provider-backed Images API generations and multipart edits, input image and mask upload mapping, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, and UI/SDK workflow compatibility. It does not yet relay true upstream streaming partial-image chunks, perform OpenAI hosted model-side prompt rewriting, or persist previous image bytes by image-generation call ID across turns | Add real streaming relay, moderation/error-detail parity, multi-turn image persistence, and image-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |
