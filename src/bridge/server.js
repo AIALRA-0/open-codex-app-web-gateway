@@ -3300,6 +3300,10 @@ function emitComputerStreamItems(res, state, context) {
 
 function emitMcpStreamItems(res, state, context) {
   for (const item of mcpOutputItems(context)) {
+    if (item.type === "mcp_call") {
+      emitMcpExecutionStreamItems(res, state, [item]);
+      continue;
+    }
     state.response.output.push(item);
     writeSse(res, "response.output_item.added", sequence(state, {
       type: "response.output_item.added",

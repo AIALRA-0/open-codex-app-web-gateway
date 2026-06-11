@@ -247,6 +247,7 @@ npm run eval:bridge -- --case responses-mcp-remote-call --timeout-ms 120000 --ve
 npm run eval:bridge -- --case responses-mcp-remote-stream-call --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case responses-mcp-remote-background-call --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case responses-mcp-remote-approval --timeout-ms 120000 --verbose
+npm run eval:bridge -- --case responses-mcp-remote-stream-approval --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case responses-mcp-remote-denial --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose

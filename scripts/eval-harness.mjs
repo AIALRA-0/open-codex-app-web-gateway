@@ -602,6 +602,21 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-stream-approval",
+        mode: "responses-mcp-remote",
+        remoteApproval: true,
+        request: {
+          model: defaultModel,
+          instructions: "You have an MCP dice tool exposed as a function tool, but it requires approval. First request the tool call with expression 2d4+1. After approval and tool output are available, stream exactly this text and nothing else: mcp-remote-stream-approval-ok.",
+          input: "Stream the approval flow for the remote MCP roll tool with expression 2d4+1, then after approval return mcp-remote-stream-approval-ok.",
+          reasoning: { effort: "none" },
+          stream: true,
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          store: true,
+        },
+      },
+      {
         id: "responses-mcp-remote-denial",
         mode: "responses-mcp-remote",
         remoteApproval: true,
@@ -3486,7 +3501,9 @@ async function runMcpRemoteCase(testCase, context, started) {
       const secondRequest = {
         ...request,
         instructions: approvalApprove
-          ? "The approved MCP roll output is now available in context. Return exactly this text and nothing else: mcp-remote-approval-ok."
+          ? wantsStream
+            ? "The approved MCP roll output is now available in context. Stream exactly this text and nothing else: mcp-remote-stream-approval-ok."
+            : "The approved MCP roll output is now available in context. Return exactly this text and nothing else: mcp-remote-approval-ok."
           : "The MCP roll tool approval was denied. Return exactly this text and nothing else: mcp-remote-denial-ok.",
         input: [{
           type: "mcp_approval_response",
@@ -3509,7 +3526,25 @@ async function runMcpRemoteCase(testCase, context, started) {
         });
       }
 
-      const secondJson = JSON.parse(secondBody);
+      let secondEvents = [];
+      let secondJson = null;
+      if (wantsStream) {
+        secondEvents = parseSseEvents(secondBody);
+        secondJson = secondEvents.findLast((event) => event.event === "response.completed")?.data?.response || null;
+        if (!secondJson) {
+          return finishResult(testCase, context, started, {
+            ok: false,
+            status: secondResponse.status,
+            usage: responseUsage(json),
+            output_text: text,
+            mcp_methods: records.map((record) => record.method),
+            event_count: streamEvents.length + secondEvents.length,
+            error: truncate(secondBody),
+          });
+        }
+      } else {
+        secondJson = JSON.parse(secondBody);
+      }
       const secondText = responseOutputText(secondJson);
       const secondSerialized = JSON.stringify(secondJson);
       const secondMcpCall = (secondJson.output || []).find((item) => item.type === "mcp_call");
@@ -3518,7 +3553,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       const allMethods = records.map((record) => record.method);
       const callRecord = records.find((record) => record.method === "tools/call") || {};
       const secondOk = approvalApprove
-        ? /mcp-remote-approval-ok/i.test(secondText)
+        ? (wantsStream ? /mcp-remote-stream-approval-ok/i.test(secondText) : /mcp-remote-approval-ok/i.test(secondText))
         && secondMcpCall?.approval_request_id === approvalRequest.id
         && secondMcpCall?.server_label === "remote_eval"
         && secondMcpCall?.name === "roll"
@@ -3535,6 +3570,11 @@ async function runMcpRemoteCase(testCase, context, started) {
         && callRecord.params?.arguments?.expression === "2d4+1"
         && !secondSerialized.includes(authValue)
         && !secondSerialized.includes("hidden_tool")
+        && (!wantsStream || (
+          secondEvents.some((event) => event.event === "response.mcp_call_arguments.delta")
+          && secondEvents.some((event) => event.event === "response.output_text.delta")
+          && !secondEvents.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
+        ))
         : /mcp-remote-denial-ok/i.test(secondText)
         && !secondMcpCall
         && secondLocalMcp.remote_approval_response_count === 1
@@ -3558,6 +3598,7 @@ async function runMcpRemoteCase(testCase, context, started) {
         mcp_methods: allMethods,
         mcp_auth_forwarded: callRecord.headers?.authorization === `Bearer ${authValue}`,
         session_forwarded: callRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp",
+        event_count: streamEvents.length + secondEvents.length || undefined,
         error: secondOk ? undefined : truncate(secondSerialized),
       });
     }
