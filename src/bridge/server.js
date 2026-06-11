@@ -100,8 +100,14 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/embeddings",
   "/v1/images/generations",
   "/v1/images/edits",
+  "/v1/videos",
   "/v1/moderations",
 ]);
+
+const LOCAL_VIDEO_CONTENT_VARIANTS = new Set(["video", "thumbnail", "spritesheet"]);
+const LOCAL_PLACEHOLDER_MP4 = Buffer.from("AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAGG1kYXQ=", "base64");
+const LOCAL_PLACEHOLDER_WEBP = Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64");
+const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 
 const MODERATION_CATEGORIES = Object.freeze([
   "harassment",
@@ -264,6 +270,12 @@ function loadConfig(overrides = {}) {
     imageGenerationMaxInputImageBytes: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     imageGenerationInputFetchTimeoutMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_INPUT_FETCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
     imageGenerationPlaceholderSize: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE", 96, 16, 512),
+    videoGenerationProvider: process.env.CODEXCOMPAT_VIDEO_GENERATION_PROVIDER || "placeholder",
+    videoGenerationModel: process.env.CODEXCOMPAT_VIDEO_GENERATION_MODEL || "sora-2",
+    videoGenerationDefaultSize: process.env.CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_SIZE || "1280x720",
+    videoGenerationDefaultSeconds: process.env.CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_SECONDS || "4",
+    videoGenerationDefaultQuality: process.env.CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_QUALITY || "standard",
+    videoGenerationMaxInputBytes: numberFromEnv("CODEXCOMPAT_VIDEO_GENERATION_MAX_INPUT_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     skillMaxFileCount: numberFromEnv("CODEXCOMPAT_SKILL_MAX_FILE_COUNT", 500, 1, 500),
@@ -4730,6 +4742,227 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
   }
 }
 
+async function handleVideosCreate(req, res, config, store, options = {}) {
+  try {
+    const request = await readVideoCreateRequest(req, config);
+    const video = createLocalVideoResource(request, config, options);
+    store.put(video.id, {
+      video,
+      video_request: sanitizeVideoRequestForStore(request),
+    });
+    sendJson(res, 200, video);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "video request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "video_generation_error",
+      param: error.param || null,
+    });
+  }
+}
+
+function handleVideosList(res, store, url) {
+  const videos = store.list()
+    .filter((record) => record?.video)
+    .map((record) => clone(record.video))
+    .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
+  sendJson(res, 200, paginateVideosList(videos, url));
+}
+
+function handleVideoGet(res, store, videoId) {
+  const record = store.get(videoId);
+  if (!record?.video) {
+    sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
+    return;
+  }
+  sendJson(res, 200, record.video);
+}
+
+function handleVideoDelete(res, store, videoId) {
+  const record = store.get(videoId);
+  if (!record?.video) {
+    sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
+    return;
+  }
+  const deleted = store.delete(videoId);
+  if (!deleted) {
+    sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
+    return;
+  }
+  sendJson(res, 200, {
+    id: videoId,
+    object: "video.deleted",
+    deleted: true,
+  });
+}
+
+function handleVideoContent(res, store, videoId, url) {
+  const record = store.get(videoId);
+  if (!record?.video) {
+    sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
+    return;
+  }
+
+  const variant = String(url.searchParams.get("variant") || "video").trim().toLowerCase();
+  if (!LOCAL_VIDEO_CONTENT_VARIANTS.has(variant)) {
+    sendError(res, 400, `unsupported video content variant: ${variant}`, {
+      type: "invalid_request_error",
+      code: "unsupported_video_variant",
+      param: "variant",
+    });
+    return;
+  }
+
+  if (record.video.status !== "completed") {
+    sendError(res, 409, `video is not completed: ${videoId}`, {
+      type: "invalid_request_error",
+      code: "video_not_completed",
+    });
+    return;
+  }
+
+  const content = placeholderVideoContent(record.video, variant);
+  res.writeHead(200, {
+    "content-type": content.contentType,
+    "content-length": content.buffer.length,
+    "cache-control": "no-store",
+    "x-video-id": videoId,
+    "x-video-variant": variant,
+  });
+  res.end(content.buffer);
+}
+
+async function readVideoCreateRequest(req, config) {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("multipart/form-data")) {
+    const form = parseMultipartFormBinary(
+      await readRawBody(req, (config.videoGenerationMaxInputBytes || 50 * 1024 * 1024) + 1024 * 1024),
+      contentType,
+    );
+    return normalizeVideoRequest({
+      ...form.fields,
+      ...(form.fields.metadata ? { metadata: parseJsonOrNull(form.fields.metadata) || form.fields.metadata } : {}),
+      ...(form.fields.input_reference ? { input_reference: parseJsonOrNull(form.fields.input_reference) || form.fields.input_reference } : {}),
+      reference_files: form.files.map((file) => ({
+        name: file.name,
+        filename: file.filename,
+        content_type: file.content_type || "application/octet-stream",
+        bytes: file.content.length,
+      })),
+    });
+  }
+
+  if (!contentType || contentType.includes("application/json")) {
+    return normalizeVideoRequest(await readJson(req));
+  }
+
+  const error = new Error("video requests must use application/json or multipart/form-data");
+  error.status = 415;
+  error.code = "unsupported_content_type";
+  error.param = "content-type";
+  throw error;
+}
+
+function normalizeVideoRequest(body) {
+  if (!isPlainObject(body)) {
+    const error = new Error("video request body must be an object");
+    error.status = 400;
+    error.code = "invalid_video_request";
+    throw error;
+  }
+  return clone(body);
+}
+
+function createLocalVideoResource(request, config, options = {}) {
+  const prompt = stringifyContent(request.prompt).trim();
+  const operation = options.operation || "create";
+  if (!prompt && operation === "create") {
+    const error = new Error("prompt is required");
+    error.status = 400;
+    error.code = "missing_required_parameter";
+    error.param = "prompt";
+    throw error;
+  }
+
+  const now = nowSeconds();
+  const model = stringifyContent(request.model || config.videoGenerationModel || "sora-2").trim() || "sora-2";
+  const size = stringifyContent(request.size || config.videoGenerationDefaultSize || "1280x720").trim() || "1280x720";
+  const seconds = stringifyContent(request.seconds ?? request.duration ?? config.videoGenerationDefaultSeconds ?? "4").trim() || "4";
+  const quality = stringifyContent(request.quality || config.videoGenerationDefaultQuality || "standard").trim() || "standard";
+  const metadata = isPlainObject(request.metadata) ? clone(request.metadata) : {};
+  metadata.compatibility = mergeCompatibility(metadata.compatibility, {
+    provider: "local",
+    mode: config.videoGenerationProvider || "placeholder",
+    operation,
+    status: "synchronously_completed",
+    content_variants: Array.from(LOCAL_VIDEO_CONTENT_VARIANTS),
+    batch_supported: operation === "create",
+    upstream_provider: "chat_completion_incompatible",
+  });
+
+  return {
+    id: prefixedId("video"),
+    object: "video",
+    created_at: now,
+    status: "completed",
+    model,
+    progress: 100,
+    seconds,
+    size,
+    quality,
+    ...(options.sourceVideoId ? { source_video_id: options.sourceVideoId } : {}),
+    metadata,
+  };
+}
+
+function sanitizeVideoRequestForStore(request) {
+  const sanitized = clone(request || {});
+  for (const field of ["video", "image", "input_reference"]) {
+    if (isPlainObject(sanitized[field]) && typeof sanitized[field].data === "string") {
+      sanitized[field] = { ...sanitized[field], data: `[base64:${sanitized[field].data.length}]` };
+    }
+  }
+  return sanitized;
+}
+
+function placeholderVideoContent(video, variant) {
+  if (variant === "thumbnail") {
+    return {
+      contentType: "image/webp",
+      buffer: Buffer.concat([LOCAL_PLACEHOLDER_WEBP, Buffer.from(`\nopen-codex-video:${video.id}\n`)]),
+    };
+  }
+  if (variant === "spritesheet") {
+    return {
+      contentType: "image/jpeg",
+      buffer: Buffer.concat([LOCAL_PLACEHOLDER_JPEG, Buffer.from(`\nopen-codex-video:${video.id}\n`)]),
+    };
+  }
+  return {
+    contentType: "video/mp4",
+    buffer: Buffer.concat([LOCAL_PLACEHOLDER_MP4, Buffer.from(`\nopen-codex-video:${video.id}\n`)]),
+  };
+}
+
+function paginateVideosList(items, url) {
+  const order = String(url.searchParams.get("order") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
+  const after = url.searchParams.get("after");
+  const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
+  let data = items.map((item) => clone(item));
+  if (order === "asc") data.reverse();
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    first_id: page[0]?.id || null,
+    last_id: page.at(-1)?.id || null,
+    has_more: data.length > page.length,
+  };
+}
+
 async function writeImageApiEventStream(res, events, emptyMessage) {
   if (Array.isArray(events) && !events.length) {
     sendError(res, 502, emptyMessage, {
@@ -5605,6 +5838,8 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleImagesGenerations(req, res, config);
     } else if (endpoint === "/v1/images/edits") {
       await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
+    } else if (endpoint === "/v1/videos") {
+      await handleVideosCreate(req, res, config, store, { operation: "create" });
     } else if (endpoint === "/v1/moderations") {
       await handleModerations(req, res, config);
     } else {
@@ -6400,6 +6635,55 @@ function createServer(config = loadConfig()) {
       if (req.method === "POST" && url.pathname === "/v1/images/edits") {
         await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
         return;
+      }
+
+      if (url.pathname === "/v1/videos") {
+        if (req.method === "GET") {
+          handleVideosList(res, store, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleVideosCreate(req, res, config, store, { operation: "create" });
+          return;
+        }
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/videos/edits") {
+        await handleVideosCreate(req, res, config, store, { operation: "edit" });
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/videos/extensions") {
+        await handleVideosCreate(req, res, config, store, { operation: "extend" });
+        return;
+      }
+
+      const videoRemixRoute = url.pathname.match(/^\/v1\/videos\/([^/]+)\/remix$/);
+      if (videoRemixRoute && req.method === "POST") {
+        await handleVideosCreate(req, res, config, store, {
+          operation: "remix",
+          sourceVideoId: decodeURIComponent(videoRemixRoute[1]),
+        });
+        return;
+      }
+
+      const videoContentRoute = url.pathname.match(/^\/v1\/videos\/([^/]+)\/content$/);
+      if (videoContentRoute && req.method === "GET") {
+        handleVideoContent(res, store, decodeURIComponent(videoContentRoute[1]), url);
+        return;
+      }
+
+      const videoRoute = url.pathname.match(/^\/v1\/videos\/([^/]+)$/);
+      if (videoRoute) {
+        const videoId = decodeURIComponent(videoRoute[1]);
+        if (req.method === "GET") {
+          handleVideoGet(res, store, videoId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleVideoDelete(res, store, videoId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/batches") {

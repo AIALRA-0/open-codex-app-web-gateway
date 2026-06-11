@@ -635,6 +635,42 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "batch-videos",
+        mode: "batch-local",
+        endpoint: "/v1/videos",
+        usage: "videos",
+        requests: [
+          {
+            custom_id: "batch-direct-video",
+            body: {
+              model: "sora-2",
+              prompt: "Exercise the direct OpenAI-compatible Videos API inside local Batch JSONL.",
+              size: "1280x720",
+              seconds: "4",
+              input_reference: { image_url: "https://example.test/frame.png" },
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/videos"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-direct-video"
+            && outputLines[0].response?.status_code === 200
+            && /^video_/.test(response?.id || "")
+            && response?.object === "video"
+            && response?.status === "completed"
+            && response?.metadata?.compatibility?.batch_supported === true;
+        },
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -1473,6 +1509,30 @@ function buildSuites(defaultModel) {
           && /image_edit:2:completed/.test(text),
       },
       {
+        id: "video-lifecycle",
+        mode: "video-lifecycle",
+        request: {
+          model: "sora-2",
+          prompt: "Exercise the direct OpenAI-compatible Videos API endpoint.",
+          size: "1280x720",
+          seconds: "4",
+          quality: "standard",
+          metadata: { suite: "bridge-regression-video" },
+        },
+        check: ({ created, retrieved, listed, content, deleted, text }) => /^video_/.test(created?.id || "")
+          && created?.object === "video"
+          && created?.status === "completed"
+          && created?.progress === 100
+          && created?.metadata?.compatibility?.provider === "local"
+          && retrieved?.id === created?.id
+          && listed?.data?.some((item) => item.id === created?.id)
+          && content?.status === 200
+          && content?.content_type === "video/mp4"
+          && content?.bytes > 16
+          && deleted?.deleted === true
+          && /video:completed:content/.test(text),
+      },
+      {
         id: "responses-image-edit",
         mode: "responses",
         request: {
@@ -2034,6 +2094,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "images-edit-stream") {
       return await runImageApiStreamCase(testCase, context, started, "/v1/images/edits", "image_edit");
     }
+    if (testCase.mode === "video-lifecycle") {
+      return await runVideoLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
     }
@@ -2135,6 +2198,54 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
     });
   } finally {
     if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
+  }
+}
+
+async function runVideoLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let videoId = null;
+  try {
+    const createResponse = await postJson(`${baseUrl}/v1/videos`, request);
+    const createBody = await createResponse.text();
+    if (!createResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: createResponse.status,
+        error: truncate(createBody),
+      });
+    }
+
+    const created = JSON.parse(createBody);
+    videoId = created.id || null;
+    const retrieved = videoId ? await getJson(`${baseUrl}/v1/videos/${videoId}`) : { status: 0, json: null };
+    const listed = await getJson(`${baseUrl}/v1/videos?limit=20`);
+    const content = videoId ? await getBinaryMetadata(`${baseUrl}/v1/videos/${videoId}/content`) : { status: 0, bytes: 0 };
+    const deletedResponse = videoId ? await deleteJson(`${baseUrl}/v1/videos/${videoId}`) : { status: 0, body: "" };
+    const deleted = parseJsonish(deletedResponse.body);
+    if (deleted?.deleted) videoId = null;
+    const text = `video:${created.status}:${content.ok ? "content" : "missing"}`;
+    const ok = !!testCase.check({
+      created,
+      retrieved: retrieved.json,
+      listed: listed.json,
+      content,
+      deleted,
+      text,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: createResponse.status,
+      video_id: created.id,
+      retrieve_status: retrieved.status,
+      list_status: listed.status,
+      content_status: content.status,
+      delete_status: deletedResponse.status,
+      usage: videoUsage(created),
+      output_text: text,
+    });
+  } finally {
+    if (videoId) await deleteJson(`${baseUrl}/v1/videos/${videoId}`);
   }
 }
 
@@ -3463,6 +3574,23 @@ async function getText(url) {
   }
 }
 
+async function getBinaryMetadata(url) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    const body = Buffer.from(await response.arrayBuffer());
+    return {
+      status: response.status,
+      ok: response.ok,
+      content_type: response.headers.get("content-type") || "",
+      bytes: body.length,
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function deleteJson(url) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -3623,12 +3751,21 @@ function imagesGenerationUsage(response) {
   };
 }
 
+function videoUsage() {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+  };
+}
+
 function batchResponseUsage(testCase, response) {
   if (testCase.usage === "embeddings") return embeddingUsage(response);
   if (testCase.usage === "responses") return responseUsage(response);
   if (testCase.usage === "chat") return chatUsage(response);
   if (testCase.usage === "completions") return completionUsage(response);
   if (testCase.usage === "images") return imagesGenerationUsage(response);
+  if (testCase.usage === "videos") return videoUsage(response);
   return moderationUsage(response);
 }
 

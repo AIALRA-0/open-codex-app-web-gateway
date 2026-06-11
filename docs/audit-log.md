@@ -5652,6 +5652,79 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Local Videos API protocol compatibility
+
+- Used official OpenAI developer documentation before implementation:
+  - Video generation guide: `POST /v1/videos` creates an async job, `GET
+    /v1/videos/{video_id}` polls status, and `GET
+    /v1/videos/{video_id}/content` downloads `video`, `thumbnail`, or
+    `spritesheet` variants.
+  - Batch guide: Batch supports JSON requests to `POST /v1/videos` and does not
+    support multipart video inputs.
+  - OpenAPI endpoint list: `/v1/videos`, `/v1/videos/{video_id}`,
+    `/v1/videos/{video_id}/content`, `/v1/videos/edits`,
+    `/v1/videos/extensions`, and `/v1/videos/{video_id}/remix` are current
+    Videos API surfaces.
+- Added local Videos API compatibility for Chat-Completions-only deployments:
+  - `POST /v1/videos` accepts JSON or multipart video creation requests and
+    returns a completed OpenAI-style `object:"video"` job with model, status,
+    progress, size, seconds, quality, and compatibility metadata.
+  - `GET /v1/videos`, `GET /v1/videos/{video_id}`, and
+    `DELETE /v1/videos/{video_id}` provide local lifecycle coverage.
+  - `GET /v1/videos/{video_id}/content` returns tiny placeholder bytes for
+    `variant=video`, `thumbnail`, and `spritesheet` with matching content
+    types, keeping `/srv/aialra/apps` disk usage bounded.
+  - `POST /v1/videos/edits`, `/v1/videos/extensions`, and
+    `/v1/videos/{video_id}/remix` return completed local video jobs with
+    operation metadata for UI/SDK workflow compatibility.
+  - Local Batch execution now supports `/v1/videos` JSONL lines and writes video
+    resources into Batch output files.
+- Added configuration:
+  - `CODEXCOMPAT_VIDEO_GENERATION_PROVIDER`;
+  - `CODEXCOMPAT_VIDEO_GENERATION_MODEL`;
+  - `CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_SIZE`;
+  - `CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_SECONDS`;
+  - `CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_QUALITY`;
+  - `CODEXCOMPAT_VIDEO_GENERATION_MAX_INPUT_BYTES`.
+- Updated compatibility and evaluation docs to move the gap from "no video
+  endpoint coverage" to "protocol-compatible local placeholder, not hosted Sora
+  rendering or media-quality parity."
+- Verification so far:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test test/server.test.js --test-name-pattern "Videos API|local Batch API executes local video"` ran the full server test file and passed 113/113 subtests, including the two new Videos API cases.
+  - Temporary local bridge eval `video-lifecycle`: passed 1/1, created a
+    `video_...` record, retrieved it, downloaded content, deleted it, and
+    reported `output_text:"video:completed:content"`.
+  - Temporary local bridge eval `batch-videos`: passed 1/1, completed a local
+    Batch with one `/v1/videos` JSONL request, produced one output line, and no
+    error file.
+  - `npm test`: passed 151/151 subtests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Post-restart live `video-lifecycle` bridge-regression case passed 1/1 on
+    `http://127.0.0.1:12912`, including create, retrieve, content download,
+    list, and delete, with latency 166 ms.
+  - Post-restart live `batch-videos` bridge-regression case passed 1/1 on
+    `http://127.0.0.1:12912`, completing one `/v1/videos` JSONL request with
+    one output line and no error file, latency 217 ms.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run prune:runtime -- --dry-run`: passed with exit code 0; scanned 724
+    runtime candidates, selected 90 old UI screenshots by retention policy,
+    deleted 0, selected 7353648 bytes, and reported 0 errors.
+  - Disk/storage check: the filesystem has 40 GB available; `state/` is
+    7.2 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Direct Images API upstream SSE relay
 
 - Used the official OpenAI Images OpenAPI endpoint specs for

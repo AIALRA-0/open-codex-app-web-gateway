@@ -6850,6 +6850,104 @@ test("POST /v1/moderations returns local OpenAI-compatible category results", as
   });
 });
 
+test("Videos API creates, lists, retrieves, downloads, remixes, and deletes local jobs", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "videos should not call upstream" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/videos`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "sora-2",
+        prompt: "A compact protocol test video.",
+        size: "1280x720",
+        seconds: "4",
+        quality: "standard",
+        metadata: { suite: "video-local" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const video = await created.json();
+    assert.match(video.id, /^video_/);
+    assert.equal(video.object, "video");
+    assert.equal(video.status, "completed");
+    assert.equal(video.progress, 100);
+    assert.equal(video.model, "sora-2");
+    assert.equal(video.size, "1280x720");
+    assert.equal(video.seconds, "4");
+    assert.equal(video.quality, "standard");
+    assert.equal(video.metadata.suite, "video-local");
+    assert.equal(video.metadata.compatibility.provider, "local");
+    assert.equal(video.metadata.compatibility.operation, "create");
+
+    const retrieved = await fetch(`${baseUrl}/v1/videos/${video.id}`);
+    assert.equal(retrieved.status, 200);
+    assert.equal((await retrieved.json()).id, video.id);
+
+    const list = await fetch(`${baseUrl}/v1/videos?limit=1`);
+    assert.equal(list.status, 200);
+    const listJson = await list.json();
+    assert.equal(listJson.object, "list");
+    assert.equal(listJson.data.length, 1);
+    assert.equal(listJson.data[0].id, video.id);
+    assert.equal(listJson.has_more, false);
+
+    const content = await fetch(`${baseUrl}/v1/videos/${video.id}/content`);
+    assert.equal(content.status, 200);
+    assert.equal(content.headers.get("content-type"), "video/mp4");
+    assert.ok((await content.arrayBuffer()).byteLength > 16);
+
+    const thumbnail = await fetch(`${baseUrl}/v1/videos/${video.id}/content?variant=thumbnail`);
+    assert.equal(thumbnail.status, 200);
+    assert.equal(thumbnail.headers.get("content-type"), "image/webp");
+
+    const spritesheet = await fetch(`${baseUrl}/v1/videos/${video.id}/content?variant=spritesheet`);
+    assert.equal(spritesheet.status, 200);
+    assert.equal(spritesheet.headers.get("content-type"), "image/jpeg");
+
+    const invalidVariant = await fetch(`${baseUrl}/v1/videos/${video.id}/content?variant=poster`);
+    assert.equal(invalidVariant.status, 400);
+    assert.equal((await invalidVariant.json()).error.code, "unsupported_video_variant");
+
+    const form = new FormData();
+    form.append("model", "sora-2");
+    form.append("prompt", "Edit this tiny clip.");
+    form.append("size", "720x1280");
+    form.append("video", new Blob([Buffer.from("tiny video input")], { type: "video/mp4" }), "source.mp4");
+    const edit = await fetch(`${baseUrl}/v1/videos/edits`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(edit.status, 200);
+    const editJson = await edit.json();
+    assert.equal(editJson.metadata.compatibility.operation, "edit");
+    assert.equal(editJson.size, "720x1280");
+
+    const remix = await fetch(`${baseUrl}/v1/videos/${video.id}/remix`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "Remix the scene with a faster camera move." }),
+    });
+    assert.equal(remix.status, 200);
+    const remixJson = await remix.json();
+    assert.equal(remixJson.source_video_id, video.id);
+    assert.equal(remixJson.metadata.compatibility.operation, "remix");
+
+    const deleted = await fetch(`${baseUrl}/v1/videos/${video.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      id: video.id,
+      object: "video.deleted",
+      deleted: true,
+    });
+    const missing = await fetch(`${baseUrl}/v1/videos/${video.id}`);
+    assert.equal(missing.status, 404);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/completions maps legacy prompts to Chat Completions", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");
@@ -8316,6 +8414,73 @@ test("local Batch API executes local embeddings without provider calls", async (
     assert.equal(outputLines[0].response.body.object, "list");
     assert.equal(outputLines[0].response.body.data[0].embedding.length, 8);
     assert.equal(outputLines[1].response.body.data.length, 2);
+  });
+});
+
+test("local Batch API executes local video generations without provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "video-a",
+        method: "POST",
+        url: "/v1/videos",
+        body: {
+          model: "sora-2",
+          prompt: "A compact Batch video compatibility case.",
+          size: "1280x720",
+          seconds: "4",
+          input_reference: { image_url: "https://example.test/frame.png" },
+        },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "videos-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/videos",
+        completion_window: "24h",
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 1);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.ok(batch.metadata.compatibility.supported_endpoints.includes("/v1/videos"));
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "video-a");
+    assert.equal(outputLines[0].response.status_code, 200);
+    assert.match(outputLines[0].response.body.id, /^video_/);
+    assert.equal(outputLines[0].response.body.object, "video");
+    assert.equal(outputLines[0].response.body.status, "completed");
+    assert.equal(outputLines[0].response.body.metadata.compatibility.batch_supported, true);
   });
 });
 
