@@ -7645,6 +7645,101 @@ test("local Batch API executes Responses JSONL and exposes output and error file
   });
 });
 
+test("local Batch API executes Responses image_generation JSONL", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.equal(call.body.tools, undefined);
+    assert.equal(call.body.tool_choice, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses image_generation compatibility is active/);
+    assert.match(prompt, /Generated image call items/);
+    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_batch_image_generation" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_batch_image_generation",
+      object: "chat.completion",
+      created: 1700000445,
+      model: call.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "batch-image-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 3, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = `${JSON.stringify({
+      custom_id: "response-image-ok",
+      method: "POST",
+      url: "/v1/responses",
+      body: {
+        model: "mock-model",
+        input: "Generate a batch image and return batch-image-ok.",
+        tools: [{ type: "image_generation", action: "generate", partial_images: 1 }],
+        tool_choice: { type: "image_generation" },
+        max_tool_calls: 1,
+        max_output_tokens: 32,
+        store: false,
+      },
+    })}\n`;
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "responses-image-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/responses",
+        completion_window: "24h",
+        metadata: { suite: "batch-responses-image-generation" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.object, "batch");
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 1);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(requests.length, 1);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "response-image-ok");
+    assert.equal(outputLines[0].response.status_code, 200);
+    assert.match(outputLines[0].response.request_id, /^req_/);
+    const body = outputLines[0].response.body;
+    assert.equal(body.object, "response");
+    assert.equal(body.output[0].type, "image_generation_call");
+    assert.equal(body.output[0].status, "completed");
+    assert.match(body.output[0].id, /^ig_/);
+    assert.deepEqual(Buffer.from(body.output[0].result, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.equal(body.output[1].content[0].text, "batch-image-ok");
+    assert.equal(body.metadata.compatibility.local_image_generation.call_count, 1);
+    assert.equal(body.metadata.compatibility.local_image_generation.stored_image_call_count, 1);
+    assert.equal(fs.existsSync(path.join(stateDir, "local-image-generations", `${body.output[0].id}.json`)), true);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
 test("local Batch API executes Chat and legacy Completions JSONL", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

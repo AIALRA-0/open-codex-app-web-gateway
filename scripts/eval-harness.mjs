@@ -521,6 +521,51 @@ function buildSuites(defaultModel) {
           && /batch-completion-one/i.test(completionOutputText(outputLines[0].response?.body)),
       },
       {
+        id: "batch-responses-image-generation",
+        mode: "batch-local",
+        endpoint: "/v1/responses",
+        usage: "responses",
+        requests: [
+          {
+            custom_id: "batch-response-image",
+            body: {
+              model: defaultModel,
+              instructions: "The local bridge handles image_generation in Batch. Return exactly this text and nothing else: batch-image-generation-ok.",
+              input: "Exercise image_generation inside local Batch JSONL.",
+              tools: [{ type: "image_generation", action: "generate" }],
+              tool_choice: { type: "image_generation" },
+              max_tool_calls: 1,
+              max_output_tokens: 128,
+              store: false,
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          const call = (response?.output || []).find((item) => item.type === "image_generation_call");
+          const localImage = response?.metadata?.compatibility?.local_image_generation || {};
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/responses"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-response-image"
+            && outputLines[0].response?.status_code === 200
+            && response?.object === "response"
+            && /batch-image-generation-ok/i.test(responseOutputText(response))
+            && call?.status === "completed"
+            && /^ig_/.test(call?.id || "")
+            && /^iVBORw0KGgo/.test(call?.result || "")
+            && localImage.call_count === 1
+            && localImage.stored_image_call_count === 1
+            && localImage.deepseek_thinking === "disabled_for_local_image_generation";
+        },
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {

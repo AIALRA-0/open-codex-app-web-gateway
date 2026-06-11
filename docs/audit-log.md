@@ -4335,6 +4335,40 @@ Open follow-ups:
     and `/srv/aialra/logs/opencodexapp` is 13 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Batch Responses image_generation regression coverage
+
+- Added explicit local Batch coverage for Responses image-generation JSONL
+  requests:
+  - unit coverage creates a `purpose:"batch"` JSONL file containing a
+    `/v1/responses` request with `tools:[{type:"image_generation"}]`;
+  - the local Batch executor writes a Batch output file whose response body
+    preserves the `image_generation_call` item, base64 PNG result, assistant
+    message, compatibility metadata, and generated image-call state record;
+  - live `bridge-regression` now includes `batch-responses-image-generation`,
+    so the DeepSeek-backed bridge checks Batch + image-generation protocol
+    compatibility continuously.
+- Updated compatibility/evaluation docs:
+  - Batch known gap now distinguishes covered Responses image-generation JSONL
+    from not-yet-implemented direct Images/video endpoint batch execution;
+  - image-generation known gap no longer claims missing call-id persistence,
+    since id-only multi-turn edit is now implemented and covered.
+- Verification:
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "Batch API executes Responses image_generation" test/server.test.js`:
+    1/1 passing.
+  - `npm run eval:bridge -- --case batch-responses-image-generation`: passed
+    1/1 against `deepseek-v4-pro`, latency 1312 ms, total usage 185 tokens.
+  - `npm test`: 142/142 passing tests.
+  - `npm run eval:bridge`: passed 53/53 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1336 ms, P95 latency 3041 ms, and total usage
+    10797 tokens. The suite now includes
+    `batch-responses-image-generation`.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-10 Stored Response Lifecycle Include Projection
 
 - Re-checked the current OpenAI Responses include list through the official
