@@ -8815,6 +8815,38 @@ function includeValuesFromRequest(request = {}) {
     .filter(Boolean));
 }
 
+const ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE = "step_details.tool_calls[*].file_search.results[*].content";
+
+function projectAssistantRunStepsForIncludes(steps, url) {
+  const includes = includeValuesFromUrl(url);
+  return (Array.isArray(steps) ? steps : []).map((step) => projectAssistantRunStepForIncludeSet(step, includes));
+}
+
+function projectAssistantRunStepForIncludes(step, url) {
+  return projectAssistantRunStepForIncludeSet(step, includeValuesFromUrl(url));
+}
+
+function projectAssistantRunStepForIncludeSet(step, includes = new Set()) {
+  const projected = clone(step || {});
+  if (includes.has(ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE)) return projected;
+  return redactAssistantRunStepFileSearchResultContent(projected);
+}
+
+function redactAssistantRunStepFileSearchResultContent(step) {
+  const toolCalls = step?.step_details?.tool_calls;
+  if (!Array.isArray(toolCalls)) return step;
+  for (const toolCall of toolCalls) {
+    if (toolCall?.type !== "file_search" || !Array.isArray(toolCall.file_search?.results)) continue;
+    toolCall.file_search.results = toolCall.file_search.results.map((result) => {
+      if (!isPlainObject(result) || !Object.prototype.hasOwnProperty.call(result, "content")) return result;
+      const cloned = { ...result };
+      delete cloned.content;
+      return cloned;
+    });
+  }
+  return step;
+}
+
 function isInputImageItem(value) {
   return isPlainObject(value)
     && (value.type === "input_image"
@@ -9364,7 +9396,7 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
   sendJson(res, 200, paginateList(runs, url));
 }
 
-async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore) {
+async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore, url) {
   const body = await readJson(req);
   if (body.stream === true) {
     await streamNewAssistantRun({
@@ -9377,7 +9409,7 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
       threadId,
       incomingHeaders: req.headers,
       res,
-      streamOptions: { includeThreadCreated: false },
+      streamOptions: { includeThreadCreated: false, stepIncludes: includeValuesFromUrl(url) },
     });
     return;
   }
@@ -9398,7 +9430,7 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
   sendJson(res, 200, result.run);
 }
 
-async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore) {
+async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore, url) {
   const body = await readJson(req);
   const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
   const materialized = materializeAssistantThreadMessageAttachments({
@@ -9423,7 +9455,7 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
       threadId: thread.id,
       incomingHeaders: req.headers,
       res,
-      streamOptions: { thread: runThread },
+      streamOptions: { thread: runThread, stepIncludes: includeValuesFromUrl(url) },
     });
     return;
   }
@@ -9563,10 +9595,10 @@ function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) 
     });
     return;
   }
-  sendJson(res, 200, paginateList(steps, url));
+  sendJson(res, 200, paginateList(projectAssistantRunStepsForIncludes(steps, url), url));
 }
 
-function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId) {
+function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId, url) {
   const run = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -9585,7 +9617,7 @@ function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId)
     });
     return;
   }
-  sendJson(res, 200, step);
+  sendJson(res, 200, projectAssistantRunStepForIncludes(step, url));
 }
 
 async function createAndCompleteAssistantRun({
@@ -10100,8 +10132,12 @@ async function streamAssistantChatTurn({
   }
   writeSse(res, "thread.run.in_progress", run);
   if (hostedToolStep) {
-    writeSse(res, "thread.run.step.created", hostedToolStep);
-    writeSse(res, "thread.run.step.completed", hostedToolStep);
+    const projectedHostedToolStep = projectAssistantRunStepForIncludeSet(
+      hostedToolStep,
+      streamOptions.stepIncludes instanceof Set ? streamOptions.stepIncludes : new Set(),
+    );
+    writeSse(res, "thread.run.step.created", projectedHostedToolStep);
+    writeSse(res, "thread.run.step.completed", projectedHostedToolStep);
   }
 
   const streamState = createAssistantStreamState(run);
@@ -11185,7 +11221,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (url.pathname === "/v1/threads/runs" && req.method === "POST") {
-        await handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore);
+        await handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore, url);
         return;
       }
 
@@ -11202,7 +11238,7 @@ function createServer(config = loadConfig()) {
         const runId = decodeURIComponent(assistantRunStepRoute[2]);
         const stepId = assistantRunStepRoute[3] ? decodeURIComponent(assistantRunStepRoute[3]) : "";
         if (req.method === "GET" && stepId) {
-          handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId);
+          handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId, url);
           return;
         }
         if (req.method === "GET") {
@@ -11233,7 +11269,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!runId && req.method === "POST") {
-          await handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore);
+          await handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore, url);
           return;
         }
         if (runId && req.method === "GET") {

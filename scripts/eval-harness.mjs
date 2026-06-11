@@ -13,6 +13,7 @@ const timeoutMs = parsePositiveInt(args.get("timeout-ms"), 10 * 60 * 1000);
 const caseFilter = args.get("case");
 const verbose = !!args.get("verbose");
 let cachedCrcTable = null;
+const ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE = "step_details.tool_calls[*].file_search.results[*].content";
 
 const suites = buildSuites(model);
 const selected = caseFilter
@@ -445,10 +446,12 @@ function buildSuites(defaultModel) {
         request: {
           model: defaultModel,
         },
-        check: ({ run, messages, steps, file, vectorStore }) => {
+        check: ({ run, messages, steps, stepsIncluded, file, vectorStore }) => {
           const text = assistantMessageTextFromList(messages?.data || []);
           const toolStep = (steps?.data || []).find((step) => step.type === "tool_calls");
           const fileSearchCall = (toolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "file_search");
+          const includedToolStep = (stepsIncluded?.data || []).find((step) => step.type === "tool_calls");
+          const includedFileSearchCall = (includedToolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "file_search");
           const assistantMessage = (messages?.data || []).find((message) => message.role === "assistant");
           const annotations = assistantMessage?.content?.[0]?.text?.annotations || [];
           return run?.status === "completed"
@@ -457,7 +460,10 @@ function buildSuites(defaultModel) {
             && run.metadata?.compatibility?.local_assistants?.local_hosted_tool_types?.includes("file_search")
             && run.tool_resources?.file_search?.vector_store_ids?.includes(vectorStore?.id)
             && fileSearchCall?.file_search?.vector_store_ids?.includes(vectorStore?.id)
-            && fileSearchCall?.file_search?.results?.some((result) => result.file_id === file?.id)
+            && fileSearchCall?.file_search?.results?.some((result) => result.file_id === file?.id
+              && !Object.prototype.hasOwnProperty.call(result, "content"))
+            && includedFileSearchCall?.file_search?.results?.some((result) => result.file_id === file?.id
+              && /Assistants live file-search fixture/i.test(result.content?.[0]?.text || ""))
             && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === file?.id);
         },
       },
@@ -3437,12 +3443,15 @@ async function runAssistantsFileSearchCase(testCase, context, started) {
 
     const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
     const steps = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}/steps?limit=20`);
+    const includeParam = encodeURIComponent(ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE);
+    const stepsIncluded = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}/steps?limit=20&include[]=${includeParam}`);
     const ok = !!testCase.check({
       assistant: assistant.json,
       thread: thread.json,
       run: run.json,
       messages: messages.json,
       steps: steps.json,
+      stepsIncluded: stepsIncluded.json,
       file: file.json,
       vectorStore: vectorStore.json,
       attached: attached.json,
@@ -3464,6 +3473,7 @@ async function runAssistantsFileSearchCase(testCase, context, started) {
         run: run.json,
         messages: messages.json,
         steps: steps.json,
+        stepsIncluded: stepsIncluded.json,
       })),
     });
   } finally {

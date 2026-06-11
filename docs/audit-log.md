@@ -4369,6 +4369,79 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants Run Step include projection
+
+- Used the official OpenAI Assistants Run Step API references to close a
+  response-shape gap:
+  - `GET /v1/threads/{thread_id}/runs/{run_id}/steps` supports
+    `include[]=step_details.tool_calls[*].file_search.results[*].content`;
+  - `GET /v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}` supports the
+    same include value;
+  - Create Run exposes the same include query parameter for run-step
+    file-search result content in run event contexts.
+- Implemented local compatibility for Chat-only providers:
+  - local Assistants `file_search` Run Steps still persist full retrieval
+    evidence for audit and later include-aware retrieval;
+  - Run Step list/retrieve responses now hide
+    `step_details.tool_calls[*].file_search.results[*].content` by default and
+    return it only when the official include value is requested;
+  - streamed hosted Assistants `file_search` Run Step events apply the same
+    projection, including `POST /v1/threads/{thread_id}/runs?stream=true` and
+    `POST /v1/threads/runs?stream=true`;
+  - file-search result metadata such as `file_id`, filename, score, query, and
+    chunk metadata remains visible without the include value.
+- Extended regression coverage:
+  - updated the existing Assistants `file_search` mock-provider test to verify
+    default-hidden and include-expanded content for Run Step list and retrieve;
+  - added a streaming Assistants `file_search` mock-provider test to verify SSE
+    `thread.run.step.completed` hides result content by default and includes it
+    when the official include value is requested;
+  - extended the live `assistants-file-search` bridge-regression case to check
+    default-hidden and include-expanded Run Step content against DeepSeek.
+- Updated docs:
+  - compatibility matrix now documents include-gated Assistants Run Step
+    `file_search` result content for list, retrieve, and streamed run events;
+  - evaluation plan now lists this coverage in both the live bridge-regression
+    suite and the Assistants mock-provider coverage description.
+- Verification so far:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 13/13.
+  - `npm test`: passed 190/190.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `assistants-file-search` passed 1/1 against
+    `deepseek-v4-pro`, latency 1790 ms, output
+    `assistants-file-search-live-ok [1]`, 2 Run Steps, 2 messages, and 205
+    total tokens. This case now verifies default-hidden and include-expanded
+    Assistants Run Step file-search result content.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 88/88,
+    pass rate 1.0, average latency 1350 ms, P95 latency 3938 ms, and total
+    usage 22186 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1205 ms, P95 latency 1297 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core pages, project dialog/upload, prompt submission, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1470 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 85798 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    85798 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 39 GB available; `state/` was 20 MB,
+    `output/` was 4.7 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 25 MB.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants run additional messages
 
 - Used the official OpenAI Create Run API reference to close another

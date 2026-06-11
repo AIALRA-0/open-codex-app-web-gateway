@@ -2473,6 +2473,149 @@ test("Assistants API local file_search tool injects vector store evidence", asyn
     const toolStep = (await listedSteps.json()).data.find((step) => step.type === "tool_calls");
     assert.equal(toolStep.step_details.tool_calls[0].type, "file_search");
     assert.equal(toolStep.step_details.tool_calls[0].file_search.results[0].file_id, file.id);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(toolStep.step_details.tool_calls[0].file_search.results[0], "content"),
+      false,
+    );
+
+    const stepInclude = encodeURIComponent("step_details.tool_calls[*].file_search.results[*].content");
+    const includedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps?limit=10&include[]=${stepInclude}`);
+    assert.equal(includedSteps.status, 200);
+    const includedToolStep = (await includedSteps.json()).data.find((step) => step.type === "tool_calls");
+    assert.equal(includedToolStep.step_details.tool_calls[0].file_search.results[0].content[0].text, "Assistants File Search Fixture says the exact marker is assistants-file-search-ok.");
+
+    const hiddenStepGet = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${toolStep.id}`);
+    assert.equal(hiddenStepGet.status, 200);
+    const hiddenStepGetJson = await hiddenStepGet.json();
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(hiddenStepGetJson.step_details.tool_calls[0].file_search.results[0], "content"),
+      false,
+    );
+
+    const includedStepGet = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${toolStep.id}?include[]=${stepInclude}`);
+    assert.equal(includedStepGet.status, 200);
+    const includedStepGetJson = await includedStepGet.json();
+    assert.equal(includedStepGetJson.step_details.tool_calls[0].file_search.results[0].content[0].text, "Assistants File Search Fixture says the exact marker is assistants-file-search-ok.");
+  });
+});
+
+test("Assistants API streaming file_search run steps respect include content projection", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.stream, true);
+    assert.equal(request.body.tools, undefined);
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Streaming Assistants File Search Fixture/);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_assistants_stream_file_search",
+      object: "chat.completion.chunk",
+      created: 1700000007,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: "stream-assistants-file-search-ok [1]" },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_assistants_stream_file_search",
+      object: "chat.completion.chunk",
+      created: 1700000007,
+      model: request.body.model,
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 33, completion_tokens: 6, total_tokens: 39 },
+    })}\n\n`);
+    res.end("data: [DONE]\n\n");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistants-stream-file-search.txt",
+        purpose: "assistants",
+        content: "Streaming Assistants File Search Fixture says the exact marker is stream-assistants-file-search-ok.",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const vectorStoreResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "assistants-stream-file-search-store" }),
+    });
+    assert.equal(vectorStoreResponse.status, 200);
+    const vectorStore = await vectorStoreResponse.json();
+
+    const attachedResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: file.id }),
+    });
+    assert.equal(attachedResponse.status, 200);
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use file_search evidence before answering.",
+        tools: [{ type: "file_search" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const createThread = async () => {
+      const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          messages: [{
+            role: "user",
+            content: "File search for stream-assistants-file-search-ok. Return stream-assistants-file-search-ok [1].",
+          }],
+          tool_resources: { file_search: { vector_store_ids: [vectorStore.id] } },
+        }),
+      });
+      assert.equal(threadResponse.status, 200);
+      return await threadResponse.json();
+    };
+
+    const hiddenThread = await createThread();
+    const hiddenRunResponse = await fetch(`${baseUrl}/v1/threads/${hiddenThread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id, stream: true }),
+    });
+    assert.equal(hiddenRunResponse.status, 200);
+    const hiddenEvents = parseSseEvents(await hiddenRunResponse.text());
+    const hiddenToolStep = hiddenEvents
+      .filter((event) => event.event === "thread.run.step.completed")
+      .map((event) => event.data)
+      .find((step) => step.step_details?.tool_calls?.some((toolCall) => toolCall.type === "file_search"));
+    assert.equal(hiddenToolStep.step_details.tool_calls[0].file_search.results[0].file_id, file.id);
+    assert.equal(
+      Object.prototype.hasOwnProperty.call(hiddenToolStep.step_details.tool_calls[0].file_search.results[0], "content"),
+      false,
+    );
+
+    const includedThread = await createThread();
+    const stepInclude = encodeURIComponent("step_details.tool_calls[*].file_search.results[*].content");
+    const includedRunResponse = await fetch(`${baseUrl}/v1/threads/${includedThread.id}/runs?include[]=${stepInclude}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id, stream: true }),
+    });
+    assert.equal(includedRunResponse.status, 200);
+    const includedEvents = parseSseEvents(await includedRunResponse.text());
+    const includedToolStep = includedEvents
+      .filter((event) => event.event === "thread.run.step.completed")
+      .map((event) => event.data)
+      .find((step) => step.step_details?.tool_calls?.some((toolCall) => toolCall.type === "file_search"));
+    assert.equal(includedToolStep.step_details.tool_calls[0].file_search.results[0].content[0].text, "Streaming Assistants File Search Fixture says the exact marker is stream-assistants-file-search-ok.");
+    assert.equal(requests.length, 2);
   });
 });
 
