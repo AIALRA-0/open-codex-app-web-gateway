@@ -635,6 +635,41 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "batch-images-variation",
+        mode: "batch-local",
+        endpoint: "/v1/images/variations",
+        usage: "images",
+        requests: [
+          {
+            custom_id: "batch-direct-image-variation",
+            body: {
+              model: "dall-e-2",
+              image: { image_url: `data:image/png;base64,${tinyPngBase64}`, filename: "eval-source.png" },
+              n: 2,
+              size: "1024x1024",
+              response_format: "b64_json",
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/images/variations"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-direct-image-variation"
+            && outputLines[0].response?.status_code === 200
+            && response?.data?.length === 2
+            && response.data.every((item) => /^iVBORw0KGgo/.test(item?.b64_json || ""))
+            && /variation of the supplied image/.test(response.data[0]?.revised_prompt || "");
+        },
+      },
+      {
         id: "batch-videos",
         mode: "batch-local",
         endpoint: "/v1/videos",
@@ -1509,6 +1544,23 @@ function buildSuites(defaultModel) {
           && /image_edit:2:completed/.test(text),
       },
       {
+        id: "images-variation",
+        mode: "images-variation",
+        request: {
+          model: "dall-e-2",
+          image: { image_url: `data:image/png;base64,${tinyPngBase64}`, filename: "eval-source.png" },
+          n: 2,
+          size: "1024x1024",
+          response_format: "b64_json",
+        },
+        check: ({ json, text }) => Array.isArray(json.data)
+          && json.data.length === 2
+          && /^iVBORw0KGgo/.test(json.data[0]?.b64_json || "")
+          && /^iVBORw0KGgo/.test(json.data[1]?.b64_json || "")
+          && /variation of the supplied image/.test(json.data[0]?.revised_prompt || "")
+          && /images:2/.test(text),
+      },
+      {
         id: "video-lifecycle",
         mode: "video-lifecycle",
         request: {
@@ -2093,6 +2145,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "images-edit-stream") {
       return await runImageApiStreamCase(testCase, context, started, "/v1/images/edits", "image_edit");
+    }
+    if (testCase.mode === "images-variation") {
+      return await runJsonCase(testCase, context, started, "/v1/images/variations", imagesGenerationOutputText, imagesGenerationUsage);
     }
     if (testCase.mode === "video-lifecycle") {
       return await runVideoLifecycleCase(testCase, context, started);

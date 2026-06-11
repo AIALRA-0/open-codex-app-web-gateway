@@ -58,6 +58,7 @@ const {
   createImagesEditResponse,
   createImagesGenerationEventStream,
   createImagesGenerationResponse,
+  createImagesVariationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
@@ -100,6 +101,7 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/embeddings",
   "/v1/images/generations",
   "/v1/images/edits",
+  "/v1/images/variations",
   "/v1/videos",
   "/v1/moderations",
 ]);
@@ -261,9 +263,11 @@ function loadConfig(overrides = {}) {
     imageGenerationBaseUrl: trimTrailingSlash(process.env.CODEXCOMPAT_IMAGE_GENERATION_BASE_URL || "https://api.openai.com/v1"),
     imageGenerationPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_PATH || "/images/generations"),
     imageGenerationEditPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH || "/images/edits"),
+    imageGenerationVariationPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_VARIATION_PATH || "/images/variations"),
     imageGenerationApiKey: process.env[imageGenerationApiKeyEnv] || process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY || "",
     imageGenerationApiKeyEnv,
     imageGenerationModel: process.env.CODEXCOMPAT_IMAGE_GENERATION_MODEL || "gpt-image-2",
+    imageGenerationVariationModel: process.env.CODEXCOMPAT_IMAGE_GENERATION_VARIATION_MODEL || "dall-e-2",
     imageGenerationResponseFormat: process.env.CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT || "",
     imageGenerationUser: process.env.CODEXCOMPAT_IMAGE_GENERATION_USER || "",
     imageGenerationTimeoutMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS", 120 * 1000, 1000, 10 * 60 * 1000),
@@ -4742,6 +4746,25 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
   }
 }
 
+async function handleImagesVariations(req, res, config, fileSearchStore, imageGenerationStore) {
+  let request;
+  try {
+    request = await readImagesVariationRequest(req, config);
+    const response = await createImagesVariationResponse(request, config, {
+      fileSearchStore,
+      imageGenerationStore,
+      fetch: globalThis.fetch,
+    });
+    sendJson(res, 200, response);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "image variation request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "image_variation_error",
+      param: error.param || null,
+    });
+  }
+}
+
 async function handleVideosCreate(req, res, config, store, options = {}) {
   try {
     const request = await readVideoCreateRequest(req, config);
@@ -5036,6 +5059,29 @@ async function readImagesEditRequest(req, config = {}) {
         content_type: maskFile.content_type,
         content: maskFile.content,
       },
+    } : {}),
+  };
+}
+
+async function readImagesVariationRequest(req, config = {}) {
+  const contentType = req.headers["content-type"] || "";
+  if (!/^multipart\/form-data\b/i.test(contentType)) return await readJson(req);
+
+  const maxInputBytes = Number(config.imageGenerationMaxInputImageBytes || 50 * 1024 * 1024);
+  const maxBodyBytes = Math.min(
+    256 * 1024 * 1024,
+    Math.max(1024 * 1024, Number.isFinite(maxInputBytes) ? maxInputBytes : 50 * 1024 * 1024) + 1024 * 1024,
+  );
+  const form = parseMultipartFormBinary(await readRawBody(req, maxBodyBytes), contentType);
+  const imageFile = form.files.find((file) => file.name === "image") || form.files[0];
+  return {
+    ...form.fields,
+    ...(imageFile ? {
+      image_files: [{
+        filename: imageFile.filename,
+        content_type: imageFile.content_type,
+        content: imageFile.content,
+      }],
     } : {}),
   };
 }
@@ -5838,6 +5884,8 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleImagesGenerations(req, res, config);
     } else if (endpoint === "/v1/images/edits") {
       await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
+    } else if (endpoint === "/v1/images/variations") {
+      await handleImagesVariations(req, res, config, fileSearchStore, imageGenerationStore);
     } else if (endpoint === "/v1/videos") {
       await handleVideosCreate(req, res, config, store, { operation: "create" });
     } else if (endpoint === "/v1/moderations") {
@@ -6634,6 +6682,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/images/edits") {
         await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/images/variations") {
+        await handleImagesVariations(req, res, config, fileSearchStore, imageGenerationStore);
         return;
       }
 

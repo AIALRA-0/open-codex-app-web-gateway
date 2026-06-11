@@ -2716,6 +2716,101 @@ test("POST /v1/images/edits accepts JSON image_url and mask inputs", async () =>
   });
 });
 
+test("POST /v1/images/variations accepts multipart placeholder requests", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder image variations");
+  }, async ({ bridgeAddress, requests }) => {
+    const form = new FormData();
+    form.append("model", "dall-e-2");
+    form.append("n", "2");
+    form.append("size", "1024x1024");
+    form.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source.png");
+
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/variations`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(typeof json.created, "number");
+    assert.equal(json.data.length, 2);
+    assert.deepEqual(Buffer.from(json.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(json.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.notEqual(json.data[0].b64_json, json.data[1].b64_json);
+    assert.match(json.data[0].revised_prompt, /variation of the supplied image/);
+
+    const missing = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/variations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "dall-e-2", n: 1 }),
+    });
+    assert.equal(missing.status, 400);
+    const error = await missing.json();
+    assert.equal(error.error.code, "missing_required_parameter");
+    assert.equal(error.error.param, "image");
+    assert.equal(requests.length, 0);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("POST /v1/images/variations can call an OpenAI-compatible Images API", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const variationPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8DwQACfsD/QVQH6UAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/images/variations");
+    assert.equal(req.headers.authorization, "Bearer image-test-key");
+    assert.match(req.headers["content-type"], /^multipart\/form-data; boundary=/);
+    assert.equal(call.body, null);
+    assert.match(call.rawBody, /name="model"/);
+    assert.match(call.rawBody, /direct-variation-model/);
+    assert.match(call.rawBody, /name="n"/);
+    assert.match(call.rawBody, /\r\n\r\n2\r\n/);
+    assert.match(call.rawBody, /name="size"/);
+    assert.match(call.rawBody, /512x512/);
+    assert.match(call.rawBody, /name="response_format"/);
+    assert.match(call.rawBody, /b64_json/);
+    assert.match(call.rawBody, /name="user"/);
+    assert.match(call.rawBody, /direct-variation-user/);
+    assert.match(call.rawBody, /name="image"; filename="source\.png"/);
+    assert.match(call.rawBody, /Content-Type: image\/png/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      created: 100,
+      data: [
+        { b64_json: variationPng },
+        { b64_json: variationPng },
+      ],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const form = new FormData();
+    form.append("model", "direct-variation-model");
+    form.append("n", "2");
+    form.append("size", "512x512");
+    form.append("response_format", "b64_json");
+    form.append("user", "direct-variation-user");
+    form.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source.png");
+
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/variations`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.created, 100);
+    assert.equal(json.data.length, 2);
+    assert.equal(json.data[0].b64_json, variationPng);
+    assert.equal(requests.length, 1);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationVariationPath: "/images/variations",
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationVariationModel: "dall-e-2",
+  }));
+});
+
 test("POST /v1/images/edits can call an OpenAI-compatible Images API", async () => {
   const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
@@ -8221,6 +8316,78 @@ test("local Batch API executes direct Images edit JSONL", async () => {
     assert.deepEqual(Buffer.from(body.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
     assert.deepEqual(Buffer.from(body.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
     assert.match(body.data[0].revised_prompt, /Edit the supplied image using this instruction/);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("local Batch API executes direct Images variation JSONL", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder direct image variation batches");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = `${JSON.stringify({
+      custom_id: "direct-image-variation-ok",
+      method: "POST",
+      url: "/v1/images/variations",
+      body: {
+        model: "dall-e-2",
+        image: { image_url: `data:image/png;base64,${sourcePng}`, filename: "batch-source.png" },
+        n: 2,
+        size: "1024x1024",
+        response_format: "b64_json",
+      },
+    })}\n`;
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "images-variation-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/images/variations",
+        completion_window: "24h",
+        metadata: { suite: "batch-images-variations" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.object, "batch");
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.endpoint, "/v1/images/variations");
+    assert.equal(batch.request_counts.total, 1);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/images/variations"), true);
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "direct-image-variation-ok");
+    assert.equal(outputLines[0].response.status_code, 200);
+    const body = outputLines[0].response.body;
+    assert.equal(typeof body.created, "number");
+    assert.equal(body.data.length, 2);
+    assert.deepEqual(Buffer.from(body.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(body.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.match(body.data[0].revised_prompt, /variation of the supplied image/);
   }, {
     imageGenerationPlaceholderSize: 16,
   });

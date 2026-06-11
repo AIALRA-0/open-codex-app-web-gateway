@@ -5652,6 +5652,82 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Direct Images variations compatibility
+
+- Used the official OpenAI OpenAPI operation `createImageVariation`
+  (`POST /v1/images/variations`) as the source of truth for the endpoint shape:
+  multipart form input, one `image`, `ImagesResponse` output, and default
+  compatibility with `dall-e-2`.
+- Added direct local `POST /v1/images/variations` support:
+  - accepts official multipart requests with `image`, `model`, `n`, `size`,
+    `response_format`, and `user`;
+  - validates missing image input as `missing_required_parameter` on `image`;
+  - returns deterministic placeholder PNG `ImagesResponse` data when the image
+    provider is `placeholder`;
+  - forwards provider-backed variation requests as multipart form data to the
+    configured `/images/variations` provider path;
+  - normalizes provider responses through the same Images API response adapter
+    used by direct generations and edits;
+  - keeps provider credentials sourced only from local environment variables.
+- Added Batch-compatible JSON input for variations because Batch JSONL cannot
+  carry multipart file parts:
+  - JSON bodies can reference source images through `image`, `images`, or
+    `image_url`;
+  - accepted image sources include data URLs, HTTP(S) URLs, and local `file_id`
+    references through the existing bounded image resolver;
+  - local Batch now lists and executes `/v1/images/variations` alongside
+    `/v1/images/generations` and `/v1/images/edits`.
+- Added configuration and documentation:
+  - `CODEXCOMPAT_IMAGE_GENERATION_VARIATION_PATH`, default
+    `/images/variations`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_VARIATION_MODEL`, default `dall-e-2`;
+  - updated `.env.example`, deployment docs, compatibility matrix, and
+    evaluation plan.
+- Added regression coverage:
+  - multipart placeholder variation success;
+  - missing-image validation;
+  - OpenAI-compatible provider multipart forwarding;
+  - local Batch JSONL execution over `/v1/images/variations`;
+  - live eval cases `images-variation` and `batch-images-variation`.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused variation tests passed 116/116 in `test/server.test.js` under
+    `node --test test/server.test.js --test-name-pattern
+    "images/variations|Images variation"`; Node ran the full file while the
+    new variation and Batch variation tests passed.
+  - `npm test`: 154/154 passing tests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`; bridge healthz returned `ok:true`, DeepSeek
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `images-variation` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro` after the final bridge restart, pass rate 1.0,
+    latency 76 ms, and output
+    `images:2`.
+  - Live `batch-images-variation` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, pass rate 1.0, latency 191 ms, request counts
+    `total:1`, `completed:1`, `failed:0`, and no error file.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, and saved-project
+    cleanup with no console errors or warnings.
+  - `npm run prune:runtime -- --dry-run`: passed with exit code 0; scanned
+    724 runtime candidates, selected 90 old UI screenshots by retention policy,
+    deleted 0 files, selected 7353648 bytes, and reported 0 errors.
+  - Disk/storage check: the filesystem has 39 GB available; `state/` is
+    7.2 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Local Videos API protocol compatibility
 
 - Used official OpenAI developer documentation before implementation:

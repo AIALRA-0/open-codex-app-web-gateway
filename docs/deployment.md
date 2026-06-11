@@ -106,16 +106,18 @@ Useful bridge flags:
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote `input_file.file_url` fetches |
 | `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR` | `pdftotext` | Uses local Poppler `pdftotext` to extract text-layer content from PDFs; set `disabled` to skip PDFs |
 | `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS` | `10000` | Timeout for each local PDF extraction process |
-| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` plus direct `/v1/images/generations` and `/v1/images/edits` provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
+| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` plus direct `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations` provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation; keep provider-specific endpoints and secrets outside Git |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed Responses-tool and direct Images API calls |
 | `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for provider-backed Responses edits and direct Images edit calls |
+| `CODEXCOMPAT_IMAGE_GENERATION_VARIATION_PATH` | `/images/variations` | Multipart image-variation endpoint path for provider-backed direct Images variation calls |
 | `CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-image-generations` | Local JSON state directory for generated image-call bytes used by `image_generation_call.id` and `previous_response_id` follow-up edits |
 | `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES` | `5000` | Maximum locally persisted generated image-call records retained before cleanup |
 | `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGE_BYTES` | `52428800` | Maximum generated image bytes persisted per call for later edit references |
 | `CODEXCOMPAT_IMAGE_GENERATION_STORE_TTL_MS` | `1209600000` | TTL for locally persisted generated image-call records; default is 14 days |
 | `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
 | `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
+| `CODEXCOMPAT_IMAGE_GENERATION_VARIATION_MODEL` | `dall-e-2` | Default model sent to provider-backed direct image variation requests when the client omits `model`; OpenAI's documented variation operation currently names `dall-e-2` |
 | `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override such as `b64_json` for providers/models that require it |
 | `CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS` | `120000` | Timeout for provider-backed image generation requests; complex image prompts can take longer than text requests |
 | `CODEXCOMPAT_IMAGE_GENERATION_MAX_INPUT_IMAGE_BYTES` | `52428800` | Maximum bytes per edit input image or mask before the bridge fails the local `image_generation_call` |

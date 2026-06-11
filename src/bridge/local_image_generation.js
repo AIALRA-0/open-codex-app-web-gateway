@@ -12,6 +12,7 @@ const PROVIDER_IMAGE_GENERATION_TYPES = new Set(["openai", "openai-compatible", 
 const DEFAULT_IMAGE_GENERATION_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_IMAGE_GENERATION_PATH = "/images/generations";
 const DEFAULT_IMAGE_GENERATION_EDIT_PATH = "/images/edits";
+const DEFAULT_IMAGE_GENERATION_VARIATION_PATH = "/images/variations";
 const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
@@ -294,6 +295,30 @@ async function createImagesEditEventStream(request = {}, config = {}, options = 
   }
 
   return imagesEditStreamEvents(placeholderImagesEditResponse(normalized, config), normalized);
+}
+
+async function createImagesVariationResponse(request = {}, config = {}, options = {}) {
+  const normalized = await normalizeImagesVariationRequest(request, config, options);
+  const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
+
+  if (!canUseLocalImageGeneration(config)) {
+    throw imageApiError("local image generation is disabled", {
+      status: 400,
+      code: "image_generation_disabled",
+      param: "provider",
+    });
+  }
+
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(provider)) {
+    const response = await requestImagesVariationProvider({
+      config,
+      normalized,
+      signal: options.signal,
+    });
+    return normalizeImagesGenerationProviderResponse(response);
+  }
+
+  return placeholderImagesVariationResponse(normalized, config);
 }
 
 function imagesGenerationStreamEvents(response = {}, request = {}) {
@@ -740,6 +765,58 @@ async function requestImagesEditProviderStream({ config = {}, normalized = {}, s
   });
 }
 
+async function requestImagesVariationProvider({ config = {}, normalized = {}, signal }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw imageApiError(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`, {
+      status: 401,
+      code: "missing_image_generation_api_key",
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = config.imageGenerationTimeoutMs || 120000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  try {
+    const response = await fetch(imageGenerationVariationProviderUrl(config), {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+      },
+      body: imagesVariationProviderForm({ config, normalized }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const json = parseJson(text);
+    if (!response.ok) {
+      const message = stringifyContent(json?.error?.message || text || `image provider returned HTTP ${response.status}`);
+      throw imageApiError(message, {
+        status: response.status,
+        code: json?.error?.code || "image_provider_error",
+        type: json?.error?.type || "image_provider_error",
+      });
+    }
+    return isPlainObject(json) ? json : {};
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw imageApiError("image provider request timed out", {
+        status: 504,
+        code: "image_provider_timeout",
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
 async function requestImageProviderStream({ config = {}, expectedPrefix, fallbackEvents, fetchOptions, signal, url }) {
   const controller = new AbortController();
   const timeoutMs = config.imageGenerationTimeoutMs || 120000;
@@ -893,6 +970,21 @@ function imagesEditProviderForm({ config = {}, normalized = {} }) {
   return form;
 }
 
+function imagesVariationProviderForm({ config = {}, normalized = {} }) {
+  const form = new FormData();
+  appendFormValue(form, "model", normalized.model || config.imageGenerationVariationModel || "dall-e-2");
+  appendFormValue(form, "n", normalized.n || 1);
+  for (const key of ["response_format", "size", "user"]) {
+    if (normalized.options?.[key] !== undefined) appendFormValue(form, key, normalized.options[key]);
+  }
+  if (normalized.options?.response_format === undefined && config.imageGenerationResponseFormat) {
+    appendFormValue(form, "response_format", config.imageGenerationResponseFormat);
+  }
+  if (normalized.options?.user === undefined && config.imageGenerationUser) appendFormValue(form, "user", config.imageGenerationUser);
+  appendImageBlob(form, "image", normalized.image);
+  return form;
+}
+
 function copyImageProviderOption(source, target, key) {
   if (source?.[key] !== undefined) target[key] = source[key];
 }
@@ -920,6 +1012,12 @@ function imageGenerationProviderUrl(config = {}) {
 function imageGenerationEditProviderUrl(config = {}) {
   const base = trimTrailingSlash(config.imageGenerationBaseUrl || DEFAULT_IMAGE_GENERATION_BASE_URL);
   const route = normalizeRoute(config.imageGenerationEditPath || DEFAULT_IMAGE_GENERATION_EDIT_PATH);
+  return `${base}${route}`;
+}
+
+function imageGenerationVariationProviderUrl(config = {}) {
+  const base = trimTrailingSlash(config.imageGenerationBaseUrl || DEFAULT_IMAGE_GENERATION_BASE_URL);
+  const route = normalizeRoute(config.imageGenerationVariationPath || DEFAULT_IMAGE_GENERATION_VARIATION_PATH);
   return `${base}${route}`;
 }
 
@@ -1144,6 +1242,52 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
   };
 }
 
+async function normalizeImagesVariationRequest(request = {}, config = {}, options = {}) {
+  if (!isPlainObject(request)) {
+    throw imageApiError("image variation request body must be an object", {
+      code: "invalid_request_body",
+    });
+  }
+
+  const n = normalizeImagesGenerationN(request.n);
+  const model = stringifyContent(request.model || config.imageGenerationVariationModel || "dall-e-2");
+  const requestOptions = {};
+  for (const key of ["response_format", "size", "user"]) {
+    if (request[key] !== undefined) requestOptions[key] = request[key];
+  }
+
+  const variationInputRequest = { ...request };
+  delete variationInputRequest.mask;
+  delete variationInputRequest.mask_file;
+  const editInput = await resolveDirectImagesEditInput({
+    request: variationInputRequest,
+    config,
+    options,
+  });
+  if (!editInput.images.length) {
+    const message = editInput.errors?.length
+      ? imageEditInputError(editInput).replace("image_generation edit", "image variation")
+      : "image variation requires an image";
+    throw imageApiError(message, {
+      code: "missing_required_parameter",
+      param: "image",
+    });
+  }
+
+  return {
+    model,
+    n,
+    options: requestOptions,
+    image: editInput.images[0],
+    editInput,
+    tool: {
+      action: "variation",
+      ...requestOptions,
+      n,
+    },
+  };
+}
+
 function normalizeImagesGenerationN(value) {
   if (value === undefined || value === null || value === "") return 1;
   const parsed = Number(value);
@@ -1178,6 +1322,21 @@ function placeholderImagesEditResponse(normalized = {}, config = {}) {
         `[input images: ${imageCount}; mask: ${hasMask ? "yes" : "no"}]`,
       ].join("\n"), normalized.tool, config),
       revised_prompt: revisedPromptFor(normalized.prompt, "edit"),
+    })),
+  };
+}
+
+function placeholderImagesVariationResponse(normalized = {}, config = {}) {
+  const image = normalized.image || {};
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: Array.from({ length: normalized.n }, (_unused, index) => ({
+      b64_json: makePlaceholderImageBase64([
+        "Create a variation of the supplied image.",
+        `[variation image ${index + 1}/${normalized.n}]`,
+        `[source: ${image.filename || image.source || "image"}; bytes: ${image.bytes || 0}]`,
+      ].join("\n"), normalized.tool, config),
+      revised_prompt: "Create a variation of the supplied image.",
     })),
   };
 }
@@ -2070,6 +2229,7 @@ module.exports = {
   createImagesEditResponse,
   createImagesGenerationEventStream,
   createImagesGenerationResponse,
+  createImagesVariationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
