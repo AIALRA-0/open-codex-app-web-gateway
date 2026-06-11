@@ -5373,3 +5373,66 @@ Open follow-ups:
     `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 17 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Saved project open UI smoke coverage
+
+- Extended the default `scripts/ui-smoke.mjs` browser workflow with saved
+  project coverage:
+  - creates a unique UI-smoke project through the real Projects menu;
+  - verifies the saved project appears in the sidebar;
+  - navigates away to Plugins, reopens the project from the sidebar, and checks
+    the project context returns;
+  - removes the generated workspace root through the browser bridge and then
+    applies a file-level cleanup fallback for ignored local state.
+- Hardened active UI coverage while validating the new saved-project path:
+  - active prompts now request chat-only long output to avoid file-artifact
+    shortcuts during stop-control testing;
+  - visible stop matching uses exact short labels such as `停止` and
+    `Stop generating`, preventing false matches against old conversation text;
+  - button discovery is viewport-bounded for faster and less noisy polling;
+  - the result records a composer-action fallback path if a future UI renders
+    the stop action without accessible text.
+- Updated README, deployment notes, and the evaluation plan:
+  - active UI smoke command now uses
+    `npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls`;
+  - saved project open is no longer listed as a remaining UI gap;
+  - remaining UI gaps are generated artifact display and a dedicated
+    completed-turn retry/regenerate path when that action is visible.
+- Verification:
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - `git diff --check`: passed.
+  - Active UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8r08xl`: core page switches visited `plugins`, `automation`,
+    and `mobile`; active stop clicked with control name `停止`;
+    `stop_control_rect:{x:1122,y:668,w:28,h:28}`;
+    `interrupt_method:"named_stop_control"`; `stop_cleared:true`;
+    `retry_control_status:"not_visible_after_interrupt"`; recovery marker
+    occurrences 2; saved project `UI smoke saved ui-smoke-mq8r08xl` created
+    and reopened; cleanup removed
+    `/srv/aialra/apps/open-codex-app-web-gateway/state/browser-workspaces/2026-06-11-ui-smoke-saved-ui-smoke-mq8r08xl`
+    with `bridge_updated:true`; console errors 0, warnings 0; screenshot
+    `output/playwright/ui-smoke-2026-06-11T00-17-21-465Z.png`.
+  - Default UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8qt71d`: core page switching, project dialog open/cancel,
+    browser-upload fixture write and filesystem verification, writable-root
+    add/clear, prompt submit, reload persistence, saved project
+    `UI smoke saved ui-smoke-mq8qt71d` created and reopened, cleanup removed
+    `/srv/aialra/apps/open-codex-app-web-gateway/state/browser-workspaces/2026-06-11-ui-smoke-saved-ui-smoke-mq8qt71d`
+    with `bridge_updated:true`, console errors 0, warnings 0, and screenshot
+    `output/playwright/ui-smoke-2026-06-11T00-11-52-417Z.png`.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 982 ms, P95 latency 1221 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 620 runtime candidates,
+    selected 72 old UI screenshots by retention policy, deleted 0, selected
+    5869605 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 40 GB available; `state/` is
+    5.4 MB, `output/` is 11 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 19 MB.
+  - No API keys, account credentials, or local secret files were committed.

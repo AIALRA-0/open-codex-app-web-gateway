@@ -12,9 +12,9 @@ const prompt = String(args.get("prompt") || process.env.UI_SMOKE_PROMPT || `Retu
 const exerciseActiveControls = !!args.get("exercise-active-controls") || parseBoolean(process.env.UI_SMOKE_EXERCISE_ACTIVE_CONTROLS, false);
 const activeMarker = String(args.get("active-marker") || process.env.UI_SMOKE_ACTIVE_MARKER || `${marker}-active`);
 const activePrompt = String(args.get("active-prompt") || process.env.UI_SMOKE_ACTIVE_PROMPT || [
-  `For UI smoke active control test ${activeMarker}, write 120 numbered lines.`,
-  `Every line must contain ${activeMarker} and at least twelve words.`,
-  "Do not summarize; keep writing until every requested line is complete.",
+  `For UI smoke active control test ${activeMarker}, reply in the chat only and do not create files or attachments.`,
+  `Write 260 numbered lines. Every line must contain ${activeMarker}, the line number, and at least eighteen words.`,
+  "Do not summarize, do not use markdown tables, and do not stop until all lines are visible in this chat.",
 ].join(" "));
 const outputDir = path.resolve(String(args.get("output-dir") || process.env.UI_SMOKE_OUTPUT_DIR || "output/playwright"));
 const stateDir = path.resolve(String(args.get("state-dir") || process.env.UI_SMOKE_STATE_DIR || "state"));
@@ -234,6 +234,26 @@ async function runWorkflow(page, config) {
     return text.replace(/\s+/g, " ").trim().slice(0, max);
   }
 
+  async function clickSidebarButtonAndWait(target) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= 2; attempt += 1) {
+      await closeTransientOverlays();
+      if (!(await ensureSidebarVisible())) throw new Error(`sidebar is not visible before opening ${target.id}`);
+      const control = page.getByRole("button", { name: target.button }).first();
+      await control.waitFor({ state: "visible", timeout: 5000 });
+      await control.scrollIntoViewIfNeeded().catch(() => {});
+      await control.click({ timeout: 5000 });
+      try {
+        await waitForMainText(target.expected, 10000);
+        return { id: target.id, snippet: await mainSnippet() };
+      } catch (error) {
+        lastError = error;
+        await page.waitForTimeout(500);
+      }
+    }
+    throw new Error(`opening ${target.id} did not show expected content: ${lastError?.message || "unknown error"}; snippet=${await mainSnippet()}`);
+  }
+
   async function markerCount() {
     return markerCountFor(config.marker);
   }
@@ -245,42 +265,78 @@ async function runWorkflow(page, config) {
     }, value);
   }
 
-  async function visibleButtonNames(pattern, { maxNameLength = Infinity } = {}) {
+  async function visibleButtonNames(pattern, { maxNameLength = Infinity, viewportOnly = false } = {}) {
     return await page.getByRole("button").evaluateAll((buttons, params) => {
       const regex = new RegExp(params.source, "i");
       const visible = (element) => {
         const rect = element.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
+        if (rect.width <= 0 || rect.height <= 0) return false;
+        if (!params.viewportOnly) return true;
+        return rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth;
       };
       return buttons
         .map((button) => (button.getAttribute("aria-label") || button.getAttribute("title") || button.innerText || button.textContent || "").replace(/\s+/g, " ").trim())
         .filter((name, index) => name && name.length <= params.maxNameLength && regex.test(name) && visible(buttons[index]))
         .slice(0, 12);
-    }, { source: pattern.source, maxNameLength });
+    }, { source: pattern.source, maxNameLength, viewportOnly });
   }
 
-  async function findVisibleButton(pattern, timeout = 5000, { maxNameLength = Infinity } = {}) {
+  async function findVisibleButton(pattern, timeout = 5000, { maxNameLength = Infinity, viewportOnly = false } = {}) {
     const deadline = Date.now() + timeout;
     let lastNames = [];
     do {
-      const buttons = await page.getByRole("button").all();
-      lastNames = [];
-      for (const button of buttons) {
-        const visible = await button.isVisible().catch(() => false);
-        if (!visible) continue;
-        const name = await button.evaluate((element) => (
-          element.getAttribute("aria-label") ||
-          element.getAttribute("title") ||
-          element.innerText ||
-          element.textContent ||
-          ""
-        ).replace(/\s+/g, " ").trim()).catch(() => "");
-        if (name && name.length <= maxNameLength) lastNames.push(name);
-        if (!name || name.length > maxNameLength) continue;
-        const regex = new RegExp(pattern.source, pattern.flags.replace("g", ""));
-        if (regex.test(name)) {
-          return { locator: button, name };
+      const found = await page.getByRole("button").evaluateAll((buttons, params) => {
+        const regex = new RegExp(params.source, params.flags);
+        const names = [];
+        for (let index = 0; index < buttons.length; index += 1) {
+          const button = buttons[index];
+          const rect = button.getBoundingClientRect();
+          const visible = rect.width > 0 && rect.height > 0 && (
+            !params.viewportOnly ||
+            (rect.bottom >= 0 && rect.right >= 0 && rect.top <= window.innerHeight && rect.left <= window.innerWidth)
+          );
+          if (!visible) continue;
+          const name = (
+            button.getAttribute("aria-label") ||
+            button.getAttribute("title") ||
+            button.innerText ||
+            button.textContent ||
+            ""
+          ).replace(/\s+/g, " ").trim();
+          if (name && name.length <= params.maxNameLength) names.push(name);
+          if (name && name.length <= params.maxNameLength && regex.test(name)) {
+            return {
+              index,
+              name,
+              x: rect.left + rect.width / 2,
+              y: rect.top + rect.height / 2,
+              rect: {
+                x: Math.round(rect.left),
+                y: Math.round(rect.top),
+                w: Math.round(rect.width),
+                h: Math.round(rect.height),
+              },
+              visible_names: names.slice(0, 20),
+            };
+          }
         }
+        return { index: -1, name: null, x: null, y: null, rect: null, visible_names: names.slice(0, 20) };
+      }, {
+        source: pattern.source,
+        flags: pattern.flags.replace("g", ""),
+        maxNameLength,
+        viewportOnly,
+      });
+      lastNames = found.visible_names || [];
+      if (found.index >= 0) {
+        return {
+          locator: page.getByRole("button").nth(found.index),
+          name: found.name,
+          x: found.x,
+          y: found.y,
+          rect: found.rect,
+          visible_names: lastNames,
+        };
       }
       if (Date.now() >= deadline) break;
       await page.waitForTimeout(250);
@@ -288,26 +344,73 @@ async function runWorkflow(page, config) {
     return { locator: null, name: null, visible_names: lastNames.slice(0, 20) };
   }
 
-  async function clickFirstVisibleButton(pattern, { timeout = 5000, settleMs = 500, maxNameLength = Infinity } = {}) {
-    const found = await findVisibleButton(pattern, timeout, { maxNameLength });
+  async function clickFirstVisibleButton(pattern, { timeout = 5000, settleMs = 500, maxNameLength = Infinity, viewportOnly = false } = {}) {
+    const found = await findVisibleButton(pattern, timeout, { maxNameLength, viewportOnly });
     if (!found.locator) return { clicked: false, name: null, visible_names: found.visible_names || [] };
-    await found.locator.click({ timeout: 5000 });
+    if (Number.isFinite(found.x) && Number.isFinite(found.y)) {
+      await page.mouse.click(found.x, found.y);
+    } else {
+      await found.locator.click({ timeout: 5000 });
+    }
     if (settleMs > 0) await page.waitForTimeout(settleMs);
-    return { clicked: true, name: found.name };
+    return { clicked: true, name: found.name, rect: found.rect || null };
   }
 
-  async function waitUntilNoVisibleButton(pattern, timeout = 10000, { maxNameLength = Infinity } = {}) {
+  async function waitUntilNoVisibleButton(pattern, timeout = 10000, { maxNameLength = Infinity, viewportOnly = false } = {}) {
     const deadline = Date.now() + timeout;
     do {
-      const found = await findVisibleButton(pattern, 250, { maxNameLength });
+      const found = await findVisibleButton(pattern, 250, { maxNameLength, viewportOnly });
       if (!found.locator) return true;
       if (Date.now() >= deadline) return false;
       await page.waitForTimeout(300);
     } while (true);
   }
 
+  async function clickComposerActionButton({ timeout = 5000, settleMs = 800 } = {}) {
+    const deadline = Date.now() + timeout;
+    do {
+      const candidate = await page.locator("button").evaluateAll((buttons) => {
+        const candidates = [];
+        for (const button of buttons) {
+          const rect = button.getBoundingClientRect();
+          const name = (
+            button.getAttribute("aria-label") ||
+            button.getAttribute("title") ||
+            button.innerText ||
+            button.textContent ||
+            ""
+          ).replace(/\s+/g, " ").trim();
+          const squareEnough = rect.width >= 24 && rect.width <= 64 && rect.height >= 24 && rect.height <= 64;
+          const inComposerCorner = rect.left >= window.innerWidth * 0.75 && rect.top >= window.innerHeight * 0.55;
+          if (rect.width > 0 && rect.height > 0 && squareEnough && inComposerCorner) {
+            candidates.push({
+              name,
+              x: rect.left + rect.width / 2,
+              y: rect.top + rect.height / 2,
+              rect: {
+                x: Math.round(rect.left),
+                y: Math.round(rect.top),
+                w: Math.round(rect.width),
+                h: Math.round(rect.height),
+              },
+            });
+          }
+        }
+        return candidates.at(-1) || null;
+      });
+      if (candidate) {
+        await page.mouse.click(candidate.x, candidate.y);
+        if (settleMs > 0) await page.waitForTimeout(settleMs);
+        return { clicked: true, name: candidate.name || "composer action button", rect: candidate.rect };
+      }
+      if (Date.now() >= deadline) break;
+      await page.waitForTimeout(250);
+    } while (true);
+    return { clicked: false, name: null };
+  }
+
   async function exerciseActiveInterruptAndRecover() {
-    const stopPattern = /停止|Stop|取消|Cancel|中断|Abort/i;
+    const stopPattern = /^(停止|停止生成|取消|中断|Stop|Stop generating|Stop response|Cancel|Abort)$/i;
     const retryPattern = /重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i;
     const recoveryMarker = `${config.activeMarker}-recovered`;
 
@@ -320,20 +423,33 @@ async function runWorkflow(page, config) {
 
     await fillEditor(config.activePrompt);
     await page.keyboard.press("Enter");
+    await page.waitForTimeout(1200);
 
-    const stop = await clickFirstVisibleButton(stopPattern, { timeout: Math.min(45000, config.timeoutMs), settleMs: 1200, maxNameLength: 80 });
-    if (!stop.clicked) {
-      throw new Error(`active stop/interrupt control did not appear; visible buttons: ${(stop.visible_names || []).join(", ")}`);
+    const stop = await clickFirstVisibleButton(stopPattern, {
+      timeout: Math.min(12000, config.timeoutMs),
+      settleMs: 1200,
+      maxNameLength: 80,
+      viewportOnly: true,
+    });
+    const composerInterrupt = stop.clicked
+      ? { clicked: false, name: null }
+      : await clickComposerActionButton({ timeout: 5000, settleMs: 1200 });
+    const interruptRequested = stop.clicked || composerInterrupt.clicked;
+    if (!interruptRequested) {
+      throw new Error(`active interrupt control did not appear; visible buttons: ${(stop.visible_names || []).join(", ")}`);
     }
 
-    const stopCleared = await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80 });
-    const controlsAfterInterrupt = await visibleButtonNames(/停止|Stop|取消|Cancel|中断|Abort|重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i, { maxNameLength: 80 });
+    const stopCleared = stop.clicked ? await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80, viewportOnly: true }) : true;
+    const controlsAfterInterrupt = await visibleButtonNames(/停止|Stop|取消|Cancel|中断|Abort|重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i, {
+      maxNameLength: 80,
+      viewportOnly: true,
+    });
 
     const retry = await clickFirstVisibleButton(retryPattern, { timeout: 5000, settleMs: 800, maxNameLength: 80 });
     const retryStop = retry.clicked
-      ? await clickFirstVisibleButton(stopPattern, { timeout: 15000, settleMs: 1200, maxNameLength: 80 })
+      ? await clickFirstVisibleButton(stopPattern, { timeout: 15000, settleMs: 1200, maxNameLength: 80, viewportOnly: true })
       : { clicked: false, name: null };
-    const retryStopCleared = retryStop.clicked ? await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80 }) : true;
+    const retryStopCleared = retryStop.clicked ? await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80, viewportOnly: true }) : true;
 
     await closeTransientOverlays();
     await fillEditor(`Return exactly ${recoveryMarker}.`);
@@ -347,6 +463,12 @@ async function runWorkflow(page, config) {
       active_marker: config.activeMarker,
       stop_clicked: stop.clicked,
       stop_control_name: stop.name,
+      stop_control_rect: stop.rect || null,
+      composer_interrupt_clicked: composerInterrupt.clicked,
+      composer_interrupt_control_name: composerInterrupt.name,
+      composer_interrupt_control_rect: composerInterrupt.rect || null,
+      interrupt_requested: interruptRequested,
+      interrupt_method: stop.clicked ? "named_stop_control" : (composerInterrupt.clicked ? "composer_action_button" : "none"),
       stop_cleared: stopCleared,
       controls_after_interrupt: controlsAfterInterrupt,
       retry_clicked: retry.clicked,
@@ -404,12 +526,7 @@ async function runWorkflow(page, config) {
     ];
 
     for (const target of targets) {
-      await closeTransientOverlays();
-      const control = page.getByRole("button", { name: target.button }).first();
-      await control.waitFor({ state: "visible", timeout: 5000 });
-      await control.click({ timeout: 5000 });
-      await waitForMainText(target.expected, 10000);
-      visited.push({ id: target.id, snippet: await mainSnippet() });
+      visited.push(await clickSidebarButtonAndWait(target));
     }
 
     await closeTransientOverlays();
@@ -418,6 +535,69 @@ async function runWorkflow(page, config) {
     await findEditor();
     await waitForMainText(/我们该做什么|What should we/i, 10000);
     return { page_switches: visited, returned_to_new_chat: true };
+  }
+
+  async function exerciseSavedProjectOpen() {
+    const projectName = `UI smoke saved ${safeBridgeId(config.marker)}`;
+    let savedProjectSnippet = "";
+    let reopenedProjectSnippet = "";
+    try {
+      await closeTransientOverlays();
+      if (!(await ensureSidebarVisible())) throw new Error("sidebar is not visible before saving project");
+      const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
+      if (await isVisible(newChat)) {
+        await newChat.click({ timeout: 5000 });
+        await findEditor();
+      }
+
+      const projectButton = page.getByRole("button", { name: /项目|Projects/i }).first();
+      await projectButton.click({ timeout: 5000 });
+      const newBlankProject = page.getByRole("menuitem", { name: /新建空白项目|New blank project|New project/i }).first();
+      await newBlankProject.waitFor({ state: "visible", timeout: 5000 });
+      await newBlankProject.click();
+
+      const projectNameBox = page.getByRole("textbox", { name: /项目名称|Project name/i }).first();
+      await projectNameBox.waitFor({ state: "visible", timeout: 5000 });
+      await projectNameBox.fill(projectName);
+      await page.getByRole("button", { name: /保存|Save/i }).first().click({ timeout: 5000 });
+      await page.getByText(projectName, { exact: true }).first().waitFor({ state: "visible", timeout: 10000 });
+      await waitForMainText(new RegExp(escapeRegExp(projectName)), 10000).catch(() => {});
+      savedProjectSnippet = await mainSnippet();
+
+      const plugins = page.getByRole("button", { name: /插件|Plugins/i }).first();
+      await plugins.click({ timeout: 5000 });
+      await waitForMainText(/让 Codex 按你的方式工作|搜索插件|更多插件|work.*your way|Search plugins|More plugins/i, 10000);
+
+      const savedProjectText = page.getByText(projectName, { exact: true }).first();
+      await savedProjectText.waitFor({ state: "visible", timeout: 5000 });
+      await savedProjectText.hover({ timeout: 5000 }).catch(() => {});
+      const startProjectChat = page.getByRole("button", {
+        name: new RegExp(`在 ${escapeRegExp(projectName)} 中开始新对话|Start.*${escapeRegExp(projectName)}|New chat.*${escapeRegExp(projectName)}`, "i"),
+      }).first();
+      await startProjectChat.waitFor({ state: "visible", timeout: 5000 });
+      await startProjectChat.click({ timeout: 5000 });
+      await waitForMainText(new RegExp(escapeRegExp(projectName)), 15000);
+      reopenedProjectSnippet = await mainSnippet();
+
+      const cleanup = await cleanupSavedUiSmokeProject(page, config.stateDir, projectName);
+      await page.reload({ waitUntil: "domcontentloaded", timeout: config.timeoutMs });
+      await waitForAppShell();
+      await page.getByRole("button", { name: /新对话|New chat/i }).first().click({ timeout: 5000 });
+      await findEditor();
+
+      return {
+        saved_project_name: projectName,
+        saved_project_created: true,
+        saved_project_reopened: true,
+        saved_project_snippet: savedProjectSnippet,
+        reopened_project_snippet: reopenedProjectSnippet,
+        cleanup,
+      };
+    } catch (error) {
+      const cleanup = await cleanupSavedUiSmokeProject(page, config.stateDir, projectName);
+      error.message = `${error.message}; cleanup=${JSON.stringify(cleanup)}`;
+      throw error;
+    }
   }
 
   async function exerciseHostProjectAndUploadServices() {
@@ -561,6 +741,8 @@ async function runWorkflow(page, config) {
       await recordStep("actively interrupt and recover from a model turn", exerciseActiveInterruptAndRecover);
     }
 
+    await recordStep("create, reopen, and clean up saved project", exerciseSavedProjectOpen);
+
     if (config.screenshotPath) await page.screenshot({ path: config.screenshotPath, fullPage: true });
     result.ok = result.steps.every((step) => step.ok) && result.console.errors.length === 0;
   } catch (error) {
@@ -581,6 +763,89 @@ function safeBridgeId(value) {
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
   return cleaned.length >= 6 ? cleaned : `ui-smoke-${Date.now().toString(36)}`;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function cleanupSavedUiSmokeProject(page, stateDir, projectName) {
+  const statePath = path.join(stateDir, "host-state.json");
+  const workspaceRoot = path.resolve(stateDir, "browser-workspaces");
+  const result = { attempted: false, removed_roots: [], state_file_updated: false, bridge_updated: false };
+  if (!fs.existsSync(statePath)) return result;
+
+  let state;
+  try {
+    state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  } catch (error) {
+    return { ...result, error: error.message };
+  }
+  if (!state || typeof state !== "object") return result;
+
+  const labels = state["electron-workspace-root-labels"] && typeof state["electron-workspace-root-labels"] === "object"
+    ? { ...state["electron-workspace-root-labels"] }
+    : {};
+  const rootsToRemove = Object.entries(labels)
+    .filter(([root, label]) => label === projectName && path.resolve(root).startsWith(`${workspaceRoot}${path.sep}`))
+    .map(([root]) => path.resolve(root));
+  result.attempted = true;
+  if (rootsToRemove.length === 0) return result;
+
+  const removeSet = new Set(rootsToRemove);
+  const remainingSavedRoots = Array.isArray(state["electron-saved-workspace-roots"])
+    ? state["electron-saved-workspace-roots"].filter((root) => !removeSet.has(path.resolve(root)))
+    : [];
+  const remainingLabels = {};
+  for (const [root, label] of Object.entries(labels)) {
+    if (!removeSet.has(path.resolve(root))) remainingLabels[root] = label;
+  }
+
+  try {
+    await page.evaluate(({ roots, labels: nextLabels }) => {
+      window.electronBridge?.sendMessageFromView?.({
+        type: "electron-update-workspace-root-options",
+        roots,
+        labels: nextLabels,
+      });
+    }, { roots: remainingSavedRoots, labels: remainingLabels });
+    await page.waitForTimeout(500);
+    result.bridge_updated = true;
+  } catch (error) {
+    result.bridge_error = error.message;
+  }
+
+  try {
+    state = JSON.parse(fs.readFileSync(statePath, "utf8"));
+  } catch (error) {
+    result.error = error.message;
+    state = null;
+  }
+  if (!state || typeof state !== "object") return result;
+
+  for (const key of ["active-workspace-roots", "electron-saved-workspace-roots"]) {
+    if (Array.isArray(state[key])) {
+      state[key] = state[key].filter((root) => !removeSet.has(path.resolve(root)));
+    }
+  }
+  const currentLabels = state["electron-workspace-root-labels"] && typeof state["electron-workspace-root-labels"] === "object"
+    ? { ...state["electron-workspace-root-labels"] }
+    : {};
+  for (const root of rootsToRemove) delete currentLabels[root];
+  state["electron-workspace-root-labels"] = currentLabels;
+
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  result.state_file_updated = true;
+
+  for (const root of rootsToRemove) {
+    try {
+      fs.rmSync(root, { recursive: true, force: true });
+      result.removed_roots.push(root);
+    } catch (error) {
+      result.error = error.message;
+    }
+  }
+  return result;
 }
 
 function isBenignConsoleMessage(text) {

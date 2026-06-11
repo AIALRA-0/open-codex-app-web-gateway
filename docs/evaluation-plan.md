@@ -21,16 +21,18 @@ Codex/OpenAI Responses behavior.
   dialog open/cancel, host browser-upload fixture writes with filesystem
   verification, project writable-root add/clear, core page switching through
   plugins/automation/mobile views and back to new chat, prompt send, model
-  response visibility, stop/retry control discovery, console errors,
+  response visibility, stop/retry control discovery, saved project create,
+  reopen-from-sidebar, and cleanup through the browser bridge, console errors,
   screenshot capture, and reload persistence.
-- `npm run smoke:ui -- --timeout-ms 240000 --exercise-active-controls` extends
+- `npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls` extends
   that browser path with an active long-running model turn, clicks the visible
-  stop/interrupt control, verifies the control clears, records whether
-  retry/regenerate/continue is exposed after interruption, and submits a
-  recovery prompt to prove the conversation remains usable.
-- Expand coverage for saved project open, generated image/file display, and a
-  dedicated retry/regenerate path when the UI exposes that action for completed
-  turns.
+  stop/interrupt control when exposed, records a composer-action fallback if
+  the stop control is rendered without accessible text, verifies the control
+  clears, records whether retry/regenerate/continue is exposed after
+  interruption, and submits a recovery prompt to prove the conversation remains
+  usable.
+- Expand coverage for generated image/file display and a dedicated
+  retry/regenerate path when the UI exposes that action for completed turns.
 - Treat audio-capable Chat providers as provider-specific protocol coverage:
   unit and mock-provider tests must map Responses `input_audio` into Chat
   `input_audio` content parts, preserve `message.audio` and streaming
@@ -98,7 +100,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-se
 node scripts/eval-harness.mjs --suite bridge-regression --case vector-store-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --repeat 5 --output /srv/aialra/data/opencodexapp/eval/bridge-regression.json
 npm run smoke:ui -- --timeout-ms 180000
-npm run smoke:ui -- --timeout-ms 240000 --exercise-active-controls
+npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls
 npm run bench:code -- --timeout-ms 180000
 npm run bench:code -- --suite humaneval-mbpp --timeout-ms 180000
 npm run bench:code -- --suite repo-maintenance --timeout-ms 180000

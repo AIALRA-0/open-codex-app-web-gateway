@@ -200,7 +200,7 @@ npm run bench:swe -- --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.js
 npm run bench:swe:score -- --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json --dry-run
 npm run soak:bridge -- --iterations 5 --timeout-ms 180000
 npm run smoke:ui -- --timeout-ms 180000
-npm run smoke:ui -- --timeout-ms 240000 --exercise-active-controls
+npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls
 curl http://127.0.0.1:12920/
 curl http://127.0.0.1:12923/login
 ```
@@ -213,15 +213,18 @@ in the local environment. It writes screenshots under the ignored
 verifies the host browser-upload bridge by writing a small fixture under
 `state/browser-uploads/`, adds and clears a project writable root, switches
 through the plugins, automation, and mobile views before returning to new chat,
-and records visible stop/retry controls after a model turn. The current
-`--exercise-active-controls` option runs a longer browser path that actively
-clicks the visible stop control during generation, records whether the
-interrupted turn exposes retry/regenerate/continue, and sends a recovery prompt.
+creates a saved project, reopens it from the sidebar, cleans the generated UI
+smoke workspace root through the browser bridge, and records visible stop/retry
+controls after a model turn. The current `--exercise-active-controls` option
+runs a longer browser path that actively clicks the visible stop control during
+generation when exposed, records whether a composer-action fallback was used,
+records whether the interrupted turn exposes retry/regenerate/continue, and
+sends a recovery prompt.
 The `opencodexapp.aialra.online` nginx template proxies directly to the web service;
 the optional login proxy service is not in the public request path unless nginx
 is changed to target port `12923`. Broader automated UI coverage still needs
-saved project open, generated artifact display, and a dedicated completed-turn
-retry/regenerate path when that UI action is visible.
+generated artifact display and a dedicated completed-turn retry/regenerate path
+when that UI action is visible.
 
 ## Runtime Retention
 
