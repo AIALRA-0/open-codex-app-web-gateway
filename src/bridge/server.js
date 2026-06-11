@@ -9039,6 +9039,18 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
 
 async function handleAssistantRunCreate(req, res, config, assistantStore, threadId) {
   const body = await readJson(req);
+  if (body.stream === true) {
+    await streamNewAssistantRun({
+      body,
+      config,
+      assistantStore,
+      threadId,
+      incomingHeaders: req.headers,
+      res,
+      streamOptions: { includeThreadCreated: false },
+    });
+    return;
+  }
   const result = await createAndCompleteAssistantRun({
     body,
     config,
@@ -9050,16 +9062,24 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
     sendJson(res, result.status, result.error);
     return;
   }
-  if (body.stream === true) {
-    writeAssistantRunStream(res, result.thread, result.initialRun, result.run, result.message, result.step);
-    return;
-  }
   sendJson(res, 200, result.run);
 }
 
 async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore) {
   const body = await readJson(req);
   const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
+  if (body.stream === true) {
+    await streamNewAssistantRun({
+      body,
+      config,
+      assistantStore,
+      threadId: thread.id,
+      incomingHeaders: req.headers,
+      res,
+      streamOptions: { thread },
+    });
+    return;
+  }
   const result = await createAndCompleteAssistantRun({
     body,
     config,
@@ -9069,10 +9089,6 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
   });
   if (!result.ok) {
     sendJson(res, result.status, result.error);
-    return;
-  }
-  if (body.stream === true) {
-    writeAssistantRunStream(res, thread, result.initialRun, result.run, result.message, result.step);
     return;
   }
   sendJson(res, 200, result.run);
@@ -9123,6 +9139,18 @@ function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
 
 async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId) {
   const body = await readJson(req);
+  if (body.stream === true) {
+    await streamAssistantToolOutputs({
+      body,
+      config,
+      assistantStore,
+      threadId,
+      runId,
+      incomingHeaders: req.headers,
+      res,
+    });
+    return;
+  }
   const result = await submitAssistantToolOutputs({
     body,
     config,
@@ -9133,13 +9161,6 @@ async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantSt
   });
   if (!result.ok) {
     sendJson(res, result.status, result.error);
-    return;
-  }
-  if (body.stream === true) {
-    writeAssistantRunStream(res, result.thread, result.initialRun, result.run, result.message, result.step, {
-      includeThreadCreated: false,
-      includeRunCreated: false,
-    });
     return;
   }
   sendJson(res, 200, result.run);
@@ -9172,6 +9193,39 @@ function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId)
 }
 
 async function createAndCompleteAssistantRun({ body, config, assistantStore, threadId, incomingHeaders }) {
+  const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
+  if (!prepared.ok) return prepared;
+  return runAssistantChatTurn({
+    config,
+    assistantStore,
+    thread: prepared.thread,
+    initialRun: prepared.initialRun,
+    run: prepared.run,
+    messages: prepared.messages,
+    incomingHeaders,
+  });
+}
+
+async function streamNewAssistantRun({ body, config, assistantStore, threadId, incomingHeaders, res, streamOptions = {} }) {
+  const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
+  if (!prepared.ok) {
+    sendJson(res, prepared.status, prepared.error);
+    return;
+  }
+  await streamAssistantChatTurn({
+    config,
+    assistantStore,
+    thread: streamOptions.thread || prepared.thread,
+    initialRun: prepared.initialRun,
+    run: prepared.run,
+    messages: prepared.messages,
+    incomingHeaders,
+    res,
+    streamOptions,
+  });
+}
+
+function prepareAssistantRunStart({ body, assistantStore, threadId }) {
   const assistantId = stringifyContent(body.assistant_id).trim();
   if (!assistantId) {
     return {
@@ -9217,18 +9271,63 @@ async function createAndCompleteAssistantRun({ body, config, assistantStore, thr
     started_at: startedAt,
   });
   const messages = assistantStore.listMessages(threadId) || [];
-  return runAssistantChatTurn({
-    config,
-    assistantStore,
+  return {
+    ok: true,
+    assistant,
     thread,
     initialRun,
     run: inProgressRun || { ...initialRun, status: "in_progress", started_at: startedAt },
     messages,
-    incomingHeaders,
-  });
+  };
 }
 
 async function submitAssistantToolOutputs({ body, config, assistantStore, threadId, runId, incomingHeaders }) {
+  const prepared = prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId });
+  if (!prepared.ok) return prepared;
+  if (prepared.noOp) return prepared;
+  return runAssistantChatTurn({
+    config,
+    assistantStore,
+    thread: prepared.thread,
+    initialRun: prepared.initialRun,
+    run: prepared.run,
+    messages: prepared.messages,
+    incomingHeaders,
+    chatOptions: prepared.chatOptions,
+  });
+}
+
+async function streamAssistantToolOutputs({ body, config, assistantStore, threadId, runId, incomingHeaders, res }) {
+  const prepared = prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId });
+  if (!prepared.ok) {
+    sendJson(res, prepared.status, prepared.error);
+    return;
+  }
+  if (prepared.noOp) {
+    writeAssistantRunStream(res, prepared.thread, prepared.initialRun, prepared.run, null, null, {
+      includeThreadCreated: false,
+      includeRunCreated: false,
+    });
+    return;
+  }
+  await streamAssistantChatTurn({
+    config,
+    assistantStore,
+    thread: prepared.thread,
+    initialRun: prepared.initialRun,
+    run: prepared.run,
+    messages: prepared.messages,
+    incomingHeaders,
+    res,
+    chatOptions: prepared.chatOptions,
+    streamOptions: {
+      includeThreadCreated: false,
+      includeRunCreated: false,
+    },
+  });
+}
+
+function prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId }) {
   const thread = assistantStore.getThread(threadId);
   const existingRun = assistantStore.getRun(threadId, runId);
   if (!existingRun) {
@@ -9259,7 +9358,7 @@ async function submitAssistantToolOutputs({ body, config, assistantStore, thread
         }),
       },
     }));
-    return { ok: true, thread, initialRun: existingRun, run, message: null, step: null };
+    return { ok: true, thread, initialRun: existingRun, run, message: null, step: null, noOp: true };
   }
 
   const outputsById = new Map(toolOutputs.map((output) => [output.tool_call_id, output]));
@@ -9298,19 +9397,17 @@ async function submitAssistantToolOutputs({ body, config, assistantStore, thread
   })) || { ...existingRun, status: "in_progress", started_at: startedAt, required_action: null };
 
   const messages = assistantStore.listMessages(threadId) || [];
-  return runAssistantChatTurn({
-    config,
-    assistantStore,
+  return {
+    ok: true,
     thread,
     initialRun: existingRun,
     run: inProgressRun,
     messages,
-    incomingHeaders,
     chatOptions: {
       requiredToolCalls,
       toolOutputs,
     },
-  });
+  };
 }
 
 async function runAssistantChatTurn({
@@ -9418,6 +9515,304 @@ async function runAssistantChatTurn({
     message,
     step,
   };
+}
+
+async function streamAssistantChatTurn({
+  config,
+  assistantStore,
+  thread,
+  initialRun,
+  run,
+  messages,
+  incomingHeaders,
+  res,
+  chatOptions = {},
+  streamOptions = {},
+}) {
+  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
+  chat.stream = true;
+  chat.stream_options = { ...(isPlainObject(chat.stream_options) ? chat.stream_options : {}), include_usage: true };
+  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(chat, config);
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    connection: "keep-alive",
+    "x-accel-buffering": "no",
+  });
+  if (streamOptions.includeThreadCreated !== false && thread) writeSse(res, "thread.created", thread);
+  if (streamOptions.includeRunCreated !== false && initialRun) {
+    writeSse(res, "thread.run.created", initialRun);
+    writeSse(res, "thread.run.queued", initialRun);
+  }
+  writeSse(res, "thread.run.in_progress", run);
+
+  const streamState = createAssistantStreamState(run);
+  let upstream = null;
+  try {
+    upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, incomingHeaders);
+    if (!upstream.ok) {
+      const text = await upstream.text();
+      const failedRun = failAssistantStreamRun(assistantStore, run, parseJsonOrNull(text), text, upstream.status);
+      writeSse(res, "error", openAiError(failedRun?.last_error?.message || text || "assistant run provider call failed", {
+        type: "upstream_provider_error",
+        code: upstream.status,
+      }));
+      if (failedRun) writeSse(res, "thread.run.failed", failedRun);
+      writeAssistantStreamDone(res);
+      return;
+    }
+
+    const accumulator = createChatStreamAccumulator(upstreamBody);
+    for await (const payload of iterateSseJson(upstream.body)) {
+      if (payload === "[DONE]") break;
+      applyChatCompletionStreamChunk(accumulator, payload);
+      emitAssistantStreamChunkDeltas(res, assistantStore, run, streamState, payload);
+    }
+
+    const upstreamJson = finalizeChatStreamCompletion(accumulator) || {
+      choices: [],
+      model: upstreamBody.model,
+      usage: streamState.usage,
+    };
+    const usage = assistantRunUsage(upstreamJson?.usage);
+    const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
+    if (toolCalls.length) {
+      completeAssistantTextStreamContext(res, assistantStore, run, streamState);
+      const step = streamState.toolStep
+        ? assistantStore.completeRunStep(run.thread_id, run.id, streamState.toolStep.id, usage, assistantToolCallsStepDetails(toolCalls))
+        : assistantStore.createToolCallsStep(run, toolCalls, usage);
+      if (step) writeSse(res, "thread.run.step.completed", step);
+      const pendingRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
+        ...existing,
+        status: "requires_action",
+        expires_at: existing.expires_at || nowSeconds() + 600,
+        required_action: assistantRequiredAction(toolCalls),
+        usage: aggregateAssistantRunUsage(existing.usage, usage),
+        metadata: {
+          ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+          compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+            local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+              run_mode: "streaming_required_action",
+              required_action: "submit_tool_outputs",
+              tool_call_count: toolCalls.length,
+              streaming_supported: "chat_stream_delta_relay",
+              ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+            }),
+          }),
+        },
+      }));
+      writeSse(res, "thread.run.requires_action", pendingRun);
+      writeAssistantStreamDone(res);
+      return;
+    }
+
+    const assistantText = extractChatCompletionText(upstreamJson) || streamState.text || "";
+    const textContext = ensureAssistantTextStreamContext(res, assistantStore, run, streamState);
+    const message = assistantStore.completeMessage(run.thread_id, textContext.message.id, { content: assistantText });
+    const step = assistantStore.completeRunStep(run.thread_id, run.id, textContext.step.id, usage);
+    const completedAt = nowSeconds();
+    const completedRun = assistantStore.updateRun(run.thread_id, run.id, {
+      ...run,
+      status: "completed",
+      started_at: run.started_at || nowSeconds(),
+      expires_at: null,
+      completed_at: completedAt,
+      usage: aggregateAssistantRunUsage(run.usage, usage),
+      metadata: {
+        ...(isPlainObject(run.metadata) ? run.metadata : {}),
+        compatibility: mergeCompatibility(run.metadata?.compatibility, {
+          local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+            run_mode: chatOptions.toolOutputs ? "streaming_submit_tool_outputs" : "streaming",
+            streaming_supported: "chat_stream_delta_relay",
+            ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+          }),
+        }),
+      },
+    });
+    writeSse(res, "thread.message.completed", message);
+    writeSse(res, "thread.run.step.completed", step);
+    writeSse(res, "thread.run.completed", completedRun);
+    writeAssistantStreamDone(res);
+  } catch (error) {
+    const failedRun = failAssistantStreamRun(assistantStore, run, null, error.message, 500);
+    writeSse(res, "error", openAiError(error.message || "assistant run stream failed", {
+      type: "server_error",
+      code: 500,
+    }));
+    if (failedRun) writeSse(res, "thread.run.failed", failedRun);
+    writeAssistantStreamDone(res);
+  }
+}
+
+function createAssistantStreamState(run) {
+  return {
+    run,
+    text: "",
+    textContext: null,
+    toolStep: null,
+    usage: null,
+  };
+}
+
+function emitAssistantStreamChunkDeltas(res, assistantStore, run, streamState, payload) {
+  if (payload?.usage) streamState.usage = payload.usage;
+  for (const choice of payload?.choices || []) {
+    const delta = choice.delta || {};
+    const textDelta = assistantStreamTextDelta(delta);
+    if (textDelta) {
+      const context = ensureAssistantTextStreamContext(res, assistantStore, run, streamState);
+      streamState.text += textDelta;
+      writeSse(res, "thread.message.delta", {
+        id: context.message.id,
+        object: "thread.message.delta",
+        delta: {
+          content: [{
+            index: 0,
+            type: "text",
+            text: {
+              value: textDelta,
+              annotations: [],
+            },
+          }],
+        },
+      });
+    }
+    for (const deltaToolCall of delta.tool_calls || []) {
+      const step = ensureAssistantToolStreamContext(res, assistantStore, run, streamState);
+      writeSse(res, "thread.run.step.delta", {
+        id: step.id,
+        object: "thread.run.step.delta",
+        delta: {
+          step_details: {
+            type: "tool_calls",
+            tool_calls: [assistantToolCallStreamDelta(deltaToolCall)],
+          },
+        },
+      });
+    }
+    if (isPlainObject(delta.function_call)) {
+      const step = ensureAssistantToolStreamContext(res, assistantStore, run, streamState);
+      writeSse(res, "thread.run.step.delta", {
+        id: step.id,
+        object: "thread.run.step.delta",
+        delta: {
+          step_details: {
+            type: "tool_calls",
+            tool_calls: [assistantToolCallStreamDelta({
+              index: 0,
+              type: "function",
+              function: delta.function_call,
+            })],
+          },
+        },
+      });
+    }
+  }
+}
+
+function ensureAssistantTextStreamContext(res, assistantStore, run, streamState) {
+  if (streamState.textContext) return streamState.textContext;
+  const message = assistantStore.createMessage(run.thread_id, {
+    role: "assistant",
+    content: [],
+  }, {
+    assistant_id: run.assistant_id,
+    run_id: run.id,
+    status: "in_progress",
+  });
+  const step = assistantStore.createMessageCreationStep(run, message.id, null, { status: "in_progress" });
+  streamState.textContext = { message, step };
+  writeSse(res, "thread.run.step.created", step);
+  writeSse(res, "thread.run.step.in_progress", step);
+  writeSse(res, "thread.message.created", message);
+  writeSse(res, "thread.message.in_progress", message);
+  return streamState.textContext;
+}
+
+function completeAssistantTextStreamContext(res, assistantStore, run, streamState) {
+  const context = streamState.textContext;
+  if (!context || context.completed) return context || null;
+  const completedMessage = assistantStore.completeMessage(run.thread_id, context.message.id, {
+    content: streamState.text || "",
+  });
+  const completedStep = assistantStore.completeRunStep(run.thread_id, run.id, context.step.id);
+  if (completedMessage) writeSse(res, "thread.message.completed", completedMessage);
+  if (completedStep) writeSse(res, "thread.run.step.completed", completedStep);
+  streamState.textContext = {
+    ...context,
+    message: completedMessage || context.message,
+    step: completedStep || context.step,
+    completed: true,
+  };
+  return streamState.textContext;
+}
+
+function ensureAssistantToolStreamContext(res, assistantStore, run, streamState) {
+  if (streamState.toolStep) return streamState.toolStep;
+  const step = assistantStore.createToolCallsStep(run, [], null, { status: "in_progress" });
+  streamState.toolStep = step;
+  writeSse(res, "thread.run.step.created", step);
+  writeSse(res, "thread.run.step.in_progress", step);
+  return step;
+}
+
+function assistantStreamTextDelta(delta) {
+  if (!isPlainObject(delta)) return "";
+  if (delta.content !== undefined && delta.content !== null) return chatContentToText(delta.content);
+  if (delta.refusal !== undefined && delta.refusal !== null) return chatContentToText(delta.refusal);
+  return "";
+}
+
+function assistantToolCallStreamDelta(deltaToolCall) {
+  const item = {
+    index: Number.isFinite(Number(deltaToolCall.index)) ? Number(deltaToolCall.index) : 0,
+    type: stringifyContent(deltaToolCall.type || "function") || "function",
+  };
+  if (deltaToolCall.id) item.id = stringifyContent(deltaToolCall.id);
+  if (isPlainObject(deltaToolCall.function)) {
+    item.function = {};
+    if (deltaToolCall.function.name !== undefined) item.function.name = stringifyContent(deltaToolCall.function.name);
+    if (deltaToolCall.function.arguments !== undefined) item.function.arguments = stringifyContent(deltaToolCall.function.arguments);
+    if (deltaToolCall.function.output !== undefined) item.function.output = deltaToolCall.function.output;
+  }
+  return item;
+}
+
+function assistantToolCallsStepDetails(toolCalls = []) {
+  return {
+    type: "tool_calls",
+    tool_calls: toolCalls.map((toolCall) => ({
+      id: stringifyContent(toolCall.id || ""),
+      type: stringifyContent(toolCall.type || "function") || "function",
+      function: {
+        name: stringifyContent(toolCall.function?.name || ""),
+        arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+        output: null,
+      },
+    })),
+  };
+}
+
+function failAssistantStreamRun(assistantStore, run, upstreamJson, text, status) {
+  const failedAt = nowSeconds();
+  return assistantStore.updateRun(run.thread_id, run.id, {
+    ...run,
+    status: "failed",
+    started_at: run.started_at || nowSeconds(),
+    failed_at: failedAt,
+    expires_at: null,
+    last_error: {
+      code: upstreamJson?.error?.code || "upstream_provider_error",
+      message: upstreamJson?.error?.message || text || `assistant run provider stream failed (${status || 500})`,
+    },
+  });
+}
+
+function writeAssistantStreamDone(res) {
+  res.write("event: done\n");
+  res.write("data: [DONE]\n\n");
+  res.end();
 }
 
 function assistantRunToChatRequest(run, threadMessages, config, options = {}) {

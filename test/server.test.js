@@ -1492,6 +1492,34 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
 
 test("Assistants API local lifecycle runs threads through upstream Chat", async () => {
   await withMockProvider((_req, res, request) => {
+    if (request.body.stream) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_assistants_stream",
+        object: "chat.completion.chunk",
+        created: 1700000001,
+        model: request.body.model,
+        choices: [{ index: 0, delta: { role: "assistant", content: "assistants-" }, finish_reason: null }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_assistants_stream",
+        object: "chat.completion.chunk",
+        created: 1700000001,
+        model: request.body.model,
+        choices: [{ index: 0, delta: { content: "stream-ok" }, finish_reason: null }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_assistants_stream",
+        object: "chat.completion.chunk",
+        created: 1700000001,
+        model: request.body.model,
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 22, completion_tokens: 4, total_tokens: 26 },
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
     const marker = request.body.messages.some((message) => /stream this assistant run/i.test(String(message.content || "")))
       ? "assistants-stream-ok"
       : "assistants-run-ok";
@@ -1635,13 +1663,28 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
       "thread.run.created",
       "thread.run.queued",
       "thread.run.in_progress",
+      "thread.run.step.created",
+      "thread.run.step.in_progress",
+      "thread.message.created",
+      "thread.message.in_progress",
+      "thread.message.delta",
+      "thread.message.delta",
       "thread.message.completed",
       "thread.run.step.completed",
       "thread.run.completed",
       "done",
     ]);
     assert.equal(events.at(-1).data, "[DONE]");
+    assert.deepEqual(
+      events
+        .filter((event) => event.event === "thread.message.delta")
+        .map((event) => event.data.delta.content[0].text.value),
+      ["assistants-", "stream-ok"],
+    );
     assert.equal(events.find((event) => event.event === "thread.message.completed").data.content[0].text.value, "assistants-stream-ok");
+    assert.equal(events.find((event) => event.event === "thread.run.step.created").data.status, "in_progress");
+    assert.equal(events.find((event) => event.event === "thread.run.step.completed").data.usage.total_tokens, 26);
+    assert.equal(requests.at(-1).body.stream, true);
 
     const deleteThread = await fetch(`${baseUrl}/v1/threads/${thread.id}`, { method: "DELETE" });
     assert.equal(deleteThread.status, 200);
@@ -1791,6 +1834,232 @@ test("Assistants API required_action submits tool outputs through upstream Chat"
     const listedMessagesJson = await listedMessages.json();
     const assistantMessage = listedMessagesJson.data.find((message) => message.role === "assistant");
     assert.equal(assistantMessage.content[0].text.value, "tool-output-ok");
+  });
+});
+
+test("Assistants API streaming emits tool call run-step deltas", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.stream, true);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    const chunk = (choices, usage) => {
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_assistant_tool_stream",
+        object: "chat.completion.chunk",
+        created: 1700000002,
+        model: request.body.model,
+        choices,
+        ...(usage ? { usage } : {}),
+      })}\n\n`);
+    };
+    chunk([{
+      index: 0,
+      delta: {
+        role: "assistant",
+        tool_calls: [{
+          index: 0,
+          id: "call_stream_1",
+          type: "function",
+          function: { name: "lookup_weather", arguments: "" },
+        }],
+      },
+      finish_reason: null,
+    }]);
+    chunk([{
+      index: 0,
+      delta: {
+        tool_calls: [{
+          index: 0,
+          type: "function",
+          function: { arguments: "{\"city\":\"Ber" },
+        }],
+      },
+      finish_reason: null,
+    }]);
+    chunk([{
+      index: 0,
+      delta: {
+        tool_calls: [{
+          index: 0,
+          type: "function",
+          function: { arguments: "lin\"}" },
+        }],
+      },
+      finish_reason: null,
+    }]);
+    chunk([{ index: 0, delta: {}, finish_reason: "tool_calls" }], { prompt_tokens: 13, completion_tokens: 5, total_tokens: 18 });
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use lookup_weather before answering.",
+        tools: [{
+          type: "function",
+          function: {
+            name: "lookup_weather",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Weather in Berlin?" }] }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const streamResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id, stream: true }),
+    });
+    assert.equal(streamResponse.status, 200);
+    const events = parseSseEvents(await streamResponse.text());
+    assert.ok(!events.some((event) => event.event === "thread.created"));
+    assert.ok(events.some((event) => event.event === "thread.run.step.created"));
+    assert.equal(events.filter((event) => event.event === "thread.run.step.delta").length, 3);
+    assert.equal(events.find((event) => event.event === "thread.run.step.delta").data.delta.step_details.tool_calls[0].id, "call_stream_1");
+    const requiresAction = events.find((event) => event.event === "thread.run.requires_action")?.data;
+    assert.equal(requiresAction.status, "requires_action");
+    assert.equal(requiresAction.required_action.submit_tool_outputs.tool_calls[0].function.arguments, "{\"city\":\"Berlin\"}");
+    assert.deepEqual(requiresAction.usage, { prompt_tokens: 13, completion_tokens: 5, total_tokens: 18 });
+    assert.equal(events.at(-1).event, "done");
+    assert.equal(requests[0].body.tools[0].function.name, "lookup_weather");
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${requiresAction.id}/steps`);
+    assert.equal(listedSteps.status, 200);
+    const listedStepsJson = await listedSteps.json();
+    assert.equal(listedStepsJson.data[0].type, "tool_calls");
+    assert.equal(listedStepsJson.data[0].step_details.tool_calls[0].id, "call_stream_1");
+  });
+});
+
+test("Assistants API submit_tool_outputs stream emits message deltas", async () => {
+  await withMockProvider((_req, res, request) => {
+    const lastMessage = request.body.messages.at(-1);
+    if (request.body.stream && lastMessage?.role === "tool") {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      const chunk = (choices, usage) => {
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_assistant_submit_stream",
+          object: "chat.completion.chunk",
+          created: 1700000003,
+          model: request.body.model,
+          choices,
+          ...(usage ? { usage } : {}),
+        })}\n\n`);
+      };
+      chunk([{ index: 0, delta: { role: "assistant", content: "submit-" }, finish_reason: null }]);
+      chunk([{ index: 0, delta: { content: "stream-ok" }, finish_reason: null }]);
+      chunk([{ index: 0, delta: {}, finish_reason: "stop" }], { prompt_tokens: 15, completion_tokens: 4, total_tokens: 19 });
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistant_submit_required",
+      object: "chat.completion",
+      created: 1700000002,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_submit_stream_1",
+            type: "function",
+            function: {
+              name: "lookup_weather",
+              arguments: "{\"city\":\"Berlin\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 9, completion_tokens: 2, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use lookup_weather before answering.",
+        tools: [{
+          type: "function",
+          function: {
+            name: "lookup_weather",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Weather in Berlin?" }] }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "requires_action");
+
+    const submitResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        stream: true,
+        tool_outputs: [{ tool_call_id: "call_submit_stream_1", output: "weather=clear" }],
+      }),
+    });
+    assert.equal(submitResponse.status, 200);
+    const events = parseSseEvents(await submitResponse.text());
+    assert.ok(!events.some((event) => event.event === "thread.created"));
+    assert.ok(!events.some((event) => event.event === "thread.run.created"));
+    assert.deepEqual(
+      events
+        .filter((event) => event.event === "thread.message.delta")
+        .map((event) => event.data.delta.content[0].text.value),
+      ["submit-", "stream-ok"],
+    );
+    const completedRun = events.find((event) => event.event === "thread.run.completed")?.data;
+    assert.equal(completedRun.status, "completed");
+    assert.deepEqual(completedRun.usage, { prompt_tokens: 24, completion_tokens: 6, total_tokens: 30 });
+    assert.equal(events.find((event) => event.event === "thread.message.completed").data.content[0].text.value, "submit-stream-ok");
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1].body.stream, true);
+    assert.equal(requests[1].body.messages.at(-1).role, "tool");
   });
 });
 

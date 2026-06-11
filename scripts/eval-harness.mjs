@@ -384,7 +384,7 @@ function buildSuites(defaultModel) {
         request: {
           model: defaultModel,
         },
-        check: ({ assistant, thread, run, messages, runs, steps, step, streamEvents, streamMessage }) => assistant?.id?.startsWith("asst_")
+        check: ({ assistant, thread, run, messages, runs, steps, step, streamEvents, streamMessage, streamDeltaText }) => assistant?.id?.startsWith("asst_")
           && thread?.id?.startsWith("thread_")
           && run?.id?.startsWith("run_")
           && run.status === "completed"
@@ -393,7 +393,10 @@ function buildSuites(defaultModel) {
           && runs?.data?.some((item) => item.id === run.id)
           && steps?.data?.length === 1
           && step?.id === steps?.data?.[0]?.id
+          && streamEvents?.some((event) => event.event === "thread.message.created")
+          && streamEvents?.some((event) => event.event === "thread.message.delta")
           && streamEvents?.some((event) => event.event === "thread.run.completed")
+          && /assistants-stream-ok/i.test(streamDeltaText || "")
           && /assistants-stream-ok/i.test(streamMessage?.content?.[0]?.text?.value || ""),
       },
       {
@@ -2912,6 +2915,10 @@ async function runAssistantsLifecycleCase(testCase, context, started) {
     const streamThread = streamEvents.find((event) => event.event === "thread.created")?.data;
     if (streamThread?.id) threadIds.add(streamThread.id);
     const streamMessage = streamEvents.find((event) => event.event === "thread.message.completed")?.data || null;
+    const streamDeltaText = streamEvents
+      .filter((event) => event.event === "thread.message.delta")
+      .map((event) => event.data?.delta?.content?.[0]?.text?.value || "")
+      .join("");
 
     const ok = !!testCase.check({
       assistant: assistant.json,
@@ -2923,6 +2930,7 @@ async function runAssistantsLifecycleCase(testCase, context, started) {
       step: step.json,
       streamEvents,
       streamMessage,
+      streamDeltaText,
     });
 
     return finishResult(testCase, context, started, {
@@ -2936,6 +2944,7 @@ async function runAssistantsLifecycleCase(testCase, context, started) {
       step_count: steps.json?.data?.length || 0,
       stream_status: streamResponse.status,
       event_count: streamEvents.length,
+      stream_delta_count: streamEvents.filter((event) => event.event === "thread.message.delta").length,
       usage: assistantsUsage(run.json),
       output_text: assistantMessageTextFromList(messages.json?.data || []),
       error: ok ? undefined : truncate(JSON.stringify({

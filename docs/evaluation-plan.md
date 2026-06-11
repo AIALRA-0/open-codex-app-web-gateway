@@ -76,6 +76,12 @@ larger agent evaluations.
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 | `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
+The `assistants-lifecycle` bridge-regression case also checks that
+create-and-run streaming produces `thread.message.delta` text fragments before
+completion. Unit/mock-provider coverage adds streamed Chat tool-call argument
+chunks mapped to `thread.run.step.delta` and streamed
+`submit_tool_outputs` continuations mapped back to message deltas.
+
 Useful commands:
 
 ```bash
@@ -309,7 +315,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   through upstream Chat Completions, persists assistant messages and
   `message_creation` Run Steps, verifies function-tool `requires_action` /
   `submit_tool_outputs` continuation with `tool_calls` Run Steps, and checks
-  create-and-run lifecycle SSE event shape.
+  create-and-run lifecycle SSE event shape plus streamed message deltas.
 - Responses compatibility requests that include Chat-native `stop` sequences forward them to upstream Chat providers and verify the stop marker is omitted from visible output.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.

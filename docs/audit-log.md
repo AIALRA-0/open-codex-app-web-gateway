@@ -4369,6 +4369,96 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants streaming delta compatibility
+
+- Used current official OpenAI documentation through the OpenAI developer-docs
+  MCP before changing behavior:
+  - the `/v1/threads/runs` OpenAPI streaming examples show Assistants SSE
+    sequences with `thread.message.created`, `thread.message.in_progress`,
+    repeated `thread.message.delta`, `thread.message.completed`,
+    `thread.run.step.created`, `thread.run.step.in_progress`,
+    `thread.run.step.delta`, `thread.run.step.completed`,
+    `thread.run.requires_action`, `thread.run.completed`, and `done`;
+  - the Chat function-calling streaming guide documents streamed
+    `delta.tool_calls[]` chunks whose ids/names can arrive before later
+    argument fragments.
+- Extended the local Assistants compatibility layer so `stream:true` run
+  creation and streamed `submit_tool_outputs` relay upstream Chat streaming
+  deltas instead of only replaying final lifecycle objects:
+  - creates in-progress draft `thread.message` records and
+    `message_creation` Run Steps before text/refusal deltas;
+  - emits `thread.message.created`, `thread.message.in_progress`,
+    `thread.message.delta`, `thread.message.completed`, and matching Run Step
+    completion events for streamed text/refusal output;
+  - creates in-progress `tool_calls` Run Steps and emits
+    `thread.run.step.delta` while Chat `delta.tool_calls[]` or legacy
+    `delta.function_call` arguments stream in;
+  - persists the final reconstructed tool calls, updates the run to
+    `requires_action`, and emits `thread.run.requires_action` when tool
+    outputs are needed;
+  - supports streamed `submit_tool_outputs` continuations without re-emitting
+    `thread.created` or initial run-created events for existing runs;
+  - closes any already-emitted draft text message/step before a streamed turn
+    transitions to `requires_action`, avoiding dangling in-progress local
+    messages when a Chat provider mixes text deltas and final tool calls;
+  - aggregates streamed usage across the initial tool-call turn and follow-up
+    completion turn.
+- Updated the compatibility matrix and evaluation plan to mark Assistants text
+  and function-tool delta relay as implemented while keeping hosted
+  Assistants tool jobs, non-text hosted-tool delta details, and async thread
+  locks as remaining gaps.
+- Added unit/mock-provider coverage for:
+  - create-thread-and-run streaming text deltas and final message persistence;
+  - existing-thread run streaming tool-call argument deltas and persisted
+    `requires_action` details;
+  - streamed `submit_tool_outputs` message deltas and aggregate usage.
+- Updated the live bridge-regression `assistants-lifecycle` case to require
+  streamed message deltas and verify the concatenated streamed text.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Assistants server tests passed 4/4.
+  - `npm test`: passed 181/181.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - `aialra-opencodexapp-app-server.service`,
+    `aialra-opencodexapp-bridge.service`, and
+    `aialra-opencodexapp-web.service` were active.
+  - Live `assistants-lifecycle` passed 1/1 against `deepseek-v4-pro`, latency
+    4183 ms, 18 Assistants SSE events, 6 streamed message deltas, and 76
+    total tokens.
+  - Live `assistants-required-action` passed 1/1, final status `completed`,
+    1 tool call, 2 Run Steps, 2 messages, latency 3129 ms, and 784 total
+    tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 84/84,
+    pass rate 1.0, average latency 1427 ms, P95 latency 4128 ms, and 20727
+    total tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1226 ms, P95 latency 1331 ms, and 99 total tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core page navigation, project dialog/upload, prompt submission, completed
+    turn actions, reload persistence, generated image artifact display, saved
+    project reopen, and cleanup without console errors.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1287 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 100546 bytes,
+    and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    100546 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 38 GB available;
+    `state/` was 18 MB, `output/` was 4.7 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 24 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository; final `git diff --check`
+  and `npm run secret-scan` are part of the pre-commit gate for this entry.
+
 ## 2026-06-11 - Assistants function-tool required-action compatibility
 
 - Extended the local deprecated Assistants/Threads compatibility layer so

@@ -469,17 +469,19 @@ class FileAssistantStore {
   createMessage(threadId, body = {}, options = {}) {
     if (!this.getThread(threadId)) return null;
     const now = nowSeconds();
+    const status = stringOrDefault(options.status || body.status, "completed");
+    const completedAt = status === "completed" ? now : null;
     const message = {
-      id: `msg_${randomToken(18)}`,
+      id: stringOrDefault(options.id, `msg_${randomToken(18)}`),
       object: "thread.message",
       created_at: now,
       assistant_id: options.assistant_id || null,
       thread_id: threadId,
       run_id: options.run_id || null,
-      status: "completed",
+      status,
       incomplete_details: null,
       incomplete_at: null,
-      completed_at: now,
+      completed_at: completedAt,
       role: stringOrDefault(body.role || options.role, "user"),
       content: normalizeAssistantMessageContent(body.content ?? options.content ?? ""),
       attachments: Array.isArray(body.attachments) ? cloneJson(body.attachments) : [],
@@ -508,6 +510,28 @@ class FileAssistantStore {
     const message = record?.message;
     if (!message) return null;
     const updated = { ...message };
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
+      updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    }
+    this.writeJson(this.messagePath(threadId, messageId), { message: updated });
+    return cloneJson(updated);
+  }
+
+  completeMessage(threadId, messageId, body = {}) {
+    const record = this.readJson(this.messagePath(threadId, messageId));
+    const message = record?.message;
+    if (!message) return null;
+    const now = nowSeconds();
+    const updated = {
+      ...message,
+      status: "completed",
+      incomplete_details: null,
+      incomplete_at: null,
+      completed_at: now,
+    };
+    if (Object.prototype.hasOwnProperty.call(body, "content")) {
+      updated.content = normalizeAssistantMessageContent(body.content);
+    }
     if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
       updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
     }
@@ -604,8 +628,10 @@ class FileAssistantStore {
     return run;
   }
 
-  createMessageCreationStep(run, messageId, usage = null) {
+  createMessageCreationStep(run, messageId, usage = null, options = {}) {
     const now = nowSeconds();
+    const status = stringOrDefault(options.status, "completed");
+    const completedAt = status === "completed" ? now : null;
     const step = {
       id: `step_${randomToken(18)}`,
       object: "thread.run.step",
@@ -614,9 +640,9 @@ class FileAssistantStore {
       thread_id: run.thread_id,
       run_id: run.id,
       type: "message_creation",
-      status: "completed",
+      status,
       cancelled_at: null,
-      completed_at: now,
+      completed_at: completedAt,
       expires_at: null,
       failed_at: null,
       last_error: null,
@@ -630,8 +656,10 @@ class FileAssistantStore {
     return cloneJson(step);
   }
 
-  createToolCallsStep(run, toolCalls = [], usage = null) {
+  createToolCallsStep(run, toolCalls = [], usage = null, options = {}) {
     const now = nowSeconds();
+    const status = stringOrDefault(options.status, "completed");
+    const completedAt = status === "completed" ? now : null;
     const step = {
       id: `step_${randomToken(18)}`,
       object: "thread.run.step",
@@ -640,9 +668,9 @@ class FileAssistantStore {
       thread_id: run.thread_id,
       run_id: run.id,
       type: "tool_calls",
-      status: "completed",
+      status,
       cancelled_at: null,
-      completed_at: now,
+      completed_at: completedAt,
       expires_at: null,
       failed_at: null,
       last_error: null,
@@ -654,6 +682,23 @@ class FileAssistantStore {
     };
     this.writeJson(this.stepPath(run.thread_id, run.id, step.id), { step });
     return cloneJson(step);
+  }
+
+  completeRunStep(threadId, runId, stepId, usage = null, details = null) {
+    const record = this.readJson(this.stepPath(threadId, runId, stepId));
+    const step = record?.step;
+    if (!step) return null;
+    const now = nowSeconds();
+    const updated = {
+      ...step,
+      status: "completed",
+      completed_at: now,
+      expires_at: null,
+      usage: usage || step.usage || null,
+    };
+    if (isPlainObject(details)) updated.step_details = cloneJson(details);
+    this.writeJson(this.stepPath(threadId, runId, stepId), { step: updated });
+    return cloneJson(updated);
   }
 
   listRunSteps(threadId, runId) {
