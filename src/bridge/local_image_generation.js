@@ -15,6 +15,7 @@ const DEFAULT_IMAGE_GENERATION_EDIT_PATH = "/images/edits";
 const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
+const MAX_IMAGES_GENERATION_N = 10;
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -199,6 +200,58 @@ function imageGenerationCompatibility(context) {
         : {}),
     },
   };
+}
+
+async function createImagesGenerationResponse(request = {}, config = {}, options = {}) {
+  const normalized = normalizeImagesGenerationRequest(request, config);
+  const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
+
+  if (!canUseLocalImageGeneration(config)) {
+    throw imageApiError("local image generation is disabled", {
+      status: 400,
+      code: "image_generation_disabled",
+      param: "provider",
+    });
+  }
+
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(provider)) {
+    const response = await requestImagesGenerationProvider({
+      config,
+      normalized,
+      signal: options.signal,
+    });
+    return normalizeImagesGenerationProviderResponse(response);
+  }
+
+  return placeholderImagesGenerationResponse(normalized, config);
+}
+
+function imagesGenerationStreamEvents(response = {}, request = {}) {
+  const first = Array.isArray(response.data) ? response.data.find((item) => item?.b64_json) : null;
+  const b64 = first?.b64_json || "";
+  const partialCount = normalizePartialImageCount(request.partial_images);
+  const events = [];
+  if (b64) {
+    for (let index = 0; index < partialCount; index += 1) {
+      events.push({
+        event: "image_generation.partial_image",
+        data: {
+          type: "image_generation.partial_image",
+          b64_json: b64,
+          partial_image_index: index,
+        },
+      });
+    }
+    events.push({
+      event: "image_generation.completed",
+      data: {
+        type: "image_generation.completed",
+        b64_json: b64,
+        ...(response.usage ? { usage: response.usage } : {}),
+      },
+    });
+  }
+  return events;
 }
 
 function imageGenerationPrompt(context) {
@@ -416,6 +469,59 @@ async function requestImageProvider({ config = {}, fallbackModel, fetchOptions, 
   }
 }
 
+async function requestImagesGenerationProvider({ config = {}, normalized = {}, signal }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw imageApiError(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`, {
+      status: 401,
+      code: "missing_image_generation_api_key",
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = config.imageGenerationTimeoutMs || 120000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  try {
+    const response = await fetch(imageGenerationProviderUrl(config), {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(imagesGenerationProviderBody({ config, normalized })),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const json = parseJson(text);
+    if (!response.ok) {
+      const message = stringifyContent(json?.error?.message || text || `image provider returned HTTP ${response.status}`);
+      throw imageApiError(message, {
+        status: response.status,
+        code: json?.error?.code || "image_provider_error",
+        type: json?.error?.type || "image_provider_error",
+      });
+    }
+    return isPlainObject(json) ? json : {};
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw imageApiError("image provider request timed out", {
+        status: 504,
+        code: "image_provider_timeout",
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
 function imageGenerationProviderBody({ config = {}, prompt, tool = {} }) {
   const body = {
     model: config.imageGenerationModel || "gpt-image-2",
@@ -432,6 +538,32 @@ function imageGenerationProviderBody({ config = {}, prompt, tool = {} }) {
     body.response_format = config.imageGenerationResponseFormat;
   }
   if (config.imageGenerationUser) body.user = stringifyContent(config.imageGenerationUser);
+  return body;
+}
+
+function imagesGenerationProviderBody({ config = {}, normalized = {} }) {
+  const body = {
+    model: normalized.model || config.imageGenerationModel || "gpt-image-2",
+    prompt: normalized.prompt,
+    n: normalized.n,
+  };
+  for (const key of [
+    "background",
+    "moderation",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "style",
+    "user",
+  ]) {
+    if (normalized.options[key] !== undefined) body[key] = normalized.options[key];
+  }
+  if (body.response_format === undefined && config.imageGenerationResponseFormat) {
+    body.response_format = config.imageGenerationResponseFormat;
+  }
+  if (body.user === undefined && config.imageGenerationUser) body.user = stringifyContent(config.imageGenerationUser);
   return body;
 }
 
@@ -502,6 +634,121 @@ function parseJson(text) {
   } catch {
     return null;
   }
+}
+
+function normalizeImagesGenerationRequest(request = {}, config = {}) {
+  if (!isPlainObject(request)) {
+    throw imageApiError("image generation request body must be a JSON object", {
+      code: "invalid_request_body",
+    });
+  }
+  if (typeof request.prompt !== "string" || !request.prompt.trim()) {
+    throw imageApiError("prompt is required", {
+      code: "missing_required_parameter",
+      param: "prompt",
+    });
+  }
+
+  const n = normalizeImagesGenerationN(request.n);
+  const prompt = truncateForPrompt(request.prompt.trim(), 32000);
+  const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
+  const options = {};
+  for (const key of [
+    "background",
+    "moderation",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "style",
+    "user",
+  ]) {
+    if (request[key] !== undefined) options[key] = request[key];
+  }
+
+  return {
+    model,
+    prompt,
+    n,
+    options,
+    stream: request.stream === true,
+    partial_images: normalizePartialImageCount(request.partial_images),
+    tool: {
+      action: "generate",
+      ...options,
+      partial_images: request.partial_images,
+      n,
+    },
+  };
+}
+
+function normalizeImagesGenerationN(value) {
+  if (value === undefined || value === null || value === "") return 1;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 1 || parsed > MAX_IMAGES_GENERATION_N) {
+    throw imageApiError("n must be an integer between 1 and 10", {
+      code: "invalid_request_parameter",
+      param: "n",
+    });
+  }
+  return parsed;
+}
+
+function placeholderImagesGenerationResponse(normalized = {}, config = {}) {
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: Array.from({ length: normalized.n }, (_unused, index) => ({
+      b64_json: makePlaceholderImageBase64(`${normalized.prompt}\n[image ${index + 1}/${normalized.n}]`, normalized.tool, config),
+      revised_prompt: revisedPromptFor(normalized.prompt, "generate"),
+    })),
+  };
+}
+
+function normalizeImagesGenerationProviderResponse(json = {}) {
+  const providerData = Array.isArray(json.data) ? json.data : [];
+  if (!providerData.length) {
+    throw imageApiError("image provider did not return data", {
+      status: 502,
+      code: "invalid_image_provider_response",
+    });
+  }
+
+  const data = providerData.map((item, index) => {
+    const b64 = item?.b64_json || item?.image_b64 || item?.result || "";
+    const url = item?.url || "";
+    if (!b64 && !url) {
+      throw imageApiError(`image provider data[${index}] did not include b64_json or url`, {
+        status: 502,
+        code: "invalid_image_provider_response",
+      });
+    }
+    return {
+      ...(b64 ? { b64_json: stringifyContent(b64) } : {}),
+      ...(url ? { url: stringifyContent(url) } : {}),
+      ...(item?.revised_prompt ? { revised_prompt: stringifyContent(item.revised_prompt) } : {}),
+    };
+  });
+
+  return {
+    created: Number.isFinite(Number(json.created)) ? Number(json.created) : Math.floor(Date.now() / 1000),
+    data,
+    ...(isPlainObject(json.usage) ? { usage: cloneJson(json.usage) } : {}),
+  };
+}
+
+function imageApiError(message, details = {}) {
+  const error = new Error(message);
+  error.status = details.status || 400;
+  error.code = details.code || "invalid_request_error";
+  error.type = details.type || "invalid_request_error";
+  error.param = details.param || null;
+  return error;
+}
+
+function cloneJson(value) {
+  if (value == null || typeof value !== "object") return value;
+  return JSON.parse(JSON.stringify(value));
 }
 
 function stringifyOptional(value) {
@@ -1226,9 +1473,11 @@ function isPlainObject(value) {
 
 module.exports = {
   attachImageGenerationOutput,
+  createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
+  imagesGenerationStreamEvents,
   injectImageGenerationMessages,
   isImageGenerationTool,
   localImageGenerationToolTypes,

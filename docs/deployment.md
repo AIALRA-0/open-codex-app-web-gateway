@@ -106,9 +106,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote `input_file.file_url` fetches |
 | `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR` | `pdftotext` | Uses local Poppler `pdftotext` to extract text-layer content from PDFs; set `disabled` to skip PDFs |
 | `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS` | `10000` | Timeout for each local PDF extraction process |
-| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` adapter provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
+| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` and direct `/v1/images/generations` provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation; keep provider-specific endpoints and secrets outside Git |
-| `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed calls |
+| `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed Responses-tool and direct Images API calls |
 | `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for provider-backed `action:"edit"`, input-image reference, and mask workflows |
 | `CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-image-generations` | Local JSON state directory for generated image-call bytes used by `image_generation_call.id` and `previous_response_id` follow-up edits |
 | `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES` | `5000` | Maximum locally persisted generated image-call records retained before cleanup |

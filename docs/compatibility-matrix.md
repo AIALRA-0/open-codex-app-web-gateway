@@ -376,8 +376,9 @@ OpenAI-compatible surfaces without adding a separate job runner.
 | `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary |
 
 Local Batch execution currently accepts `/v1/responses`,
-`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`, and
-`/v1/moderations`, because those surfaces are implemented by the bridge. Batch
+`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
+`/v1/images/generations`, and `/v1/moderations`, because those surfaces are
+implemented by the bridge. Batch
 output lines preserve upstream JSON response bodies and upstream
 `x-request-id` values when a proxied Chat provider supplies them; otherwise a
 local `req_*` id is generated for auditability.
@@ -881,6 +882,20 @@ After the local edit adapter consumes those image inputs, the bridge replaces
 the corresponding upstream Chat `image_url` content parts with a text marker so
 text-only providers such as DeepSeek do not reject the request.
 
+The bridge also exposes a direct OpenAI-compatible
+`POST /v1/images/generations` endpoint for clients that call the Image API
+instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
+`n` from 1 to 10, `size`, `quality`, `background`, `moderation`,
+`output_format`, `output_compression`, `response_format`, `style`, `user`, and
+`stream`. Non-streaming responses use the OpenAI `ImagesResponse` shape with
+`created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
+`usage` when present. `stream:true` returns Image API SSE events
+`image_generation.partial_image` and `image_generation.completed`; placeholder
+and non-stream provider-backed mode synthesize these from the final image, so
+true upstream partial chunk relay remains a known gap. Local Batch JSONL can
+also execute `/v1/images/generations` requests synchronously and write the
+direct Images response into the Batch output file.
+
 Configuration:
 
 | Variable | Default | Purpose |
@@ -907,7 +922,7 @@ Configuration:
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
-| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service and does not yet execute direct Images API or video endpoints | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, direct Images/edits adapters if Codex needs them, and future video endpoint coverage |
+| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/images/generations`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service and does not yet execute image edits or video endpoints | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, direct image edits, and future video endpoint coverage |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
@@ -915,7 +930,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
-| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, provider-backed Images API generations and multipart edits, input image and mask upload mapping, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses` execution, and UI/SDK workflow compatibility. It does not yet relay true upstream streaming partial-image chunks or perform OpenAI hosted model-side prompt rewriting | Add real streaming relay, moderation/error-detail parity, direct image endpoint evals if needed, and image-quality evals |
+| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, provider-backed Images API generations and multipart edits, input image and mask upload mapping, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses` and `/v1/images/generations` execution, and UI/SDK workflow compatibility. It does not yet relay true upstream streaming partial-image chunks, expose direct `/v1/images/edits`, or perform OpenAI hosted model-side prompt rewriting | Add real streaming relay, direct image edits, moderation/error-detail parity, and image-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |

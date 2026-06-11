@@ -2557,6 +2557,94 @@ test("POST /v1/responses emits local image_generation_call for image_generation 
   });
 });
 
+test("POST /v1/images/generations returns placeholder Images API responses", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder image generation");
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-image-test",
+        prompt: "Draw a small bridge compatibility badge.",
+        n: 2,
+        size: "1024x1024",
+        quality: "low",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(typeof json.created, "number");
+    assert.equal(json.data.length, 2);
+    assert.deepEqual(Buffer.from(json.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(json.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.notEqual(json.data[0].b64_json, json.data[1].b64_json);
+    assert.match(json.data[0].revised_prompt, /Generate an image from this prompt/);
+    assert.equal(requests.length, 0);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
+  const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/images/generations");
+    assert.equal(call.body.model, "direct-image-model");
+    assert.equal(call.body.prompt, "Draw two tiny direct endpoint badges.");
+    assert.equal(call.body.n, 2);
+    assert.equal(call.body.size, "1024x1024");
+    assert.equal(call.body.output_format, "png");
+    assert.equal(call.body.response_format, "b64_json");
+    assert.equal(call.body.user, "direct-user");
+    assert.equal(call.body.stream, undefined);
+    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_images_direct" });
+    res.end(JSON.stringify({
+      created: 1713833628,
+      model: "provider-image-model",
+      data: [
+        { b64_json: tinyPng, revised_prompt: "direct badge one" },
+        { b64_json: tinyPng, revised_prompt: "direct badge two" },
+      ],
+      usage: {
+        total_tokens: 100,
+        input_tokens: 20,
+        output_tokens: 80,
+      },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/generations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "direct-image-model",
+        prompt: "Draw two tiny direct endpoint badges.",
+        n: 2,
+        size: "1024x1024",
+        output_format: "png",
+        response_format: "b64_json",
+        stream: true,
+        partial_images: 2,
+        user: "direct-user",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.filter((event) => event.event === "image_generation.partial_image").length, 2);
+    const completed = events.find((event) => event.event === "image_generation.completed")?.data;
+    assert.equal(completed.type, "image_generation.completed");
+    assert.equal(completed.b64_json, tinyPng);
+    assert.equal(completed.usage.total_tokens, 100);
+    assert.equal(requests.length, 1);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationModel: "gpt-image-test",
+  }));
+});
+
 test("POST /v1/responses can back image_generation with an OpenAI-compatible Images API", async () => {
   const generatedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {
@@ -7735,6 +7823,75 @@ test("local Batch API executes Responses image_generation JSONL", async () => {
     assert.equal(body.metadata.compatibility.local_image_generation.call_count, 1);
     assert.equal(body.metadata.compatibility.local_image_generation.stored_image_call_count, 1);
     assert.equal(fs.existsSync(path.join(stateDir, "local-image-generations", `${body.output[0].id}.json`)), true);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("local Batch API executes direct Images generation JSONL", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder direct image generation batches");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = `${JSON.stringify({
+      custom_id: "direct-image-ok",
+      method: "POST",
+      url: "/v1/images/generations",
+      body: {
+        model: "gpt-image-test",
+        prompt: "Generate two batch direct image placeholders.",
+        n: 2,
+        size: "1024x1024",
+      },
+    })}\n`;
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "images-generation-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/images/generations",
+        completion_window: "24h",
+        metadata: { suite: "batch-images-generations" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.object, "batch");
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.endpoint, "/v1/images/generations");
+    assert.equal(batch.request_counts.total, 1);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/images/generations"), true);
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "direct-image-ok");
+    assert.equal(outputLines[0].response.status_code, 200);
+    const body = outputLines[0].response.body;
+    assert.equal(typeof body.created, "number");
+    assert.equal(body.data.length, 2);
+    assert.deepEqual(Buffer.from(body.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(body.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
   }, {
     imageGenerationPlaceholderSize: 16,
   });

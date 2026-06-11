@@ -566,6 +566,39 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "batch-images-generation",
+        mode: "batch-local",
+        endpoint: "/v1/images/generations",
+        usage: "images",
+        requests: [
+          {
+            custom_id: "batch-direct-image",
+            body: {
+              model: "gpt-image-2",
+              prompt: "Exercise the direct Images API inside local Batch JSONL.",
+              n: 2,
+              size: "1024x1024",
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/images/generations"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-direct-image"
+            && outputLines[0].response?.status_code === 200
+            && response?.data?.length === 2
+            && response.data.every((item) => /^iVBORw0KGgo/.test(item?.b64_json || ""));
+        },
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -1333,6 +1366,22 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "images-generation",
+        mode: "images-generation",
+        request: {
+          model: "gpt-image-2",
+          prompt: "Exercise the direct OpenAI-compatible Images API endpoint.",
+          n: 2,
+          size: "1024x1024",
+          quality: "low",
+        },
+        check: ({ json, text }) => Array.isArray(json.data)
+          && json.data.length === 2
+          && /^iVBORw0KGgo/.test(json.data[0]?.b64_json || "")
+          && /^iVBORw0KGgo/.test(json.data[1]?.b64_json || "")
+          && /images:2/.test(text),
+      },
+      {
         id: "responses-image-edit",
         mode: "responses",
         request: {
@@ -1881,6 +1930,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "moderations") {
       return await runJsonCase(testCase, context, started, "/v1/moderations", moderationOutputText, moderationUsage);
+    }
+    if (testCase.mode === "images-generation") {
+      return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
@@ -3389,6 +3441,10 @@ function moderationOutputText(response) {
   return `moderations:${results.length}:flagged:${flagged}`;
 }
 
+function imagesGenerationOutputText(response) {
+  return `images:${response?.data?.length || 0}`;
+}
+
 function responseUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -3433,11 +3489,21 @@ function moderationUsage() {
   };
 }
 
+function imagesGenerationUsage(response) {
+  const usage = response?.usage || {};
+  return {
+    input_tokens: usage.input_tokens || 0,
+    output_tokens: usage.output_tokens || 0,
+    total_tokens: usage.total_tokens || 0,
+  };
+}
+
 function batchResponseUsage(testCase, response) {
   if (testCase.usage === "embeddings") return embeddingUsage(response);
   if (testCase.usage === "responses") return responseUsage(response);
   if (testCase.usage === "chat") return chatUsage(response);
   if (testCase.usage === "completions") return completionUsage(response);
+  if (testCase.usage === "images") return imagesGenerationUsage(response);
   return moderationUsage(response);
 }
 

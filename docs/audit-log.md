@@ -5652,6 +5652,74 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Direct Images API generation endpoint and Batch coverage
+
+- Used the official OpenAI Image generation guide and OpenAPI endpoint spec for
+  `POST /v1/images/generations` to align the local bridge with the current
+  Images API shape:
+  - JSON requests include `prompt`, optional `model`, `n` from 1 to 10,
+    output options such as `size`, `quality`, `background`, `moderation`,
+    `output_format`, `output_compression`, `response_format`, `style`, and
+    `user`;
+  - non-streaming responses return `created`, `data[].b64_json`, optional
+    `data[].revised_prompt`, and provider `usage` when present;
+  - streaming responses use Image API SSE events
+    `image_generation.partial_image` and `image_generation.completed`.
+- Added direct local `POST /v1/images/generations` support:
+  - placeholder mode returns deterministic base64 PNG data and supports
+    multi-image `n` requests without calling the Chat provider;
+  - provider-backed mode calls the configured OpenAI-compatible
+    `/images/generations` path, forwards supported image options, preserves all
+    returned `data[]` entries, and surfaces provider errors as OpenAI-style
+    JSON errors;
+  - `stream:true` synthesizes Image API SSE events from the final image so SDK
+    streaming workflows can parse the endpoint, while true upstream partial
+    chunk relay remains documented as a gap.
+- Extended local Batch API execution to accept endpoint
+  `/v1/images/generations` in addition to existing Responses, Chat,
+  Completions, Embeddings, and Moderations endpoints. Batch JSONL output files
+  now preserve the direct Images response body.
+- Updated:
+  - `docs/compatibility-matrix.md` direct Images and known-gap coverage;
+  - `docs/deployment.md` image-generation provider/env descriptions;
+  - `docs/evaluation-plan.md` live regression coverage;
+  - `scripts/eval-harness.mjs` with `images-generation` and
+    `batch-images-generation` bridge-regression cases.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused direct Images tests passed 5/5:
+    `node --test --test-name-pattern "images/generations|direct Images|OpenAI-compatible Images API|direct Images generation" test/server.test.js`.
+  - `npm test`: 145/145 passing tests.
+  - Live `images-generation` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 61 ms, zero model tokens because it is local
+    placeholder image generation.
+  - Live `batch-images-generation` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 153 ms, one completed Batch line and no error
+    file.
+  - Full live `npm run eval:bridge`: 55/55 passing cases, pass rate 1.0,
+    average latency 1366 ms, P95 latency 2807 ms, and total usage 10,705
+    tokens.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 691 candidates,
+    selected 90 old UI screenshots by retention policy, deleted 0 files,
+    selected 7,353,648 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Direct runtime smoke for `/v1/images/generations` returned two
+    `data[].b64_json` PNG images.
+  - Disk/storage check: filesystem has 38 GB available; repo `state/` is
+    6.6 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Provider-backed image_generation edits and masks
 
 - Extended the local Responses `image_generation` adapter to cover edit and

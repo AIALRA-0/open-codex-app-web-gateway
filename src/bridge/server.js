@@ -54,9 +54,11 @@ const {
 } = require("./local_computer");
 const {
   attachImageGenerationOutput,
+  createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
+  imagesGenerationStreamEvents,
   injectImageGenerationMessages,
   localImageGenerationToolTypes,
   prepareImageGenerationContext,
@@ -94,6 +96,7 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/chat/completions",
   "/v1/completions",
   "/v1/embeddings",
+  "/v1/images/generations",
   "/v1/moderations",
 ]);
 
@@ -4676,6 +4679,39 @@ async function handleModerations(req, res, config) {
   });
 }
 
+async function handleImagesGenerations(req, res, config) {
+  let request;
+  try {
+    request = await readJson(req);
+    const response = await createImagesGenerationResponse(request, config);
+    if (request.stream === true) {
+      const events = imagesGenerationStreamEvents(response, request);
+      if (!events.length) {
+        sendError(res, 502, "streaming image responses require b64_json output", {
+          type: "image_provider_error",
+          code: "invalid_image_provider_response",
+        });
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+      });
+      for (const event of events) writeSse(res, event.event, event.data);
+      res.end();
+      return;
+    }
+    sendJson(res, 200, response);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "image generation request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "image_generation_error",
+      param: error.param || null,
+    });
+  }
+}
+
 function normalizeModerationInputs(input) {
   if (input === undefined || input === null) {
     const error = new Error("input is required");
@@ -5470,6 +5506,8 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleLegacyCompletions(req, res, config);
     } else if (endpoint === "/v1/embeddings") {
       await handleEmbeddings(req, res, config);
+    } else if (endpoint === "/v1/images/generations") {
+      await handleImagesGenerations(req, res, config);
     } else if (endpoint === "/v1/moderations") {
       await handleModerations(req, res, config);
     } else {
@@ -6254,6 +6292,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/moderations") {
         await handleModerations(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/images/generations") {
+        await handleImagesGenerations(req, res, config);
         return;
       }
 
