@@ -4369,6 +4369,78 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants message-attachment resource materialization
+
+- Implemented Assistants message `attachments` materialization before local
+  Chat-backed runs:
+  - `file_search` attachments now validate local Files API IDs, create or reuse
+    a thread-local vector store, attach files with audit attributes, and update
+    `thread.tool_resources.file_search.vector_store_ids`;
+  - `code_interpreter` attachments now validate local Files API IDs and union
+    them into `thread.tool_resources.code_interpreter.file_ids`;
+  - `/v1/threads`, `/v1/threads/{thread_id}/messages`, and
+    `/v1/threads/runs` all materialize attachments before a run starts;
+  - failed attachment validation cleans up newly created local threads/messages
+    rather than leaving request-failed records behind.
+- Official-docs basis:
+  - OpenAI Assistants File Search docs state that Message attachments create or
+    reuse a thread vector store and are queried alongside assistant stores;
+  - OpenAI Assistants deep-dive docs state that Code Interpreter can access
+    files only when their file IDs are added to message `attachments`.
+- Extended regression coverage:
+  - added unit/mock-provider tests for initial-thread `file_search`
+    attachments creating vector stores and citations;
+  - added unit/mock-provider tests for create-and-run attachment
+    materialization before run start;
+  - added unit/mock-provider tests for POST-message `code_interpreter`
+    attachments populating thread file resources and mounted-file execution;
+  - added live bridge-regression case `assistants-attachments`, covering both
+    file-search attachment vector stores and code-interpreter attachment mounts.
+- Updated docs:
+  - compatibility matrix now lists message-attachment resource materialization
+    as implemented and removes it from Assistants known gaps;
+  - evaluation plan now includes the attachment live case and describes
+    attachment-created thread vector-store and mounted-file checks.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 9/9.
+  - `npm test`: passed 186/186.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `assistants-attachments` passed 1/1 against `deepseek-v4-pro`, with
+    both runs completed, output
+    `assistants-attachment-search-live-ok [1] | assistants-attachment-ci-live-ok`,
+    4 total Run Steps, 4 total messages, and 716 total tokens in the final
+    bridge-regression run.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1205 ms, P95 latency 1255 ms, and total usage 99 tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 87/87,
+    pass rate 1.0, average latency 1439 ms, P95 latency 3949 ms, and total
+    usage 22143 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core pages, project dialog/upload, prompt submission, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1340 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 84056 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    84056 bytes, and reported 0 errors.
+  - Final `npm run prune:runtime -- --dry-run` after live eval: scanned 1365
+    runtime candidates, selected 0, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 40 GB available; `state/` was 19 MB,
+    `output/` was 4.7 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 24 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants streaming delta compatibility
 
 - Used current official OpenAI documentation through the OpenAI developer-docs

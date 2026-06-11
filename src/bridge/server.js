@@ -8916,8 +8916,166 @@ function handleAssistantDelete(res, assistantStore, assistantId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleAssistantThreadCreate(req, res, assistantStore) {
-  sendJson(res, 200, assistantStore.createThread(await readJson(req)));
+function materializeAssistantThreadMessageAttachments({ assistantStore, fileSearchStore, threadId }) {
+  const messages = assistantStore.listMessages(threadId) || [];
+  for (const message of messages) {
+    const validation = validateAssistantMessageAttachmentFiles({ fileSearchStore, message });
+    if (!validation.ok) return validation;
+  }
+  let latestThread = assistantStore.getThread(threadId);
+  for (const message of messages) {
+    const materialized = materializeAssistantMessageAttachments({
+      assistantStore,
+      fileSearchStore,
+      threadId,
+      message,
+    });
+    if (!materialized.ok) return materialized;
+    latestThread = materialized.thread || latestThread;
+  }
+  return { ok: true, thread: latestThread };
+}
+
+function materializeAssistantMessageAttachments({ assistantStore, fileSearchStore, threadId, message }) {
+  const validation = validateAssistantMessageAttachmentFiles({ fileSearchStore, message });
+  if (!validation.ok) return validation;
+  const relevantAttachments = validation.relevantAttachments || [];
+  if (!relevantAttachments.length) {
+    return { ok: true, thread: assistantStore.getThread(threadId) };
+  }
+
+  let thread = assistantStore.getThread(threadId);
+  if (!thread) {
+    return {
+      ok: false,
+      status: 404,
+      error: openAiError(`No thread found for id '${threadId}'`, {
+        type: "invalid_request_error",
+        code: "thread_not_found",
+        param: "thread_id",
+      }),
+    };
+  }
+
+  const resources = isPlainObject(thread.tool_resources) ? clone(thread.tool_resources) : {};
+  let changed = false;
+  let threadVectorStoreId = firstLocalThreadVectorStoreId(resources, fileSearchStore);
+
+  for (const attachment of relevantAttachments) {
+    const { fileId, usesFileSearch, usesCodeInterpreter } = attachment;
+    if (usesFileSearch) {
+      if (!threadVectorStoreId) {
+        const store = fileSearchStore.createVectorStore({
+          name: `Thread ${threadId} message attachments`,
+          metadata: {
+            source: "assistant_message_attachment",
+            thread_id: threadId,
+          },
+          expires_after: { anchor: "last_active_at", days: 7 },
+        });
+        threadVectorStoreId = store.id;
+        const existingIds = assistantResourceIds(resources, "file_search", "vector_store_ids");
+        resources.file_search = {
+          ...(isPlainObject(resources.file_search) ? resources.file_search : {}),
+          vector_store_ids: uniqStrings([...existingIds, threadVectorStoreId]),
+        };
+        changed = true;
+      }
+      if (!fileSearchStore.getVectorStoreFile(threadVectorStoreId, fileId)) {
+        fileSearchStore.attachFile(threadVectorStoreId, {
+          file_id: fileId,
+          attributes: {
+            source: "assistant_message_attachment",
+            thread_id: threadId,
+            message_id: message.id,
+          },
+        });
+      }
+    }
+
+    if (usesCodeInterpreter) {
+      const existingIds = assistantResourceIds(resources, "code_interpreter", "file_ids");
+      const nextIds = uniqStrings([...existingIds, fileId]);
+      if (nextIds.length !== existingIds.length) {
+        resources.code_interpreter = {
+          ...(isPlainObject(resources.code_interpreter) ? resources.code_interpreter : {}),
+          file_ids: nextIds,
+        };
+        changed = true;
+      }
+    }
+  }
+
+  if (changed) {
+    thread = assistantStore.updateThread(threadId, { tool_resources: resources }) || thread;
+  }
+  return { ok: true, thread };
+}
+
+function validateAssistantMessageAttachmentFiles({ fileSearchStore, message }) {
+  const attachments = Array.isArray(message?.attachments) ? message.attachments : [];
+  const relevantAttachments = [];
+
+  for (const attachment of attachments) {
+    if (!isPlainObject(attachment)) continue;
+    const fileId = stringifyContent(attachment.file_id).trim();
+    const toolTypes = assistantAttachmentToolTypes(attachment);
+    const usesFileSearch = toolTypes.includes("file_search");
+    const usesCodeInterpreter = toolTypes.includes("code_interpreter");
+    if (!usesFileSearch && !usesCodeInterpreter) continue;
+    if (!fileId) {
+      return {
+        ok: false,
+        status: 400,
+        error: openAiError("message attachment file_id is required", {
+          type: "invalid_request_error",
+          code: "missing_required_parameter",
+          param: "attachments.file_id",
+        }),
+      };
+    }
+    if (!fileSearchStore.getFile(fileId)) {
+      return {
+        ok: false,
+        status: 404,
+        error: openAiError(`No file found for id '${fileId}'`, {
+          type: "invalid_request_error",
+          code: "file_not_found",
+          param: "attachments.file_id",
+        }),
+      };
+    }
+    relevantAttachments.push({ fileId, usesFileSearch, usesCodeInterpreter });
+  }
+  return { ok: true, relevantAttachments };
+}
+
+function assistantAttachmentToolTypes(attachment) {
+  if (!Array.isArray(attachment?.tools)) return [];
+  return uniqStrings(attachment.tools
+    .filter(isPlainObject)
+    .map((tool) => tool.type)
+    .filter((type) => type === "file_search" || type === "code_interpreter"));
+}
+
+function firstLocalThreadVectorStoreId(resources, fileSearchStore) {
+  const ids = assistantResourceIds(resources, "file_search", "vector_store_ids");
+  return ids.find((id) => fileSearchStore.getVectorStore(id)) || "";
+}
+
+async function handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore) {
+  const thread = assistantStore.createThread(await readJson(req));
+  const materialized = materializeAssistantThreadMessageAttachments({
+    assistantStore,
+    fileSearchStore,
+    threadId: thread.id,
+  });
+  if (!materialized.ok) {
+    assistantStore.deleteThread(thread.id);
+    sendJson(res, materialized.status, materialized.error);
+    return;
+  }
+  sendJson(res, 200, materialized.thread || thread);
 }
 
 function handleAssistantThreadGet(res, assistantStore, threadId) {
@@ -8972,7 +9130,7 @@ function handleAssistantMessagesList(res, assistantStore, threadId, url) {
   sendJson(res, 200, paginateList(messages, url));
 }
 
-async function handleAssistantMessageCreate(req, res, assistantStore, threadId) {
+async function handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId) {
   const message = assistantStore.createMessage(threadId, await readJson(req));
   if (!message) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -8980,6 +9138,17 @@ async function handleAssistantMessageCreate(req, res, assistantStore, threadId) 
       code: "thread_not_found",
       param: "thread_id",
     });
+    return;
+  }
+  const materialized = materializeAssistantMessageAttachments({
+    assistantStore,
+    fileSearchStore,
+    threadId,
+    message,
+  });
+  if (!materialized.ok) {
+    assistantStore.deleteMessage(threadId, message.id);
+    sendJson(res, materialized.status, materialized.error);
     return;
   }
   sendJson(res, 200, message);
@@ -9074,6 +9243,17 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
 async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore) {
   const body = await readJson(req);
   const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
+  const materialized = materializeAssistantThreadMessageAttachments({
+    assistantStore,
+    fileSearchStore,
+    threadId: thread.id,
+  });
+  if (!materialized.ok) {
+    assistantStore.deleteThread(thread.id);
+    sendJson(res, materialized.status, materialized.error);
+    return;
+  }
+  const runThread = materialized.thread || thread;
   if (body.stream === true) {
     await streamNewAssistantRun({
       body,
@@ -9085,7 +9265,7 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
       threadId: thread.id,
       incomingHeaders: req.headers,
       res,
-      streamOptions: { thread },
+      streamOptions: { thread: runThread },
     });
     return;
   }
@@ -10797,7 +10977,7 @@ function createServer(config = loadConfig()) {
 
       if (url.pathname === "/v1/threads") {
         if (req.method === "POST") {
-          await handleAssistantThreadCreate(req, res, assistantStore);
+          await handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore);
           return;
         }
       }
@@ -10861,7 +11041,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!messageId && req.method === "POST") {
-          await handleAssistantMessageCreate(req, res, assistantStore, threadId);
+          await handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId);
           return;
         }
         if (messageId && req.method === "GET") {

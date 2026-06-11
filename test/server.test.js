@@ -2169,6 +2169,162 @@ test("Assistants API local file_search tool injects vector store evidence", asyn
   });
 });
 
+test("Assistants API file_search message attachments create thread vector stores", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /attachment-file-search-ok/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_attachment_file_search",
+      object: "chat.completion",
+      created: 1700000006,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "attachment-file-search-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 34, completion_tokens: 5, total_tokens: 39 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-attachment-search.txt",
+        purpose: "assistants",
+        content: "attachment-file-search-ok",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use file_search evidence before answering.",
+        tools: [{ type: "file_search" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{
+          role: "user",
+          content: "Use the attached file_search file. Return attachment-file-search-ok [1].",
+          attachments: [{ file_id: file.id, tools: [{ type: "file_search" }] }],
+        }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+    const vectorStoreIds = thread.tool_resources.file_search.vector_store_ids;
+    assert.equal(vectorStoreIds.length, 1);
+
+    const attachedFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStoreIds[0]}/files`);
+    assert.equal(attachedFiles.status, 200);
+    assert.deepEqual((await attachedFiles.json()).data.map((attached) => attached.id), [file.id]);
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.tool_resources.file_search.vector_store_ids, vectorStoreIds);
+    assert.equal(run.metadata.compatibility.local_file_search.result_count, 1);
+    assert.equal(requests.length, 1);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const assistantMessage = (await listedMessages.json()).data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.content[0].text.value, "attachment-file-search-ok [1]");
+    assert.equal(assistantMessage.content[0].text.annotations[0].file_id, file.id);
+  });
+});
+
+test("Assistants API file_search attachments are materialized before create-and-run", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /create-and-run-attachment-ok/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_create_and_run_attachment",
+      object: "chat.completion",
+      created: 1700000007,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "create-and-run-attachment-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 30, completion_tokens: 6, total_tokens: 36 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-create-and-run-search.txt",
+        purpose: "assistants",
+        content: "create-and-run-attachment-ok",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use file_search evidence before answering.",
+        tools: [{ type: "file_search" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        thread: {
+          messages: [{
+            role: "user",
+            content: "Use attached evidence. Return create-and-run-attachment-ok [1].",
+            attachments: [{ file_id: file.id, tools: [{ type: "file_search" }] }],
+          }],
+        },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.tool_resources.file_search.vector_store_ids.length, 1);
+    assert.equal(run.metadata.compatibility.local_file_search.result_count, 1);
+    assert.equal(requests.length, 1);
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads/${run.thread_id}`);
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+    assert.deepEqual(thread.tool_resources.file_search.vector_store_ids, run.tool_resources.file_search.vector_store_ids);
+  });
+});
+
 test("Assistants API local code_interpreter tool executes python blocks with file resources", async () => {
   await withMockProvider((_req, res, request) => {
     assert.equal(request.body.tools, undefined);
@@ -2264,6 +2420,106 @@ test("Assistants API local code_interpreter tool executes python blocks with fil
     assert.equal(listedMessages.status, 200);
     const assistantMessage = (await listedMessages.json()).data.find((message) => message.role === "assistant");
     assert.equal(assistantMessage.content[0].text.value, "assistants-ci-ok");
+  });
+});
+
+test("Assistants API code_interpreter message attachments populate thread file resources", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses shell compatibility executed command output/);
+    assert.match(prompt, /attachment-ci-ok/);
+    assert.match(prompt, /attachment-mounted-ok/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_attachment_code_interpreter",
+      object: "chat.completion",
+      created: 1700000008,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "attachment-ci-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 35, completion_tokens: 4, total_tokens: 39 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-attachment-ci.txt",
+        purpose: "assistants",
+        content: "attachment-mounted-ok",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use code_interpreter output before answering.",
+        tools: [{ type: "code_interpreter" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const messageResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role: "user",
+        content: [
+          "```python",
+          "from pathlib import Path",
+          "print('attachment-ci-ok')",
+          "print(Path('/mnt/data/assistant-attachment-ci.txt').read_text())",
+          "```",
+          "Return attachment-ci-ok.",
+        ].join("\n"),
+        attachments: [{ file_id: file.id, tools: [{ type: "code_interpreter" }] }],
+      }),
+    });
+    assert.equal(messageResponse.status, 200);
+    const message = await messageResponse.json();
+    assert.deepEqual(message.attachments, [{ file_id: file.id, tools: [{ type: "code_interpreter" }] }]);
+
+    const updatedThreadResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}`);
+    assert.equal(updatedThreadResponse.status, 200);
+    const updatedThread = await updatedThreadResponse.json();
+    assert.deepEqual(updatedThread.tool_resources.code_interpreter.file_ids, [file.id]);
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.tool_resources.code_interpreter.file_ids, [file.id]);
+    assert.equal(run.metadata.compatibility.local_shell.mounted_file_count, 1);
+    assert.equal(requests.length, 1);
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps?limit=10`);
+    assert.equal(listedSteps.status, 200);
+    const toolStep = (await listedSteps.json()).data.find((step) => step.type === "tool_calls");
+    const codeCall = toolStep.step_details.tool_calls.find((toolCall) => toolCall.type === "code_interpreter");
+    assert.match(codeCall.code_interpreter.outputs[0].logs, /attachment-ci-ok/);
+    assert.match(codeCall.code_interpreter.outputs[0].logs, /attachment-mounted-ok/);
   });
 });
 

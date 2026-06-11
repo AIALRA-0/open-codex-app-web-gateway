@@ -87,7 +87,10 @@ vector-store resources, injects local retrieval evidence, persists a
 `file_search` Run Step, and annotates assistant messages with `file_citation`;
 `code_interpreter` mounts local Files API `file_ids`, executes explicit Python
 blocks in the local container workspace, injects stdout evidence, and persists
-a `code_interpreter` Run Step.
+a `code_interpreter` Run Step. Attachment coverage verifies that message
+`file_search` attachments create or reuse thread vector stores, that
+`code_interpreter` attachments populate thread file resources, and that those
+resources are visible to the following run.
 
 Useful commands:
 
@@ -115,6 +118,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case assistants-lifecy
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-required-action --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-file-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-code-interpreter --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case assistants-attachments --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case evals-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case graders-api-local --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case graders-api-score-model --timeout-ms 90000 --verbose
@@ -327,7 +331,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   create-and-run lifecycle SSE event shape plus streamed message deltas. It
   also verifies local Assistants `file_search` and `code_interpreter`
   adapters, including resource merging, local tool evidence injection, Run Step
-  persistence, file citations, and mounted file resources.
+  persistence, file citations, attachment-created thread vector stores, and
+  mounted file resources.
 - Responses compatibility requests that include Chat-native `stop` sequences forward them to upstream Chat providers and verify the stop marker is omitted from visible output.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.

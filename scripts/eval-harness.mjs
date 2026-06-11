@@ -462,6 +462,52 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "assistants-attachments",
+        mode: "assistants-attachments",
+        request: {
+          model: defaultModel,
+        },
+        check: ({
+          searchRun,
+          searchMessages,
+          searchSteps,
+          searchFile,
+          searchVectorStoreId,
+          searchAttachedFiles,
+          codeRun,
+          codeMessages,
+          codeSteps,
+          codeFile,
+          codeThread,
+        }) => {
+          const searchText = assistantMessageTextFromList(searchMessages?.data || []);
+          const searchToolStep = (searchSteps?.data || []).find((step) => step.type === "tool_calls");
+          const fileSearchCall = (searchToolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "file_search");
+          const searchAssistantMessage = (searchMessages?.data || []).find((message) => message.role === "assistant");
+          const searchAnnotations = searchAssistantMessage?.content?.[0]?.text?.annotations || [];
+          const codeText = assistantMessageTextFromList(codeMessages?.data || []);
+          const codeToolStep = (codeSteps?.data || []).find((step) => step.type === "tool_calls");
+          const codeCall = (codeToolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "code_interpreter");
+          const logs = (codeCall?.code_interpreter?.outputs || [])
+            .map((output) => output.logs || "")
+            .join("\n");
+          return searchRun?.status === "completed"
+            && /assistants-attachment-search-live-ok/i.test(searchText)
+            && searchRun.tool_resources?.file_search?.vector_store_ids?.includes(searchVectorStoreId)
+            && fileSearchCall?.file_search?.vector_store_ids?.includes(searchVectorStoreId)
+            && fileSearchCall?.file_search?.results?.some((result) => result.file_id === searchFile?.id)
+            && searchAttachedFiles?.data?.some((attached) => attached.id === searchFile?.id)
+            && searchAnnotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === searchFile?.id)
+            && codeRun?.status === "completed"
+            && /assistants-attachment-ci-live-ok/i.test(codeText)
+            && codeThread?.tool_resources?.code_interpreter?.file_ids?.includes(codeFile?.id)
+            && codeRun.tool_resources?.code_interpreter?.file_ids?.includes(codeFile?.id)
+            && codeRun.metadata?.compatibility?.local_shell?.mounted_file_count >= 1
+            && /assistants-attachment-ci-live-ok/i.test(logs)
+            && /attachment-mounted-live-ok/i.test(logs);
+        },
+      },
+      {
         id: "evals-lifecycle",
         mode: "evals-lifecycle",
         request: {
@@ -2636,6 +2682,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-code-interpreter") {
       return await runAssistantsCodeInterpreterCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-attachments") {
+      return await runAssistantsAttachmentsCase(testCase, context, started);
+    }
     if (testCase.mode === "evals-lifecycle") {
       return await runEvalsLifecycleCase(testCase, context, started);
     }
@@ -3402,6 +3451,247 @@ async function runAssistantsCodeInterpreterCase(testCase, context, started) {
     if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
     if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
     if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
+  }
+}
+
+async function runAssistantsAttachmentsCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let searchAssistantId = null;
+  let codeAssistantId = null;
+  let searchThreadId = null;
+  let codeThreadId = null;
+  let searchFileId = null;
+  let codeFileId = null;
+  let searchVectorStoreId = null;
+  try {
+    const searchFile = await postJsonCapture(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}-search.txt`,
+      purpose: "assistants",
+      content: "Assistants attachment fixture says assistants-attachment-search-live-ok.",
+    });
+    if (!searchFile.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchFile.status,
+        error: truncate(searchFile.body),
+      });
+    }
+    searchFileId = searchFile.json.id;
+
+    const searchAssistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id} file_search`,
+      instructions: "Use file_search evidence. Return exactly assistants-attachment-search-live-ok [1] and no extra words.",
+      tools: [{ type: "file_search" }],
+      metadata: { suite: testCase.id, branch: "file_search_attachment" },
+    });
+    if (!searchAssistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchAssistant.status,
+        file_id: searchFileId,
+        error: truncate(searchAssistant.body),
+      });
+    }
+    searchAssistantId = searchAssistant.json.id;
+
+    const searchThread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: "Use the attached file_search file. Return exactly assistants-attachment-search-live-ok [1].",
+        attachments: [{ file_id: searchFileId, tools: [{ type: "file_search" }] }],
+      }],
+      metadata: { suite: testCase.id, branch: "file_search_attachment" },
+    });
+    if (!searchThread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchThread.status,
+        assistant_id: searchAssistantId,
+        file_id: searchFileId,
+        error: truncate(searchThread.body),
+      });
+    }
+    searchThreadId = searchThread.json.id;
+    searchVectorStoreId = searchThread.json.tool_resources?.file_search?.vector_store_ids?.[0] || null;
+    if (!searchVectorStoreId) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchThread.status,
+        assistant_id: searchAssistantId,
+        thread_id: searchThreadId,
+        file_id: searchFileId,
+        error: "file_search attachment did not create a thread vector store",
+      });
+    }
+
+    const searchAttachedFiles = await getJson(`${baseUrl}/v1/vector_stores/${searchVectorStoreId}/files?limit=20`);
+    const searchRun = await postJsonCapture(`${baseUrl}/v1/threads/${searchThreadId}/runs`, {
+      assistant_id: searchAssistantId,
+      metadata: { suite: testCase.id, branch: "file_search_attachment" },
+    });
+    if (!searchRun.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: searchRun.status,
+        assistant_id: searchAssistantId,
+        thread_id: searchThreadId,
+        file_id: searchFileId,
+        vector_store_id: searchVectorStoreId,
+        error: truncate(searchRun.body),
+      });
+    }
+    const searchMessages = await getJson(`${baseUrl}/v1/threads/${searchThreadId}/messages?order=asc&limit=20`);
+    const searchSteps = await getJson(`${baseUrl}/v1/threads/${searchThreadId}/runs/${searchRun.json.id}/steps?limit=20`);
+
+    const codeFile = await postJsonCapture(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}-ci.txt`,
+      purpose: "assistants",
+      content: "attachment-mounted-live-ok",
+    });
+    if (!codeFile.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: codeFile.status,
+        search_run_id: searchRun.json.id,
+        error: truncate(codeFile.body),
+      });
+    }
+    codeFileId = codeFile.json.id;
+
+    const codeAssistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id} code_interpreter`,
+      instructions: "Use code_interpreter output. Return exactly assistants-attachment-ci-live-ok and no extra words.",
+      tools: [{ type: "code_interpreter" }],
+      metadata: { suite: testCase.id, branch: "code_interpreter_attachment" },
+    });
+    if (!codeAssistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: codeAssistant.status,
+        search_run_id: searchRun.json.id,
+        file_id: codeFileId,
+        error: truncate(codeAssistant.body),
+      });
+    }
+    codeAssistantId = codeAssistant.json.id;
+
+    const codeThread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      metadata: { suite: testCase.id, branch: "code_interpreter_attachment" },
+    });
+    if (!codeThread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: codeThread.status,
+        assistant_id: codeAssistantId,
+        file_id: codeFileId,
+        error: truncate(codeThread.body),
+      });
+    }
+    codeThreadId = codeThread.json.id;
+
+    const codeMessage = await postJsonCapture(`${baseUrl}/v1/threads/${codeThreadId}/messages`, {
+      role: "user",
+      content: [
+        "Run this Python and answer from its output.",
+        "```python",
+        "from pathlib import Path",
+        "print('assistants-attachment-ci-live-ok')",
+        `print(Path('/mnt/data/${testCase.id}-ci.txt').read_text())`,
+        "```",
+        "Return exactly assistants-attachment-ci-live-ok.",
+      ].join("\n"),
+      attachments: [{ file_id: codeFileId, tools: [{ type: "code_interpreter" }] }],
+      metadata: { suite: testCase.id, branch: "code_interpreter_attachment" },
+    });
+    if (!codeMessage.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: codeMessage.status,
+        assistant_id: codeAssistantId,
+        thread_id: codeThreadId,
+        file_id: codeFileId,
+        error: truncate(codeMessage.body),
+      });
+    }
+
+    const codeThreadAfterMessage = await getJson(`${baseUrl}/v1/threads/${codeThreadId}`);
+    const codeRun = await postJsonCapture(`${baseUrl}/v1/threads/${codeThreadId}/runs`, {
+      assistant_id: codeAssistantId,
+      metadata: { suite: testCase.id, branch: "code_interpreter_attachment" },
+    });
+    if (!codeRun.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: codeRun.status,
+        assistant_id: codeAssistantId,
+        thread_id: codeThreadId,
+        file_id: codeFileId,
+        error: truncate(codeRun.body),
+      });
+    }
+    const codeMessages = await getJson(`${baseUrl}/v1/threads/${codeThreadId}/messages?order=asc&limit=20`);
+    const codeSteps = await getJson(`${baseUrl}/v1/threads/${codeThreadId}/runs/${codeRun.json.id}/steps?limit=20`);
+
+    const ok = !!testCase.check({
+      searchAssistant: searchAssistant.json,
+      searchThread: searchThread.json,
+      searchRun: searchRun.json,
+      searchMessages: searchMessages.json,
+      searchSteps: searchSteps.json,
+      searchFile: searchFile.json,
+      searchVectorStoreId,
+      searchAttachedFiles: searchAttachedFiles.json,
+      codeAssistant: codeAssistant.json,
+      codeThread: codeThreadAfterMessage.json,
+      codeRun: codeRun.json,
+      codeMessages: codeMessages.json,
+      codeSteps: codeSteps.json,
+      codeFile: codeFile.json,
+      codeMessage: codeMessage.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: `${searchRun.json.status}/${codeRun.json.status}`,
+      search_assistant_id: searchAssistantId,
+      search_thread_id: searchThreadId,
+      search_run_id: searchRun.json.id,
+      search_file_id: searchFileId,
+      search_vector_store_id: searchVectorStoreId,
+      code_assistant_id: codeAssistantId,
+      code_thread_id: codeThreadId,
+      code_run_id: codeRun.json.id,
+      code_file_id: codeFileId,
+      search_step_count: searchSteps.json?.data?.length || 0,
+      code_step_count: codeSteps.json?.data?.length || 0,
+      search_message_count: searchMessages.json?.data?.length || 0,
+      code_message_count: codeMessages.json?.data?.length || 0,
+      usage: sumUsage([assistantsUsage(searchRun.json), assistantsUsage(codeRun.json)]),
+      output_text: [
+        assistantMessageTextFromList(searchMessages.json?.data || []),
+        assistantMessageTextFromList(codeMessages.json?.data || []),
+      ].filter(Boolean).join(" | "),
+      error: ok ? undefined : truncate(JSON.stringify({
+        searchRun: searchRun.json,
+        searchMessages: searchMessages.json,
+        searchSteps: searchSteps.json,
+        searchAttachedFiles: searchAttachedFiles.json,
+        codeThread: codeThreadAfterMessage.json,
+        codeRun: codeRun.json,
+        codeMessages: codeMessages.json,
+        codeSteps: codeSteps.json,
+      })),
+    });
+  } finally {
+    if (codeThreadId) await deleteJson(`${baseUrl}/v1/threads/${codeThreadId}`);
+    if (searchThreadId) await deleteJson(`${baseUrl}/v1/threads/${searchThreadId}`);
+    if (codeAssistantId) await deleteJson(`${baseUrl}/v1/assistants/${codeAssistantId}`);
+    if (searchAssistantId) await deleteJson(`${baseUrl}/v1/assistants/${searchAssistantId}`);
+    if (searchVectorStoreId) await deleteJson(`${baseUrl}/v1/vector_stores/${searchVectorStoreId}`);
+    if (codeFileId) await deleteJson(`${baseUrl}/v1/files/${codeFileId}`);
+    if (searchFileId) await deleteJson(`${baseUrl}/v1/files/${searchFileId}`);
   }
 }
 
