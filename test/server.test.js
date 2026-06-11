@@ -9166,6 +9166,229 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
   });
 });
 
+test("Graders API validates and runs local text similarity and multi graders", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called for local graders" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const validateResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "string_check",
+          name: "exact",
+          input: "{{ sample.output_text }}",
+          reference: "{{ item.label }}",
+          operation: "eq",
+        },
+      }),
+    });
+    assert.equal(validateResponse.status, 200);
+    assert.equal((await validateResponse.json()).grader.name, "exact");
+
+    const similarityResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "text_similarity",
+          name: "summary_similarity",
+          input: "{{ sample.output_text }}",
+          reference: "{{ item.reference_answer }}",
+          evaluation_metric: "rouge_l",
+          pass_threshold: 0.5,
+        },
+        item: { reference_answer: "The router was restarted successfully" },
+        model_sample: "Router restarted successfully",
+      }),
+    });
+    assert.equal(similarityResponse.status, 200);
+    const similarity = await similarityResponse.json();
+    assert.equal(similarity.metadata.type, "text_similarity");
+    assert.equal(similarity.metadata.errors.other_error, false);
+    assert.ok(similarity.reward >= 0.5);
+    assert.deepEqual(similarity.model_grader_token_usage_per_model, {});
+
+    const multiResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "multi",
+          name: "contact_json",
+          graders: {
+            name: {
+              type: "text_similarity",
+              input: "{{ sample.output_json.name }}",
+              reference: "{{ item.name }}",
+              evaluation_metric: "fuzzy_match",
+              pass_threshold: 0.7,
+            },
+            email: {
+              type: "string_check",
+              input: "{{ sample.output_json.email }}",
+              reference: "{{ item.email }}",
+              operation: "eq",
+            },
+          },
+          calculate_output: "(name + email) / 2",
+          pass_threshold: 0.8,
+        },
+        item: { name: "Jane Doe", email: "jane@example.com" },
+        model_sample: {
+          output_text: "{\"name\":\"Jane Do\",\"email\":\"jane@example.com\"}",
+          output_json: { name: "Jane Do", email: "jane@example.com" },
+        },
+      }),
+    });
+    assert.equal(multiResponse.status, 200);
+    const multi = await multiResponse.json();
+    assert.equal(multi.metadata.type, "multi");
+    assert.ok(multi.reward >= 0.8);
+    assert.ok(multi.sub_rewards.name >= 0.7);
+    assert.equal(multi.sub_rewards.email, 1);
+
+    const unsupportedResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "score_model",
+          name: "judge",
+          input: [{ role: "user", content: "score {{ sample.output_text }}" }],
+          model: "gpt-5-mini",
+        },
+      }),
+    });
+    assert.equal(unsupportedResponse.status, 400);
+    assert.equal((await unsupportedResponse.json()).error.code, "unsupported_grader_type");
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("Evals API runs local text similarity and multi graders", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called for sample-driven evals" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const createdEvalResponse = await fetch(`${baseUrl}/v1/evals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Summary quality eval",
+        data_source_config: {
+          type: "custom",
+          include_sample_schema: true,
+          item_schema: {
+            type: "object",
+            properties: {
+              reference_answer: { type: "string" },
+              name: { type: "string" },
+              email: { type: "string" },
+            },
+          },
+        },
+        testing_criteria: [
+          {
+            type: "text_similarity",
+            name: "Reference similarity",
+            input: "{{ sample.output_text }}",
+            reference: "{{ item.reference_answer }}",
+            evaluation_metric: "rouge_l",
+            pass_threshold: 0.5,
+          },
+          {
+            type: "multi",
+            name: "Contact JSON",
+            graders: {
+              name: {
+                type: "text_similarity",
+                input: "{{ sample.output_json.name }}",
+                reference: "{{ item.name }}",
+                evaluation_metric: "fuzzy_match",
+                pass_threshold: 0.7,
+              },
+              email: {
+                type: "string_check",
+                input: "{{ sample.output_json.email }}",
+                reference: "{{ item.email }}",
+                operation: "eq",
+              },
+            },
+            calculate_output: "(name + email) / 2",
+            pass_threshold: 0.8,
+          },
+        ],
+      }),
+    });
+    assert.equal(createdEvalResponse.status, 201);
+    const evalObject = await createdEvalResponse.json();
+
+    const jsonl = JSON.stringify({
+      item: {
+        reference_answer: "The router was restarted successfully",
+        name: "Jane Doe",
+        email: "jane@example.com",
+      },
+      sample: {
+        output_text: "Router restarted successfully",
+        output_json: { name: "Jane Do", email: "jane@example.com" },
+      },
+    }) + "\n";
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "eval-graders.jsonl",
+        purpose: "evals",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data_source: {
+          type: "responses",
+          model: "mock-model",
+          source: { type: "file_id", id: file.id },
+          input_messages: {
+            type: "template",
+            template: [{ role: "user", content: "{{ item.reference_answer }}" }],
+          },
+        },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.result_counts.total, 1);
+    assert.equal(run.result_counts.passed, 1);
+    assert.deepEqual(run.metadata.compatibility.supported_graders, ["string_check", "text_similarity", "multi"]);
+    assert.equal(run.per_testing_criteria_results.length, 2);
+    assert.equal(run.per_testing_criteria_results.every((result) => result.passed === 1), true);
+
+    const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items`);
+    assert.equal(outputItemsResponse.status, 200);
+    const outputItems = await outputItemsResponse.json();
+    assert.equal(outputItems.data[0].status, "passed");
+    assert.equal(outputItems.data[0].results[0].type, "text_similarity");
+    assert.ok(outputItems.data[0].results[0].score >= 0.5);
+    assert.equal(outputItems.data[0].results[1].type, "multi");
+    assert.ok(outputItems.data[0].results[1].sub_rewards.email === 1);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);

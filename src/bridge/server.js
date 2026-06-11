@@ -32,6 +32,14 @@ const {
 } = require("./local_file_search");
 const { LocalEvalStore } = require("./local_evals");
 const {
+  SUPPORTED_GRADER_TYPES,
+  evaluateGrader,
+  normalizeRunSample,
+  renderTemplateValue,
+  runGrader,
+  validateGrader,
+} = require("./local_graders");
+const {
   LocalUploadStore,
   OFFICIAL_UPLOAD_MAX_BYTES,
   OFFICIAL_UPLOAD_PART_MAX_BYTES,
@@ -6993,7 +7001,7 @@ async function handleEvalRunCreate(req, res, config, responseStore, fileSearchSt
         provider: "local",
         execution: "synchronous",
         row_count: rows.length,
-        supported_graders: ["string_check"],
+        supported_graders: SUPPORTED_GRADER_TYPES,
         reason: "evals_api_protocol_compatibility",
       },
     },
@@ -7254,7 +7262,7 @@ async function executeEvalRow(options) {
         score: 0,
         error: clone(sampleError),
       }))
-    : (evalObject.testing_criteria || []).map((criterion) => evaluateTestingCriterion(criterion, context));
+    : (evalObject.testing_criteria || []).map((criterion) => evaluateGrader(criterion, context));
   for (const result of results) addCriterionAggregate(criteriaAggregates, result);
   const status = sampleError
     ? "errored"
@@ -7372,101 +7380,10 @@ function evalResponsesRequestForRow(dataSource, item, config) {
 
 function evalInputForRow(value, item) {
   const input = isPlainObject(value) && value.type === "template" ? value.template : value;
-  const rendered = renderEvalTemplateValue(input, { item, sample: {} });
+  const rendered = renderTemplateValue(input, { item, sample: {} });
   if (Array.isArray(rendered)) return rendered;
   if (rendered == null || rendered === "") return [];
   return [{ role: "user", content: stringifyContent(rendered) }];
-}
-
-function evaluateTestingCriterion(criterion, context) {
-  const id = criterion.id || prefixedId("criterion");
-  const type = String(criterion.type || "string_check");
-  if (type !== "string_check") {
-    return {
-      id,
-      name: criterion.name || type,
-      type,
-      status: "errored",
-      passed: false,
-      score: 0,
-      error: {
-        code: "unsupported_eval_grader",
-        message: `local Evals compatibility supports string_check graders, not ${type}`,
-      },
-    };
-  }
-
-  const rawInput = renderEvalTemplateValue(criterion.input ?? "{{ sample.output_text }}", context);
-  const rawReference = renderEvalTemplateValue(criterion.reference ?? criterion.expected ?? "", context);
-  const operation = String(criterion.operation || "eq").toLowerCase();
-  const caseSensitive = criterion.case_sensitive !== false && criterion.ignore_case !== true;
-  const input = stringifyContent(rawInput);
-  const reference = stringifyContent(rawReference);
-  const left = caseSensitive ? input : input.toLowerCase();
-  const right = caseSensitive ? reference : reference.toLowerCase();
-  const passed = compareStringCheck(left, right, operation);
-
-  return {
-    id,
-    name: criterion.name || "string_check",
-    type,
-    status: passed ? "passed" : "failed",
-    passed,
-    score: passed ? 1 : 0,
-    input,
-    reference,
-    operation,
-  };
-}
-
-function compareStringCheck(input, reference, operation) {
-  if (operation === "eq" || operation === "equals") return input === reference;
-  if (operation === "ne" || operation === "not_eq" || operation === "not_equals") return input !== reference;
-  if (operation === "contains") return input.includes(reference);
-  if (operation === "not_contains") return !input.includes(reference);
-  if (operation === "starts_with") return input.startsWith(reference);
-  if (operation === "ends_with") return input.endsWith(reference);
-  if (operation === "regex") {
-    try {
-      return new RegExp(reference).test(input);
-    } catch {
-      return false;
-    }
-  }
-  return false;
-}
-
-function renderEvalTemplateValue(value, context) {
-  if (typeof value === "string") return renderEvalTemplateString(value, context);
-  if (Array.isArray(value)) return value.map((item) => renderEvalTemplateValue(item, context));
-  if (isPlainObject(value)) {
-    const output = {};
-    for (const [key, item] of Object.entries(value)) output[key] = renderEvalTemplateValue(item, context);
-    return output;
-  }
-  return value;
-}
-
-function renderEvalTemplateString(template, context) {
-  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, expr) => {
-    const value = valueAtEvalPath(context, String(expr).trim());
-    if (value == null) return "";
-    return typeof value === "string" ? value : stringifyContent(value);
-  });
-}
-
-function valueAtEvalPath(context, expression) {
-  const pathParts = expression
-    .replace(/\[(\d+)\]/g, ".$1")
-    .split(".")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  let value = context;
-  for (const part of pathParts) {
-    if (value == null) return undefined;
-    value = value[part];
-  }
-  return value;
 }
 
 function extractResponseOutputText(response) {
@@ -7508,6 +7425,51 @@ function addCriterionAggregate(criteriaAggregates, result) {
   else if (result.status === "errored") existing.errored += 1;
   else existing.failed += 1;
   criteriaAggregates.set(result.id, existing);
+}
+
+async function handleGraderValidate(req, res) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("grader validate request body must be a JSON object", {
+      code: "invalid_grader_request",
+    });
+  }
+  if (!isPlainObject(body.grader)) {
+    throw requestError("grader is required", {
+      code: "missing_required_parameter",
+      param: "grader",
+    });
+  }
+  const grader = validateGrader(body.grader);
+  sendJson(res, 200, { grader });
+}
+
+async function handleGraderRun(req, res) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("grader run request body must be a JSON object", {
+      code: "invalid_grader_request",
+    });
+  }
+  if (!isPlainObject(body.grader)) {
+    throw requestError("grader is required", {
+      code: "missing_required_parameter",
+      param: "grader",
+    });
+  }
+  if (body.item != null && !isPlainObject(body.item)) {
+    throw requestError("item must be a JSON object when provided", {
+      code: "invalid_grader_item",
+      param: "item",
+    });
+  }
+  const grader = validateGrader(body.grader);
+  const sample = normalizeRunSample(body.model_sample, body.sample);
+  const response = runGrader(grader, {
+    item: isPlainObject(body.item) ? clone(body.item) : {},
+    sample,
+  });
+  sendJson(res, 200, response);
 }
 
 function handleBatchesList(res, store, url) {
@@ -8186,6 +8148,16 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/moderations") {
         await handleModerations(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/validate") {
+        await handleGraderValidate(req, res);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/run") {
+        await handleGraderRun(req, res);
         return;
       }
 

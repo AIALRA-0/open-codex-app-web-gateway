@@ -4369,6 +4369,89 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Local Graders API and Evals grader expansion
+
+- Used current official OpenAI Graders docs/OpenAPI metadata to confirm the
+  Graders surface and supported grader families:
+  - `POST /v1/fine_tuning/alpha/graders/validate`;
+  - `POST /v1/fine_tuning/alpha/graders/run`;
+  - documented grader types `string_check`, `text_similarity`, `score_model`,
+    and `python`, with `multi` documented for RFT composition.
+- Added a dependency-free local Graders compatibility module for deterministic
+  grading on Chat-only providers:
+  - `string_check` supports documented `eq`, `neq`, `like`, and `ilike`,
+    plus compatibility aliases for equality, containment, prefix/suffix, and
+    regex checks;
+  - `text_similarity` supports the documented metric names
+    `fuzzy_match`, `bleu`, `gleu`, `meteor`, `cosine`, `rouge_1` through
+    `rouge_5`, and `rouge_l` with local deterministic approximations;
+  - one-level `multi` combines subgrader rewards through a small safe formula
+    parser supporting arithmetic, parentheses, identifiers, comma-separated
+    function calls, and `min`, `max`, `abs`, `floor`, `ceil`, `exp`, `sqrt`,
+    and `log`;
+  - `score_model`, `python`, nested `multi`, hosted judge execution, and
+    sandboxed Python execution intentionally return structured unsupported
+    errors instead of silently faking parity.
+- Added Graders API handlers:
+  - validate returns the normalized grader for locally supported deterministic
+    graders;
+  - run returns `reward`, `metadata`, `sub_rewards`, and empty model-token
+    usage for local graders without contacting the upstream provider.
+- Reused the same grader engine in local Evals runs, extending Evals beyond
+  `string_check` to deterministic `text_similarity` and one-level `multi`
+  testing criteria. Run metadata now records
+  `supported_graders:["string_check","text_similarity","multi"]`.
+- Extended the live bridge-regression harness with `graders-api-local`, which
+  validates a `string_check` grader, runs `text_similarity`, runs `multi`, and
+  confirms unsupported `score_model` returns
+  `unsupported_grader_type`.
+- Updated the compatibility matrix, evaluation plan, and deployment
+  verification commands to document the Graders API, deterministic Evals
+  coverage, local approximation caveats, and remaining parity gaps.
+- Verification:
+  - `node --check src/bridge/local_graders.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Graders/Evals server tests ran through `test/server.test.js` and
+    passed, including the new Graders API and Evals text-similarity/multi
+    cases.
+  - `npm test`: passed 162/162.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 771 runtime
+    candidates, selected 94 old UI screenshots by retention policy, deleted 0
+    files, selected 7725496 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `graders-api-local` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, with `similarity_reward:0.6`,
+    `multi_reward:0.9375`, zero token usage, and unsupported `score_model`
+    returning HTTP 400.
+  - Live `evals-lifecycle` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, with `result_counts:{total:2,passed:1,failed:1,errored:0}`
+    and zero token usage because it used sample-driven local grading.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: 71/71 passing
+    cases, pass rate 1.0, average latency 1058 ms, P95 latency 2708 ms, and
+    total usage 10857 tokens.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, saved-project
+    cleanup, and no console errors or warnings.
+  - Runtime cleanup with `npm run prune:runtime -- --apply`: deleted 95 old
+    UI screenshots by retention policy, freed 7810577 bytes, and reported 0
+    errors.
+  - Disk/storage check after cleanup: the filesystem has 39 GB available;
+    `state/` is 8.3 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-10 Stored Response Lifecycle Include Projection
 
 - Re-checked the current OpenAI Responses include list through the official

@@ -411,6 +411,19 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "graders-api-local",
+        mode: "graders-api-local",
+        check: ({ validate, similarity, multi, unsupported }) => validate?.grader?.type === "string_check"
+          && similarity?.reward >= 0.5
+          && similarity?.metadata?.type === "text_similarity"
+          && similarity?.metadata?.errors?.other_error === false
+          && multi?.metadata?.type === "multi"
+          && multi?.reward >= 0.8
+          && multi?.sub_rewards?.email === 1
+          && unsupported?.status === 400
+          && unsupported?.json?.error?.code === "unsupported_grader_type",
+      },
+      {
         id: "responses-inline-moderation",
         mode: "responses",
         request: {
@@ -2316,6 +2329,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "evals-lifecycle") {
       return await runEvalsLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "graders-api-local") {
+      return await runGradersApiLocalCase(testCase, context, started);
+    }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
@@ -2712,6 +2728,84 @@ async function runEvalsLifecycleCase(testCase, context, started) {
     if (evalId) await deleteJson(`${baseUrl}/v1/evals/${evalId}`);
     if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
   }
+}
+
+async function runGradersApiLocalCase(testCase, context, started) {
+  const validate = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+    grader: {
+      type: "string_check",
+      name: "exact",
+      input: "{{ sample.output_text }}",
+      reference: "{{ item.label }}",
+      operation: "eq",
+    },
+  });
+  const similarity = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+    grader: {
+      type: "text_similarity",
+      name: "summary_similarity",
+      input: "{{ sample.output_text }}",
+      reference: "{{ item.reference_answer }}",
+      evaluation_metric: "rouge_l",
+      pass_threshold: 0.5,
+    },
+    item: { reference_answer: "The router was restarted successfully" },
+    model_sample: "Router restarted successfully",
+  });
+  const multi = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+    grader: {
+      type: "multi",
+      name: "contact_json",
+      graders: {
+        name: {
+          type: "text_similarity",
+          input: "{{ sample.output_json.name }}",
+          reference: "{{ item.name }}",
+          evaluation_metric: "fuzzy_match",
+          pass_threshold: 0.7,
+        },
+        email: {
+          type: "string_check",
+          input: "{{ sample.output_json.email }}",
+          reference: "{{ item.email }}",
+          operation: "eq",
+        },
+      },
+      calculate_output: "(name + email) / 2",
+      pass_threshold: 0.8,
+    },
+    item: { name: "Jane Doe", email: "jane@example.com" },
+    model_sample: {
+      output_text: "{\"name\":\"Jane Do\",\"email\":\"jane@example.com\"}",
+      output_json: { name: "Jane Do", email: "jane@example.com" },
+    },
+  });
+  const unsupported = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+    grader: {
+      type: "score_model",
+      name: "judge",
+      input: [{ role: "user", content: "Score {{ sample.output_text }}" }],
+      model: "gpt-5-mini",
+    },
+  });
+
+  const ok = !!testCase.check({
+    validate: validate.json,
+    similarity: similarity.json,
+    multi: multi.json,
+    unsupported,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: multi.status,
+    validate_status: validate.status,
+    similarity_status: similarity.status,
+    unsupported_status: unsupported.status,
+    similarity_reward: similarity.json?.reward || 0,
+    multi_reward: multi.json?.reward || 0,
+    usage: moderationUsage(),
+    output_text: `graders:${similarity.json?.reward || 0}:${multi.json?.reward || 0}`,
+  });
 }
 
 async function runVideoLifecycleCase(testCase, context, started) {
