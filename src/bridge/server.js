@@ -54,13 +54,13 @@ const {
 } = require("./local_computer");
 const {
   attachImageGenerationOutput,
+  createImagesEditEventStream,
   createImagesEditResponse,
+  createImagesGenerationEventStream,
   createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
-  imagesEditStreamEvents,
-  imagesGenerationStreamEvents,
   injectImageGenerationMessages,
   localImageGenerationToolTypes,
   prepareImageGenerationContext,
@@ -4686,25 +4686,12 @@ async function handleImagesGenerations(req, res, config) {
   let request;
   try {
     request = await readJson(req);
-    const response = await createImagesGenerationResponse(request, config);
     if (request.stream === true) {
-      const events = imagesGenerationStreamEvents(response, request);
-      if (!events.length) {
-        sendError(res, 502, "streaming image responses require b64_json output", {
-          type: "image_provider_error",
-          code: "invalid_image_provider_response",
-        });
-        return;
-      }
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      });
-      for (const event of events) writeSse(res, event.event, event.data);
-      res.end();
+      const events = await createImagesGenerationEventStream(request, config);
+      await writeImageApiEventStream(res, events, "streaming image responses require b64_json output");
       return;
     }
+    const response = await createImagesGenerationResponse(request, config);
     sendJson(res, 200, response);
   } catch (error) {
     sendError(res, error.status || 400, error.message || "image generation request failed", {
@@ -4719,29 +4706,20 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
   let request;
   try {
     request = await readImagesEditRequest(req, config);
+    if (request.stream === true || String(request.stream || "").toLowerCase() === "true") {
+      const events = await createImagesEditEventStream(request, config, {
+        fileSearchStore,
+        imageGenerationStore,
+        fetch: globalThis.fetch,
+      });
+      await writeImageApiEventStream(res, events, "streaming image edit responses require b64_json output");
+      return;
+    }
     const response = await createImagesEditResponse(request, config, {
       fileSearchStore,
       imageGenerationStore,
       fetch: globalThis.fetch,
     });
-    if (request.stream === true || String(request.stream || "").toLowerCase() === "true") {
-      const events = imagesEditStreamEvents(response, request);
-      if (!events.length) {
-        sendError(res, 502, "streaming image edit responses require b64_json output", {
-          type: "image_provider_error",
-          code: "invalid_image_provider_response",
-        });
-        return;
-      }
-      res.writeHead(200, {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-        connection: "keep-alive",
-      });
-      for (const event of events) writeSse(res, event.event, event.data);
-      res.end();
-      return;
-    }
     sendJson(res, 200, response);
   } catch (error) {
     sendError(res, error.status || 400, error.message || "image edit request failed", {
@@ -4749,6 +4727,52 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
       code: error.code || "image_edit_error",
       param: error.param || null,
     });
+  }
+}
+
+async function writeImageApiEventStream(res, events, emptyMessage) {
+  if (Array.isArray(events) && !events.length) {
+    sendError(res, 502, emptyMessage, {
+      type: "image_provider_error",
+      code: "invalid_image_provider_response",
+    });
+    return;
+  }
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+
+  let wrote = false;
+  try {
+    for await (const event of events || []) {
+      if (!event?.event || !event?.data) continue;
+      wrote = true;
+      writeSse(res, event.event, event.data);
+    }
+    if (!wrote) {
+      writeSse(res, "error", {
+        error: {
+          message: emptyMessage,
+          type: "image_provider_error",
+          code: "invalid_image_provider_response",
+          param: null,
+        },
+      });
+    }
+  } catch (error) {
+    writeSse(res, "error", {
+      error: {
+        message: error.message || "image streaming request failed",
+        type: error.type || "image_provider_error",
+        code: error.code || "image_stream_error",
+        param: error.param || null,
+      },
+    });
+  } finally {
+    res.end();
   }
 }
 

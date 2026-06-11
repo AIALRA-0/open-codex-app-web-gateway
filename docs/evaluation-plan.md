@@ -317,9 +317,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/responses` image-generation cases preserve those output items in Batch
   output files.
 - Direct Images API evaluation covers `/v1/images/generations` JSON responses,
-  `/v1/images/edits` JSON edit responses, synthesized Image API SSE streaming,
-  multi-image `n` handling, and local Batch JSONL execution over direct
-  image-generation and image-edit requests.
+  `/v1/images/edits` JSON edit responses, Image API SSE streaming for direct
+  generation and edit endpoints, multi-image `n` handling, and local Batch
+  JSONL execution over direct image-generation and image-edit requests.
 - Local vector-store file batches accept both OpenAI batch request shapes and remain compatible with file-search retrieval.
 - Local vector-store files honor static `chunking_strategy` limits and expose chunk metadata through file content and search results.
 - Local vector stores refresh `last_active_at` / `expires_at` when searched and

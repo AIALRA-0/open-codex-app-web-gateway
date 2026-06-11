@@ -890,9 +890,10 @@ instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
 `stream`. Non-streaming responses use the OpenAI `ImagesResponse` shape with
 `created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
 `usage` when present. `stream:true` returns Image API SSE events
-`image_generation.partial_image` and `image_generation.completed`; placeholder
-and non-stream provider-backed mode synthesize these from the final image, so
-true upstream partial chunk relay remains a known gap. The bridge also exposes
+`image_generation.partial_image` and `image_generation.completed`;
+provider-backed streaming requests forward `stream:true` and relay upstream
+SSE events as they arrive, while placeholder mode and providers that return
+JSON synthesize compatible events from the final image. The bridge also exposes
 direct `POST /v1/images/edits` compatibility. Multipart requests accept
 `image` / `image[]` / `images[]` files, optional `mask`, `prompt`, `model`,
 `n`, `size`, `quality`, `background`, `input_fidelity`, `moderation`,
@@ -902,8 +903,9 @@ and optional `mask` using `image_url` data URLs, HTTP(S) URLs, or local
 `file_id` references so Batch JSONL can exercise edit workflows without
 multipart bodies. Non-streaming direct edit responses use the same
 `ImagesResponse` shape; `stream:true` returns `image_edit.partial_image` and
-`image_edit.completed` SSE events synthesized from the final provider or
-placeholder image. Local Batch JSONL can also execute `/v1/images/generations`
+`image_edit.completed` SSE events, relaying upstream provider SSE when
+available and synthesizing compatible events for placeholder or JSON fallback
+responses. Local Batch JSONL can also execute `/v1/images/generations`
 and JSON-form `/v1/images/edits` requests synchronously and write the direct
 Images response into the Batch output file.
 
@@ -941,7 +943,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
-| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, provider-backed Images API generations and multipart edits, input image and mask upload mapping, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, and JSON-form `/v1/images/edits` execution, and UI/SDK workflow compatibility. It does not yet relay true upstream streaming partial-image chunks, execute future video endpoints, or perform OpenAI hosted model-side prompt rewriting | Add real streaming relay, moderation/error-detail parity, future video endpoint coverage, and image-quality evals |
+| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, provider-backed Images API generations and multipart edits, upstream provider SSE relay for direct Images generation/edit requests, input image and mask upload mapping, placeholder fallback, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, and JSON-form `/v1/images/edits` execution, and UI/SDK workflow compatibility. It does not yet execute future video endpoints, perform OpenAI hosted model-side prompt rewriting, or run image-quality evals beyond protocol shape checks | Add moderation/error-detail parity, future video endpoint coverage, hosted-style prompt rewrite metadata, and image-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |

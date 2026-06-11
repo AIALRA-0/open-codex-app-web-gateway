@@ -2597,21 +2597,28 @@ test("POST /v1/images/generations can call an OpenAI-compatible Images API", asy
     assert.equal(call.body.output_format, "png");
     assert.equal(call.body.response_format, "b64_json");
     assert.equal(call.body.user, "direct-user");
-    assert.equal(call.body.stream, undefined);
-    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_images_direct" });
-    res.end(JSON.stringify({
-      created: 1713833628,
-      model: "provider-image-model",
-      data: [
-        { b64_json: tinyPng, revised_prompt: "direct badge one" },
-        { b64_json: tinyPng, revised_prompt: "direct badge two" },
-      ],
+    assert.equal(call.body.stream, true);
+    assert.equal(call.body.partial_images, 2);
+    res.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "req_images_direct" });
+    res.write(`event: image_generation.partial_image\ndata: ${JSON.stringify({
+      type: "image_generation.partial_image",
+      b64_json: tinyPng,
+      partial_image_index: 0,
+    })}\n\n`);
+    res.write(`event: image_generation.partial_image\ndata: ${JSON.stringify({
+      type: "image_generation.partial_image",
+      b64_json: tinyPng,
+      partial_image_index: 1,
+    })}\n\n`);
+    res.end(`event: image_generation.completed\ndata: ${JSON.stringify({
+      type: "image_generation.completed",
+      b64_json: tinyPng,
       usage: {
         total_tokens: 100,
         input_tokens: 20,
         output_tokens: 80,
       },
-    }));
+    })}\n\n`);
   }, async ({ bridgeAddress, requests }) => {
     const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/generations`, {
       method: "POST",
@@ -2631,7 +2638,10 @@ test("POST /v1/images/generations can call an OpenAI-compatible Images API", asy
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
     const events = parseSseEvents(await response.text());
-    assert.equal(events.filter((event) => event.event === "image_generation.partial_image").length, 2);
+    const partials = events.filter((event) => event.event === "image_generation.partial_image");
+    assert.equal(partials.length, 2);
+    assert.equal(partials[0].data.partial_image_index, 0);
+    assert.equal(partials[1].data.partial_image_index, 1);
     const completed = events.find((event) => event.event === "image_generation.completed")?.data;
     assert.equal(completed.type, "image_generation.completed");
     assert.equal(completed.b64_json, tinyPng);
@@ -2731,21 +2741,29 @@ test("POST /v1/images/edits can call an OpenAI-compatible Images API", async () 
     assert.match(call.rawBody, /name="image"; filename="source\.png"/);
     assert.match(call.rawBody, /name="mask"; filename="mask\.png"/);
     assert.match(call.rawBody, /Content-Type: image\/png/);
-    assert.doesNotMatch(call.rawBody, /name="stream"/);
-    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_images_edit_direct" });
-    res.end(JSON.stringify({
-      created: 1713833629,
-      model: "provider-image-model",
-      data: [
-        { b64_json: editedPng, revised_prompt: "direct edit badge one" },
-        { b64_json: editedPng, revised_prompt: "direct edit badge two" },
-      ],
+    assert.match(call.rawBody, /name="stream"/);
+    assert.match(call.rawBody, /true/);
+    assert.match(call.rawBody, /name="partial_images"/);
+    res.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "req_images_edit_direct" });
+    res.write(`event: image_edit.partial_image\ndata: ${JSON.stringify({
+      type: "image_edit.partial_image",
+      b64_json: editedPng,
+      partial_image_index: 0,
+    })}\n\n`);
+    res.write(`event: image_edit.partial_image\ndata: ${JSON.stringify({
+      type: "image_edit.partial_image",
+      b64_json: editedPng,
+      partial_image_index: 1,
+    })}\n\n`);
+    res.end(`event: image_edit.completed\ndata: ${JSON.stringify({
+      type: "image_edit.completed",
+      b64_json: editedPng,
       usage: {
         total_tokens: 120,
         input_tokens: 30,
         output_tokens: 90,
       },
-    }));
+    })}\n\n`);
   }, async ({ bridgeAddress, requests }) => {
     const form = new FormData();
     form.append("model", "direct-edit-model");
@@ -2767,7 +2785,10 @@ test("POST /v1/images/edits can call an OpenAI-compatible Images API", async () 
     assert.equal(response.status, 200);
     assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
     const events = parseSseEvents(await response.text());
-    assert.equal(events.filter((event) => event.event === "image_edit.partial_image").length, 2);
+    const partials = events.filter((event) => event.event === "image_edit.partial_image");
+    assert.equal(partials.length, 2);
+    assert.equal(partials[0].data.partial_image_index, 0);
+    assert.equal(partials[1].data.partial_image_index, 1);
     const completed = events.find((event) => event.event === "image_edit.completed")?.data;
     assert.equal(completed.type, "image_edit.completed");
     assert.equal(completed.b64_json, editedPng);

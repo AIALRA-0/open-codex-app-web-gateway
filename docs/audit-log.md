@@ -5652,6 +5652,71 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Direct Images API upstream SSE relay
+
+- Used the official OpenAI Images OpenAPI endpoint specs for
+  `POST /v1/images/generations` and `POST /v1/images/edits`:
+  - `stream:true` generation responses use
+    `image_generation.partial_image` and `image_generation.completed`;
+  - `stream:true` edit responses use `image_edit.partial_image` and
+    `image_edit.completed`;
+  - `partial_images` controls streamed partial image count for GPT image
+    models and is forwarded only when explicitly requested by the client.
+- Replaced direct Images API streaming for provider-backed calls from
+  final-image synthesis to upstream SSE relay:
+  - generation stream requests now send JSON `stream:true` and optional
+    `partial_images` to the configured `/images/generations` provider path;
+  - edit stream requests now send multipart `stream=true` and optional
+    `partial_images` to the configured `/images/edits` provider path;
+  - upstream provider SSE frames are parsed incrementally, normalized by event
+    name, and written to the client as they arrive;
+  - provider JSON fallback and placeholder mode still synthesize compatible
+    Image API SSE events from the final image for SDK compatibility;
+  - streaming provider errors after headers are emitted as SSE `error` events,
+    while pre-stream validation/provider HTTP errors keep OpenAI-style JSON
+    errors.
+- Added bridge-regression cases for direct Images generation/edit SSE:
+  `images-generation-stream` and `images-edit-stream`.
+- Updated compatibility and evaluation docs so the current known gaps no
+  longer list true upstream Images partial-image relay as missing.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Images API streaming tests passed in the 111/111 reported server
+    subtests:
+    `node --test test/server.test.js --test-name-pattern "images/generations|images/edits|Images API|Images edit"`.
+  - `npm test`: 149/149 passing tests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 707 runtime
+    candidates, selected 90 old UI screenshots by retention policy, deleted
+    0 files, selected 7,353,648 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz on
+    `http://127.0.0.1:12912/healthz` returned `ok:true`, DeepSeek provider
+    base `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Live `images-generation-stream` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 69 ms, event count 3, output
+    `image_generation:2:completed`, and zero model tokens because it is local
+    placeholder image generation.
+  - Live `images-edit-stream` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 52 ms, event count 3, output
+    `image_edit:2:completed`, and zero model tokens because it is local
+    placeholder image editing.
+  - Full live `npm run eval:bridge`: 59/59 passing cases, pass rate 1.0,
+    average latency 1240 ms, P95 latency 3423 ms, and total usage 10,720
+    tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Disk/storage check: filesystem has 40 GB available; repo `state/` is
+    7.2 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or
+  local deployment env files were added to the repository.
+
 ## 2026-06-11 - Direct Images API edit endpoint and Batch coverage
 
 - Used the official OpenAI Images edits OpenAPI endpoint shape for

@@ -1418,6 +1418,23 @@ function buildSuites(defaultModel) {
           && /images:2/.test(text),
       },
       {
+        id: "images-generation-stream",
+        mode: "images-generation-stream",
+        request: {
+          model: "gpt-image-2",
+          prompt: "Exercise the direct OpenAI-compatible Images API streaming endpoint.",
+          n: 1,
+          size: "1024x1024",
+          quality: "low",
+          stream: true,
+          partial_images: 2,
+        },
+        check: ({ completed, events, partials, text }) => partials.length === 2
+          && events.some((event) => event.event === "image_generation.completed")
+          && /^iVBORw0KGgo/.test(completed?.b64_json || "")
+          && /image_generation:2:completed/.test(text),
+      },
+      {
         id: "images-edit",
         mode: "images-edit",
         request: {
@@ -1435,6 +1452,25 @@ function buildSuites(defaultModel) {
           && /^iVBORw0KGgo/.test(json.data[1]?.b64_json || "")
           && /Edit the supplied image using this instruction/.test(json.data[0]?.revised_prompt || "")
           && /images:2/.test(text),
+      },
+      {
+        id: "images-edit-stream",
+        mode: "images-edit-stream",
+        request: {
+          model: "gpt-image-2",
+          prompt: "Exercise the direct OpenAI-compatible Images edit API streaming endpoint.",
+          images: [{ image_url: `data:image/png;base64,${tinyPngBase64}`, filename: "eval-source.png" }],
+          mask: { image_url: `data:image/png;base64,${tinyMaskPngBase64}`, filename: "eval-mask.png" },
+          n: 1,
+          size: "1024x1024",
+          quality: "low",
+          stream: true,
+          partial_images: 2,
+        },
+        check: ({ completed, events, partials, text }) => partials.length === 2
+          && events.some((event) => event.event === "image_edit.completed")
+          && /^iVBORw0KGgo/.test(completed?.b64_json || "")
+          && /image_edit:2:completed/.test(text),
       },
       {
         id: "responses-image-edit",
@@ -1989,8 +2025,14 @@ async function runCase(testCase, context) {
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
+    if (testCase.mode === "images-generation-stream") {
+      return await runImageApiStreamCase(testCase, context, started, "/v1/images/generations", "image_generation");
+    }
     if (testCase.mode === "images-edit") {
       return await runJsonCase(testCase, context, started, "/v1/images/edits", imagesGenerationOutputText, imagesGenerationUsage);
+    }
+    if (testCase.mode === "images-edit-stream") {
+      return await runImageApiStreamCase(testCase, context, started, "/v1/images/edits", "image_edit");
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
@@ -2118,6 +2160,31 @@ async function runStreamingResponsesCase(testCase, context, started) {
     ok,
     status: response.status,
     usage: responseUsage(completed || {}),
+    output_text: truncate(text),
+    event_count: events.length,
+  });
+}
+
+async function runImageApiStreamCase(testCase, context, started, path, eventPrefix) {
+  const response = await postJson(`${baseUrl}${path}`, testCase.request);
+  const body = await response.text();
+  if (!response.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: response.status,
+      error: truncate(body),
+    });
+  }
+
+  const events = parseSseEvents(body);
+  const partials = events.filter((event) => event.event === `${eventPrefix}.partial_image`);
+  const completed = events.findLast((event) => event.event === `${eventPrefix}.completed`)?.data || null;
+  const text = `${eventPrefix}:${partials.length}:${completed ? "completed" : "missing"}`;
+  const ok = !!testCase.check({ completed, events, partials, text });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: response.status,
+    usage: imagesGenerationUsage({ usage: completed?.usage || {} }),
     output_text: truncate(text),
     event_count: events.length,
   });

@@ -226,6 +226,29 @@ async function createImagesGenerationResponse(request = {}, config = {}, options
   return placeholderImagesGenerationResponse(normalized, config);
 }
 
+async function createImagesGenerationEventStream(request = {}, config = {}, options = {}) {
+  const normalized = normalizeImagesGenerationRequest(request, config);
+  const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
+
+  if (!canUseLocalImageGeneration(config)) {
+    throw imageApiError("local image generation is disabled", {
+      status: 400,
+      code: "image_generation_disabled",
+      param: "provider",
+    });
+  }
+
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(provider)) {
+    return await requestImagesGenerationProviderStream({
+      config,
+      normalized,
+      signal: options.signal,
+    });
+  }
+
+  return imagesGenerationStreamEvents(placeholderImagesGenerationResponse(normalized, config), normalized);
+}
+
 async function createImagesEditResponse(request = {}, config = {}, options = {}) {
   const normalized = await normalizeImagesEditRequest(request, config, options);
   const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
@@ -248,6 +271,29 @@ async function createImagesEditResponse(request = {}, config = {}, options = {})
   }
 
   return placeholderImagesEditResponse(normalized, config);
+}
+
+async function createImagesEditEventStream(request = {}, config = {}, options = {}) {
+  const normalized = await normalizeImagesEditRequest(request, config, options);
+  const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
+
+  if (!canUseLocalImageGeneration(config)) {
+    throw imageApiError("local image generation is disabled", {
+      status: 400,
+      code: "image_generation_disabled",
+      param: "provider",
+    });
+  }
+
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(provider)) {
+    return await requestImagesEditProviderStream({
+      config,
+      normalized,
+      signal: options.signal,
+    });
+  }
+
+  return imagesEditStreamEvents(placeholderImagesEditResponse(normalized, config), normalized);
 }
 
 function imagesGenerationStreamEvents(response = {}, request = {}) {
@@ -581,6 +627,37 @@ async function requestImagesGenerationProvider({ config = {}, normalized = {}, s
   }
 }
 
+async function requestImagesGenerationProviderStream({ config = {}, normalized = {}, signal }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw imageApiError(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`, {
+      status: 401,
+      code: "missing_image_generation_api_key",
+    });
+  }
+
+  const body = imagesGenerationProviderBody({ config, normalized });
+  body.stream = true;
+  if (normalized.partial_images_requested) body.partial_images = normalized.partial_images;
+
+  return await requestImageProviderStream({
+    config,
+    expectedPrefix: "image_generation",
+    fallbackEvents: (json) => imagesGenerationStreamEvents(normalizeImagesGenerationProviderResponse(json), normalized),
+    fetchOptions: {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "accept": "text/event-stream, application/json",
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    },
+    signal,
+    url: imageGenerationProviderUrl(config),
+  });
+}
+
 async function requestImagesEditProvider({ config = {}, normalized = {}, signal }) {
   const apiKey = config.imageGenerationApiKey || "";
   if (!apiKey) {
@@ -630,6 +707,96 @@ async function requestImagesEditProvider({ config = {}, normalized = {}, signal 
   } finally {
     clearTimeout(timeout);
     if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
+async function requestImagesEditProviderStream({ config = {}, normalized = {}, signal }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw imageApiError(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`, {
+      status: 401,
+      code: "missing_image_generation_api_key",
+    });
+  }
+
+  const form = imagesEditProviderForm({ config, normalized });
+  appendFormValue(form, "stream", true);
+  if (normalized.partial_images_requested) appendFormValue(form, "partial_images", normalized.partial_images);
+
+  return await requestImageProviderStream({
+    config,
+    expectedPrefix: "image_edit",
+    fallbackEvents: (json) => imagesEditStreamEvents(normalizeImagesGenerationProviderResponse(json), normalized),
+    fetchOptions: {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "accept": "text/event-stream, application/json",
+      },
+      body: form,
+    },
+    signal,
+    url: imageGenerationEditProviderUrl(config),
+  });
+}
+
+async function requestImageProviderStream({ config = {}, expectedPrefix, fallbackEvents, fetchOptions, signal, url }) {
+  const controller = new AbortController();
+  const timeoutMs = config.imageGenerationTimeoutMs || 120000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  const cleanup = () => {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  };
+
+  try {
+    const response = await fetch(url, {
+      ...fetchOptions,
+      signal: controller.signal,
+    });
+    const contentType = response.headers.get("content-type") || "";
+    if (!response.ok) {
+      const text = await response.text();
+      cleanup();
+      const json = parseJson(text);
+      const message = stringifyContent(json?.error?.message || text || `image provider returned HTTP ${response.status}`);
+      throw imageApiError(message, {
+        status: response.status,
+        code: json?.error?.code || "image_provider_error",
+        type: json?.error?.type || "image_provider_error",
+      });
+    }
+
+    if (!/text\/event-stream/i.test(contentType)) {
+      const text = await response.text();
+      cleanup();
+      const json = parseJson(text);
+      if (!isPlainObject(json)) {
+        throw imageApiError("streaming image provider did not return SSE or JSON", {
+          status: 502,
+          code: "invalid_image_provider_response",
+          type: "image_provider_error",
+        });
+      }
+      return fallbackEvents(json);
+    }
+
+    return relayImageProviderStream(response.body, expectedPrefix, cleanup);
+  } catch (error) {
+    cleanup();
+    if (error?.name === "AbortError") {
+      throw imageApiError("image provider request timed out", {
+        status: 504,
+        code: "image_provider_timeout",
+      });
+    }
+    throw error;
   }
 }
 
@@ -766,6 +933,98 @@ function trimTrailingSlash(value) {
   return String(value || "").replace(/\/+$/, "");
 }
 
+async function* relayImageProviderStream(stream, expectedPrefix, cleanup) {
+  let sawEvent = false;
+  try {
+    for await (const frame of iterateImageProviderSse(stream)) {
+      if (!frame || frame.data === "[DONE]") continue;
+      const event = normalizeImageProviderStreamEvent(frame, expectedPrefix);
+      if (!event) continue;
+      sawEvent = true;
+      yield event;
+    }
+    if (!sawEvent) {
+      throw imageApiError("streaming image provider did not return image events", {
+        status: 502,
+        code: "invalid_image_provider_response",
+        type: "image_provider_error",
+      });
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw imageApiError("image provider request timed out", {
+        status: 504,
+        code: "image_provider_timeout",
+      });
+    }
+    throw error;
+  } finally {
+    cleanup?.();
+  }
+}
+
+async function* iterateImageProviderSse(stream) {
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for await (const chunk of stream || []) {
+    buffer += decoder.decode(chunk, { stream: true });
+    let boundary = sseBoundaryIndex(buffer);
+    while (boundary !== -1) {
+      const frame = buffer.slice(0, boundary.index);
+      buffer = buffer.slice(boundary.index + boundary.length);
+      const parsed = parseImageProviderSseFrame(frame);
+      if (parsed) yield parsed;
+      boundary = sseBoundaryIndex(buffer);
+    }
+  }
+
+  buffer += decoder.decode();
+  if (buffer.trim()) {
+    const parsed = parseImageProviderSseFrame(buffer);
+    if (parsed) yield parsed;
+  }
+}
+
+function sseBoundaryIndex(buffer) {
+  const crlf = buffer.indexOf("\r\n\r\n");
+  const lf = buffer.indexOf("\n\n");
+  if (crlf === -1 && lf === -1) return -1;
+  if (crlf !== -1 && (lf === -1 || crlf < lf)) return { index: crlf, length: 4 };
+  return { index: lf, length: 2 };
+}
+
+function parseImageProviderSseFrame(frame) {
+  const lines = String(frame || "").split(/\r?\n/);
+  let event = "";
+  const dataLines = [];
+  for (const line of lines) {
+    if (!line || line.startsWith(":")) continue;
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+  if (!dataLines.length) return null;
+  const dataText = dataLines.join("\n").trim();
+  if (!dataText || dataText === "[DONE]") return { event, data: "[DONE]" };
+  const data = parseJson(dataText);
+  if (!isPlainObject(data)) return null;
+  return { event, data };
+}
+
+function normalizeImageProviderStreamEvent(frame = {}, expectedPrefix) {
+  const data = isPlainObject(frame.data) ? cloneJson(frame.data) : null;
+  if (!data) return null;
+  const type = stringifyContent(data.type || frame.event || "");
+  if (!type.startsWith(`${expectedPrefix}.`)) return null;
+  data.type = type;
+  return {
+    event: frame.event || type,
+    data,
+  };
+}
+
 function parseJson(text) {
   try {
     return JSON.parse(text);
@@ -812,6 +1071,7 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
     options,
     stream: request.stream === true,
     partial_images: normalizePartialImageCount(request.partial_images),
+    partial_images_requested: request.partial_images !== undefined,
     tool: {
       action: "generate",
       ...options,
@@ -873,6 +1133,7 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
     options: requestOptions,
     stream: normalizeImageApiBoolean(request.stream),
     partial_images: normalizePartialImageCount(request.partial_images),
+    partial_images_requested: request.partial_images !== undefined,
     editInput,
     tool: {
       action: "edit",
@@ -1805,7 +2066,9 @@ function isPlainObject(value) {
 
 module.exports = {
   attachImageGenerationOutput,
+  createImagesEditEventStream,
   createImagesEditResponse,
+  createImagesGenerationEventStream,
   createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
