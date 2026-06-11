@@ -599,6 +599,42 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "batch-images-edit",
+        mode: "batch-local",
+        endpoint: "/v1/images/edits",
+        usage: "images",
+        requests: [
+          {
+            custom_id: "batch-direct-image-edit",
+            body: {
+              model: "gpt-image-2",
+              prompt: "Exercise the direct Images edit API inside local Batch JSONL.",
+              images: [{ image_url: `data:image/png;base64,${tinyPngBase64}`, filename: "eval-source.png" }],
+              mask: { image_url: `data:image/png;base64,${tinyMaskPngBase64}`, filename: "eval-mask.png" },
+              n: 2,
+              size: "1024x1024",
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/images/edits"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-direct-image-edit"
+            && outputLines[0].response?.status_code === 200
+            && response?.data?.length === 2
+            && response.data.every((item) => /^iVBORw0KGgo/.test(item?.b64_json || ""))
+            && /Edit the supplied image using this instruction/.test(response.data[0]?.revised_prompt || "");
+        },
+      },
+      {
         id: "chat-passthrough",
         mode: "chat",
         request: {
@@ -1382,6 +1418,25 @@ function buildSuites(defaultModel) {
           && /images:2/.test(text),
       },
       {
+        id: "images-edit",
+        mode: "images-edit",
+        request: {
+          model: "gpt-image-2",
+          prompt: "Exercise the direct OpenAI-compatible Images edit API endpoint.",
+          images: [{ image_url: `data:image/png;base64,${tinyPngBase64}`, filename: "eval-source.png" }],
+          mask: { image_url: `data:image/png;base64,${tinyMaskPngBase64}`, filename: "eval-mask.png" },
+          n: 2,
+          size: "1024x1024",
+          quality: "low",
+        },
+        check: ({ json, text }) => Array.isArray(json.data)
+          && json.data.length === 2
+          && /^iVBORw0KGgo/.test(json.data[0]?.b64_json || "")
+          && /^iVBORw0KGgo/.test(json.data[1]?.b64_json || "")
+          && /Edit the supplied image using this instruction/.test(json.data[0]?.revised_prompt || "")
+          && /images:2/.test(text),
+      },
+      {
         id: "responses-image-edit",
         mode: "responses",
         request: {
@@ -1933,6 +1988,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
+    }
+    if (testCase.mode === "images-edit") {
+      return await runJsonCase(testCase, context, started, "/v1/images/edits", imagesGenerationOutputText, imagesGenerationUsage);
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);

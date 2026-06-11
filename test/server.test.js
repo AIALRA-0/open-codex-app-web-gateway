@@ -2645,6 +2645,142 @@ test("POST /v1/images/generations can call an OpenAI-compatible Images API", asy
   }));
 });
 
+test("POST /v1/images/edits accepts multipart placeholder edit requests", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder image edits");
+  }, async ({ bridgeAddress, requests }) => {
+    const form = new FormData();
+    form.append("model", "gpt-image-test");
+    form.append("prompt", "Replace the tiny image background with teal.");
+    form.append("n", "2");
+    form.append("size", "1024x1024");
+    form.append("quality", "low");
+    form.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source.png");
+    form.append("mask", new Blob([Buffer.from(maskPng, "base64")], { type: "image/png" }), "mask.png");
+
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/edits`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(typeof json.created, "number");
+    assert.equal(json.data.length, 2);
+    assert.deepEqual(Buffer.from(json.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(json.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.notEqual(json.data[0].b64_json, json.data[1].b64_json);
+    assert.match(json.data[0].revised_prompt, /Edit the supplied image using this instruction/);
+    assert.equal(requests.length, 0);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("POST /v1/images/edits accepts JSON image_url and mask inputs", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder JSON image edits");
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/edits`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-image-test",
+        prompt: "Edit the JSON-provided tiny image.",
+        images: [{ image_url: `data:image/png;base64,${sourcePng}`, filename: "json-source.png" }],
+        mask: { image_url: `data:image/png;base64,${maskPng}`, filename: "json-mask.png" },
+        n: 1,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.data.length, 1);
+    assert.deepEqual(Buffer.from(json.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.match(json.data[0].revised_prompt, /Edit the supplied image using this instruction/);
+    assert.equal(requests.length, 0);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("POST /v1/images/edits can call an OpenAI-compatible Images API", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  const editedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8DwQACfsD/QVQH6UAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/images/edits");
+    assert.equal(req.headers.authorization, "Bearer image-test-key");
+    assert.match(req.headers["content-type"], /^multipart\/form-data; boundary=/);
+    assert.equal(call.body, null);
+    assert.match(call.rawBody, /name="model"/);
+    assert.match(call.rawBody, /direct-edit-model/);
+    assert.match(call.rawBody, /name="prompt"/);
+    assert.match(call.rawBody, /Edit two tiny direct endpoint badges/);
+    assert.match(call.rawBody, /name="n"/);
+    assert.match(call.rawBody, /name="size"/);
+    assert.match(call.rawBody, /1024x1024/);
+    assert.match(call.rawBody, /name="output_format"/);
+    assert.match(call.rawBody, /png/);
+    assert.match(call.rawBody, /name="response_format"/);
+    assert.match(call.rawBody, /b64_json/);
+    assert.match(call.rawBody, /name="user"/);
+    assert.match(call.rawBody, /direct-edit-user/);
+    assert.match(call.rawBody, /name="image"; filename="source\.png"/);
+    assert.match(call.rawBody, /name="mask"; filename="mask\.png"/);
+    assert.match(call.rawBody, /Content-Type: image\/png/);
+    assert.doesNotMatch(call.rawBody, /name="stream"/);
+    res.writeHead(200, { "content-type": "application/json", "x-request-id": "req_images_edit_direct" });
+    res.end(JSON.stringify({
+      created: 1713833629,
+      model: "provider-image-model",
+      data: [
+        { b64_json: editedPng, revised_prompt: "direct edit badge one" },
+        { b64_json: editedPng, revised_prompt: "direct edit badge two" },
+      ],
+      usage: {
+        total_tokens: 120,
+        input_tokens: 30,
+        output_tokens: 90,
+      },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const form = new FormData();
+    form.append("model", "direct-edit-model");
+    form.append("prompt", "Edit two tiny direct endpoint badges.");
+    form.append("n", "2");
+    form.append("size", "1024x1024");
+    form.append("output_format", "png");
+    form.append("response_format", "b64_json");
+    form.append("stream", "true");
+    form.append("partial_images", "2");
+    form.append("user", "direct-edit-user");
+    form.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source.png");
+    form.append("mask", new Blob([Buffer.from(maskPng, "base64")], { type: "image/png" }), "mask.png");
+
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/images/edits`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.filter((event) => event.event === "image_edit.partial_image").length, 2);
+    const completed = events.find((event) => event.event === "image_edit.completed")?.data;
+    assert.equal(completed.type, "image_edit.completed");
+    assert.equal(completed.b64_json, editedPng);
+    assert.equal(completed.usage.total_tokens, 120);
+    assert.equal(requests.length, 1);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationModel: "gpt-image-test",
+  }));
+});
+
 test("POST /v1/responses can back image_generation with an OpenAI-compatible Images API", async () => {
   const generatedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {
@@ -7892,6 +8028,80 @@ test("local Batch API executes direct Images generation JSONL", async () => {
     assert.equal(body.data.length, 2);
     assert.deepEqual(Buffer.from(body.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
     assert.deepEqual(Buffer.from(body.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("local Batch API executes direct Images edit JSONL", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const maskPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for placeholder direct image edit batches");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = `${JSON.stringify({
+      custom_id: "direct-image-edit-ok",
+      method: "POST",
+      url: "/v1/images/edits",
+      body: {
+        model: "gpt-image-test",
+        prompt: "Edit two batch direct image placeholders.",
+        images: [{ image_url: `data:image/png;base64,${sourcePng}`, filename: "batch-source.png" }],
+        mask: { image_url: `data:image/png;base64,${maskPng}`, filename: "batch-mask.png" },
+        n: 2,
+        size: "1024x1024",
+      },
+    })}\n`;
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "images-edit-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/images/edits",
+        completion_window: "24h",
+        metadata: { suite: "batch-images-edits" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.object, "batch");
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.endpoint, "/v1/images/edits");
+    assert.equal(batch.request_counts.total, 1);
+    assert.equal(batch.request_counts.completed, 1);
+    assert.equal(batch.request_counts.failed, 0);
+    assert.ok(batch.output_file_id);
+    assert.equal(batch.error_file_id, null);
+    assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/images/edits"), true);
+    assert.equal(requests.length, 0);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 1);
+    assert.equal(outputLines[0].custom_id, "direct-image-edit-ok");
+    assert.equal(outputLines[0].response.status_code, 200);
+    const body = outputLines[0].response.body;
+    assert.equal(typeof body.created, "number");
+    assert.equal(body.data.length, 2);
+    assert.deepEqual(Buffer.from(body.data[0].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.deepEqual(Buffer.from(body.data[1].b64_json, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.match(body.data[0].revised_prompt, /Edit the supplied image using this instruction/);
   }, {
     imageGenerationPlaceholderSize: 16,
   });

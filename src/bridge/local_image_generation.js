@@ -226,6 +226,30 @@ async function createImagesGenerationResponse(request = {}, config = {}, options
   return placeholderImagesGenerationResponse(normalized, config);
 }
 
+async function createImagesEditResponse(request = {}, config = {}, options = {}) {
+  const normalized = await normalizeImagesEditRequest(request, config, options);
+  const provider = String(config.imageGenerationProvider || "placeholder").toLowerCase();
+
+  if (!canUseLocalImageGeneration(config)) {
+    throw imageApiError("local image generation is disabled", {
+      status: 400,
+      code: "image_generation_disabled",
+      param: "provider",
+    });
+  }
+
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(provider)) {
+    const response = await requestImagesEditProvider({
+      config,
+      normalized,
+      signal: options.signal,
+    });
+    return normalizeImagesGenerationProviderResponse(response);
+  }
+
+  return placeholderImagesEditResponse(normalized, config);
+}
+
 function imagesGenerationStreamEvents(response = {}, request = {}) {
   const first = Array.isArray(response.data) ? response.data.find((item) => item?.b64_json) : null;
   const b64 = first?.b64_json || "";
@@ -246,6 +270,34 @@ function imagesGenerationStreamEvents(response = {}, request = {}) {
       event: "image_generation.completed",
       data: {
         type: "image_generation.completed",
+        b64_json: b64,
+        ...(response.usage ? { usage: response.usage } : {}),
+      },
+    });
+  }
+  return events;
+}
+
+function imagesEditStreamEvents(response = {}, request = {}) {
+  const first = Array.isArray(response.data) ? response.data.find((item) => item?.b64_json) : null;
+  const b64 = first?.b64_json || "";
+  const partialCount = normalizePartialImageCount(request.partial_images);
+  const events = [];
+  if (b64) {
+    for (let index = 0; index < partialCount; index += 1) {
+      events.push({
+        event: "image_edit.partial_image",
+        data: {
+          type: "image_edit.partial_image",
+          b64_json: b64,
+          partial_image_index: index,
+        },
+      });
+    }
+    events.push({
+      event: "image_edit.completed",
+      data: {
+        type: "image_edit.completed",
         b64_json: b64,
         ...(response.usage ? { usage: response.usage } : {}),
       },
@@ -314,6 +366,13 @@ function normalizePartialImageCount(value) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed)) return 0;
   return Math.max(0, Math.min(3, Math.trunc(parsed)));
+}
+
+function normalizeImageApiBoolean(value) {
+  if (value === true) return true;
+  if (value === false || value === undefined || value === null) return false;
+  const text = String(value).trim().toLowerCase();
+  return text === "true" || text === "1";
 }
 
 function requestedImageOptions(tool = {}) {
@@ -522,6 +581,58 @@ async function requestImagesGenerationProvider({ config = {}, normalized = {}, s
   }
 }
 
+async function requestImagesEditProvider({ config = {}, normalized = {}, signal }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw imageApiError(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`, {
+      status: 401,
+      code: "missing_image_generation_api_key",
+    });
+  }
+
+  const controller = new AbortController();
+  const timeoutMs = config.imageGenerationTimeoutMs || 120000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  try {
+    const response = await fetch(imageGenerationEditProviderUrl(config), {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+      },
+      body: imagesEditProviderForm({ config, normalized }),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const json = parseJson(text);
+    if (!response.ok) {
+      const message = stringifyContent(json?.error?.message || text || `image provider returned HTTP ${response.status}`);
+      throw imageApiError(message, {
+        status: response.status,
+        code: json?.error?.code || "image_provider_error",
+        type: json?.error?.type || "image_provider_error",
+      });
+    }
+    return isPlainObject(json) ? json : {};
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      throw imageApiError("image provider request timed out", {
+        status: 504,
+        code: "image_provider_timeout",
+      });
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
 function imageGenerationProviderBody({ config = {}, prompt, tool = {} }) {
   const body = {
     model: config.imageGenerationModel || "gpt-image-2",
@@ -585,6 +696,33 @@ function imageGenerationProviderEditForm({ config = {}, editInput = {}, prompt, 
   if (config.imageGenerationUser) appendFormValue(form, "user", config.imageGenerationUser);
   for (const image of editInput.images || []) appendImageBlob(form, "image[]", image);
   if (editInput.mask) appendImageBlob(form, "mask", editInput.mask);
+  return form;
+}
+
+function imagesEditProviderForm({ config = {}, normalized = {} }) {
+  const form = new FormData();
+  appendFormValue(form, "model", normalized.model || config.imageGenerationModel || "gpt-image-2");
+  appendFormValue(form, "prompt", normalized.prompt);
+  appendFormValue(form, "n", normalized.n || 1);
+  for (const key of [
+    "background",
+    "input_fidelity",
+    "moderation",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "user",
+  ]) {
+    if (normalized.options?.[key] !== undefined) appendFormValue(form, key, normalized.options[key]);
+  }
+  if (normalized.options?.response_format === undefined && config.imageGenerationResponseFormat) {
+    appendFormValue(form, "response_format", config.imageGenerationResponseFormat);
+  }
+  if (normalized.options?.user === undefined && config.imageGenerationUser) appendFormValue(form, "user", config.imageGenerationUser);
+  for (const image of normalized.editInput?.images || []) appendImageBlob(form, "image", image);
+  if (normalized.editInput?.mask) appendImageBlob(form, "mask", normalized.editInput.mask);
   return form;
 }
 
@@ -683,6 +821,68 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
   };
 }
 
+async function normalizeImagesEditRequest(request = {}, config = {}, options = {}) {
+  if (!isPlainObject(request)) {
+    throw imageApiError("image edit request body must be an object", {
+      code: "invalid_request_body",
+    });
+  }
+  if (typeof request.prompt !== "string" || !request.prompt.trim()) {
+    throw imageApiError("prompt is required", {
+      code: "missing_required_parameter",
+      param: "prompt",
+    });
+  }
+
+  const n = normalizeImagesGenerationN(request.n);
+  const prompt = truncateForPrompt(request.prompt.trim(), 32000);
+  const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
+  const requestOptions = {};
+  for (const key of [
+    "background",
+    "input_fidelity",
+    "moderation",
+    "output_compression",
+    "output_format",
+    "quality",
+    "response_format",
+    "size",
+    "user",
+  ]) {
+    if (request[key] !== undefined) requestOptions[key] = request[key];
+  }
+
+  const editInput = await resolveDirectImagesEditInput({ request, config, options });
+  if (!editInput.images.length) {
+    throw imageApiError(imageEditInputError(editInput).replace("image_generation action edit", "image edit"), {
+      code: "missing_required_parameter",
+      param: "image",
+    });
+  }
+  if (editInput.mask_required && !editInput.mask) {
+    throw imageApiError(imageEditMaskError(editInput).replace("image_generation input_image_mask", "image edit mask"), {
+      code: "invalid_request_parameter",
+      param: "mask",
+    });
+  }
+
+  return {
+    model,
+    prompt,
+    n,
+    options: requestOptions,
+    stream: normalizeImageApiBoolean(request.stream),
+    partial_images: normalizePartialImageCount(request.partial_images),
+    editInput,
+    tool: {
+      action: "edit",
+      ...requestOptions,
+      partial_images: request.partial_images,
+      n,
+    },
+  };
+}
+
 function normalizeImagesGenerationN(value) {
   if (value === undefined || value === null || value === "") return 1;
   const parsed = Number(value);
@@ -701,6 +901,22 @@ function placeholderImagesGenerationResponse(normalized = {}, config = {}) {
     data: Array.from({ length: normalized.n }, (_unused, index) => ({
       b64_json: makePlaceholderImageBase64(`${normalized.prompt}\n[image ${index + 1}/${normalized.n}]`, normalized.tool, config),
       revised_prompt: revisedPromptFor(normalized.prompt, "generate"),
+    })),
+  };
+}
+
+function placeholderImagesEditResponse(normalized = {}, config = {}) {
+  const imageCount = normalized.editInput?.images?.length || 0;
+  const hasMask = !!normalized.editInput?.mask;
+  return {
+    created: Math.floor(Date.now() / 1000),
+    data: Array.from({ length: normalized.n }, (_unused, index) => ({
+      b64_json: makePlaceholderImageBase64([
+        normalized.prompt,
+        `[edit image ${index + 1}/${normalized.n}]`,
+        `[input images: ${imageCount}; mask: ${hasMask ? "yes" : "no"}]`,
+      ].join("\n"), normalized.tool, config),
+      revised_prompt: revisedPromptFor(normalized.prompt, "edit"),
     })),
   };
 }
@@ -758,6 +974,122 @@ function stringifyOptional(value) {
 
 function emptyImageEditInput() {
   return { images: [], mask: null, mask_required: false, mask_error: null, errors: [] };
+}
+
+async function resolveDirectImagesEditInput({ request = {}, config = {}, options = {} }) {
+  const maxBytes = Number(config.imageGenerationMaxInputImageBytes || DEFAULT_MAX_EDIT_IMAGE_BYTES);
+  const resolveOptions = {
+    config,
+    fetch: options.fetch,
+    fileStore: options.fileSearchStore || options.fileStore,
+    imageStore: options.imageGenerationStore,
+    maxBytes,
+    signal: options.signal,
+  };
+  const editInput = emptyImageEditInput();
+
+  for (const [index, file] of directEditImageFiles(request).entries()) {
+    const image = directEditableFile(file, "image", index, maxBytes);
+    if (image.status === "completed") editInput.images.push(image);
+    else editInput.errors.push(image);
+  }
+
+  for (const [index, part] of directEditImageParts(request).entries()) {
+    const image = await resolveEditableImagePart(part, resolveOptions, "image");
+    if (image.status === "completed") editInput.images.push(image);
+    else editInput.errors.push(image);
+  }
+
+  const maskFile = directEditMaskFile(request);
+  if (maskFile) {
+    editInput.mask_required = true;
+    const mask = directEditableFile(maskFile, "mask", 0, maxBytes);
+    if (mask.status === "completed") editInput.mask = mask;
+    else {
+      editInput.mask_error = mask;
+      editInput.errors.push(mask);
+    }
+  } else if (directEditMaskRequested(request)) {
+    editInput.mask_required = true;
+    const mask = await resolveEditableImagePart(normalizeDirectEditPart(request.mask, "mask", 0), resolveOptions, "mask");
+    if (mask.status === "completed") editInput.mask = mask;
+    else {
+      editInput.mask_error = mask;
+      editInput.errors.push(mask);
+    }
+  }
+
+  return editInput;
+}
+
+function directEditImageFiles(request = {}) {
+  const files = Array.isArray(request.image_files) ? request.image_files : [];
+  return files.filter(Boolean);
+}
+
+function directEditMaskFile(request = {}) {
+  return request.mask_file || null;
+}
+
+function directEditImageParts(request = {}) {
+  const parts = [];
+  const add = (value) => {
+    if (value === undefined || value === null || value === "") return;
+    if (Array.isArray(value)) {
+      for (const item of value) add(item);
+      return;
+    }
+    parts.push(value);
+  };
+  add(request.images);
+  add(request.image);
+  if (request.image_url !== undefined) {
+    add({
+      image_url: request.image_url,
+      filename: request.filename,
+      media_type: request.media_type || request.mime_type,
+    });
+  }
+  return parts.map((part, index) => normalizeDirectEditPart(part, "image", index));
+}
+
+function directEditMaskRequested(request = {}) {
+  return Object.prototype.hasOwnProperty.call(request, "mask")
+    && request.mask !== undefined
+    && request.mask !== null
+    && request.mask !== "";
+}
+
+function normalizeDirectEditPart(part, role, index) {
+  if (typeof part === "string") {
+    const value = part.trim();
+    if (/^file[-_]/i.test(value)) {
+      return { file_id: value, filename: `${role}-${index + 1}.png` };
+    }
+    return { image_url: value, filename: `${role}-${index + 1}.png` };
+  }
+  if (isPlainObject(part)) {
+    if (part.type === "image_url" && part.url && !part.image_url) {
+      return { ...part, image_url: part.url };
+    }
+    return part;
+  }
+  return part;
+}
+
+function directEditableFile(file = {}, role, index, maxBytes) {
+  const content = Buffer.isBuffer(file.buffer)
+    ? file.buffer
+    : Buffer.isBuffer(file.content)
+      ? file.content
+      : Buffer.from(file.content || "");
+  return completedEditableImage({
+    source: `multipart.${role}`,
+    filename: file.filename || file.name || `${role}-${index + 1}.png`,
+    media_type: file.media_type || file.mime_type || file.content_type,
+    buffer: content,
+    maxBytes,
+  });
 }
 
 async function resolveImageEditInput({
@@ -1473,10 +1805,12 @@ function isPlainObject(value) {
 
 module.exports = {
   attachImageGenerationOutput,
+  createImagesEditResponse,
   createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
+  imagesEditStreamEvents,
   imagesGenerationStreamEvents,
   injectImageGenerationMessages,
   isImageGenerationTool,

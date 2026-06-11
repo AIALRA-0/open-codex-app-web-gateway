@@ -54,10 +54,12 @@ const {
 } = require("./local_computer");
 const {
   attachImageGenerationOutput,
+  createImagesEditResponse,
   createImagesGenerationResponse,
   imageGenerationCompatibility,
   imageGenerationOutputItems,
   imageGenerationPartialImages,
+  imagesEditStreamEvents,
   imagesGenerationStreamEvents,
   injectImageGenerationMessages,
   localImageGenerationToolTypes,
@@ -97,6 +99,7 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/completions",
   "/v1/embeddings",
   "/v1/images/generations",
+  "/v1/images/edits",
   "/v1/moderations",
 ]);
 
@@ -4712,6 +4715,74 @@ async function handleImagesGenerations(req, res, config) {
   }
 }
 
+async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore) {
+  let request;
+  try {
+    request = await readImagesEditRequest(req, config);
+    const response = await createImagesEditResponse(request, config, {
+      fileSearchStore,
+      imageGenerationStore,
+      fetch: globalThis.fetch,
+    });
+    if (request.stream === true || String(request.stream || "").toLowerCase() === "true") {
+      const events = imagesEditStreamEvents(response, request);
+      if (!events.length) {
+        sendError(res, 502, "streaming image edit responses require b64_json output", {
+          type: "image_provider_error",
+          code: "invalid_image_provider_response",
+        });
+        return;
+      }
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        connection: "keep-alive",
+      });
+      for (const event of events) writeSse(res, event.event, event.data);
+      res.end();
+      return;
+    }
+    sendJson(res, 200, response);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "image edit request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "image_edit_error",
+      param: error.param || null,
+    });
+  }
+}
+
+async function readImagesEditRequest(req, config = {}) {
+  const contentType = req.headers["content-type"] || "";
+  if (!/^multipart\/form-data\b/i.test(contentType)) return await readJson(req);
+
+  const maxInputBytes = Number(config.imageGenerationMaxInputImageBytes || 50 * 1024 * 1024);
+  const maxBodyBytes = Math.min(
+    256 * 1024 * 1024,
+    Math.max(1024 * 1024, Number.isFinite(maxInputBytes) ? maxInputBytes : 50 * 1024 * 1024) * 4 + 1024 * 1024,
+  );
+  const form = parseMultipartFormBinary(await readRawBody(req, maxBodyBytes), contentType);
+  const imageFiles = form.files
+    .filter((file) => ["image", "image[]", "images", "images[]"].includes(file.name))
+    .map((file) => ({
+      filename: file.filename,
+      content_type: file.content_type,
+      content: file.content,
+    }));
+  const maskFile = form.files.find((file) => file.name === "mask");
+  return {
+    ...form.fields,
+    ...(imageFiles.length ? { image_files: imageFiles } : {}),
+    ...(maskFile ? {
+      mask_file: {
+        filename: maskFile.filename,
+        content_type: maskFile.content_type,
+        content: maskFile.content,
+      },
+    } : {}),
+  };
+}
+
 function normalizeModerationInputs(input) {
   if (input === undefined || input === null) {
     const error = new Error("input is required");
@@ -5508,6 +5579,8 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleEmbeddings(req, res, config);
     } else if (endpoint === "/v1/images/generations") {
       await handleImagesGenerations(req, res, config);
+    } else if (endpoint === "/v1/images/edits") {
+      await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
     } else if (endpoint === "/v1/moderations") {
       await handleModerations(req, res, config);
     } else {
@@ -6297,6 +6370,11 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/images/generations") {
         await handleImagesGenerations(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/images/edits") {
+        await handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore);
         return;
       }
 

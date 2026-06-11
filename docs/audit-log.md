@@ -5652,6 +5652,77 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Direct Images API edit endpoint and Batch coverage
+
+- Used the official OpenAI Images edits OpenAPI endpoint shape for
+  `POST /v1/images/edits`, including multipart source images and masks,
+  JSON-form `images` inputs, `ImagesResponse` output, and
+  `image_edit.partial_image` / `image_edit.completed` streaming event names.
+- Added direct local `POST /v1/images/edits` support:
+  - multipart requests accept repeated `image`, `image[]`, `images`, or
+    `images[]` file parts plus optional `mask`;
+  - JSON requests accept `images`, `image`, or `image_url` inputs using data
+    URLs, inline base64 image data, bounded HTTP(S) URLs, and local Files API
+    `file_id` references;
+  - optional JSON or multipart masks are resolved with the same byte and media
+    type validation as Responses image-generation edits;
+  - placeholder mode returns deterministic multi-image base64 PNG responses
+    without calling the Chat provider;
+  - provider-backed mode calls the configured OpenAI-compatible multipart
+    `/images/edits` path, forwards supported edit options, preserves all
+    returned `data[]` entries, and maps provider errors into OpenAI-style JSON
+    errors;
+  - `stream:true` synthesizes direct Images edit SSE events from the final
+    image so SDK streaming clients can parse the surface while true upstream
+    partial relay remains documented as a gap.
+- Extended local Batch API execution to accept JSON-form
+  `/v1/images/edits` requests in addition to `/v1/images/generations` and the
+  existing text/embedding/moderation endpoints.
+- Updated:
+  - `docs/compatibility-matrix.md` direct Images edit, Batch coverage, and
+    known gaps;
+  - `docs/deployment.md` image provider/env descriptions;
+  - `docs/evaluation-plan.md` with `images-edit` and `batch-images-edit`
+    bridge-regression coverage;
+  - `scripts/eval-harness.mjs` with direct and Batch Images edit cases.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused server tests including direct Images edit and Batch edit coverage
+    passed 111/111 reported subtests:
+    `node --test test/server.test.js --test-name-pattern "images/edits|Images edit"`.
+  - `npm test`: 149/149 passing tests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 691 runtime
+    candidates, selected 90 old UI screenshots by retention policy, deleted
+    0 files, selected 7,353,648 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz on
+    `http://127.0.0.1:12912/healthz` returned `ok:true`, DeepSeek provider
+    base `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Live `images-edit` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 111 ms, zero model tokens because it is local
+    placeholder image editing.
+  - Live `batch-images-edit` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 221 ms, one completed Batch line and no error
+    file.
+  - Full live `npm run eval:bridge`: 57/57 passing cases, pass rate 1.0,
+    average latency 1240 ms, P95 latency 2514 ms, and total usage 10,644
+    tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Direct runtime multipart smoke for `/v1/images/edits` returned HTTP 200
+    with two `data[].b64_json` PNG images and an edit `revised_prompt`.
+  - Disk/storage check: filesystem has 40 GB available; repo `state/` is
+    6.9 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or
+  local deployment env files were added to the repository.
+
 ## 2026-06-11 - Direct Images API generation endpoint and Batch coverage
 
 - Used the official OpenAI Image generation guide and OpenAPI endpoint spec for
