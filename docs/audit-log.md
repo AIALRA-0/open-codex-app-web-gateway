@@ -7062,3 +7062,88 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 23 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Streaming remote MCP call-loop compatibility
+
+- Used current official OpenAI Responses MCP/Connectors documentation through
+  the OpenAI developer-docs MCP before changing behavior. The relevant
+  documented surfaces remain `tools:[{type:"mcp"}]`, `server_label`,
+  `server_url` / `connector_id`, per-request `authorization`,
+  `require_approval`, `allowed_tools`, output items such as `mcp_list_tools`,
+  `mcp_call`, and `mcp_approval_request`, and streaming events including
+  `response.mcp_call_arguments.delta`,
+  `response.mcp_call_arguments.done`, and
+  `response.mcp_call.in_progress`.
+- Extended the remote MCP bridge from non-streaming/background call loops to
+  streaming Responses requests:
+  - streaming requests with imported remote MCP tools now expose generated
+    Chat function-tool proxies to the upstream Chat provider;
+  - the upstream tool-selection SSE turn is buffered so generated internal
+    `function_call` proxy items do not leak to Responses clients;
+  - auto-approved MCP proxy calls execute remote JSON-RPC `tools/call`, append
+    redacted Chat `tool` messages, then stream the final visible follow-up
+    provider deltas;
+  - the bridge emits Responses MCP call argument/progress SSE events and lets
+    normal stream completion emit final `mcp_call` output items;
+  - approval-required streaming tool calls now emit `mcp_approval_request`
+    output items without executing `tools/call`.
+- Updated the MCP compatibility prompt, compatibility matrix, deployment docs,
+  evaluation plan, and bridge regression harness. Added live case
+  `responses-mcp-remote-stream-call`.
+- Added unit/mock-provider coverage for:
+  - streaming auto-approved remote MCP `tools/call` over two upstream Chat
+    streams;
+  - SSE `response.mcp_call_arguments.*` and
+    `response.mcp_call.in_progress` emission;
+  - no public leak of generated MCP proxy `function_call` items;
+  - usage aggregation across tool-selection and final streaming turns;
+  - authorization redaction in public responses and Chat follow-up payloads;
+  - streaming approval-request emission without remote `tools/call`.
+- Compatibility boundary: this now covers non-streaming, streaming, and active
+  background auto-approved remote MCP `tools/call` for `server_url` tools, plus
+  streaming approval-request emission. Hosted connector OAuth/token sidecars,
+  restart-resumable per-request MCP authorization, and broader hosted connector
+  approval persistence remain future work.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/local_mcp.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused MCP server-test command ran through `test/server.test.js`; the
+    whole file passed 138/138, including the new streaming remote MCP call and
+    streaming approval-request tests.
+  - `npm test`: passed 176/176.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `responses-mcp-remote-stream-call` case passed 1/1 against
+    `deepseek-v4-pro`, latency 3397 ms, output
+    `mcp-remote-stream-call-ok`, 24 SSE events, remote MCP methods
+    `initialize`, `notifications/initialized`, `tools/list`, `tools/call`,
+    and total usage 1128 tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 79/79,
+    pass rate 1.0, average latency 1418 ms, P95 latency 4089 ms, and total
+    usage 18366 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1306 ms, P95 latency 1395 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, exercised sidebar navigation,
+    project dialog/upload, prompt submission, completed-turn actions,
+    reload persistence, generated image artifact display, and saved-project
+    cleanup without console errors.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 994 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 85190 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    85190 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 39 GB available;
+    `state/` was 13 MB, `output/` was 4.8 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

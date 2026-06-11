@@ -1045,7 +1045,7 @@ function mcpCompatibility(context) {
 function mcpPrompt(context) {
   const sections = [
     "Local Responses MCP compatibility is active.",
-    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured, execute auto-approved remote MCP tool calls in non-streaming requests, and create or consume local MCP approval items for approval-required non-streaming calls. It does not yet execute hosted connector calls.",
+    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured, execute auto-approved remote MCP tool calls in non-streaming, streaming, and active background requests, and create or consume local MCP approval items for approval-required remote calls. It does not yet execute hosted connector calls.",
     "Never infer private connector data. Use only visible MCP context items, user input, and other provided evidence.",
   ];
 

@@ -673,7 +673,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localMcp) {
     const approvedMcp = await executeApprovedMcpApprovalResponses(localMcp, config, { toolBudget });
     applyLocalMcpToChat(chat, compatibility, localMcp, config);
-    if (!chat.stream && !approvedMcp.handled) injectMcpChatTools(chat, localMcp, config, { toolBudget });
+    if (!approvedMcp.handled) injectMcpChatTools(chat, localMcp, config, { toolBudget });
   }
   const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {
@@ -698,7 +698,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
-    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, localMcp, conversationStore, conversation);
+    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, localMcp, conversationStore, conversation, toolBudget);
     return;
   }
 
@@ -2952,7 +2952,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, conversationStore = null, conversation = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, conversationStore = null, conversation = null, toolBudget = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
@@ -2973,23 +2973,34 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   emitWebSearchStreamItems(res, state, localWebSearch);
   emitFileSearchStreamItems(res, state, localFileSearch);
 
-  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
-  if (!upstream.ok) {
-    const text = await upstream.text();
-    emitError(res, state, text, upstream.status);
-    res.end();
-    return;
-  }
-
   try {
-    for await (const payload of iterateSseJson(upstream.body)) {
-      if (payload === "[DONE]") break;
-      const events = applyChatStreamChunk(state, payload);
-      for (const event of events) writeSse(res, event.type, sequence(state, event));
+    if (canRunStreamingMcpToolLoop(localMcp, config)) {
+      const mcpStreamResult = await streamProviderWithMcpToolLoop(res, state, config, chat, req.headers, localMcp, toolBudget);
+      if (!mcpStreamResult.ok) {
+        emitError(res, state, mcpStreamResult.text || mcpStreamResult.json?.error?.message || "upstream provider request failed", mcpStreamResult.status);
+        res.end();
+        return;
+      }
+    } else {
+      const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
+      if (!upstream.ok) {
+        const text = await upstream.text();
+        emitError(res, state, text, upstream.status);
+        res.end();
+        return;
+      }
+
+      for await (const payload of iterateSseJson(upstream.body)) {
+        if (payload === "[DONE]") break;
+        const events = applyChatStreamChunk(state, payload);
+        for (const event of events) writeSse(res, event.type, sequence(state, event));
+      }
     }
 
     annotateWebSearchResponse(response, localWebSearch);
     annotateFileSearchResponse(response, localFileSearch);
+    mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
+    Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
     syncStreamTextFromResponse(state);
     const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
     const doneEvents = finishStreamState(state);
@@ -3046,6 +3057,134 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     emitError(res, state, error.message, 500);
   } finally {
     res.end();
+  }
+}
+
+function canRunStreamingMcpToolLoop(localMcp, config = {}) {
+  return config.mcpRemoteToolCalls !== false
+    && !!localMcp?.chat_tool_map
+    && typeof localMcp.chat_tool_map.size === "number"
+    && localMcp.chat_tool_map.size > 0;
+}
+
+async function streamProviderWithMcpToolLoop(res, state, config, chat, incomingHeaders, localMcp, toolBudget) {
+  const usageParts = [];
+  const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
+
+  for (let round = 0; round <= maxRounds; round += 1) {
+    const current = await collectProviderStreamCompletion(config, chat, incomingHeaders);
+    if (!current.ok) return current;
+    if (current.completion?.usage) usageParts.push(current.completion.usage);
+
+    const execution = round < maxRounds
+      ? await executeMcpChatToolCalls(localMcp, current.completion, config, { toolBudget })
+      : { executed: false };
+    if (!execution.executed) {
+      replayBufferedChatStreamEvents(res, state, current.payloads);
+      applyCombinedStreamUsage(state, usageParts);
+      return { ok: true };
+    }
+
+    emitMcpExecutionStreamItems(res, state, execution.output_items || []);
+    if (execution.approval_requested) {
+      applyCombinedStreamUsage(state, usageParts);
+      return { ok: true };
+    }
+
+    chat.messages.push(...(execution.messages || []));
+    if (round + 1 >= maxRounds) chat.tool_choice = "none";
+  }
+
+  applyCombinedStreamUsage(state, usageParts);
+  return { ok: true };
+}
+
+async function collectProviderStreamCompletion(config, chat, incomingHeaders) {
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders);
+  if (!upstream.ok) {
+    const text = await upstream.text();
+    return {
+      ok: false,
+      status: upstream.status,
+      text,
+      json: parseJsonOrNull(text),
+    };
+  }
+
+  const accumulator = createChatStreamAccumulator(chat);
+  const payloads = [];
+  for await (const payload of iterateSseJson(upstream.body)) {
+    if (payload === "[DONE]") break;
+    payloads.push(payload);
+    applyChatCompletionStreamChunk(accumulator, payload);
+  }
+
+  return {
+    ok: true,
+    status: upstream.status,
+    payloads,
+    completion: finalizeChatStreamCompletion(accumulator),
+  };
+}
+
+function replayBufferedChatStreamEvents(res, state, payloads = []) {
+  for (const payload of payloads) {
+    const events = applyChatStreamChunk(state, payload);
+    for (const event of events) writeSse(res, event.type, sequence(state, event));
+  }
+}
+
+function applyCombinedStreamUsage(state, usageParts = []) {
+  const usable = usageParts.filter(isPlainObject);
+  if (!usable.length) return;
+  const usage = usable.length > 1 ? combineChatUsage(usable) : clone(usable[0]);
+  state.chatUsage = usage;
+  state.usage = mapUsage(usage);
+}
+
+function emitMcpExecutionStreamItems(res, state, items = []) {
+  for (const rawItem of items) {
+    const item = clone(rawItem);
+    state.response.output.push(item);
+    const outputIndex = state.response.output.length - 1;
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: outputIndex,
+      item: clone(item),
+    }));
+    if (item.type !== "mcp_call") continue;
+    if (item.arguments) {
+      writeSse(res, "response.mcp_call_arguments.delta", sequence(state, {
+        type: "response.mcp_call_arguments.delta",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        delta: item.arguments,
+      }));
+      writeSse(res, "response.mcp_call_arguments.done", sequence(state, {
+        type: "response.mcp_call_arguments.done",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        arguments: item.arguments,
+      }));
+    }
+    writeSse(res, "response.mcp_call.in_progress", sequence(state, {
+      type: "response.mcp_call.in_progress",
+      response_id: state.response.id,
+      item_id: item.id,
+      output_index: outputIndex,
+    }));
+    if (item.error) {
+      writeSse(res, "response.mcp_call.failed", sequence(state, {
+        type: "response.mcp_call.failed",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        error: clone(item.error),
+      }));
+    }
   }
 }
 

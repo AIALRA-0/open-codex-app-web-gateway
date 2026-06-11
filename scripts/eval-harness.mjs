@@ -557,6 +557,21 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-stream-call",
+        mode: "responses-mcp-remote",
+        remoteCall: true,
+        request: {
+          model: defaultModel,
+          instructions: "You have an MCP dice tool exposed as a function tool. First call the available tool with expression 2d4+1. After the tool result is returned, answer exactly this text and nothing else: mcp-remote-stream-call-ok.",
+          input: "Stream a remote MCP roll tool call with expression 2d4+1, then return mcp-remote-stream-call-ok.",
+          reasoning: { effort: "none" },
+          stream: true,
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          store: false,
+        },
+      },
+      {
         id: "responses-mcp-remote-background-call",
         mode: "responses-mcp-remote",
         remoteCall: true,
@@ -3270,6 +3285,7 @@ async function runMcpRemoteCase(testCase, context, started) {
   const wantsApproval = !!testCase.remoteApproval;
   const approvalApprove = testCase.remoteApprovalApprove !== false;
   const wantsBackground = !!testCase.background || !!testCase.request?.background;
+  const wantsStream = !!testCase.request?.stream;
   const records = [];
   const mcpServer = http.createServer((req, res) => {
     const chunks = [];
@@ -3368,7 +3384,7 @@ async function runMcpRemoteCase(testCase, context, started) {
         server_label: "remote_eval",
         server_url: `http://127.0.0.1:${address.port}/mcp`,
         authorization: authValue,
-        headers: { "x-eval-mcp": wantsApproval ? "remote-approval" : wantsBackground ? "remote-background-call" : wantsCall ? "remote-call" : "remote-list" },
+        headers: { "x-eval-mcp": wantsApproval ? "remote-approval" : wantsBackground ? "remote-background-call" : wantsStream && wantsCall ? "remote-stream-call" : wantsCall ? "remote-call" : "remote-list" },
         require_approval: wantsApproval ? "always" : "never",
         allowed_tools: ["roll"],
       }],
@@ -3383,7 +3399,22 @@ async function runMcpRemoteCase(testCase, context, started) {
       });
     }
 
-    let json = JSON.parse(body);
+    let streamEvents = [];
+    let json = null;
+    if (wantsStream) {
+      streamEvents = parseSseEvents(body);
+      json = streamEvents.findLast((event) => event.event === "response.completed")?.data?.response || null;
+      if (!json) {
+        return finishResult(testCase, context, started, {
+          ok: false,
+          status: response.status,
+          event_count: streamEvents.length,
+          error: truncate(body),
+        });
+      }
+    } else {
+      json = JSON.parse(body);
+    }
     const backgroundHistory = wantsBackground ? [json.status] : [];
     if (wantsBackground && json.status === "in_progress" && json.id) {
       for (let attempt = 0; attempt < 30; attempt += 1) {
@@ -3412,6 +3443,15 @@ async function runMcpRemoteCase(testCase, context, started) {
     const toolsListRecord = records.find((record) => record.method === "tools/list") || {};
     const toolsCallRecord = records.find((record) => record.method === "tools/call") || {};
     const mcpCallArguments = parseJsonish(mcpCall?.arguments);
+    const expectedHeader = wantsApproval
+      ? "remote-approval"
+      : wantsBackground
+      ? "remote-background-call"
+      : wantsStream && wantsCall
+      ? "remote-stream-call"
+      : wantsCall
+      ? "remote-call"
+      : "remote-list";
     if (wantsApproval) {
       const approvalRequest = (json.output || []).find((item) => item.type === "mcp_approval_request");
       const firstOk = mcpList?.server_label === "remote_eval"
@@ -3538,7 +3578,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       && methods.includes("notifications/initialized")
       && methods.includes("tools/list")
       && initializeRecord.headers?.authorization === `Bearer ${authValue}`
-      && initializeRecord.headers?.["x-eval-mcp"] === (wantsBackground ? "remote-background-call" : wantsCall ? "remote-call" : "remote-list")
+      && initializeRecord.headers?.["x-eval-mcp"] === expectedHeader
       && /application\/json/.test(String(initializeRecord.headers?.accept || ""))
       && /text\/event-stream/.test(String(initializeRecord.headers?.accept || ""))
       && toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
@@ -3546,7 +3586,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       && !serialized.includes("hidden_tool");
     const ok = commonOk && (
       wantsCall
-        ? (wantsBackground ? /mcp-remote-background-call-ok/i.test(text) : /mcp-remote-call-ok/i.test(text))
+        ? (wantsBackground ? /mcp-remote-background-call-ok/i.test(text) : wantsStream ? /mcp-remote-stream-call-ok/i.test(text) : /mcp-remote-call-ok/i.test(text))
           && mcpCall?.server_label === "remote_eval"
           && mcpCall?.name === "roll"
           && mcpCall?.output === "7"
@@ -3564,6 +3604,12 @@ async function runMcpRemoteCase(testCase, context, started) {
           && localMcp.boundary === "remote_list_tools_and_call_execution"
           && json.metadata?.compatibility?.local_tool_budget?.used === 2
           && json.metadata?.compatibility?.local_tool_budget?.exhausted === true
+          && (!wantsStream || (
+            streamEvents.length > 0
+            && streamEvents.some((event) => event.event === "response.mcp_call_arguments.delta")
+            && streamEvents.some((event) => event.event === "response.output_text.delta")
+            && !streamEvents.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
+          ))
         : /mcp-remote-ok/i.test(text)
           && localMcp.boundary === "remote_list_tools_without_call_execution"
           && json.metadata?.compatibility?.local_tool_budget?.used === 1
@@ -3580,6 +3626,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       mcp_methods: methods,
       mcp_auth_forwarded: initializeRecord.headers?.authorization === `Bearer ${authValue}`,
       session_forwarded: toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp",
+      event_count: streamEvents.length || undefined,
       error: ok ? undefined : truncate(serialized),
     });
   } finally {
