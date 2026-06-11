@@ -553,6 +553,11 @@ class FileAssistantStore {
   createRun(threadId, body = {}, assistant = {}) {
     if (!this.getThread(threadId)) return null;
     const now = nowSeconds();
+    const baseInstructions = nullableString(body.instructions ?? assistant.instructions);
+    const additionalInstructions = nullableString(body.additional_instructions);
+    const runInstructions = additionalInstructions
+      ? [baseInstructions, additionalInstructions].filter(Boolean).join("\n\n")
+      : baseInstructions;
     const run = {
       id: `run_${randomToken(18)}`,
       object: "thread.run",
@@ -569,7 +574,7 @@ class FileAssistantStore {
       required_action: null,
       last_error: null,
       model: stringOrDefault(body.model || assistant.model, "gpt-4o"),
-      instructions: nullableString(body.instructions ?? assistant.instructions),
+      instructions: runInstructions,
       tools: Array.isArray(body.tools) ? cloneJson(body.tools) : Array.isArray(assistant.tools) ? cloneJson(assistant.tools) : [],
       tool_resources: isPlainObject(body.tool_resources)
         ? cloneJson(body.tool_resources)

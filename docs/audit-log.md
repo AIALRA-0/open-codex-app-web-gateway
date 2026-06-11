@@ -4369,6 +4369,71 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants run additional messages
+
+- Used the official OpenAI Create Run API reference to close another
+  Assistants compatibility gap:
+  - `additional_messages` adds messages to the thread before creating the run;
+  - `additional_instructions` appends per-run guidance to the effective run
+    instructions.
+- Implemented local compatibility for Chat-only providers:
+  - run creation now appends `additional_messages` before creating the local
+    run, so the upstream Chat request sees the appended user/assistant content;
+  - appended messages reuse local thread-message normalization and metadata;
+  - appended message attachments are validated before mutation and materialized
+    into thread/run `tool_resources` before local hosted tools execute;
+  - invalid `additional_messages` shapes or missing attachment files fail before
+    creating messages, runs, or upstream provider calls;
+  - `additional_instructions` now appends to the effective run instructions and
+    therefore to the upstream Chat system context.
+- Extended regression coverage:
+  - added a unit/mock-provider test proving `additional_messages`,
+    `additional_instructions`, and file-search attachment materialization reach
+    the same Chat-backed run;
+  - added a unit/mock-provider test proving malformed `additional_messages` and
+    missing attached files do not mutate the thread or call the provider;
+  - added live bridge-regression case `assistants-additional-messages` against
+    the configured DeepSeek model.
+- Updated docs:
+  - compatibility matrix now documents `additional_messages` /
+    `additional_instructions` on `POST /v1/threads/{thread_id}/runs`;
+  - evaluation plan now lists mock and live coverage for appended run messages
+    and pre-run attachment materialization.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/store.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 12/12.
+  - `npm test`: passed 189/189.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 88/88,
+    pass rate 1.0, average latency 1321 ms, P95 latency 4004 ms, and total
+    usage 21983 tokens. The new `assistants-additional-messages` case passed
+    with status `completed`, 2 messages, 1 run, 1 step, output
+    `assistants-additional-live-ok`, and 101 total tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1249 ms, P95 latency 1260 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core pages, project dialog/upload, prompt submission, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1444 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 86158 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    86158 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 40 GB available; `state/` was 20 MB,
+    `output/` was 4.8 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 25 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants active-run locks and expiration
 
 - Used the official OpenAI Assistants Run lifecycle documentation to pin the

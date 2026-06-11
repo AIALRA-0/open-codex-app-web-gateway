@@ -9063,6 +9063,80 @@ function firstLocalThreadVectorStoreId(resources, fileSearchStore) {
   return ids.find((id) => fileSearchStore.getVectorStore(id)) || "";
 }
 
+function assistantRunAdditionalMessages(body) {
+  if (!Object.prototype.hasOwnProperty.call(body || {}, "additional_messages")) {
+    return { ok: true, messages: [] };
+  }
+  if (!Array.isArray(body.additional_messages)) {
+    return {
+      ok: false,
+      status: 400,
+      error: openAiError("additional_messages must be an array", {
+        type: "invalid_request_error",
+        code: "invalid_type",
+        param: "additional_messages",
+      }),
+    };
+  }
+  for (const [index, message] of body.additional_messages.entries()) {
+    if (!isPlainObject(message)) {
+      return {
+        ok: false,
+        status: 400,
+        error: openAiError("additional_messages entries must be objects", {
+          type: "invalid_request_error",
+          code: "invalid_type",
+          param: `additional_messages[${index}]`,
+        }),
+      };
+    }
+  }
+  return { ok: true, messages: body.additional_messages };
+}
+
+function appendAssistantRunAdditionalMessages({ assistantStore, fileSearchStore, threadId, body }) {
+  const additional = assistantRunAdditionalMessages(body);
+  if (!additional.ok || !additional.messages.length) {
+    return additional.ok ? { ok: true, thread: assistantStore.getThread(threadId), messages: [] } : additional;
+  }
+
+  for (const message of additional.messages) {
+    const validation = validateAssistantMessageAttachmentFiles({ fileSearchStore, message });
+    if (!validation.ok) return validation;
+  }
+
+  const createdMessages = [];
+  let latestThread = assistantStore.getThread(threadId);
+  for (const messageBody of additional.messages) {
+    const message = assistantStore.createMessage(threadId, messageBody);
+    if (!message) {
+      for (const created of createdMessages) assistantStore.deleteMessage(threadId, created.id);
+      return {
+        ok: false,
+        status: 404,
+        error: openAiError(`No thread found for id '${threadId}'`, {
+          type: "invalid_request_error",
+          code: "thread_not_found",
+          param: "thread_id",
+        }),
+      };
+    }
+    createdMessages.push(message);
+    const materialized = materializeAssistantMessageAttachments({
+      assistantStore,
+      fileSearchStore,
+      threadId,
+      message,
+    });
+    if (!materialized.ok) {
+      for (const created of createdMessages) assistantStore.deleteMessage(threadId, created.id);
+      return materialized;
+    }
+    latestThread = materialized.thread || latestThread;
+  }
+  return { ok: true, thread: latestThread, messages: createdMessages };
+}
+
 const ASSISTANT_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "expired", "incomplete"]);
 
 function assistantRunIsTerminal(run) {
@@ -9524,7 +9598,7 @@ async function createAndCompleteAssistantRun({
   threadId,
   incomingHeaders,
 }) {
-  const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
+  const prepared = prepareAssistantRunStart({ body, assistantStore, fileSearchStore, threadId });
   if (!prepared.ok) return prepared;
   return runAssistantChatTurn({
     config,
@@ -9552,7 +9626,7 @@ async function streamNewAssistantRun({
   res,
   streamOptions = {},
 }) {
-  const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
+  const prepared = prepareAssistantRunStart({ body, assistantStore, fileSearchStore, threadId });
   if (!prepared.ok) {
     sendJson(res, prepared.status, prepared.error);
     return;
@@ -9573,7 +9647,7 @@ async function streamNewAssistantRun({
   });
 }
 
-function prepareAssistantRunStart({ body, assistantStore, threadId }) {
+function prepareAssistantRunStart({ body, assistantStore, fileSearchStore, threadId }) {
   const assistantId = stringifyContent(body.assistant_id).trim();
   if (!assistantId) {
     return {
@@ -9598,7 +9672,7 @@ function prepareAssistantRunStart({ body, assistantStore, threadId }) {
       }),
     };
   }
-  const thread = assistantStore.getThread(threadId);
+  let thread = assistantStore.getThread(threadId);
   if (!thread) {
     return {
       ok: false,
@@ -9618,6 +9692,14 @@ function prepareAssistantRunStart({ body, assistantStore, threadId }) {
       error: assistantThreadLockedError(threadId, activeRun, "run"),
     };
   }
+  const additionalMessages = appendAssistantRunAdditionalMessages({
+    assistantStore,
+    fileSearchStore,
+    threadId,
+    body,
+  });
+  if (!additionalMessages.ok) return additionalMessages;
+  thread = additionalMessages.thread || thread;
 
   const assistantForRun = {
     ...assistant,

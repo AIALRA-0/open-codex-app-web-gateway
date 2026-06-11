@@ -1704,6 +1704,168 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
   });
 });
 
+test("Assistants API create run appends additional_messages before upstream Chat", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    assert.deepEqual(request.body.thinking, { type: "disabled" });
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Base assistant instructions/);
+    assert.match(prompt, /Per-run extra instruction/);
+    assert.match(prompt, /Use the attached file to return assistants-additional-message-ok/);
+    assert.match(prompt, /Additional Message File Fixture/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistant_additional_messages",
+      object: "chat.completion",
+      created: 1700000005,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-additional-message-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 41, completion_tokens: 6, total_tokens: 47 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistants-additional-message.txt",
+        purpose: "assistants",
+        content: "Additional Message File Fixture says the exact marker is assistants-additional-message-ok.",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Base assistant instructions.",
+        tools: [{ type: "file_search" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "additional-messages" } }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        additional_instructions: "Per-run extra instruction.",
+        additional_messages: [{
+          role: "user",
+          content: "Use the attached file to return assistants-additional-message-ok.",
+          attachments: [{
+            file_id: file.id,
+            tools: [{ type: "file_search" }],
+          }],
+          metadata: { source: "run_additional_messages" },
+        }],
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.match(run.instructions, /Base assistant instructions\.\n\nPer-run extra instruction\./);
+    const vectorStoreIds = run.tool_resources.file_search.vector_store_ids;
+    assert.equal(vectorStoreIds.length, 1);
+    assert.match(vectorStoreIds[0], /^vs_/);
+    assert.equal(run.metadata.compatibility.local_assistants.local_hosted_tool_types[0], "file_search");
+
+    assert.equal(requests.length, 1);
+    assert.ok(requests[0].body.messages.some((message) => (
+      message.role === "user"
+        && /Use the attached file/.test(String(message.content || ""))
+    )));
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const listedMessagesJson = await listedMessages.json();
+    assert.equal(listedMessagesJson.data.length, 2);
+    const userMessage = listedMessagesJson.data.find((message) => message.role === "user");
+    assert.equal(userMessage.metadata.source, "run_additional_messages");
+    assert.equal(userMessage.attachments[0].file_id, file.id);
+    const assistantMessage = listedMessagesJson.data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.run_id, run.id);
+    assert.equal(assistantMessage.content[0].text.value, "assistants-additional-message-ok [1]");
+  });
+});
+
+test("Assistants API rejects invalid run additional_messages before creating messages or runs", async () => {
+  await withMockProvider(async () => {
+    throw new Error("provider should not be called for invalid additional_messages");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-4o-mini" }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const malformedResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        additional_messages: "not-an-array",
+      }),
+    });
+    assert.equal(malformedResponse.status, 400);
+    assert.equal((await malformedResponse.json()).error.code, "invalid_type");
+
+    const missingFileResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        additional_messages: [{
+          role: "user",
+          content: "Use a missing file.",
+          attachments: [{
+            file_id: "file_missing_additional",
+            tools: [{ type: "file_search" }],
+          }],
+        }],
+      }),
+    });
+    assert.equal(missingFileResponse.status, 404);
+    assert.equal((await missingFileResponse.json()).error.code, "file_not_found");
+    assert.equal(requests.length, 0);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?limit=10`);
+    assert.equal(listedMessages.status, 200);
+    assert.equal((await listedMessages.json()).data.length, 0);
+
+    const listedRuns = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs?limit=10`);
+    assert.equal(listedRuns.status, 200);
+    assert.equal((await listedRuns.json()).data.length, 0);
+  });
+});
+
 test("Assistants API required_action submits tool outputs through upstream Chat", async () => {
   await withMockProvider((_req, res, request) => {
     const lastMessage = request.body.messages.at(-1);
