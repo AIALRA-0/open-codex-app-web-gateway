@@ -7623,3 +7623,82 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` was 23 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Assistants hosted-tool local compatibility
+
+- Used the official OpenAI Assistants docs to refine the next compatibility
+  boundary:
+  - Assistants can define built-in `file_search` and `code_interpreter` tools;
+  - `tool_resources.file_search.vector_store_ids` and
+    `tool_resources.code_interpreter.file_ids` can be attached at assistant,
+    thread, and run scope;
+  - Run Steps can expose hosted tool-call details and file-search results.
+- Closed the first Assistants hosted-tool gap for Chat-only providers:
+  - run startup now merges assistant-, thread-, and run-level tool resources
+    before local execution;
+  - Assistants `file_search` tools reuse the local Responses file-search/vector
+    store adapter, inject retrieval evidence into the upstream Chat request,
+    create `file_search` Run Steps with results, and add `file_citation`
+    annotations to assistant message content;
+  - Assistants `code_interpreter` tools reuse the local container/shell adapter,
+    mount local Files API `file_ids` into `/mnt/data`, execute explicit Python
+    blocks, inject stdout and mounted-file evidence into Chat, and create
+    `code_interpreter` Run Steps with logs;
+  - compatibility metadata now reports local hosted Assistants tool types
+    without marking locally handled `file_search` / `code_interpreter` as
+    unsupported.
+- Extended regression coverage:
+  - added unit/mock-provider tests for Assistants `file_search` vector-store
+    evidence, citation annotations, Run Step persistence, and thread-level
+    resource merging;
+  - added unit/mock-provider tests for Assistants `code_interpreter` Python
+    execution, file-id mounting, Run Step logs, and mounted-file metadata;
+  - added live bridge-regression cases `assistants-file-search` and
+    `assistants-code-interpreter`.
+- Updated docs:
+  - compatibility matrix now lists local Assistants hosted-tool behavior and
+    narrows the known gap to hosted OpenAI jobs, attachment-created vector
+    stores, model-driven code loops, async thread locks, and non-text hosted
+    deltas;
+  - evaluation plan now lists the new live and mock-provider Assistants
+    hosted-tool coverage.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/store.js`, `src/bridge/local_shell.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 6/6.
+  - `npm test`: passed 183/183.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `assistants-file-search` passed 1/1 against `deepseek-v4-pro`, latency
+    1747 ms, output `assistants-file-search-live-ok [1]`, 2 Run Steps, 2
+    messages, and 205 total tokens.
+  - Live `assistants-code-interpreter` passed 1/1 against `deepseek-v4-pro`,
+    latency 1743 ms, output `assistants-ci-live-ok`, 2 Run Steps, 2 messages,
+    and 487 total tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 86/86,
+    pass rate 1.0, average latency 1375 ms, P95 latency 4103 ms, and total
+    usage 21202 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1377 ms, P95 latency 1499 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core pages, project dialog/upload, prompt submission, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1313 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 105170 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    105170 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 41 GB available; `state/` was 18 MB,
+    `output/` was 4.8 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 24 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

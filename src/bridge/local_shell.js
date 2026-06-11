@@ -280,9 +280,15 @@ async function prepareShellContext(request = {}, config = {}, containerStore, op
     }
     const container = containerStore.ensureContainer(tool);
     const mountedSkills = mountToolSkills(tool, container, containerStore, options.skillStore);
+    const mountedFiles = mountToolFiles(tool, container, containerStore, options.fileSearchStore);
     for (const skill of mountedSkills) {
       if (!context.mounted_skills.some((item) => item.skill_id === skill.skill_id && item.version === skill.version)) {
         context.mounted_skills.push(skill);
+      }
+    }
+    for (const file of mountedFiles) {
+      if (!context.mounted_files?.some((item) => item.file_id === file.file_id && item.path === file.path)) {
+        context.mounted_files = [...(context.mounted_files || []), file];
       }
     }
     const callId = prefixedId("call");
@@ -394,8 +400,10 @@ function shellCompatibility(context) {
       skipped_count: context.skipped_calls?.length || 0,
       artifact_count: context.artifacts?.length || 0,
       mounted_skill_count: context.mounted_skills?.length || 0,
+      mounted_file_count: context.mounted_files?.length || 0,
       include_code_interpreter_outputs: !!context.include_code_interpreter_outputs,
       ...(context.mounted_skills?.length ? { mounted_skills: context.mounted_skills } : {}),
+      ...(context.mounted_files?.length ? { mounted_files: context.mounted_files } : {}),
       ...(first ? {
         container_id: first.container.id,
         exit_code: first.result.exit_code,
@@ -449,6 +457,9 @@ function shellPrompt(context) {
   const skills = (context.mounted_skills || [])
     .map((skill) => `- ${skill.name} v${skill.version}: ${skill.description} (${skill.path})`)
     .join("\n");
+  const files = (context.mounted_files || [])
+    .map((file) => `- ${file.filename}: ${file.path} (${file.bytes} bytes, file_id ${file.file_id})`)
+    .join("\n");
 
   return [
     "Local Responses shell compatibility executed command output follows.",
@@ -456,6 +467,7 @@ function shellPrompt(context) {
     "Use the command output as tool evidence. Preserve exact stdout when the user asks for exact output.",
     "Do not rename, reinterpret, or invent artifact paths; use only the listed /mnt/data paths.",
     skills ? `Mounted skills:\n${skills}` : "Mounted skills: none",
+    files ? `Mounted files:\n${files}` : "Mounted files: none",
     ...sections,
     artifacts ? `Artifacts:\n${artifacts}` : "Artifacts: none",
   ].join("\n\n");
@@ -493,6 +505,41 @@ function mountToolSkills(tool, container, containerStore, skillStore) {
     });
   }
   return mounted;
+}
+
+function mountToolFiles(tool, container, containerStore, fileSearchStore) {
+  if (!fileSearchStore || !tool || !container || !containerStore) return [];
+  const mounted = [];
+  for (const fileId of extractToolFileIds(tool)) {
+    const file = fileSearchStore.getFile?.(fileId);
+    const buffer = fileSearchStore.getFileContentBuffer?.(fileId);
+    if (!file || !Buffer.isBuffer(buffer)) continue;
+    const filename = sanitizeRelativePath(file.filename || `${fileId}.txt`);
+    const mountedFile = containerStore.createContainerFile(container.id, {
+      path: filename,
+      content: buffer,
+    });
+    if (mountedFile) {
+      mounted.push({
+        type: "file_reference",
+        file_id: file.id,
+        filename: file.filename || filename,
+        path: `/mnt/data${mountedFile.path}`,
+        bytes: mountedFile.bytes,
+      });
+    }
+  }
+  return mounted;
+}
+
+function extractToolFileIds(tool = {}) {
+  const resources = tool.tool_resources?.code_interpreter || tool.resources?.code_interpreter || {};
+  const candidates = [
+    ...(Array.isArray(tool.file_ids) ? tool.file_ids : []),
+    ...(Array.isArray(tool.files) ? tool.files.map((file) => file?.file_id || file?.id || file) : []),
+    ...(Array.isArray(resources.file_ids) ? resources.file_ids : []),
+  ];
+  return Array.from(new Set(candidates.map((item) => stringifyContent(item).trim()).filter(Boolean)));
 }
 
 function extractSkillReferences(tool = {}) {

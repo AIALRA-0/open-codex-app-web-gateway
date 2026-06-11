@@ -12,6 +12,7 @@ Primary sources:
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Assistants deep dive run lifecycle: https://developers.openai.com/api/docs/assistants/deep-dive#runs-and-run-steps
+- OpenAI Assistants file search guide: https://developers.openai.com/api/docs/assistants/tools/file-search
 - OpenAI Assistants OpenAPI operation `createAssistant`: https://api.openai.com/v1/assistants
 - OpenAI Threads OpenAPI operation `createThread`: https://api.openai.com/v1/threads
 - OpenAI Threads OpenAPI operation `createThreadAndRun`: https://api.openai.com/v1/threads/runs
@@ -248,6 +249,17 @@ deltas, `thread.run.step.*` tool-call argument deltas, terminal completed
 events, and `thread.run.requires_action` when streamed Chat tool calls need
 client tool outputs.
 
+Assistant `file_search` and `code_interpreter` tools are intercepted before the
+upstream Chat call. `file_search` merges assistant-, thread-, and run-level
+`tool_resources.file_search.vector_store_ids`, searches the local vector store,
+injects bounded retrieval evidence into Chat context, writes a local
+`tool_calls` Run Step, and adds `file_citation` annotations to assistant text
+when sources are present. `code_interpreter` merges
+`tool_resources.code_interpreter.file_ids`, mounts those local Files into the
+local container workspace, executes explicit Python code blocks, injects stdout
+and mounted-file evidence into Chat context, and writes a `code_interpreter`
+Run Step with outputs.
+
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `GET /v1/assistants` | Implemented locally | Lists local `assistant` records with OpenAI-style `limit`, `after`, `before`, and `order` pagination |
@@ -265,24 +277,27 @@ client tool outputs.
 | `POST /v1/threads/{thread_id}/messages/{message_id}` | Implemented locally | Updates message `metadata` |
 | `DELETE /v1/threads/{thread_id}/messages/{message_id}` | Implemented locally | Deletes the local message record |
 | `GET /v1/threads/{thread_id}/runs` | Implemented locally | Lists local runs for a thread |
-| `POST /v1/threads/{thread_id}/runs` | Implemented via upstream Chat | Creates a local run by calling the configured Chat provider; completes with one assistant message and `message_creation` step, or enters `requires_action` for function `tool_calls`; `stream:true` relays Chat text/refusal deltas as `thread.message.delta` and Chat tool-call argument deltas as `thread.run.step.delta` |
+| `POST /v1/threads/{thread_id}/runs` | Implemented via upstream Chat plus local hosted-tool adapters | Creates a local run by calling the configured Chat provider; local Assistants `file_search` and `code_interpreter` tools run first and persist `tool_calls` Run Steps; function tools complete with one assistant message and `message_creation` step or enter `requires_action`; `stream:true` relays Chat text/refusal deltas as `thread.message.delta` and Chat tool-call argument deltas as `thread.run.step.delta` |
 | `GET /v1/threads/{thread_id}/runs/{run_id}` | Implemented locally | Retrieves local run state |
 | `POST /v1/threads/{thread_id}/runs/{run_id}` | Implemented locally | Updates run `metadata` |
 | `POST /v1/threads/{thread_id}/runs/{run_id}/cancel` | Compatibility no-op for terminal local runs | Local runs complete synchronously, so completed runs are returned unchanged |
 | `POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs` | Implemented for function tools | Accepts all required tool outputs, replays the assistant `tool_calls` plus Chat `tool` messages upstream, then completes the run or enters another `requires_action` round; `stream:true` relays follow-up message or tool-call deltas; non-required-action runs are returned unchanged with compatibility metadata |
 | `GET /v1/threads/{thread_id}/runs/{run_id}/steps` | Implemented locally | Lists local `thread.run.step` records |
 | `GET /v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}` | Implemented locally | Retrieves one run step |
-| `POST /v1/threads/runs` | Implemented via upstream Chat | Creates a thread and immediately creates/completes a run; `stream:true` emits `thread.created`, run lifecycle events, message deltas, run-step deltas, and terminal run events |
+| `POST /v1/threads/runs` | Implemented via upstream Chat plus local hosted-tool adapters | Creates a thread and immediately creates/completes a run; `stream:true` emits `thread.created`, run lifecycle events, hosted-tool Run Steps when local Assistants tools execute, message deltas, run-step deltas, and terminal run events |
 
-Current boundary: hosted Assistants tool types such as OpenAI-hosted Code
-Interpreter/File Search are still not hosted jobs in this local layer, and
-broader edge-delta parity for non-text message content, hosted tool output
-details, and async thread locks remains future work. Function tools are
-forwarded through Chat Completions, with `tool_calls` Run Steps, streamed
-argument deltas, and `submit_tool_outputs` replay. The local layer records
-`metadata.compatibility.local_assistants` on runs so callers can see that
-execution happened locally through Chat Completions rather than OpenAI hosted
-Assistants.
+Current boundary: Assistants `file_search` and `code_interpreter` are local
+compatibility adapters, not OpenAI hosted jobs. File search uses the bridge's
+local vector-store retrieval rather than OpenAI hosted ranking/rewrite policy,
+and message attachments do not yet auto-create thread vector stores. Code
+interpreter executes explicit Python blocks locally rather than running a
+model-driven hosted code loop. Broader edge-delta parity for non-text message
+content, hosted tool output deltas, and async thread locks remains future work.
+Function tools are forwarded through Chat Completions, with `tool_calls` Run
+Steps, streamed argument deltas, and `submit_tool_outputs` replay. The local
+layer records `metadata.compatibility.local_assistants` on runs so callers can
+see that execution happened locally through Chat Completions and local bridge
+adapters rather than OpenAI hosted Assistants.
 
 ## Chat Completions Endpoint Coverage
 
@@ -1319,7 +1334,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
-| OpenAI Assistants full parity | The local adapter covers Assistants CRUD, Threads CRUD, Messages CRUD, synchronous Chat-backed Runs, function-tool `requires_action` / `submit_tool_outputs` loops through Chat `tool_calls`, Run Step listing/retrieval, terminal cancel no-op, create-thread-and-run, streamed Chat text/refusal deltas as Assistants `thread.message.delta`, and streamed Chat tool-call/function-call arguments as `thread.run.step.delta`, but it is not OpenAI hosted Assistants and does not yet implement hosted Code Interpreter/File Search behavior through Assistants, non-text hosted-tool delta details, or async thread locks | Add async run workers/thread locks and map Assistants hosted tools onto the existing local file-search/shell/MCP adapters with broader non-text delta parity |
+| OpenAI Assistants full parity | The local adapter covers Assistants CRUD, Threads CRUD, Messages CRUD, synchronous Chat-backed Runs, function-tool `requires_action` / `submit_tool_outputs` loops through Chat `tool_calls`, local Assistants `file_search` over bridge vector stores, local Assistants `code_interpreter` over explicit Python blocks with file-id mounts, Run Step listing/retrieval, terminal cancel no-op, create-thread-and-run, streamed Chat text/refusal deltas as Assistants `thread.message.delta`, and streamed Chat tool-call/function-call arguments as `thread.run.step.delta`, but it is not OpenAI hosted Assistants and does not yet implement message-attachment auto vector-store creation, model-driven hosted code loops, non-text hosted-tool delta details, or async thread locks | Add async run workers/thread locks, attachment-to-vector-store materialization, broader non-text delta parity, and stronger hosted-tool loop orchestration |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |

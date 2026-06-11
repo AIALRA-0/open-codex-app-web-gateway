@@ -9037,13 +9037,16 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
   sendJson(res, 200, paginateList(runs, url));
 }
 
-async function handleAssistantRunCreate(req, res, config, assistantStore, threadId) {
+async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore) {
   const body = await readJson(req);
   if (body.stream === true) {
     await streamNewAssistantRun({
       body,
       config,
       assistantStore,
+      fileSearchStore,
+      containerStore,
+      skillStore,
       threadId,
       incomingHeaders: req.headers,
       res,
@@ -9055,6 +9058,9 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
     body,
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     threadId,
     incomingHeaders: req.headers,
   });
@@ -9065,7 +9071,7 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
   sendJson(res, 200, result.run);
 }
 
-async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore) {
+async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore) {
   const body = await readJson(req);
   const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
   if (body.stream === true) {
@@ -9073,6 +9079,9 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
       body,
       config,
       assistantStore,
+      fileSearchStore,
+      containerStore,
+      skillStore,
       threadId: thread.id,
       incomingHeaders: req.headers,
       res,
@@ -9084,6 +9093,9 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
     body,
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     threadId: thread.id,
     incomingHeaders: req.headers,
   });
@@ -9137,13 +9149,16 @@ function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
   sendJson(res, 200, run);
 }
 
-async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId) {
+async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore) {
   const body = await readJson(req);
   if (body.stream === true) {
     await streamAssistantToolOutputs({
       body,
       config,
       assistantStore,
+      fileSearchStore,
+      containerStore,
+      skillStore,
       threadId,
       runId,
       incomingHeaders: req.headers,
@@ -9155,6 +9170,9 @@ async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantSt
     body,
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     threadId,
     runId,
     incomingHeaders: req.headers,
@@ -9192,12 +9210,24 @@ function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId)
   sendJson(res, 200, step);
 }
 
-async function createAndCompleteAssistantRun({ body, config, assistantStore, threadId, incomingHeaders }) {
+async function createAndCompleteAssistantRun({
+  body,
+  config,
+  assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
+  threadId,
+  incomingHeaders,
+}) {
   const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
   if (!prepared.ok) return prepared;
   return runAssistantChatTurn({
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     thread: prepared.thread,
     initialRun: prepared.initialRun,
     run: prepared.run,
@@ -9206,7 +9236,18 @@ async function createAndCompleteAssistantRun({ body, config, assistantStore, thr
   });
 }
 
-async function streamNewAssistantRun({ body, config, assistantStore, threadId, incomingHeaders, res, streamOptions = {} }) {
+async function streamNewAssistantRun({
+  body,
+  config,
+  assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
+  threadId,
+  incomingHeaders,
+  res,
+  streamOptions = {},
+}) {
   const prepared = prepareAssistantRunStart({ body, assistantStore, threadId });
   if (!prepared.ok) {
     sendJson(res, prepared.status, prepared.error);
@@ -9215,6 +9256,9 @@ async function streamNewAssistantRun({ body, config, assistantStore, threadId, i
   await streamAssistantChatTurn({
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     thread: streamOptions.thread || prepared.thread,
     initialRun: prepared.initialRun,
     run: prepared.run,
@@ -9263,7 +9307,18 @@ function prepareAssistantRunStart({ body, assistantStore, threadId }) {
     };
   }
 
-  const initialRun = assistantStore.createRun(threadId, body, assistant);
+  const assistantForRun = {
+    ...assistant,
+    tool_resources: assistantRunToolResources(
+      assistant.tool_resources,
+      thread.tool_resources,
+      body.tool_resources,
+    ),
+  };
+  const initialRun = assistantStore.createRun(threadId, {
+    ...body,
+    tool_resources: assistantForRun.tool_resources,
+  }, assistantForRun);
   const startedAt = nowSeconds();
   const inProgressRun = assistantStore.updateRun(threadId, initialRun.id, {
     ...initialRun,
@@ -9281,13 +9336,76 @@ function prepareAssistantRunStart({ body, assistantStore, threadId }) {
   };
 }
 
-async function submitAssistantToolOutputs({ body, config, assistantStore, threadId, runId, incomingHeaders }) {
+function assistantRunToolResources(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    if (!isPlainObject(source)) continue;
+    for (const [toolName, resource] of Object.entries(source)) {
+      if (isPlainObject(resource)) {
+        merged[toolName] = {
+          ...(isPlainObject(merged[toolName]) ? merged[toolName] : {}),
+          ...clone(resource),
+        };
+      } else if (resource !== undefined) {
+        merged[toolName] = clone(resource);
+      }
+    }
+  }
+
+  const vectorStoreIds = uniqStrings(sources.flatMap((source) => (
+    assistantResourceIds(source, "file_search", "vector_store_ids")
+  )));
+  if (vectorStoreIds.length) {
+    merged.file_search = {
+      ...(isPlainObject(merged.file_search) ? merged.file_search : {}),
+      vector_store_ids: vectorStoreIds,
+    };
+  }
+
+  const codeFileIds = uniqStrings(sources.flatMap((source) => (
+    assistantResourceIds(source, "code_interpreter", "file_ids")
+  )));
+  if (codeFileIds.length) {
+    merged.code_interpreter = {
+      ...(isPlainObject(merged.code_interpreter) ? merged.code_interpreter : {}),
+      file_ids: codeFileIds,
+    };
+  }
+
+  return merged;
+}
+
+function assistantResourceIds(resources, toolName, key) {
+  if (!isPlainObject(resources)) return [];
+  const values = resources[toolName]?.[key];
+  if (!Array.isArray(values)) return [];
+  return values.map((value) => stringifyContent(value).trim()).filter(Boolean);
+}
+
+function uniqStrings(values = []) {
+  return Array.from(new Set(values.map((value) => stringifyContent(value).trim()).filter(Boolean)));
+}
+
+async function submitAssistantToolOutputs({
+  body,
+  config,
+  assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
+  threadId,
+  runId,
+  incomingHeaders,
+}) {
   const prepared = prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId });
   if (!prepared.ok) return prepared;
   if (prepared.noOp) return prepared;
   return runAssistantChatTurn({
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     thread: prepared.thread,
     initialRun: prepared.initialRun,
     run: prepared.run,
@@ -9297,7 +9415,18 @@ async function submitAssistantToolOutputs({ body, config, assistantStore, thread
   });
 }
 
-async function streamAssistantToolOutputs({ body, config, assistantStore, threadId, runId, incomingHeaders, res }) {
+async function streamAssistantToolOutputs({
+  body,
+  config,
+  assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
+  threadId,
+  runId,
+  incomingHeaders,
+  res,
+}) {
   const prepared = prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId });
   if (!prepared.ok) {
     sendJson(res, prepared.status, prepared.error);
@@ -9313,6 +9442,9 @@ async function streamAssistantToolOutputs({ body, config, assistantStore, thread
   await streamAssistantChatTurn({
     config,
     assistantStore,
+    fileSearchStore,
+    containerStore,
+    skillStore,
     thread: prepared.thread,
     initialRun: prepared.initialRun,
     run: prepared.run,
@@ -9413,6 +9545,9 @@ function prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, 
 async function runAssistantChatTurn({
   config,
   assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
   thread,
   initialRun,
   run,
@@ -9420,8 +9555,17 @@ async function runAssistantChatTurn({
   incomingHeaders,
   chatOptions = {},
 }) {
-  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
-  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(chat, config);
+  const preparedChat = await prepareAssistantChatRequest({
+    run,
+    messages,
+    config,
+    chatOptions,
+    fileSearchStore,
+    containerStore,
+    skillStore,
+  });
+  createAssistantHostedToolRunStep(assistantStore, run, preparedChat.hostedToolCalls);
+  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(preparedChat.chat, config);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, incomingHeaders);
   const text = await upstream.text();
   const upstreamJson = parseJsonOrNull(text);
@@ -9460,8 +9604,9 @@ async function runAssistantChatTurn({
       usage: aggregateAssistantRunUsage(existing.usage, usage),
       metadata: {
         ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
-        compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+        compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
           local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+            ...preparedChat.assistantCompatibility,
             run_mode: "required_action",
             required_action: "submit_tool_outputs",
             tool_call_count: toolCalls.length,
@@ -9483,7 +9628,7 @@ async function runAssistantChatTurn({
   const assistantText = extractChatCompletionText(upstreamJson) || "";
   const message = assistantStore.createMessage(run.thread_id, {
     role: "assistant",
-    content: assistantText,
+    content: assistantMessageContentWithLocalToolAnnotations(assistantText, preparedChat.contexts),
   }, {
     assistant_id: run.assistant_id,
     run_id: run.id,
@@ -9499,8 +9644,9 @@ async function runAssistantChatTurn({
     usage: aggregateAssistantRunUsage(run.usage, usage),
     metadata: {
       ...(isPlainObject(run.metadata) ? run.metadata : {}),
-      compatibility: mergeCompatibility(run.metadata?.compatibility, {
+      compatibility: mergeCompatibility(run.metadata?.compatibility, preparedChat.compatibility, {
         local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+          ...preparedChat.assistantCompatibility,
           run_mode: chatOptions.toolOutputs ? "submit_tool_outputs" : "synchronous",
           ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
         }),
@@ -9520,6 +9666,9 @@ async function runAssistantChatTurn({
 async function streamAssistantChatTurn({
   config,
   assistantStore,
+  fileSearchStore,
+  containerStore,
+  skillStore,
   thread,
   initialRun,
   run,
@@ -9529,10 +9678,20 @@ async function streamAssistantChatTurn({
   chatOptions = {},
   streamOptions = {},
 }) {
-  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
+  const preparedChat = await prepareAssistantChatRequest({
+    run,
+    messages,
+    config,
+    chatOptions,
+    fileSearchStore,
+    containerStore,
+    skillStore,
+  });
+  const chat = preparedChat.chat;
   chat.stream = true;
   chat.stream_options = { ...(isPlainObject(chat.stream_options) ? chat.stream_options : {}), include_usage: true };
   const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(chat, config);
+  const hostedToolStep = createAssistantHostedToolRunStep(assistantStore, run, preparedChat.hostedToolCalls);
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -9546,6 +9705,10 @@ async function streamAssistantChatTurn({
     writeSse(res, "thread.run.queued", initialRun);
   }
   writeSse(res, "thread.run.in_progress", run);
+  if (hostedToolStep) {
+    writeSse(res, "thread.run.step.created", hostedToolStep);
+    writeSse(res, "thread.run.step.completed", hostedToolStep);
+  }
 
   const streamState = createAssistantStreamState(run);
   let upstream = null;
@@ -9591,8 +9754,9 @@ async function streamAssistantChatTurn({
         usage: aggregateAssistantRunUsage(existing.usage, usage),
         metadata: {
           ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
-          compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+          compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
             local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+              ...preparedChat.assistantCompatibility,
               run_mode: "streaming_required_action",
               required_action: "submit_tool_outputs",
               tool_call_count: toolCalls.length,
@@ -9609,7 +9773,9 @@ async function streamAssistantChatTurn({
 
     const assistantText = extractChatCompletionText(upstreamJson) || streamState.text || "";
     const textContext = ensureAssistantTextStreamContext(res, assistantStore, run, streamState);
-    const message = assistantStore.completeMessage(run.thread_id, textContext.message.id, { content: assistantText });
+    const message = assistantStore.completeMessage(run.thread_id, textContext.message.id, {
+      content: assistantMessageContentWithLocalToolAnnotations(assistantText, preparedChat.contexts),
+    });
     const step = assistantStore.completeRunStep(run.thread_id, run.id, textContext.step.id, usage);
     const completedAt = nowSeconds();
     const completedRun = assistantStore.updateRun(run.thread_id, run.id, {
@@ -9621,8 +9787,9 @@ async function streamAssistantChatTurn({
       usage: aggregateAssistantRunUsage(run.usage, usage),
       metadata: {
         ...(isPlainObject(run.metadata) ? run.metadata : {}),
-        compatibility: mergeCompatibility(run.metadata?.compatibility, {
+        compatibility: mergeCompatibility(run.metadata?.compatibility, preparedChat.compatibility, {
           local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+            ...preparedChat.assistantCompatibility,
             run_mode: chatOptions.toolOutputs ? "streaming_submit_tool_outputs" : "streaming",
             streaming_supported: "chat_stream_delta_relay",
             ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
@@ -9643,6 +9810,216 @@ async function streamAssistantChatTurn({
     if (failedRun) writeSse(res, "thread.run.failed", failedRun);
     writeAssistantStreamDone(res);
   }
+}
+
+async function prepareAssistantChatRequest({
+  run,
+  messages,
+  config,
+  chatOptions = {},
+  fileSearchStore,
+  containerStore,
+  skillStore,
+}) {
+  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
+  const contexts = {};
+  const compatibility = {};
+  const input = assistantLocalToolInput(messages, chatOptions);
+  const localHostedToolTypes = assistantLocalHostedToolTypes(run);
+
+  const fileSearchTools = assistantFileSearchTools(run);
+  if (fileSearchTools.length) {
+    const localFileSearch = await prepareFileSearchContext({
+      model: run.model || config.defaultModel,
+      input,
+      tools: fileSearchTools,
+      tool_resources: run.tool_resources || {},
+      include: ["file_search_call.results"],
+    }, config, fileSearchStore);
+    if (localFileSearch) {
+      contexts.file_search = localFileSearch;
+      applyLocalFileSearchToChat(chat, compatibility, localFileSearch, config);
+    }
+  }
+
+  const codeInterpreterTools = assistantCodeInterpreterTools(run);
+  if (codeInterpreterTools.length) {
+    const localShell = await prepareShellContext({
+      model: run.model || config.defaultModel,
+      input,
+      tools: codeInterpreterTools,
+      include: ["code_interpreter_call.outputs"],
+    }, config, containerStore, { skillStore, fileSearchStore });
+    if (localShell) {
+      contexts.shell = localShell;
+      applyLocalShellToChat(chat, compatibility, localShell, config);
+    }
+  }
+
+  const hostedToolCalls = assistantHostedToolCalls(contexts);
+  return {
+    chat,
+    contexts,
+    compatibility,
+    hostedToolCalls,
+    assistantCompatibility: {
+      hosted_tools_supported: true,
+      local_hosted_tool_types: localHostedToolTypes,
+      local_hosted_tool_call_count: hostedToolCalls.length,
+      ...(contexts.file_search ? { local_file_search_status: fileSearchCompatibility(contexts.file_search).local_file_search?.status } : {}),
+      ...(contexts.shell ? { local_code_interpreter_status: shellCompatibility(contexts.shell).local_shell?.status } : {}),
+    },
+  };
+}
+
+function assistantLocalToolInput(messages = [], chatOptions = {}) {
+  const lines = [];
+  for (const message of messages) {
+    const role = message.role === "assistant" ? "assistant" : "user";
+    const content = assistantMessageContentText(message.content);
+    if (content) lines.push(`${role}:\n${content}`);
+  }
+  if (Array.isArray(chatOptions.requiredToolCalls) && chatOptions.requiredToolCalls.length) {
+    for (const toolCall of chatOptions.requiredToolCalls) {
+      lines.push(`assistant tool_call ${toolCall.id || ""}:\n${stringifyContent(toolCall.function?.name || toolCall.type || "")}`);
+    }
+  }
+  if (Array.isArray(chatOptions.toolOutputs) && chatOptions.toolOutputs.length) {
+    for (const output of chatOptions.toolOutputs) {
+      lines.push(`tool ${output.tool_call_id || ""}:\n${stringifyContent(output.output || "")}`);
+    }
+  }
+  return lines.join("\n\n") || "Continue the assistant thread.";
+}
+
+function assistantLocalHostedToolTypes(run) {
+  return uniqStrings((Array.isArray(run.tools) ? run.tools : [])
+    .map((tool) => tool?.type)
+    .filter((type) => type === "file_search" || type === "code_interpreter"));
+}
+
+function assistantFileSearchTools(run) {
+  const vectorStoreIds = assistantResourceIds(run.tool_resources, "file_search", "vector_store_ids");
+  return (Array.isArray(run.tools) ? run.tools : [])
+    .filter((tool) => isPlainObject(tool) && tool.type === "file_search")
+    .map((tool) => {
+      const mapped = clone(tool);
+      const explicitIds = Array.isArray(mapped.vector_store_ids) ? mapped.vector_store_ids : [];
+      const ids = uniqStrings([...explicitIds, ...vectorStoreIds]);
+      if (ids.length) mapped.vector_store_ids = ids;
+      mapped.tool_resources = {
+        ...(isPlainObject(mapped.tool_resources) ? mapped.tool_resources : {}),
+        file_search: {
+          ...(isPlainObject(mapped.tool_resources?.file_search) ? mapped.tool_resources.file_search : {}),
+          ...(ids.length ? { vector_store_ids: ids } : {}),
+        },
+      };
+      return mapped;
+    });
+}
+
+function assistantCodeInterpreterTools(run) {
+  const fileIds = assistantResourceIds(run.tool_resources, "code_interpreter", "file_ids");
+  return (Array.isArray(run.tools) ? run.tools : [])
+    .filter((tool) => isPlainObject(tool) && tool.type === "code_interpreter")
+    .map((tool) => {
+      const mapped = clone(tool);
+      const explicitIds = Array.isArray(mapped.file_ids) ? mapped.file_ids : [];
+      const ids = uniqStrings([...explicitIds, ...fileIds]);
+      if (ids.length) mapped.file_ids = ids;
+      mapped.container = isPlainObject(mapped.container) ? mapped.container : { type: "auto" };
+      mapped.tool_resources = {
+        ...(isPlainObject(mapped.tool_resources) ? mapped.tool_resources : {}),
+        code_interpreter: {
+          ...(isPlainObject(mapped.tool_resources?.code_interpreter) ? mapped.tool_resources.code_interpreter : {}),
+          ...(ids.length ? { file_ids: ids } : {}),
+        },
+      };
+      return mapped;
+    });
+}
+
+function assistantHostedToolCalls(contexts = {}) {
+  const calls = [];
+  for (const item of fileSearchOutputItems(contexts.file_search, { includeResults: true })) {
+    calls.push({
+      id: item.id,
+      type: "file_search",
+      file_search: {
+        queries: item.queries || [],
+        vector_store_ids: item.vector_store_ids || [],
+        ...(item.ranking_options ? { ranking_options: item.ranking_options } : {}),
+        results: item.results || [],
+      },
+    });
+  }
+  for (const item of shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true })) {
+    if (item.type !== "code_interpreter_call") continue;
+    calls.push({
+      id: item.id,
+      type: "code_interpreter",
+      code_interpreter: {
+        input: stringifyContent(item.code || ""),
+        outputs: Array.isArray(item.outputs) ? item.outputs : [],
+      },
+    });
+  }
+  return calls;
+}
+
+function createAssistantHostedToolRunStep(assistantStore, run, hostedToolCalls = []) {
+  if (!hostedToolCalls.length) return null;
+  return assistantStore.createToolCallsStep(run, hostedToolCalls, null);
+}
+
+function assistantMessageContentWithLocalToolAnnotations(text, contexts = {}) {
+  const withSources = assistantFileSourceMarkers(text, contexts.file_search?.results || []);
+  return [{
+    type: "text",
+    text: {
+      value: withSources.text,
+      annotations: withSources.annotations,
+    },
+  }];
+}
+
+function assistantFileSourceMarkers(text, results = []) {
+  let output = stringifyContent(text || "");
+  const annotations = [];
+  const cited = [];
+
+  results.forEach((result, index) => {
+    const marker = `[${index + 1}]`;
+    const markerIndex = output.indexOf(marker);
+    if (markerIndex !== -1) cited.push({ result, marker, index: markerIndex });
+  });
+
+  if (!cited.length && results.length) {
+    const sources = results.map((result, index) => `[${index + 1}] ${result.filename}`).join("\n");
+    output = `${output.trimEnd()}\n\nSources:\n${sources}`;
+    results.forEach((result, index) => {
+      const marker = `[${index + 1}]`;
+      const markerIndex = output.indexOf(marker, output.indexOf("Sources:"));
+      if (markerIndex !== -1) cited.push({ result, marker, index: markerIndex });
+    });
+  }
+
+  for (const citation of cited) {
+    annotations.push({
+      type: "file_citation",
+      text: citation.marker,
+      index: citation.index,
+      start_index: citation.index,
+      end_index: citation.index + citation.marker.length,
+      file_id: citation.result.file_id,
+      filename: citation.result.filename,
+      file_citation: {
+        file_id: citation.result.file_id,
+      },
+    });
+  }
+
+  return { text: output, annotations };
 }
 
 function createAssistantStreamState(run) {
@@ -9993,6 +10370,8 @@ function aggregateAssistantRunUsage(previous, next) {
 
 function assistantRunCompatibility(run, upstreamJson, chatPassthrough, extra = {}) {
   const toolMapping = assistantFunctionToolMapping(run.tools);
+  const localHostedToolTypes = new Set(Array.isArray(extra.local_hosted_tool_types) ? extra.local_hosted_tool_types : []);
+  const unsupported = toolMapping.unsupported.filter((type) => !localHostedToolTypes.has(type));
   return {
     provider: "local",
     upstream: "chat_completions",
@@ -10000,7 +10379,7 @@ function assistantRunCompatibility(run, upstreamJson, chatPassthrough, extra = {
     run_mode: "synchronous",
     tool_count: Array.isArray(run.tools) ? run.tools.length : 0,
     function_tool_count: toolMapping.tools.length,
-    ...(toolMapping.unsupported.length ? { unsupported_tool_types: Array.from(new Set(toolMapping.unsupported)) } : {}),
+    ...(unsupported.length ? { unsupported_tool_types: Array.from(new Set(unsupported)) } : {}),
     tool_calls_supported: true,
     streaming_supported: "event_shape_only",
     ...(chatPassthrough ? { chat_passthrough: chatPassthrough } : {}),
@@ -10412,7 +10791,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (url.pathname === "/v1/threads/runs" && req.method === "POST") {
-        await handleAssistantThreadAndRunCreate(req, res, config, assistantStore);
+        await handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore);
         return;
       }
 
@@ -10447,7 +10826,7 @@ function createServer(config = loadConfig()) {
           handleAssistantRunCancel(res, assistantStore, threadId, runId);
           return;
         }
-        await handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId);
+        await handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore);
         return;
       }
 
@@ -10460,7 +10839,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!runId && req.method === "POST") {
-          await handleAssistantRunCreate(req, res, config, assistantStore, threadId);
+          await handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore);
           return;
         }
         if (runId && req.method === "GET") {

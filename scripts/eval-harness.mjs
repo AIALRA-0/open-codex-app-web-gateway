@@ -417,6 +417,51 @@ function buildSuites(defaultModel) {
           && steps?.data?.some((step) => step.type === "message_creation"),
       },
       {
+        id: "assistants-file-search",
+        mode: "assistants-file-search",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run, messages, steps, file, vectorStore }) => {
+          const text = assistantMessageTextFromList(messages?.data || []);
+          const toolStep = (steps?.data || []).find((step) => step.type === "tool_calls");
+          const fileSearchCall = (toolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "file_search");
+          const assistantMessage = (messages?.data || []).find((message) => message.role === "assistant");
+          const annotations = assistantMessage?.content?.[0]?.text?.annotations || [];
+          return run?.status === "completed"
+            && /assistants-file-search-live-ok/i.test(text)
+            && run.metadata?.compatibility?.local_file_search?.provider === "local"
+            && run.metadata?.compatibility?.local_assistants?.local_hosted_tool_types?.includes("file_search")
+            && run.tool_resources?.file_search?.vector_store_ids?.includes(vectorStore?.id)
+            && fileSearchCall?.file_search?.vector_store_ids?.includes(vectorStore?.id)
+            && fileSearchCall?.file_search?.results?.some((result) => result.file_id === file?.id)
+            && annotations.some((annotation) => annotation.type === "file_citation" && annotation.file_id === file?.id);
+        },
+      },
+      {
+        id: "assistants-code-interpreter",
+        mode: "assistants-code-interpreter",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run, messages, steps, file }) => {
+          const text = assistantMessageTextFromList(messages?.data || []);
+          const toolStep = (steps?.data || []).find((step) => step.type === "tool_calls");
+          const codeCall = (toolStep?.step_details?.tool_calls || []).find((toolCall) => toolCall.type === "code_interpreter");
+          const logs = (codeCall?.code_interpreter?.outputs || [])
+            .map((output) => output.logs || "")
+            .join("\n");
+          return run?.status === "completed"
+            && /assistants-ci-live-ok/i.test(text)
+            && run.metadata?.compatibility?.local_shell?.provider === "local"
+            && run.metadata?.compatibility?.local_shell?.mounted_file_count >= 1
+            && run.metadata?.compatibility?.local_assistants?.local_hosted_tool_types?.includes("code_interpreter")
+            && run.tool_resources?.code_interpreter?.file_ids?.includes(file?.id)
+            && /assistants-ci-live-ok/i.test(logs)
+            && /mounted-live-ok/i.test(logs);
+        },
+      },
+      {
         id: "evals-lifecycle",
         mode: "evals-lifecycle",
         request: {
@@ -2585,6 +2630,12 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-required-action") {
       return await runAssistantsRequiredActionCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-file-search") {
+      return await runAssistantsFileSearchCase(testCase, context, started);
+    }
+    if (testCase.mode === "assistants-code-interpreter") {
+      return await runAssistantsCodeInterpreterCase(testCase, context, started);
+    }
     if (testCase.mode === "evals-lifecycle") {
       return await runEvalsLifecycleCase(testCase, context, started);
     }
@@ -3095,6 +3146,262 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
   } finally {
     for (const threadId of threadIds) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
     if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsFileSearchCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  let fileId = null;
+  let vectorStoreId = null;
+  try {
+    const file = await postJsonCapture(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}.txt`,
+      purpose: "assistants",
+      content: "Assistants live file-search fixture says the exact marker is assistants-file-search-live-ok.",
+    });
+    if (!file.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: file.status,
+        error: truncate(file.body),
+      });
+    }
+    fileId = file.json.id;
+
+    const vectorStore = await postJsonCapture(`${baseUrl}/v1/vector_stores`, {
+      name: `Bridge ${testCase.id}`,
+      metadata: { suite: "bridge-regression", case_id: testCase.id },
+    });
+    if (!vectorStore.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: vectorStore.status,
+        file_id: fileId,
+        error: truncate(vectorStore.body),
+      });
+    }
+    vectorStoreId = vectorStore.json.id;
+
+    const attached = await postJsonCapture(`${baseUrl}/v1/vector_stores/${vectorStoreId}/files`, {
+      file_id: fileId,
+      attributes: { suite: "bridge-regression", case_id: testCase.id },
+    });
+    if (!attached.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: attached.status,
+        file_id: fileId,
+        vector_store_id: vectorStoreId,
+        error: truncate(attached.body),
+      });
+    }
+
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Use file_search evidence. Return exactly assistants-file-search-live-ok [1] and no extra words.",
+      tools: [{ type: "file_search" }],
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        file_id: fileId,
+        vector_store_id: vectorStoreId,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: "File search for assistants-file-search-live-ok. Return exactly assistants-file-search-live-ok [1].",
+      }],
+      tool_resources: { file_search: { vector_store_ids: [vectorStoreId] } },
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        assistant_id: assistantId,
+        file_id: fileId,
+        vector_store_id: vectorStoreId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        file_id: fileId,
+        vector_store_id: vectorStoreId,
+        error: truncate(run.body),
+      });
+    }
+
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const steps = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}/steps?limit=20`);
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      messages: messages.json,
+      steps: steps.json,
+      file: file.json,
+      vectorStore: vectorStore.json,
+      attached: attached.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.json.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      run_id: run.json.id,
+      file_id: fileId,
+      vector_store_id: vectorStoreId,
+      step_count: steps.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        messages: messages.json,
+        steps: steps.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+    if (vectorStoreId) await deleteJson(`${baseUrl}/v1/vector_stores/${vectorStoreId}`);
+    if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
+  }
+}
+
+async function runAssistantsCodeInterpreterCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  let fileId = null;
+  try {
+    const file = await postJsonCapture(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}-fixture.txt`,
+      purpose: "assistants",
+      content: "mounted-live-ok",
+    });
+    if (!file.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: file.status,
+        error: truncate(file.body),
+      });
+    }
+    fileId = file.json.id;
+
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Use code_interpreter output. Return exactly assistants-ci-live-ok and no extra words.",
+      tools: [{ type: "code_interpreter" }],
+      tool_resources: { code_interpreter: { file_ids: [fileId] } },
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        file_id: fileId,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: [
+          "Run this Python and answer from its output.",
+          "```python",
+          "from pathlib import Path",
+          "print('assistants-ci-live-ok')",
+          `print(Path('/mnt/data/${testCase.id}-fixture.txt').read_text())`,
+          "```",
+          "Return exactly assistants-ci-live-ok.",
+        ].join("\n"),
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        assistant_id: assistantId,
+        file_id: fileId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        file_id: fileId,
+        error: truncate(run.body),
+      });
+    }
+
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const steps = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}/steps?limit=20`);
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      messages: messages.json,
+      steps: steps.json,
+      file: file.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.json.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      run_id: run.json.id,
+      file_id: fileId,
+      step_count: steps.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        messages: messages.json,
+        steps: steps.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+    if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
   }
 }
 

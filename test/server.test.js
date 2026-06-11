@@ -2063,6 +2063,210 @@ test("Assistants API submit_tool_outputs stream emits message deltas", async () 
   });
 });
 
+test("Assistants API local file_search tool injects vector store evidence", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    assert.deepEqual(request.body.thinking, { type: "disabled" });
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses file_search compatibility results/);
+    assert.match(prompt, /Assistants File Search Fixture/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_file_search",
+      object: "chat.completion",
+      created: 1700000004,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-file-search-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 31, completion_tokens: 5, total_tokens: 36 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistants-file-search.txt",
+        purpose: "assistants",
+        content: "Assistants File Search Fixture says the exact marker is assistants-file-search-ok.",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const vectorStoreResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "assistants-file-search-store" }),
+    });
+    assert.equal(vectorStoreResponse.status, 200);
+    const vectorStore = await vectorStoreResponse.json();
+
+    const attachedResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: file.id }),
+    });
+    assert.equal(attachedResponse.status, 200);
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use file_search evidence before answering.",
+        tools: [{ type: "file_search" }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{
+          role: "user",
+          content: "File search for assistants-file-search-ok. Return assistants-file-search-ok [1].",
+        }],
+        tool_resources: { file_search: { vector_store_ids: [vectorStore.id] } },
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.tool_resources.file_search.vector_store_ids, [vectorStore.id]);
+    assert.equal(run.metadata.compatibility.local_file_search.provider, "local");
+    assert.equal(run.metadata.compatibility.local_file_search.result_count, 1);
+    assert.deepEqual(run.metadata.compatibility.local_assistants.local_hosted_tool_types, ["file_search"]);
+    assert.equal(run.metadata.compatibility.local_assistants.local_hosted_tool_call_count, 1);
+    assert.equal(Object.prototype.hasOwnProperty.call(run.metadata.compatibility.local_assistants, "unsupported_tool_types"), false);
+    assert.equal(requests.length, 1);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const assistantMessage = (await listedMessages.json()).data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.content[0].text.value, "assistants-file-search-ok [1]");
+    assert.equal(assistantMessage.content[0].text.annotations[0].type, "file_citation");
+    assert.equal(assistantMessage.content[0].text.annotations[0].file_id, file.id);
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps?limit=10`);
+    assert.equal(listedSteps.status, 200);
+    const toolStep = (await listedSteps.json()).data.find((step) => step.type === "tool_calls");
+    assert.equal(toolStep.step_details.tool_calls[0].type, "file_search");
+    assert.equal(toolStep.step_details.tool_calls[0].file_search.results[0].file_id, file.id);
+  });
+});
+
+test("Assistants API local code_interpreter tool executes python blocks with file resources", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    assert.deepEqual(request.body.thinking, { type: "disabled" });
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses shell compatibility executed command output/);
+    assert.match(prompt, /ci-assistant-ok/);
+    assert.match(prompt, /mounted-file-ok/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_code_interpreter",
+      object: "chat.completion",
+      created: 1700000005,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-ci-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 33, completion_tokens: 4, total_tokens: 37 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-fixture.txt",
+        purpose: "assistants",
+        content: "mounted-file-ok",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use code_interpreter output before answering.",
+        tools: [{ type: "code_interpreter" }],
+        tool_resources: { code_interpreter: { file_ids: [file.id] } },
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{
+          role: "user",
+          content: [
+            "```python",
+            "from pathlib import Path",
+            "print('ci-assistant-ok')",
+            "print(Path('/mnt/data/assistant-fixture.txt').read_text())",
+            "```",
+            "Return assistants-ci-ok.",
+          ].join("\n"),
+        }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.deepEqual(run.tool_resources.code_interpreter.file_ids, [file.id]);
+    assert.equal(run.metadata.compatibility.local_shell.provider, "local");
+    assert.equal(run.metadata.compatibility.local_shell.mounted_file_count, 1);
+    assert.deepEqual(run.metadata.compatibility.local_assistants.local_hosted_tool_types, ["code_interpreter"]);
+    assert.equal(run.metadata.compatibility.local_assistants.local_hosted_tool_call_count, 1);
+    assert.equal(requests.length, 1);
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps?limit=10`);
+    assert.equal(listedSteps.status, 200);
+    const toolStep = (await listedSteps.json()).data.find((step) => step.type === "tool_calls");
+    const codeCall = toolStep.step_details.tool_calls.find((toolCall) => toolCall.type === "code_interpreter");
+    assert.match(codeCall.code_interpreter.input, /python3 - <<'PY'/);
+    assert.match(codeCall.code_interpreter.outputs[0].logs, /ci-assistant-ok/);
+    assert.match(codeCall.code_interpreter.outputs[0].logs, /mounted-file-ok/);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const assistantMessage = (await listedMessages.json()).data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.content[0].text.value, "assistants-ci-ok");
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);

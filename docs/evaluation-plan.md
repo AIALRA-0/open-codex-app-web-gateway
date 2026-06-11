@@ -81,6 +81,13 @@ create-and-run streaming produces `thread.message.delta` text fragments before
 completion. Unit/mock-provider coverage adds streamed Chat tool-call argument
 chunks mapped to `thread.run.step.delta` and streamed
 `submit_tool_outputs` continuations mapped back to message deltas.
+Bridge-regression live cases and unit/mock-provider coverage also check local
+Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
+vector-store resources, injects local retrieval evidence, persists a
+`file_search` Run Step, and annotates assistant messages with `file_citation`;
+`code_interpreter` mounts local Files API `file_ids`, executes explicit Python
+blocks in the local container workspace, injects stdout evidence, and persists
+a `code_interpreter` Run Step.
 
 Useful commands:
 
@@ -106,6 +113,8 @@ node scripts/eval-harness.mjs --suite bridge-regression --case batch-embeddings-
 node scripts/eval-harness.mjs --suite bridge-regression --case batch-moderations-local --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-required-action --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case assistants-file-search --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case assistants-code-interpreter --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case evals-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case graders-api-local --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case graders-api-score-model --timeout-ms 90000 --verbose
@@ -315,7 +324,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   through upstream Chat Completions, persists assistant messages and
   `message_creation` Run Steps, verifies function-tool `requires_action` /
   `submit_tool_outputs` continuation with `tool_calls` Run Steps, and checks
-  create-and-run lifecycle SSE event shape plus streamed message deltas.
+  create-and-run lifecycle SSE event shape plus streamed message deltas. It
+  also verifies local Assistants `file_search` and `code_interpreter`
+  adapters, including resource merging, local tool evidence injection, Run Step
+  persistence, file citations, and mounted file resources.
 - Responses compatibility requests that include Chat-native `stop` sequences forward them to upstream Chat providers and verify the stop marker is omitted from visible output.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.

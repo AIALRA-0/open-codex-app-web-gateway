@@ -570,7 +570,9 @@ class FileAssistantStore {
       model: stringOrDefault(body.model || assistant.model, "gpt-4o"),
       instructions: nullableString(body.instructions ?? assistant.instructions),
       tools: Array.isArray(body.tools) ? cloneJson(body.tools) : Array.isArray(assistant.tools) ? cloneJson(assistant.tools) : [],
-      tool_resources: isPlainObject(assistant.tool_resources) ? cloneJson(assistant.tool_resources) : {},
+      tool_resources: isPlainObject(body.tool_resources)
+        ? cloneJson(body.tool_resources)
+        : (isPlainObject(assistant.tool_resources) ? cloneJson(assistant.tool_resources) : {}),
       metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
       temperature: body.temperature ?? assistant.temperature ?? 1,
       top_p: body.top_p ?? assistant.top_p ?? 1,
@@ -1107,15 +1109,37 @@ function normalizeAssistantMessageContent(content) {
 function normalizeAssistantToolCallsForStep(toolCalls = []) {
   return (Array.isArray(toolCalls) ? toolCalls : [])
     .filter(isPlainObject)
-    .map((toolCall) => ({
-      id: String(toolCall.id || ""),
-      type: String(toolCall.type || "function") || "function",
-      function: {
-        name: String(toolCall.function?.name || ""),
-        arguments: String(toolCall.function?.arguments ?? ""),
-        output: toolCall.function?.output == null ? null : String(toolCall.function.output),
-      },
-    }));
+    .map((toolCall) => {
+      const type = String(toolCall.type || "function") || "function";
+      if (type === "file_search") {
+        return {
+          id: String(toolCall.id || ""),
+          type,
+          file_search: isPlainObject(toolCall.file_search) ? cloneJson(toolCall.file_search) : {},
+        };
+      }
+      if (type === "code_interpreter") {
+        return {
+          id: String(toolCall.id || ""),
+          type,
+          code_interpreter: {
+            input: String(toolCall.code_interpreter?.input ?? toolCall.code ?? ""),
+            outputs: Array.isArray(toolCall.code_interpreter?.outputs)
+              ? cloneJson(toolCall.code_interpreter.outputs)
+              : [],
+          },
+        };
+      }
+      return {
+        id: String(toolCall.id || ""),
+        type,
+        function: {
+          name: String(toolCall.function?.name || ""),
+          arguments: String(toolCall.function?.arguments ?? ""),
+          output: toolCall.function?.output == null ? null : String(toolCall.function.output),
+        },
+      };
+    });
 }
 
 module.exports = {
