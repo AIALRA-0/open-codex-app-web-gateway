@@ -94,6 +94,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_PROMPT_TEMPLATES` | empty | Optional JSON object of local Responses prompt templates keyed by prompt id or `id@version`; supports `instructions`, `messages`, `input`, `content`, and `{{variable}}` substitution. Keep private templates out of Git |
 | `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` | empty | Optional path to a JSON object containing local prompt templates; env JSON overrides duplicate file keys. Store under `/srv/aialra/config` or another runtime path, not the repo |
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
+| `CODEXCOMPAT_EVAL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-evals` | Local Evals API state path for eval definitions, runs, and output items; keep outside Git and monitor disk growth |
+| `CODEXCOMPAT_EVAL_MAX_ROWS` | `100` | Maximum JSONL rows loaded for a local synchronous Eval run; raise only after disk/quota and runtime controls are ready |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
 | `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS` | `400000` | Local estimated input-character budget used to emulate Responses `truncation`. With `truncation:"auto"`, old replay messages are dropped from the beginning of conversation state until under this budget; with `disabled`, the bridge returns `400 context_length_exceeded` before calling the provider when this budget is exceeded |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
@@ -218,6 +220,7 @@ npm run eval:bridge -- --case responses-logprobs --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-url --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

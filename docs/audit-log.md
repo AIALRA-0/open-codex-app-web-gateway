@@ -6342,3 +6342,75 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Local Evals API compatibility
+
+- Used current official OpenAI docs/OpenAPI metadata to confirm the Evals API
+  surface:
+  - `POST /v1/evals` / `GET /v1/evals`;
+  - `GET` / `POST` / `DELETE /v1/evals/{eval_id}`;
+  - `POST` / `GET /v1/evals/{eval_id}/runs`;
+  - `GET /v1/evals/{eval_id}/runs/{run_id}`;
+  - `GET /v1/evals/{eval_id}/runs/{run_id}/output_items`;
+  - `GET /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}`.
+- Recorded the official Evals deprecation dates in the compatibility matrix:
+  read-only for existing users on 2026-10-31 and shutdown scheduled for
+  2026-11-30.
+- Added a local synchronous Evals compatibility layer for Chat-only providers:
+  - file-backed `eval_...`, `evalrun_...`, and `eval.run.output_item`
+    storage under `CODEXCOMPAT_EVAL_STATE_DIR` with `0700` directories and
+    `0600` JSON files;
+  - eval create/list/get/update/delete;
+  - run create/list/get and a local terminal cancel no-op;
+  - output item list/get with stable JSONL line ordering;
+  - `purpose:"evals"` Files as run data sources plus inline local row data;
+  - `data_source.type:"responses"` template materialization through local
+    `/v1/responses` with `store:false` when a row does not provide a sample;
+  - sample-driven grading without upstream calls when rows include
+    `sample.output_text` or compatible sample fields;
+  - deterministic `string_check` graders for `eq`, `ne`, `contains`,
+    `not_contains`, `starts_with`, `ends_with`, and `regex`;
+  - run-level `result_counts`, `per_model_usage`,
+    `per_testing_criteria_results`, local `report_url`, and compatibility
+    metadata.
+- Added `CODEXCOMPAT_EVAL_STATE_DIR` and `CODEXCOMPAT_EVAL_MAX_ROWS` to
+  `.env.example` and deployment docs. The default row cap is 100 for the
+  `/srv/aialra/apps` deployment profile.
+- Added `evals-lifecycle` to the live `bridge-regression` harness. It creates
+  an eval, uploads a `purpose:"evals"` JSONL File, creates a run, checks two
+  output items with one pass and one fail, retrieves/list runs, updates eval
+  metadata, lists evals, deletes the eval, and cleans up the file.
+- Verification:
+  - `node --check src/bridge/local_evals.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test test/server.test.js --test-name-pattern "Evals API"` ran the
+    full server test file and passed 122/122, including the new Evals case.
+  - `npm test`: passed 160/160.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 750 runtime
+    candidates, selected 93 old UI screenshots by retention policy, deleted 0
+    files, selected 7640523 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `evals-lifecycle` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 157 ms, `result_counts:{total:2,passed:1,failed:1,errored:0}`,
+    and zero token usage because it used sample-driven local grading.
+  - Full live `npm run eval:bridge`: 70/70 passing cases, pass rate 1.0,
+    average latency 967 ms, P95 latency 2350 ms, and total usage 10705 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation,
+    project dialog/upload services, conversation submission, completed-turn
+    actions, reload persistence, generated image artifact display, saved-project
+    cleanup, and no console errors or warnings.
+  - Disk/storage check: the filesystem has 40 GB available; `state/` is
+    7.9 MB, `output/` is 13 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

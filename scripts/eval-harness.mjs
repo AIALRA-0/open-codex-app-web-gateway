@@ -379,6 +379,38 @@ function buildSuites(defaultModel) {
           && voiceList.data.some((item) => item.id === voice.id),
       },
       {
+        id: "evals-lifecycle",
+        mode: "evals-lifecycle",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ evalObject, file, run, outputItems, outputItem, runGet, runList, evalList, evalUpdated, deleted }) => {
+          const statuses = (outputItems?.data || []).map((item) => item.status);
+          return evalObject?.object === "eval"
+            && /^eval_/.test(evalObject.id || "")
+            && file?.purpose === "evals"
+            && run?.object === "eval.run"
+            && run.status === "completed"
+            && run.result_counts?.total === 2
+            && run.result_counts?.passed === 1
+            && run.result_counts?.failed === 1
+            && run.result_counts?.errored === 0
+            && run.per_testing_criteria_results?.[0]?.passed === 1
+            && run.per_testing_criteria_results?.[0]?.failed === 1
+            && outputItems?.object === "list"
+            && outputItems.data?.length === 2
+            && statuses.includes("passed")
+            && statuses.includes("failed")
+            && outputItem?.object === "eval.run.output_item"
+            && outputItem.run_id === run.id
+            && runGet?.id === run.id
+            && runList?.data?.some((item) => item.id === run.id)
+            && evalList?.data?.some((item) => item.id === evalObject.id)
+            && evalUpdated?.metadata?.updated === "true"
+            && deleted?.deleted === true;
+        },
+      },
+      {
         id: "responses-inline-moderation",
         mode: "responses",
         request: {
@@ -2281,6 +2313,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "audio-voice-lifecycle") {
       return await runAudioVoiceLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "evals-lifecycle") {
+      return await runEvalsLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
@@ -2528,6 +2563,154 @@ async function runAudioVoiceLifecycleCase(testCase, context, started) {
     });
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function runEvalsLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let evalId = null;
+  let fileId = null;
+  try {
+    const evalResponse = await postJson(`${baseUrl}/v1/evals`, {
+      name: `Bridge ${testCase.id}`,
+      data_source_config: {
+        type: "custom",
+        include_sample_schema: true,
+        item_schema: {
+          type: "object",
+          properties: {
+            ticket_text: { type: "string" },
+            correct_label: { type: "string" },
+          },
+          required: ["ticket_text", "correct_label"],
+          additionalProperties: false,
+        },
+      },
+      testing_criteria: [{
+        type: "string_check",
+        name: "Exact label match",
+        input: "{{ sample.output_text }}",
+        operation: "eq",
+        reference: "{{ item.correct_label }}",
+      }],
+      metadata: { suite: "bridge-regression", case_id: testCase.id },
+    });
+    const evalBody = await evalResponse.text();
+    if (!evalResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: evalResponse.status,
+        error: truncate(evalBody),
+      });
+    }
+    const evalObject = JSON.parse(evalBody);
+    evalId = evalObject.id || null;
+
+    const jsonl = [
+      {
+        item: { ticket_text: "Mouse will not pair after update.", correct_label: "Hardware" },
+        sample: { output_text: "Hardware" },
+      },
+      {
+        item: { ticket_text: "Editor plugin crashes on startup.", correct_label: "Software" },
+        sample: { output_text: "Hardware" },
+      },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n";
+    const fileResponse = await postJson(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}.jsonl`,
+      purpose: "evals",
+      content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+      mime_type: "application/jsonl",
+      metadata: { suite: "bridge-regression", case_id: testCase.id },
+    });
+    const fileBody = await fileResponse.text();
+    if (!fileResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: fileResponse.status,
+        error: truncate(fileBody),
+      });
+    }
+    const file = JSON.parse(fileBody);
+    fileId = file.id || null;
+
+    const runResponse = await postJson(`${baseUrl}/v1/evals/${evalId}/runs`, {
+      name: `Bridge ${testCase.id} run`,
+      data_source: {
+        type: "responses",
+        model: request.model || model,
+        source: { type: "file_id", id: file.id },
+        input_messages: {
+          type: "template",
+          template: [{
+            role: "user",
+            content: "Classify this support ticket as Hardware or Software: {{ item.ticket_text }}",
+          }],
+        },
+      },
+      metadata: { suite: "bridge-regression", case_id: testCase.id },
+    });
+    const runBody = await runResponse.text();
+    if (!runResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: runResponse.status,
+        error: truncate(runBody),
+      });
+    }
+    const run = JSON.parse(runBody);
+
+    const outputItems = await getJson(`${baseUrl}/v1/evals/${evalId}/runs/${run.id}/output_items?limit=20`);
+    const firstOutputItemId = outputItems.json?.data?.[0]?.id || null;
+    const outputItem = firstOutputItemId
+      ? await getJson(`${baseUrl}/v1/evals/${evalId}/runs/${run.id}/output_items/${firstOutputItemId}`)
+      : { status: 0, ok: false, json: null };
+    const runGet = await getJson(`${baseUrl}/v1/evals/${evalId}/runs/${run.id}`);
+    const runList = await getJson(`${baseUrl}/v1/evals/${evalId}/runs?limit=20`);
+    const updateResponse = await postJson(`${baseUrl}/v1/evals/${evalId}`, {
+      metadata: { updated: "true", suite: "bridge-regression", case_id: testCase.id },
+    });
+    const updateBody = await updateResponse.text();
+    const evalUpdated = parseJsonish(updateBody);
+    const evalList = await getJson(`${baseUrl}/v1/evals?limit=20&order=desc&order_by=updated_at`);
+    const deleteResponse = await deleteJson(`${baseUrl}/v1/evals/${evalId}`);
+    const deleted = parseJsonish(deleteResponse.body);
+    if (deleted?.deleted) evalId = null;
+
+    const ok = !!testCase.check({
+      evalObject,
+      file,
+      run,
+      outputItems: outputItems.json,
+      outputItem: outputItem.json,
+      runGet: runGet.json,
+      runList: runList.json,
+      evalList: evalList.json,
+      evalUpdated,
+      deleted,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: runResponse.status,
+      eval_id: evalObject.id,
+      file_id: file.id,
+      run_id: run.id,
+      output_item_count: Array.isArray(outputItems.json?.data) ? outputItems.json.data.length : 0,
+      run_status: run.status,
+      result_counts: run.result_counts,
+      output_item_status: outputItems.status,
+      output_item_get_status: outputItem.status,
+      run_get_status: runGet.status,
+      run_list_status: runList.status,
+      eval_update_status: updateResponse.status,
+      eval_list_status: evalList.status,
+      delete_status: deleteResponse.status,
+      usage: moderationUsage(),
+      output_text: `evals:${run.result_counts?.passed || 0}/${run.result_counts?.total || 0}`,
+    });
+  } finally {
+    if (evalId) await deleteJson(`${baseUrl}/v1/evals/${evalId}`);
+    if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
   }
 }
 

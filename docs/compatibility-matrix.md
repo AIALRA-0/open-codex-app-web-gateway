@@ -18,6 +18,9 @@ Primary sources:
 - OpenAI Moderations OpenAPI operation `createModeration`: https://api.openai.com/v1/moderations
 - OpenAI Batch OpenAPI operation `createBatch`: https://api.openai.com/v1/batches
 - OpenAI Batch guide: https://developers.openai.com/api/docs/guides/batch
+- OpenAI Evals guide: https://developers.openai.com/api/docs/guides/evals
+- OpenAI Evals OpenAPI operation `createEval`: https://api.openai.com/v1/evals
+- OpenAI Evals create reference: https://developers.openai.com/api/reference/resources/evals/methods/create
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
 - OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
 - OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
@@ -398,6 +401,51 @@ represent an open stream or a still-running background response. The local
 request-count cap defaults to `CODEXCOMPAT_BATCH_MAX_REQUESTS=1000` to protect
 the `/srv/aialra/apps` test deployment; it can be raised up to OpenAI's 50,000
 request shape limit when disk and upstream quota policies are ready.
+
+## Evals Endpoint Coverage
+
+OpenAI's Evals API defines evaluation objects with `data_source_config` and
+`testing_criteria`, then runs those evals against data sources such as
+`purpose:"evals"` JSONL Files. The bridge implements a local synchronous
+compatibility layer so SDKs and regression jobs can create evals, create runs,
+read output items, and audit deterministic grader results even when the
+upstream provider only exposes Chat Completions.
+
+The official Evals product is also on a documented deprecation path: existing
+users become read-only on 2026-10-31 and shutdown is scheduled for 2026-11-30.
+This bridge support is therefore documented as local protocol compatibility and
+transition tooling, not a dependency on the hosted Evals dashboard.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/evals` | Implemented locally | Requires `name`, `data_source_config`, and non-empty `testing_criteria`; stores OpenAI-style `eval_...` objects with local metadata |
+| `GET /v1/evals` | Implemented locally | Lists local evals with `limit`, `after`, `before`, `order`, and `order_by=created_at|updated_at` pagination |
+| `GET /v1/evals/{eval_id}` | Implemented locally | Returns the stored local eval definition |
+| `POST /v1/evals/{eval_id}` | Implemented locally | Updates local `name`, `data_source_config`, `testing_criteria`, and `metadata` |
+| `DELETE /v1/evals/{eval_id}` | Implemented locally | Deletes the eval definition, local runs, and output items |
+| `POST /v1/evals/{eval_id}/runs` | Implemented locally | Loads inline rows or `source:{type:"file_id",id}` from a `purpose:"evals"` File, runs synchronously, and stores `eval.run` results |
+| `GET /v1/evals/{eval_id}/runs` | Implemented locally | Lists local runs with pagination |
+| `GET /v1/evals/{eval_id}/runs/{run_id}` | Implemented locally | Returns a stored run with `result_counts`, `per_model_usage`, `per_testing_criteria_results`, `data_source`, `error`, and metadata |
+| `POST /v1/evals/{eval_id}/runs/{run_id}/cancel` | Local extension/no-op for terminal runs | Local runs complete synchronously; terminal runs are returned unchanged with compatibility metadata |
+| `GET /v1/evals/{eval_id}/runs/{run_id}/output_items` | Implemented locally | Lists stored `eval.run.output_item` records with pagination |
+| `GET /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}` | Implemented locally | Returns one stored output item with datasource row, sample, criterion results, and error details when present |
+
+Local run execution supports deterministic `string_check` graders with
+`eq`/`equals`, `ne`/`not_eq`/`not_equals`, `contains`, `not_contains`,
+`starts_with`, `ends_with`, and `regex`. Template values such as
+`{{ item.correct_label }}` and `{{ sample.output_text }}` are resolved locally.
+When a JSONL row already includes `sample.output_text` (or compatible sample
+text fields), the bridge grades without calling the upstream provider. When no
+sample is supplied and `data_source.type:"responses"` is used, the bridge
+materializes `input_messages:{type:"template"}` and calls the local
+`/v1/responses` executor with `store:false` to produce the sample output before
+grading.
+
+Local Evals state is file-backed under
+`CODEXCOMPAT_EVAL_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-evals` by default,
+with `0700` directories and `0600` JSON records. The default
+`CODEXCOMPAT_EVAL_MAX_ROWS=100` protects the `/srv/aialra/apps` deployment
+from accidentally loading a large benchmark file into a synchronous request.
 
 ## Uploads, Files and Vector Stores Endpoint Coverage
 
@@ -1033,6 +1081,7 @@ Configuration:
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
+| OpenAI Evals full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check` grading, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, full grader suite, or replacement for SWE-bench/scored agent benchmarks | Add async workers, more grader types, dataset sharding, provider-backed judge graders, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |

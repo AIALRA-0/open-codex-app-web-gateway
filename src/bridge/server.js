@@ -30,6 +30,7 @@ const {
   prepareFileSearchContext,
   semanticVector,
 } = require("./local_file_search");
+const { LocalEvalStore } = require("./local_evals");
 const {
   LocalUploadStore,
   OFFICIAL_UPLOAD_MAX_BYTES,
@@ -225,6 +226,8 @@ function loadConfig(overrides = {}) {
     embeddingsDimensions: numberFromEnv("CODEXCOMPAT_EMBEDDINGS_DIMENSIONS", LOCAL_EMBEDDING_DIMENSIONS, 1, 3072),
     moderationsModel: process.env.CODEXCOMPAT_MODERATIONS_MODEL || "omni-moderation-latest",
     batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
+    evalStateDir: process.env.CODEXCOMPAT_EVAL_STATE_DIR || path.join(stateDir, "local-evals"),
+    evalMaxRows: numberFromEnv("CODEXCOMPAT_EVAL_MAX_ROWS", 100, 1, 5000),
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     localPromptTemplates: loadLocalPromptTemplates(),
@@ -6847,6 +6850,666 @@ function batchErrorLine(customId, line, code, message, param = null, body = null
   };
 }
 
+async function handleEvalCreate(req, res, evalStore) {
+  const body = await readJson(req);
+  validateEvalBody(body, { requireCore: true });
+  sendJson(res, 201, evalStore.createEval(body));
+}
+
+function handleEvalsList(res, evalStore, url) {
+  const orderBy = url.searchParams.get("order_by") === "updated_at" ? "updated_at" : "created_at";
+  const evals = evalStore.listEvals()
+    .sort((a, b) => Number(a[orderBy] || 0) - Number(b[orderBy] || 0));
+  sendJson(res, 200, paginateList(evals, url));
+}
+
+function handleEvalGet(res, evalStore, evalId) {
+  const evalObject = evalStore.getEval(evalId);
+  if (!evalObject) {
+    sendError(res, 404, `eval not found: ${evalId}`, {
+      type: "invalid_request_error",
+      code: "eval_not_found",
+      param: "eval_id",
+    });
+    return;
+  }
+  sendJson(res, 200, evalObject);
+}
+
+async function handleEvalUpdate(req, res, evalStore, evalId) {
+  const body = await readJson(req);
+  validateEvalBody(body, { requireCore: false });
+  const evalObject = evalStore.updateEval(evalId, body);
+  if (!evalObject) {
+    sendError(res, 404, `eval not found: ${evalId}`, {
+      type: "invalid_request_error",
+      code: "eval_not_found",
+      param: "eval_id",
+    });
+    return;
+  }
+  sendJson(res, 200, evalObject);
+}
+
+function handleEvalDelete(res, evalStore, evalId) {
+  const deleted = evalStore.deleteEval(evalId);
+  if (!deleted) {
+    sendError(res, 404, `eval not found: ${evalId}`, {
+      type: "invalid_request_error",
+      code: "eval_not_found",
+      param: "eval_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function handleEvalRunCreate(req, res, config, responseStore, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId) {
+  const evalObject = evalStore.getEval(evalId);
+  if (!evalObject) {
+    sendError(res, 404, `eval not found: ${evalId}`, {
+      type: "invalid_request_error",
+      code: "eval_not_found",
+      param: "eval_id",
+    });
+    return;
+  }
+
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("eval run request body must be a JSON object", {
+      type: "invalid_request_error",
+      code: "invalid_eval_run_request",
+    });
+  }
+  if (!isPlainObject(body.data_source)) {
+    throw requestError("data_source is required", {
+      type: "invalid_request_error",
+      code: "missing_required_parameter",
+      param: "data_source",
+    });
+  }
+
+  const rows = loadEvalRows(body.data_source, fileSearchStore, config);
+  const now = nowSeconds();
+  const runId = prefixedId("evalrun");
+  const model = String(body.data_source.model || body.model || config.defaultModel || "local");
+  let run = {
+    id: runId,
+    object: "eval.run",
+    eval_id: evalId,
+    report_url: `local://evals/${evalId}/runs/${runId}`,
+    status: "in_progress",
+    model,
+    name: String(body.name || "Local eval run"),
+    created_at: now,
+    started_at: now,
+    completed_at: null,
+    result_counts: { total: rows.length, errored: 0, failed: 0, passed: 0 },
+    per_model_usage: null,
+    per_testing_criteria_results: null,
+    data_source: clone(body.data_source),
+    error: null,
+    metadata: isPlainObject(body.metadata) ? clone(body.metadata) : {},
+  };
+  evalStore.createRun(evalId, run, []);
+
+  const outputItems = [];
+  const criteriaAggregates = new Map();
+  const usageAggregates = new Map();
+
+  for (const row of rows) {
+    const outputItem = await executeEvalRow({
+      evalObject,
+      run,
+      row,
+      config,
+      responseStore,
+      fileSearchStore,
+      imageGenerationStore,
+      backgroundJobs,
+      containerStore,
+      conversationStore,
+      skillStore,
+      incomingHeaders: req.headers,
+      usageAggregates,
+      criteriaAggregates,
+    });
+    outputItems.push(outputItem);
+    if (outputItem.status === "passed") run.result_counts.passed += 1;
+    else if (outputItem.status === "failed") run.result_counts.failed += 1;
+    else run.result_counts.errored += 1;
+  }
+
+  run = {
+    ...run,
+    status: "completed",
+    completed_at: nowSeconds(),
+    per_model_usage: usageAggregates.size ? Array.from(usageAggregates.values()) : null,
+    per_testing_criteria_results: Array.from(criteriaAggregates.values()),
+    metadata: {
+      ...(run.metadata || {}),
+      compatibility: {
+        provider: "local",
+        execution: "synchronous",
+        row_count: rows.length,
+        supported_graders: ["string_check"],
+        reason: "evals_api_protocol_compatibility",
+      },
+    },
+  };
+  evalStore.createRun(evalId, run, outputItems);
+  sendJson(res, 200, run);
+}
+
+function handleEvalRunsList(res, evalStore, evalId, url) {
+  const runs = evalStore.listRuns(evalId);
+  if (!runs) {
+    sendError(res, 404, `eval not found: ${evalId}`, {
+      type: "invalid_request_error",
+      code: "eval_not_found",
+      param: "eval_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(runs, url));
+}
+
+function handleEvalRunGet(res, evalStore, evalId, runId) {
+  const run = evalStore.getRun(evalId, runId);
+  if (!run) {
+    sendError(res, 404, `eval run not found: ${runId}`, {
+      type: "invalid_request_error",
+      code: "eval_run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+function handleEvalRunCancel(res, evalStore, evalId, runId) {
+  const run = evalStore.cancelRun(evalId, runId);
+  if (!run) {
+    sendError(res, 404, `eval run not found: ${runId}`, {
+      type: "invalid_request_error",
+      code: "eval_run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+function handleEvalRunOutputItemsList(res, evalStore, evalId, runId, url) {
+  const items = evalStore.listOutputItems(evalId, runId);
+  if (!items) {
+    sendError(res, 404, `eval run not found: ${runId}`, {
+      type: "invalid_request_error",
+      code: "eval_run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(items, url));
+}
+
+function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId) {
+  const item = evalStore.getOutputItem(evalId, runId, outputItemId);
+  if (!item) {
+    sendError(res, 404, `eval run output item not found: ${outputItemId}`, {
+      type: "invalid_request_error",
+      code: "eval_run_output_item_not_found",
+      param: "output_item_id",
+    });
+    return;
+  }
+  sendJson(res, 200, item);
+}
+
+function validateEvalBody(body, { requireCore }) {
+  if (!isPlainObject(body)) {
+    throw requestError("eval request body must be a JSON object", {
+      type: "invalid_request_error",
+      code: "invalid_eval_request",
+    });
+  }
+  if (requireCore || Object.prototype.hasOwnProperty.call(body, "data_source_config")) {
+    if (!isPlainObject(body.data_source_config)) {
+      throw requestError("data_source_config is required", {
+        type: "invalid_request_error",
+        code: "missing_required_parameter",
+        param: "data_source_config",
+      });
+    }
+  }
+  if (requireCore || Object.prototype.hasOwnProperty.call(body, "testing_criteria")) {
+    if (!Array.isArray(body.testing_criteria) || !body.testing_criteria.length) {
+      throw requestError("testing_criteria must be a non-empty array", {
+        type: "invalid_request_error",
+        code: "missing_required_parameter",
+        param: "testing_criteria",
+      });
+    }
+  }
+}
+
+function loadEvalRows(dataSource, fileSearchStore, config) {
+  const source = dataSource.source;
+  if (isPlainObject(source) && source.type === "file_id") {
+    const fileId = source.id || source.file_id;
+    const file = fileSearchStore.getFile(fileId);
+    const buffer = fileSearchStore.getFileContentBuffer?.(fileId);
+    if (!file || buffer == null) {
+      throw requestError(`file not found: ${fileId}`, {
+        type: "invalid_request_error",
+        code: "file_not_found",
+        param: "data_source.source.id",
+        status: 404,
+      });
+    }
+    if (file.purpose !== "evals") {
+      throw requestError("Eval input files must be uploaded with purpose=evals", {
+        type: "invalid_request_error",
+        code: "invalid_file_purpose",
+        param: "data_source.source.id",
+      });
+    }
+    return parseEvalJsonl(buffer, config.evalMaxRows);
+  }
+
+  if (isPlainObject(source) && Array.isArray(source.data)) {
+    return normalizeEvalRows(source.data, config.evalMaxRows);
+  }
+
+  if (Array.isArray(dataSource.data)) {
+    return normalizeEvalRows(dataSource.data, config.evalMaxRows);
+  }
+
+  throw requestError("data_source.source must reference a file_id or local inline data", {
+    type: "invalid_request_error",
+    code: "unsupported_eval_data_source",
+    param: "data_source.source",
+  });
+}
+
+function parseEvalJsonl(buffer, maxRows) {
+  const text = Buffer.isBuffer(buffer) ? buffer.toString("utf8") : String(buffer || "");
+  const rows = [];
+  const rawLines = text.split(/\r?\n/);
+  for (let index = 0; index < rawLines.length; index += 1) {
+    const raw = rawLines[index].trim();
+    if (!raw) continue;
+    if (rows.length >= maxRows) {
+      throw requestError(`eval input exceeds local limit of ${maxRows} rows`, {
+        type: "invalid_request_error",
+        code: "eval_too_large",
+        param: "data_source.source.id",
+      });
+    }
+    let parsed;
+    try {
+      parsed = JSON.parse(raw);
+    } catch (error) {
+      throw requestError(`line ${index + 1} is not valid JSON: ${error.message}`, {
+        type: "invalid_request_error",
+        code: "invalid_jsonl",
+        param: "data_source.source.id",
+      });
+    }
+    if (!isPlainObject(parsed)) {
+      throw requestError(`line ${index + 1} must be a JSON object`, {
+        type: "invalid_request_error",
+        code: "invalid_eval_row",
+        param: "data_source.source.id",
+      });
+    }
+    rows.push(normalizeEvalRow(parsed, index + 1));
+  }
+  if (!rows.length) {
+    throw requestError("eval input file must contain at least one JSONL row", {
+      type: "invalid_request_error",
+      code: "empty_eval_file",
+      param: "data_source.source.id",
+    });
+  }
+  return rows;
+}
+
+function normalizeEvalRows(values, maxRows) {
+  if (values.length > maxRows) {
+    throw requestError(`eval input exceeds local limit of ${maxRows} rows`, {
+      type: "invalid_request_error",
+      code: "eval_too_large",
+      param: "data_source.data",
+    });
+  }
+  return values.map((value, index) => normalizeEvalRow(value, index + 1));
+}
+
+function normalizeEvalRow(value, line) {
+  const row = isPlainObject(value) ? clone(value) : { item: { value } };
+  const item = isPlainObject(row.item) ? clone(row.item) : clone(row);
+  return {
+    id: row.id || row.custom_id || `row-${line}`,
+    line,
+    row,
+    item,
+  };
+}
+
+async function executeEvalRow(options) {
+  const {
+    evalObject,
+    run,
+    row,
+    config,
+    responseStore,
+    fileSearchStore,
+    imageGenerationStore,
+    backgroundJobs,
+    containerStore,
+    conversationStore,
+    skillStore,
+    incomingHeaders,
+    usageAggregates,
+    criteriaAggregates,
+  } = options;
+  const createdAt = nowSeconds();
+  let sample;
+  let sampleError = null;
+  try {
+    const generated = await evalSampleForRow({
+      dataSource: run.data_source,
+      row,
+      config,
+      responseStore,
+      fileSearchStore,
+      imageGenerationStore,
+      backgroundJobs,
+      containerStore,
+      conversationStore,
+      skillStore,
+      incomingHeaders,
+    });
+    sample = generated.sample;
+    if (generated.usage) addEvalUsage(usageAggregates, generated.model || run.model, generated.usage);
+  } catch (error) {
+    sample = { output_text: "" };
+    sampleError = {
+      code: error.code || "eval_sample_error",
+      message: error.message || "failed to create eval sample",
+      param: error.param || null,
+    };
+  }
+
+  const context = { item: row.item, sample };
+  const results = sampleError
+    ? (evalObject.testing_criteria || []).map((criterion) => ({
+        id: criterion.id || prefixedId("criterion"),
+        name: criterion.name || criterion.type || "criterion",
+        type: criterion.type || "string_check",
+        status: "errored",
+        passed: false,
+        score: 0,
+        error: clone(sampleError),
+      }))
+    : (evalObject.testing_criteria || []).map((criterion) => evaluateTestingCriterion(criterion, context));
+  for (const result of results) addCriterionAggregate(criteriaAggregates, result);
+  const status = sampleError
+    ? "errored"
+    : results.every((result) => result.status === "passed")
+      ? "passed"
+      : results.some((result) => result.status === "errored")
+        ? "errored"
+        : "failed";
+
+  return {
+    id: prefixedId("evalout"),
+    object: "eval.run.output_item",
+    eval_id: run.eval_id,
+    run_id: run.id,
+    created_at: createdAt,
+    status,
+    datasource_item_id: String(row.id),
+    datasource_item: clone(row.row),
+    item: clone(row.item),
+    sample,
+    results,
+    error: sampleError,
+    metadata: {
+      line: row.line,
+      compatibility: {
+        provider: "local",
+        reason: "eval_output_item_protocol_compatibility",
+      },
+    },
+  };
+}
+
+async function evalSampleForRow({ dataSource, row, config, responseStore, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, incomingHeaders }) {
+  const provided = providedEvalSample(row.row);
+  if (provided) return { sample: provided, usage: null, model: dataSource.model || config.defaultModel };
+
+  const request = evalResponsesRequestForRow(dataSource, row.item, config);
+  if (!request) {
+    return {
+      sample: {
+        output_text: "",
+        compatibility: {
+          provider: "local",
+          reason: "no_sample_or_supported_generation_prompt",
+        },
+      },
+      usage: null,
+      model: dataSource.model || config.defaultModel,
+    };
+  }
+
+  const result = await executeLocalBatchRequest({
+    endpoint: "/v1/responses",
+    requestBody: request,
+    incomingHeaders,
+    config,
+    store: responseStore,
+    backgroundJobs,
+    fileSearchStore,
+    imageGenerationStore,
+    containerStore,
+    conversationStore,
+    skillStore,
+  });
+  if (!result.ok) {
+    const error = new Error(result.message || "eval sample generation failed");
+    error.status = result.status_code || 500;
+    error.code = result.code || "eval_sample_generation_failed";
+    error.param = result.param || null;
+    throw error;
+  }
+
+  return {
+    sample: {
+      output_text: extractResponseOutputText(result.body),
+      response_id: result.body?.id || null,
+      output: Array.isArray(result.body?.output) ? clone(result.body.output) : undefined,
+    },
+    usage: result.body?.usage || null,
+    model: result.body?.model || request.model || config.defaultModel,
+  };
+}
+
+function providedEvalSample(row) {
+  if (!isPlainObject(row)) return null;
+  if (isPlainObject(row.sample)) {
+    const outputText = sampleOutputText(row.sample);
+    if (outputText != null) return { ...clone(row.sample), output_text: outputText };
+  }
+  for (const key of ["sample_output_text", "output_text", "completion", "answer"]) {
+    if (row[key] != null) return { output_text: stringifyContent(row[key]) };
+  }
+  return null;
+}
+
+function sampleOutputText(sample) {
+  if (sample.output_text != null) return stringifyContent(sample.output_text);
+  if (sample.text != null) return stringifyContent(sample.text);
+  if (sample.output != null) return stringifyContent(sample.output);
+  return null;
+}
+
+function evalResponsesRequestForRow(dataSource, item, config) {
+  const type = String(dataSource.type || "responses");
+  if (type !== "responses") return null;
+  const input = evalInputForRow(dataSource.input_messages ?? dataSource.input ?? dataSource.messages, item);
+  if (!input.length) return null;
+  return {
+    ...(isPlainObject(dataSource.sampling_params) ? clone(dataSource.sampling_params) : {}),
+    model: dataSource.model || config.defaultModel,
+    input,
+    store: false,
+  };
+}
+
+function evalInputForRow(value, item) {
+  const input = isPlainObject(value) && value.type === "template" ? value.template : value;
+  const rendered = renderEvalTemplateValue(input, { item, sample: {} });
+  if (Array.isArray(rendered)) return rendered;
+  if (rendered == null || rendered === "") return [];
+  return [{ role: "user", content: stringifyContent(rendered) }];
+}
+
+function evaluateTestingCriterion(criterion, context) {
+  const id = criterion.id || prefixedId("criterion");
+  const type = String(criterion.type || "string_check");
+  if (type !== "string_check") {
+    return {
+      id,
+      name: criterion.name || type,
+      type,
+      status: "errored",
+      passed: false,
+      score: 0,
+      error: {
+        code: "unsupported_eval_grader",
+        message: `local Evals compatibility supports string_check graders, not ${type}`,
+      },
+    };
+  }
+
+  const rawInput = renderEvalTemplateValue(criterion.input ?? "{{ sample.output_text }}", context);
+  const rawReference = renderEvalTemplateValue(criterion.reference ?? criterion.expected ?? "", context);
+  const operation = String(criterion.operation || "eq").toLowerCase();
+  const caseSensitive = criterion.case_sensitive !== false && criterion.ignore_case !== true;
+  const input = stringifyContent(rawInput);
+  const reference = stringifyContent(rawReference);
+  const left = caseSensitive ? input : input.toLowerCase();
+  const right = caseSensitive ? reference : reference.toLowerCase();
+  const passed = compareStringCheck(left, right, operation);
+
+  return {
+    id,
+    name: criterion.name || "string_check",
+    type,
+    status: passed ? "passed" : "failed",
+    passed,
+    score: passed ? 1 : 0,
+    input,
+    reference,
+    operation,
+  };
+}
+
+function compareStringCheck(input, reference, operation) {
+  if (operation === "eq" || operation === "equals") return input === reference;
+  if (operation === "ne" || operation === "not_eq" || operation === "not_equals") return input !== reference;
+  if (operation === "contains") return input.includes(reference);
+  if (operation === "not_contains") return !input.includes(reference);
+  if (operation === "starts_with") return input.startsWith(reference);
+  if (operation === "ends_with") return input.endsWith(reference);
+  if (operation === "regex") {
+    try {
+      return new RegExp(reference).test(input);
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+function renderEvalTemplateValue(value, context) {
+  if (typeof value === "string") return renderEvalTemplateString(value, context);
+  if (Array.isArray(value)) return value.map((item) => renderEvalTemplateValue(item, context));
+  if (isPlainObject(value)) {
+    const output = {};
+    for (const [key, item] of Object.entries(value)) output[key] = renderEvalTemplateValue(item, context);
+    return output;
+  }
+  return value;
+}
+
+function renderEvalTemplateString(template, context) {
+  return String(template).replace(/\{\{\s*([^}]+?)\s*\}\}/g, (_match, expr) => {
+    const value = valueAtEvalPath(context, String(expr).trim());
+    if (value == null) return "";
+    return typeof value === "string" ? value : stringifyContent(value);
+  });
+}
+
+function valueAtEvalPath(context, expression) {
+  const pathParts = expression
+    .replace(/\[(\d+)\]/g, ".$1")
+    .split(".")
+    .map((part) => part.trim())
+    .filter(Boolean);
+  let value = context;
+  for (const part of pathParts) {
+    if (value == null) return undefined;
+    value = value[part];
+  }
+  return value;
+}
+
+function extractResponseOutputText(response) {
+  if (typeof response?.output_text === "string") return response.output_text;
+  return (response?.output || [])
+    .flatMap((item) => item.content || [])
+    .filter((part) => part?.type === "output_text")
+    .map((part) => part.text || "")
+    .join("");
+}
+
+function addEvalUsage(usageAggregates, model, usage) {
+  if (!usage || !isPlainObject(usage)) return;
+  const key = model || "unknown";
+  const existing = usageAggregates.get(key) || {
+    model_name: key,
+    invocation_count: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    cached_tokens: 0,
+  };
+  existing.invocation_count += 1;
+  existing.prompt_tokens += Number(usage.input_tokens || usage.prompt_tokens || 0);
+  existing.completion_tokens += Number(usage.output_tokens || usage.completion_tokens || 0);
+  existing.total_tokens += Number(usage.total_tokens || 0);
+  existing.cached_tokens += Number(usage.input_tokens_details?.cached_tokens || usage.prompt_tokens_details?.cached_tokens || 0);
+  usageAggregates.set(key, existing);
+}
+
+function addCriterionAggregate(criteriaAggregates, result) {
+  const existing = criteriaAggregates.get(result.id) || {
+    testing_criteria: result.id,
+    passed: 0,
+    failed: 0,
+    errored: 0,
+  };
+  if (result.status === "passed") existing.passed += 1;
+  else if (result.status === "errored") existing.errored += 1;
+  else existing.failed += 1;
+  criteriaAggregates.set(result.id, existing);
+}
+
 function handleBatchesList(res, store, url) {
   const batches = store.list()
     .filter((record) => record?.batch)
@@ -7481,6 +8144,7 @@ function createServer(config = loadConfig()) {
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
+  const evalStore = config.evalStore || new LocalEvalStore(config);
   const backgroundJobs = new Map();
   const backgroundRestart = resumeStaleBackgroundResponses({
     config,
@@ -7659,6 +8323,72 @@ function createServer(config = loadConfig()) {
         }
         if (action === "cancel" && req.method === "POST") {
           handleBatchCancel(res, store, batchId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/evals") {
+        if (req.method === "GET") {
+          handleEvalsList(res, evalStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleEvalCreate(req, res, evalStore);
+          return;
+        }
+      }
+
+      const evalRunOutputItemsRoute = url.pathname.match(/^\/v1\/evals\/([^/]+)\/runs\/([^/]+)\/output_items(?:\/([^/]+))?$/);
+      if (evalRunOutputItemsRoute) {
+        const evalId = decodeURIComponent(evalRunOutputItemsRoute[1]);
+        const runId = decodeURIComponent(evalRunOutputItemsRoute[2]);
+        const outputItemId = evalRunOutputItemsRoute[3] ? decodeURIComponent(evalRunOutputItemsRoute[3]) : "";
+        if (!outputItemId && req.method === "GET") {
+          handleEvalRunOutputItemsList(res, evalStore, evalId, runId, url);
+          return;
+        }
+        if (outputItemId && req.method === "GET") {
+          handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId);
+          return;
+        }
+      }
+
+      const evalRunsRoute = url.pathname.match(/^\/v1\/evals\/([^/]+)\/runs(?:\/([^/]+)(?:\/(cancel))?)?$/);
+      if (evalRunsRoute) {
+        const evalId = decodeURIComponent(evalRunsRoute[1]);
+        const runId = evalRunsRoute[2] ? decodeURIComponent(evalRunsRoute[2]) : "";
+        const action = evalRunsRoute[3] || "";
+        if (!runId && req.method === "GET") {
+          handleEvalRunsList(res, evalStore, evalId, url);
+          return;
+        }
+        if (!runId && req.method === "POST") {
+          await handleEvalRunCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId);
+          return;
+        }
+        if (runId && !action && req.method === "GET") {
+          handleEvalRunGet(res, evalStore, evalId, runId);
+          return;
+        }
+        if (runId && action === "cancel" && req.method === "POST") {
+          handleEvalRunCancel(res, evalStore, evalId, runId);
+          return;
+        }
+      }
+
+      const evalRoute = url.pathname.match(/^\/v1\/evals\/([^/]+)$/);
+      if (evalRoute) {
+        const evalId = decodeURIComponent(evalRoute[1]);
+        if (req.method === "GET") {
+          handleEvalGet(res, evalStore, evalId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleEvalUpdate(req, res, evalStore, evalId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleEvalDelete(res, evalStore, evalId);
           return;
         }
       }

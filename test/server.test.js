@@ -9020,6 +9020,152 @@ test("local Batch API executes local moderations without provider calls", async 
   });
 });
 
+test("Evals API creates local runs and output items from eval JSONL", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called for sample-driven evals" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const createdEvalResponse = await fetch(`${baseUrl}/v1/evals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Ticket label eval",
+        data_source_config: {
+          type: "custom",
+          item_schema: {
+            type: "object",
+            properties: {
+              ticket_text: { type: "string" },
+              correct_label: { type: "string" },
+            },
+            required: ["ticket_text", "correct_label"],
+          },
+          include_sample_schema: true,
+        },
+        testing_criteria: [{
+          type: "string_check",
+          name: "Exact label match",
+          input: "{{ sample.output_text }}",
+          operation: "eq",
+          reference: "{{ item.correct_label }}",
+        }],
+        metadata: { suite: "evals-local" },
+      }),
+    });
+    assert.equal(createdEvalResponse.status, 201);
+    const evalObject = await createdEvalResponse.json();
+    assert.match(evalObject.id, /^eval_/);
+    assert.equal(evalObject.object, "eval");
+    assert.equal(evalObject.testing_criteria.length, 1);
+    assert.match(evalObject.testing_criteria[0].id, /^Exact-label-match-/);
+
+    const jsonl = [
+      {
+        item: { ticket_text: "My monitor will not turn on", correct_label: "Hardware" },
+        sample: { output_text: "Hardware" },
+      },
+      {
+        item: { ticket_text: "I cannot quit vim", correct_label: "Software" },
+        sample: { output_text: "Hardware" },
+      },
+    ].map((line) => JSON.stringify(line)).join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "eval-tickets.jsonl",
+        purpose: "evals",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "sample labels",
+        data_source: {
+          type: "responses",
+          model: "mock-model",
+          source: { type: "file_id", id: file.id },
+          input_messages: {
+            type: "template",
+            template: [
+              { role: "developer", content: "Return one ticket label." },
+              { role: "user", content: "{{ item.ticket_text }}" },
+            ],
+          },
+        },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.match(run.id, /^evalrun_/);
+    assert.equal(run.object, "eval.run");
+    assert.equal(run.status, "completed");
+    assert.equal(run.result_counts.total, 2);
+    assert.equal(run.result_counts.passed, 1);
+    assert.equal(run.result_counts.failed, 1);
+    assert.equal(run.result_counts.errored, 0);
+    assert.equal(run.per_model_usage, null);
+    assert.equal(run.per_testing_criteria_results[0].passed, 1);
+    assert.equal(run.per_testing_criteria_results[0].failed, 1);
+    assert.equal(requests.length, 0);
+
+    const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?limit=10`);
+    assert.equal(outputItemsResponse.status, 200);
+    const outputItems = await outputItemsResponse.json();
+    assert.equal(outputItems.object, "list");
+    assert.equal(outputItems.data.length, 2);
+    assert.deepEqual(outputItems.data.map((item) => item.status), ["passed", "failed"]);
+    assert.equal(outputItems.data[0].sample.output_text, "Hardware");
+    assert.equal(outputItems.data[1].results[0].reference, "Software");
+
+    const outputItemResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items/${outputItems.data[0].id}`);
+    assert.equal(outputItemResponse.status, 200);
+    const outputItem = await outputItemResponse.json();
+    assert.equal(outputItem.id, outputItems.data[0].id);
+    assert.equal(outputItem.datasource_item.item.correct_label, "Hardware");
+
+    const runGet = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}`);
+    assert.equal(runGet.status, 200);
+    assert.equal((await runGet.json()).id, run.id);
+
+    const runList = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?limit=1`);
+    assert.equal(runList.status, 200);
+    assert.equal((await runList.json()).data[0].id, run.id);
+
+    const updatedEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "evals-updated" } }),
+    });
+    assert.equal(updatedEvalResponse.status, 200);
+    assert.deepEqual((await updatedEvalResponse.json()).metadata, { suite: "evals-updated" });
+
+    const evalList = await fetch(`${baseUrl}/v1/evals?order=desc&order_by=updated_at`);
+    assert.equal(evalList.status, 200);
+    assert.equal((await evalList.json()).data[0].id, evalObject.id);
+
+    const deleteEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, { method: "DELETE" });
+    assert.equal(deleteEvalResponse.status, 200);
+    assert.deepEqual(await deleteEvalResponse.json(), {
+      id: evalObject.id,
+      object: "eval.deleted",
+      deleted: true,
+    });
+
+    const missingEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`);
+    assert.equal(missingEvalResponse.status, 404);
+  });
+});
+
 test("GET /healthz does not require a provider key", async () => {
   const server = createServer(loadConfig({ providerApiKey: "", providerBaseUrl: "http://127.0.0.1:1" }));
   const address = await listen(server);
