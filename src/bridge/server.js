@@ -63,6 +63,7 @@ const {
 } = require("./local_computer");
 const {
   attachMcpOutput,
+  executeApprovedMcpApprovalResponses,
   executeMcpChatToolCalls,
   injectMcpChatTools,
   injectMcpMessages,
@@ -70,6 +71,7 @@ const {
   mcpCompatibility,
   mcpOutputItems,
   prepareMcpContext,
+  suppressMcpChatToolCalls,
 } = require("./local_mcp");
 const {
   attachImageGenerationOutput,
@@ -555,6 +557,10 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
   for (let round = 0; round < maxRounds; round += 1) {
     const execution = await executeMcpChatToolCalls(localMcp, current.json, config, { toolBudget });
     if (!execution.executed) break;
+    if (execution.approval_requested) {
+      current.json = suppressMcpChatToolCalls(current.json, localMcp);
+      break;
+    }
     chat.messages.push(...execution.messages);
     if (round + 1 >= maxRounds) chat.tool_choice = "none";
     current = await fetchProviderJson(config, chat, incomingHeaders);
@@ -663,10 +669,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localComputer) {
     applyLocalComputerToChat(chat, compatibility, localComputer, config);
   }
-  const localMcp = await prepareMcpContext(request, config, { toolBudget });
+  const localMcp = await prepareMcpContext(request, config, { toolBudget, previousResponse });
   if (localMcp) {
+    const approvedMcp = await executeApprovedMcpApprovalResponses(localMcp, config, { toolBudget });
     applyLocalMcpToChat(chat, compatibility, localMcp, config);
-    if (!chat.stream) injectMcpChatTools(chat, localMcp, config, { toolBudget });
+    if (!chat.stream && !approvedMcp.handled) injectMcpChatTools(chat, localMcp, config, { toolBudget });
   }
   const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {

@@ -4369,6 +4369,98 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Remote MCP approval flow compatibility
+
+- Used current official OpenAI MCP/Connectors Responses docs through the
+  OpenAI developer-docs MCP to confirm the approval item flow:
+  `mcp_approval_request` output items can be returned before a connector call,
+  and a later request can send `mcp_approval_response` input with
+  `approval_request_id`, typically chained with `previous_response_id`.
+  Authorization remains per-request and is not stored on the Response object.
+- Extended non-streaming remote MCP compatibility from auto-approved execution
+  to approval-required execution:
+  - remote MCP tools with `require_approval:"always"`, `"default"`, or no
+    matching `never` rule are exposed to Chat providers as temporary function
+    tools so the model can request the call;
+  - model-produced Chat tool calls for approval-required MCP tools are converted
+    into Responses `mcp_approval_request` items instead of calling the remote
+    server immediately;
+  - internal generated Chat function calls are suppressed from public Responses
+    output so clients see the MCP approval item shape, not bridge plumbing;
+  - later `mcp_approval_response` items are matched against prior response
+    output via `previous_response_id`, then approved calls execute remote
+    JSON-RPC `tools/call` with the current request's MCP server authorization
+    and session handling;
+  - approved call results emit `mcp_call` with `approval_request_id` and are
+    injected back into the final Chat prompt so the model can answer from the
+    tool output.
+- Added compatibility metadata counters for approval requests, approval
+  responses, approvals, denials, missing approvals, and remote call execution.
+- Updated the bridge regression harness with
+  `responses-mcp-remote-approval` and `responses-mcp-remote-denial`, which
+  start a local mock MCP server, validate the approval request turn, send
+  approved or denied continuations, verify `tools/call` only happens for the
+  approved path, and confirm authorization/session behavior without leaking
+  secrets into Responses output.
+- Updated compatibility matrix, deployment docs, evaluation plan, unit tests,
+  and the live harness.
+- Kept the compatibility boundary explicit: this supports non-streaming
+  approval request/response execution for remote `server_url` MCP tools.
+  Streaming remote MCP calls, background approval loops, hosted OpenAI
+  connector OAuth/token sidecars, and broader audit UI for tool outputs remain
+  future work.
+- Verification:
+  - `node --check src/bridge/local_mcp.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused MCP/background server tests passed through `test/server.test.js`,
+    including approval request creation, approved continuation execution,
+    denied approval continuation without re-requesting the tool, budget
+    accounting, hidden Chat tool-call suppression, and authorization redaction.
+  - `npm test`: passed 171/171.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live targeted
+    `npm run eval:bridge -- --case responses-mcp-remote-approval --timeout-ms 120000 --verbose`
+    passed 1/1 against `deepseek-v4-pro`, confirmed remote `initialize`,
+    `notifications/initialized`, two `tools/list` calls, approved
+    `tools/call`, authorization forwarding, and session forwarding.
+  - Live targeted
+    `npm run eval:bridge -- --case responses-mcp-remote-denial --timeout-ms 120000 --verbose`
+    passed 1/1 against `deepseek-v4-pro`, confirmed remote `initialize`,
+    `notifications/initialized`, two `tools/list` calls, denied approval
+    accounting, no `tools/call`, and no secret leakage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` after bridge
+    restart: 77/77 passing cases, pass rate 1.0, average latency 1319 ms, P95
+    latency 3965 ms, and total usage 15782 tokens.
+  - `npm run eval:protocol -- --timeout-ms 120000`: passed 2/2, pass rate
+    1.0, average latency 1040 ms, P95 latency 1128 ms, and total usage 99
+    tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, saved-project
+    cleanup, and no console errors or warnings.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; initial cleanup scan selected
+    1 old screenshot and 85582 bytes, and the final scan after cleanup scanned
+    946 runtime candidates, selected 0 files, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: initial cleanup deleted 1 old
+    screenshot and freed 85582 bytes; the final apply scan checked 946 runtime
+    candidates, deleted 0 files, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem has 40 GB available; the
+    repo is 62 MB, `state/` is 13 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, MCP
+  authorization values, or local deployment env files were added to the
+  repository.
+
 ## 2026-06-11 - Remote MCP tools/call execution compatibility
 
 - Used current official OpenAI MCP/Connectors Responses docs through the

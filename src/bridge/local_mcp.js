@@ -51,7 +51,13 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     servers: [],
     list_tools_items: [],
-    input_items: extractMcpContextItems(request.input),
+    input_items: [
+      ...extractMcpContextItems(options.previousResponse?.output),
+      ...extractMcpContextItems(request.input),
+    ],
+    approval_request_items: [],
+    call_items: [],
+    execution_items: [],
     skipped_calls: [],
     warnings: [],
   };
@@ -450,13 +456,14 @@ function injectMcpChatTools(chat, context, config = {}, options = {}) {
     if (server.server_kind !== "remote_mcp" || server.remote_import_status !== "completed") continue;
     if (!server._remote_tool_config?.server_url) continue;
     for (const tool of server.imported_tools || []) {
-      if (!canAutoCallMcpTool(server.require_approval, tool.name)) continue;
+      const approvalMode = mcpApprovalModeForTool(server.require_approval, tool.name);
       const functionName = mcpChatFunctionName(server.server_label, tool.name, usedNames);
       usedNames.add(functionName);
       map.set(functionName, {
         server_label: server.server_label,
         tool_name: tool.name,
         server,
+        approval_required: approvalMode !== "auto",
       });
       tools.push({
         type: "function",
@@ -482,14 +489,18 @@ function injectMcpChatTools(chat, context, config = {}, options = {}) {
 }
 
 function canAutoCallMcpTool(requireApproval, toolName) {
-  if (requireApproval === "never") return true;
-  if (requireApproval === "always" || requireApproval === "default") return false;
-  if (!isPlainObject(requireApproval)) return false;
+  return mcpApprovalModeForTool(requireApproval, toolName) === "auto";
+}
+
+function mcpApprovalModeForTool(requireApproval, toolName) {
+  if (requireApproval === "never") return "auto";
+  if (requireApproval === "always" || requireApproval === "default") return "approval_required";
+  if (!isPlainObject(requireApproval)) return "approval_required";
   const never = requireApproval.never || requireApproval.never_require_approval;
   const always = requireApproval.always || requireApproval.always_require_approval;
-  if (toolNameMatchesApproval(always, toolName)) return false;
-  if (never === true || never === "all" || never === "*") return true;
-  return toolNameMatchesApproval(never, toolName);
+  if (toolNameMatchesApproval(always, toolName)) return "approval_required";
+  if (never === true || never === "all" || never === "*") return "auto";
+  return toolNameMatchesApproval(never, toolName) ? "auto" : "approval_required";
 }
 
 function toolNameMatchesApproval(value, toolName) {
@@ -569,7 +580,7 @@ async function executeMcpChatToolCalls(context, chatCompletion, config = {}, opt
     let callError = null;
 
     if (!reserveToolCall(options.toolBudget, {
-      type: "mcp_call",
+      type: mapping.approval_required ? "mcp_approval_request" : "mcp_call",
       tool_type: "mcp",
       server_label: mapping.server_label,
       name: mapping.tool_name,
@@ -579,6 +590,21 @@ async function executeMcpChatToolCalls(context, chatCompletion, config = {}, opt
         code: "max_tool_calls_exhausted",
         message: "max_tool_calls was exhausted before the MCP tool call could run.",
       };
+    } else if (mapping.approval_required) {
+      const outputItem = {
+        id: prefixedId("mcpr"),
+        type: "mcp_approval_request",
+        arguments: rawArguments,
+        name: mapping.tool_name,
+        server_label: mapping.server_label,
+      };
+      outputItems.push(outputItem);
+      if (!Array.isArray(context.approval_request_items)) context.approval_request_items = [];
+      if (!Array.isArray(context.execution_items)) context.execution_items = [];
+      context.approval_request_items.push(clone(outputItem));
+      context.execution_items.push(clone(outputItem));
+      context.remote_approval_request_count = (context.remote_approval_request_count || 0) + 1;
+      continue;
     } else {
       try {
         parsedArguments = parseToolArguments(rawArguments);
@@ -607,6 +633,8 @@ async function executeMcpChatToolCalls(context, chatCompletion, config = {}, opt
       server_label: mapping.server_label,
     };
     outputItems.push(outputItem);
+    if (!Array.isArray(context.execution_items)) context.execution_items = [];
+    context.execution_items.push(clone(outputItem));
     toolMessages.push({
       role: "tool",
       tool_call_id: callId,
@@ -617,20 +645,149 @@ async function executeMcpChatToolCalls(context, chatCompletion, config = {}, opt
   }
 
   if (!Array.isArray(context.call_items)) context.call_items = [];
-  context.call_items.push(...outputItems.map(clone));
-  context.remote_call_attempt_count = (context.remote_call_attempt_count || 0) + outputItems.length;
+  context.call_items.push(...outputItems.filter((item) => item.type === "mcp_call").map(clone));
+  const callOutputCount = outputItems.filter((item) => item.type === "mcp_call").length;
+  context.remote_call_attempt_count = (context.remote_call_attempt_count || 0) + callOutputCount;
   context.remote_call_success_count = (context.remote_call_success_count || 0) + successCount;
   context.remote_call_failed_count = (context.remote_call_failed_count || 0) + failedCount;
   context.remote_call_skipped_count = (context.remote_call_skipped_count || 0) + skippedCount;
 
   return {
     executed: true,
+    approval_requested: outputItems.some((item) => item.type === "mcp_approval_request"),
     output_items: outputItems,
     messages: [assistantMessage, ...toolMessages],
     success_count: successCount,
     failed_count: failedCount,
     skipped_count: skippedCount,
   };
+}
+
+async function executeApprovedMcpApprovalResponses(context, config = {}, options = {}) {
+  if (!context || config.mcpRemoteToolCalls === false) return { executed: false, handled: false, output_items: [], messages: [] };
+  const responses = (context.input_items || []).filter((item) => item.type === "mcp_approval_response");
+  if (!responses.length) return { executed: false, handled: false, output_items: [], messages: [] };
+
+  const requestsById = new Map((context.input_items || [])
+    .filter((item) => item.type === "mcp_approval_request" && item.id)
+    .map((item) => [item.id, item]));
+  const outputItems = [];
+  let successCount = 0;
+  let failedCount = 0;
+  let skippedCount = 0;
+  let approvedCount = 0;
+  let deniedCount = 0;
+  let missingCount = 0;
+
+  for (const approvalResponse of responses) {
+    const approvalRequest = requestsById.get(approvalResponse.approval_request_id);
+    if (!approvalRequest) {
+      missingCount += 1;
+      continue;
+    }
+    if (approvalResponse.approve !== true) {
+      deniedCount += 1;
+      continue;
+    }
+
+    approvedCount += 1;
+    const server = findMcpServer(context, approvalRequest.server_label);
+    const rawArguments = stringifyOptional(approvalRequest.arguments || "{}") || "{}";
+    let callOutput = "";
+    let callError = null;
+
+    if (!server?._remote_tool_config?.server_url) {
+      failedCount += 1;
+      callError = {
+        code: "mcp_approval_server_unavailable",
+        message: "The approved MCP server is not available in this request.",
+      };
+    } else if (!reserveToolCall(options.toolBudget, {
+      type: "mcp_call",
+      tool_type: "mcp",
+      server_label: approvalRequest.server_label,
+      name: approvalRequest.name,
+    })) {
+      skippedCount += 1;
+      callError = {
+        code: "max_tool_calls_exhausted",
+        message: "max_tool_calls was exhausted before the approved MCP tool call could run.",
+      };
+    } else {
+      try {
+        const parsedArguments = parseToolArguments(rawArguments);
+        const result = await callRemoteMcpTool(server, approvalRequest.name, parsedArguments, config);
+        callOutput = result.output;
+        callError = result.error;
+        if (callError) failedCount += 1;
+        else successCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        callError = {
+          code: error.code || "mcp_remote_call_failed",
+          message: safeErrorMessage(error),
+        };
+      }
+    }
+
+    outputItems.push({
+      id: prefixedId("mcp"),
+      type: "mcp_call",
+      approval_request_id: approvalRequest.id,
+      arguments: rawArguments,
+      error: callError,
+      name: approvalRequest.name,
+      output: callOutput,
+      server_label: approvalRequest.server_label,
+    });
+  }
+
+  if (outputItems.length) {
+    if (!Array.isArray(context.call_items)) context.call_items = [];
+    if (!Array.isArray(context.execution_items)) context.execution_items = [];
+    context.call_items.push(...outputItems.map(clone));
+    context.execution_items.push(...outputItems.map(clone));
+  }
+  context.remote_approval_response_count = (context.remote_approval_response_count || 0) + responses.length;
+  context.remote_approval_approved_count = (context.remote_approval_approved_count || 0) + approvedCount;
+  context.remote_approval_denied_count = (context.remote_approval_denied_count || 0) + deniedCount;
+  context.remote_approval_missing_count = (context.remote_approval_missing_count || 0) + missingCount;
+  context.remote_call_attempt_count = (context.remote_call_attempt_count || 0) + outputItems.length;
+  context.remote_call_success_count = (context.remote_call_success_count || 0) + successCount;
+  context.remote_call_failed_count = (context.remote_call_failed_count || 0) + failedCount;
+  context.remote_call_skipped_count = (context.remote_call_skipped_count || 0) + skippedCount;
+
+  return {
+    executed: outputItems.length > 0,
+    handled: true,
+    output_items: outputItems,
+    messages: [],
+    success_count: successCount,
+    failed_count: failedCount,
+    skipped_count: skippedCount,
+  };
+}
+
+function findMcpServer(context, serverLabel) {
+  return (context.servers || []).find((server) => server.server_label === serverLabel);
+}
+
+function suppressMcpChatToolCalls(chatCompletion, context) {
+  if (!chatCompletion || !context?.chat_tool_map) return chatCompletion;
+  const cloned = clone(chatCompletion);
+  for (const choice of cloned.choices || []) {
+    const calls = choice.message?.tool_calls;
+    if (!Array.isArray(calls)) continue;
+    const remaining = calls.filter((call) => !context.chat_tool_map.has(call?.function?.name));
+    if (remaining.length) {
+      choice.message.tool_calls = remaining;
+    } else {
+      delete choice.message.tool_calls;
+      if (choice.message.content === undefined) choice.message.content = null;
+      if (choice.finish_reason === "tool_calls") choice.finish_reason = "stop";
+    }
+  }
+  return cloned;
 }
 
 function parseToolArguments(rawArguments) {
@@ -829,9 +986,15 @@ function attachMcpOutput(response, context) {
 }
 
 function mcpOutputItems(context) {
+  const executionItems = Array.isArray(context?.execution_items) && context.execution_items.length
+    ? context.execution_items
+    : [
+      ...(context?.approval_request_items || []),
+      ...(context?.call_items || []),
+    ];
   return [
     ...(context?.list_tools_items || []),
-    ...(context?.call_items || []),
+    ...executionItems,
   ].map(clone);
 }
 
@@ -854,6 +1017,11 @@ function mcpCompatibility(context) {
       remote_import_success_count: remoteImportAttempts.filter((server) => server.remote_import_status === "completed").length,
       remote_import_failed_count: remoteImportAttempts.filter((server) => server.remote_import_status === "failed").length,
       remote_call_tool_count: context.remote_call_tool_count || 0,
+      remote_approval_request_count: context.remote_approval_request_count || 0,
+      remote_approval_response_count: context.remote_approval_response_count || 0,
+      remote_approval_approved_count: context.remote_approval_approved_count || 0,
+      remote_approval_denied_count: context.remote_approval_denied_count || 0,
+      remote_approval_missing_count: context.remote_approval_missing_count || 0,
       remote_call_attempt_count: context.remote_call_attempt_count || 0,
       remote_call_success_count: context.remote_call_success_count || 0,
       remote_call_failed_count: context.remote_call_failed_count || 0,
@@ -862,6 +1030,10 @@ function mcpCompatibility(context) {
       skipped_count: context.skipped_calls?.length || 0,
       boundary: context.remote_call_attempt_count
         ? "remote_list_tools_and_call_execution"
+        : context.remote_approval_request_count
+        ? "remote_list_tools_with_approval_request"
+        : context.remote_approval_response_count
+        ? "remote_list_tools_with_approval_response"
         : remoteImportAttempts.length
         ? "remote_list_tools_without_call_execution"
         : "local_protocol_context_only",
@@ -873,7 +1045,7 @@ function mcpCompatibility(context) {
 function mcpPrompt(context) {
   const sections = [
     "Local Responses MCP compatibility is active.",
-    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured and can execute auto-approved remote MCP tool calls in non-streaming requests. It does not yet execute hosted connector calls or approval-required remote calls.",
+    "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured, execute auto-approved remote MCP tool calls in non-streaming requests, and create or consume local MCP approval items for approval-required non-streaming calls. It does not yet execute hosted connector calls.",
     "Never infer private connector data. Use only visible MCP context items, user input, and other provided evidence.",
   ];
 
@@ -921,6 +1093,18 @@ function mcpPrompt(context) {
         `  name: ${item.name}`,
         item.error ? `  error: ${item.error.code}` : `  output: ${truncateForPrompt(item.output || "", 512)}`,
       ].filter(Boolean).join("\n")),
+    ].join("\n"));
+  }
+
+  if (context.approval_request_items?.length) {
+    sections.push([
+      "MCP approval requests produced by the bridge:",
+      ...context.approval_request_items.map((item) => [
+        `- id: ${item.id}`,
+        `  server_label: ${item.server_label}`,
+        `  name: ${item.name}`,
+        `  arguments: ${truncateForPrompt(item.arguments || "", 512)}`,
+      ].join("\n")),
     ].join("\n"));
   }
 
@@ -1033,11 +1217,13 @@ function truncateForPrompt(value, maxLength = MAX_PROMPT_TEXT) {
 
 module.exports = {
   attachMcpOutput,
+  executeApprovedMcpApprovalResponses,
+  executeMcpChatToolCalls,
   injectMcpMessages,
   injectMcpChatTools,
   localMcpToolTypes,
   mcpCompatibility,
   mcpOutputItems,
   prepareMcpContext,
-  executeMcpChatToolCalls,
+  suppressMcpChatToolCalls,
 };

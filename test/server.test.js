@@ -3055,6 +3055,414 @@ test("POST /v1/responses executes auto-approved remote MCP tools/call through Ch
   ]);
 });
 
+test("POST /v1/responses requests approval then executes approved remote MCP call", async () => {
+  const authValue = "redaction-fixture-value-for-remote-mcp-approval";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_remote_mcp_approval_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "remote-mcp-approval-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after approval",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers["mcp-session-id"], "sess_remote_mcp_approval_test");
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(400, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "unexpected mcp method" }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      if (/MCP call output items produced by the bridge/.test(prompt)) {
+        assert.equal(call.body.tools, undefined);
+        assert.match(prompt, /output: 7/);
+        assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_remote_mcp_approval_final",
+          object: "chat.completion",
+          created: 102,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "approved-call-ok" },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 13, completion_tokens: 3, total_tokens: 16 },
+        }));
+        return;
+      }
+
+      assert.equal(call.body.tools.length, 1);
+      const toolName = call.body.tools[0].function.name;
+      assert.match(toolName, /^mcp_remote_approval_roll_/);
+      assert.equal(call.body.tool_choice, "auto");
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_remote_mcp_approval_request",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_roll_approval",
+              type: "function",
+              function: {
+                name: toolName,
+                arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const tool = {
+        type: "mcp",
+        server_label: "remote_approval",
+        server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+        authorization: authValue,
+        require_approval: "always",
+        allowed_tools: ["roll"],
+      };
+      const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Roll 2d4+1 with approval.",
+          tools: [tool],
+          max_tool_calls: 2,
+        }),
+      });
+
+      assert.equal(firstResponse.status, 200);
+      const first = await firstResponse.json();
+      assert.equal(requests.length, 1);
+      assert.equal(first.output[0].type, "mcp_list_tools");
+      assert.equal(first.output[1].type, "mcp_approval_request");
+      assert.equal(first.output[1].server_label, "remote_approval");
+      assert.equal(first.output[1].name, "roll");
+      assert.equal(first.output[1].arguments, "{\"diceRollExpression\":\"2d4+1\"}");
+      assert.ok(!first.output.some((item) => item.type === "function_call"));
+      assert.equal(first.metadata.compatibility.local_mcp.remote_approval_request_count, 1);
+      assert.equal(first.metadata.compatibility.local_mcp.remote_call_attempt_count, 0);
+      assert.equal(first.metadata.compatibility.local_mcp.boundary, "remote_list_tools_with_approval_request");
+      assert.deepEqual(first.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(first), new RegExp(authValue));
+
+      const approval = first.output[1];
+      const secondResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          previous_response_id: first.id,
+          input: [{
+            type: "mcp_approval_response",
+            approve: true,
+            approval_request_id: approval.id,
+          }],
+          tools: [tool],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(secondResponse.status, 200);
+      const second = await secondResponse.json();
+      assert.equal(requests.length, 2);
+      assert.equal(second.output[0].type, "mcp_list_tools");
+      assert.equal(second.output[1].type, "mcp_call");
+      assert.equal(second.output[1].approval_request_id, approval.id);
+      assert.equal(second.output[1].server_label, "remote_approval");
+      assert.equal(second.output[1].name, "roll");
+      assert.equal(second.output[1].output, "7");
+      assert.equal(second.output[1].error, null);
+      assert.equal(second.output[2].content[0].text, "approved-call-ok");
+      assert.equal(second.metadata.compatibility.local_mcp.remote_approval_response_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_approval_approved_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.boundary, "remote_list_tools_and_call_execution");
+      assert.deepEqual(second.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(second), new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+  ]);
+});
+
+test("POST /v1/responses handles denied remote MCP approval without re-requesting tool", async () => {
+  const authValue = "redaction-fixture-value-for-remote-mcp-denial";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_remote_mcp_denial_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "remote-mcp-denial-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after approval",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: "unexpected mcp method", method: body.method }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      if (/mcp_approval_response approval_request_id=/.test(prompt)) {
+        assert.equal(call.body.tools, undefined);
+        assert.match(prompt, /approve=false/);
+        assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_remote_mcp_denial_final",
+          object: "chat.completion",
+          created: 202,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "denied-call-ok" },
+            finish_reason: "stop",
+          }],
+          usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+        }));
+        return;
+      }
+
+      assert.equal(call.body.tools.length, 1);
+      const toolName = call.body.tools[0].function.name;
+      assert.match(toolName, /^mcp_remote_denial_roll_/);
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_remote_mcp_denial_request",
+        object: "chat.completion",
+        created: 201,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_roll_denial",
+              type: "function",
+              function: {
+                name: toolName,
+                arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const tool = {
+        type: "mcp",
+        server_label: "remote_denial",
+        server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+        authorization: authValue,
+        require_approval: "always",
+        allowed_tools: ["roll"],
+      };
+      const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Roll 2d4+1 with approval.",
+          tools: [tool],
+          max_tool_calls: 2,
+        }),
+      });
+
+      assert.equal(firstResponse.status, 200);
+      const first = await firstResponse.json();
+      assert.equal(first.output[1].type, "mcp_approval_request");
+      assert.equal(first.metadata.compatibility.local_mcp.remote_approval_request_count, 1);
+
+      const denialResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          previous_response_id: first.id,
+          input: [{
+            type: "mcp_approval_response",
+            approve: false,
+            approval_request_id: first.output[1].id,
+          }],
+          tools: [tool],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(denialResponse.status, 200);
+      const denied = await denialResponse.json();
+      assert.equal(requests.length, 2);
+      assert.equal(denied.output[0].type, "mcp_list_tools");
+      assert.equal(denied.output[1].content[0].text, "denied-call-ok");
+      assert.equal(denied.metadata.compatibility.local_mcp.remote_approval_response_count, 1);
+      assert.equal(denied.metadata.compatibility.local_mcp.remote_approval_denied_count, 1);
+      assert.equal(denied.metadata.compatibility.local_mcp.remote_call_attempt_count, 0);
+      assert.equal(denied.metadata.compatibility.local_mcp.boundary, "remote_list_tools_with_approval_response");
+      assert.deepEqual(denied.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 1,
+        skipped: 0,
+        exhausted: false,
+      });
+      assert.doesNotMatch(JSON.stringify(denied), new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+  ]);
+});
+
 test("POST /v1/responses emits local mcp_list_tools context without leaking authorization", async () => {
   const authValue = "redaction-fixture-value-for-mcp-list-tools";
   await withMockProvider(async (_req, res, call) => {
