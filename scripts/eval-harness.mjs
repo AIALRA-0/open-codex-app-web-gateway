@@ -379,6 +379,24 @@ function buildSuites(defaultModel) {
           && voiceList.data.some((item) => item.id === voice.id),
       },
       {
+        id: "assistants-lifecycle",
+        mode: "assistants-lifecycle",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ assistant, thread, run, messages, runs, steps, step, streamEvents, streamMessage }) => assistant?.id?.startsWith("asst_")
+          && thread?.id?.startsWith("thread_")
+          && run?.id?.startsWith("run_")
+          && run.status === "completed"
+          && run.metadata?.compatibility?.local_assistants?.upstream === "chat_completions"
+          && messages?.data?.some((message) => message.role === "assistant" && /assistants-life-ok/i.test(message.content?.[0]?.text?.value || ""))
+          && runs?.data?.some((item) => item.id === run.id)
+          && steps?.data?.length === 1
+          && step?.id === steps?.data?.[0]?.id
+          && streamEvents?.some((event) => event.event === "thread.run.completed")
+          && /assistants-stream-ok/i.test(streamMessage?.content?.[0]?.text?.value || ""),
+      },
+      {
         id: "evals-lifecycle",
         mode: "evals-lifecycle",
         request: {
@@ -2541,6 +2559,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "audio-voice-lifecycle") {
       return await runAudioVoiceLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-lifecycle") {
+      return await runAssistantsLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "evals-lifecycle") {
       return await runEvalsLifecycleCase(testCase, context, started);
     }
@@ -2803,6 +2824,112 @@ async function runAudioVoiceLifecycleCase(testCase, context, started) {
     });
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function runAssistantsLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  const threadIds = new Set();
+  try {
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Return the requested marker exactly and with no extra words.",
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{ role: "user", content: "Return exactly assistants-life-ok." }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        error: truncate(thread.body),
+      });
+    }
+    threadIds.add(thread.json.id);
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${thread.json.id}/runs`, {
+      assistant_id: assistantId,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        error: truncate(run.body),
+      });
+    }
+
+    const messages = await getJson(`${baseUrl}/v1/threads/${thread.json.id}/messages?order=asc&limit=20`);
+    const runs = await getJson(`${baseUrl}/v1/threads/${thread.json.id}/runs?limit=20`);
+    const steps = await getJson(`${baseUrl}/v1/threads/${thread.json.id}/runs/${run.json.id}/steps?limit=20`);
+    const stepId = steps.json?.data?.[0]?.id || "";
+    const step = stepId
+      ? await getJson(`${baseUrl}/v1/threads/${thread.json.id}/runs/${run.json.id}/steps/${stepId}`)
+      : { status: 0, json: null };
+
+    const streamResponse = await postJson(`${baseUrl}/v1/threads/runs`, {
+      assistant_id: assistantId,
+      stream: true,
+      thread: {
+        messages: [{ role: "user", content: "Return exactly assistants-stream-ok." }],
+      },
+    });
+    const streamBody = await streamResponse.text();
+    const streamEvents = parseSseEvents(streamBody);
+    const streamThread = streamEvents.find((event) => event.event === "thread.created")?.data;
+    if (streamThread?.id) threadIds.add(streamThread.id);
+    const streamMessage = streamEvents.find((event) => event.event === "thread.message.completed")?.data || null;
+
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      messages: messages.json,
+      runs: runs.json,
+      steps: steps.json,
+      step: step.json,
+      streamEvents,
+      streamMessage,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.status,
+      assistant_id: assistantId,
+      thread_id: thread.json.id,
+      run_id: run.json.id,
+      message_count: messages.json?.data?.length || 0,
+      run_count: runs.json?.data?.length || 0,
+      step_count: steps.json?.data?.length || 0,
+      stream_status: streamResponse.status,
+      event_count: streamEvents.length,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        messages: messages.json,
+        runs: runs.json,
+        steps: steps.json,
+        step: step.json,
+        streamEvents,
+      })),
+    });
+  } finally {
+    for (const threadId of threadIds) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
   }
 }
 
@@ -5116,6 +5243,16 @@ function imagesGenerationOutputText(response) {
   return `images:${response?.data?.length || 0}`;
 }
 
+function assistantMessageTextFromList(messages = []) {
+  return messages
+    .filter((message) => message?.role === "assistant")
+    .map((message) => (message.content || [])
+      .map((part) => part?.text?.value || part?.text || part?.content || "")
+      .join(""))
+    .filter(Boolean)
+    .join("\n");
+}
+
 function responseUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -5183,6 +5320,14 @@ function videoUsage() {
     input_tokens: 0,
     output_tokens: 0,
     total_tokens: 0,
+  };
+}
+
+function assistantsUsage(run) {
+  return {
+    input_tokens: run?.usage?.prompt_tokens || 0,
+    output_tokens: run?.usage?.completion_tokens || 0,
+    total_tokens: run?.usage?.total_tokens || 0,
   };
 }
 

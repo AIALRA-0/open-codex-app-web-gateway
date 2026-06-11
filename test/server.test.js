@@ -1490,6 +1490,169 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
   });
 });
 
+test("Assistants API local lifecycle runs threads through upstream Chat", async () => {
+  await withMockProvider((_req, res, request) => {
+    const marker = request.body.messages.some((message) => /stream this assistant run/i.test(String(message.content || "")))
+      ? "assistants-stream-ok"
+      : "assistants-run-ok";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_${request.body.messages.length}`,
+      object: "chat.completion",
+      created: 1700000000,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: marker },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 21, completion_tokens: 3, total_tokens: 24 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        name: "Local Assistant",
+        instructions: "Reply with the compatibility marker.",
+        metadata: { suite: "assistants-local" },
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+    assert.match(assistant.id, /^asst_/);
+    assert.equal(assistant.object, "assistant");
+    assert.equal(assistant.model, "gpt-4o-mini");
+
+    const listedAssistants = await fetch(`${baseUrl}/v1/assistants?limit=1`);
+    assert.equal(listedAssistants.status, 200);
+    const listedAssistantsJson = await listedAssistants.json();
+    assert.equal(listedAssistantsJson.object, "list");
+    assert.equal(listedAssistantsJson.data[0].id, assistant.id);
+
+    const updatedAssistant = await fetch(`${baseUrl}/v1/assistants/${assistant.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "assistants-updated" } }),
+    });
+    assert.equal(updatedAssistant.status, 200);
+    assert.deepEqual((await updatedAssistant.json()).metadata, { suite: "assistants-updated" });
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Run the local assistants bridge." }],
+        metadata: { ticket: "T-1" },
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+    assert.match(thread.id, /^thread_/);
+
+    const userMessageResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "user", content: "Second user turn." }),
+    });
+    assert.equal(userMessageResponse.status, 200);
+    const userMessage = await userMessageResponse.json();
+    assert.match(userMessage.id, /^msg_/);
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id, metadata: { run: "primary" } }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.match(run.id, /^run_/);
+    assert.equal(run.object, "thread.run");
+    assert.equal(run.status, "completed");
+    assert.equal(run.assistant_id, assistant.id);
+    assert.equal(run.thread_id, thread.id);
+    assert.deepEqual(run.usage, { prompt_tokens: 21, completion_tokens: 3, total_tokens: 24 });
+    assert.equal(run.metadata.compatibility.local_assistants.provider, "local");
+    assert.equal(run.metadata.compatibility.local_assistants.upstream, "chat_completions");
+
+    assert.equal(requests[0].body.model, "gpt-4o-mini");
+    assert.deepEqual(requests[0].body.messages.map((message) => message.role), ["system", "user", "user"]);
+    assert.match(requests[0].body.messages[0].content, /compatibility marker/);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const listedMessagesJson = await listedMessages.json();
+    assert.equal(listedMessagesJson.data.length, 3);
+    const assistantMessage = listedMessagesJson.data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.assistant_id, assistant.id);
+    assert.equal(assistantMessage.run_id, run.id);
+    assert.equal(assistantMessage.content[0].text.value, "assistants-run-ok");
+
+    const listedRuns = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`);
+    assert.equal(listedRuns.status, 200);
+    assert.equal((await listedRuns.json()).data[0].id, run.id);
+
+    const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps`);
+    assert.equal(listedSteps.status, 200);
+    const listedStepsJson = await listedSteps.json();
+    assert.equal(listedStepsJson.data.length, 1);
+    assert.equal(listedStepsJson.data[0].step_details.message_creation.message_id, assistantMessage.id);
+
+    const fetchedStep = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${listedStepsJson.data[0].id}`);
+    assert.equal(fetchedStep.status, 200);
+    assert.equal((await fetchedStep.json()).id, listedStepsJson.data[0].id);
+
+    const updatedMessage = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages/${userMessage.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { updated: true } }),
+    });
+    assert.equal(updatedMessage.status, 200);
+    assert.deepEqual((await updatedMessage.json()).metadata, { updated: true });
+
+    const cancelCompletedRun = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/cancel`, {
+      method: "POST",
+    });
+    assert.equal(cancelCompletedRun.status, 200);
+    assert.equal((await cancelCompletedRun.json()).status, "completed");
+
+    const streamResponse = await fetch(`${baseUrl}/v1/threads/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        stream: true,
+        thread: { messages: [{ role: "user", content: "stream this assistant run" }] },
+      }),
+    });
+    assert.equal(streamResponse.status, 200);
+    assert.match(streamResponse.headers.get("content-type"), /text\/event-stream/);
+    const events = parseSseEvents(await streamResponse.text());
+    assert.deepEqual(events.map((event) => event.event), [
+      "thread.created",
+      "thread.run.created",
+      "thread.run.queued",
+      "thread.run.in_progress",
+      "thread.message.completed",
+      "thread.run.step.completed",
+      "thread.run.completed",
+      "done",
+    ]);
+    assert.equal(events.at(-1).data, "[DONE]");
+    assert.equal(events.find((event) => event.event === "thread.message.completed").data.content[0].text.value, "assistants-stream-ok");
+
+    const deleteThread = await fetch(`${baseUrl}/v1/threads/${thread.id}`, { method: "DELETE" });
+    assert.equal(deleteThread.status, 200);
+    assert.equal((await deleteThread.json()).deleted, true);
+
+    const deleteAssistant = await fetch(`${baseUrl}/v1/assistants/${assistant.id}`, { method: "DELETE" });
+    assert.equal(deleteAssistant.status, 200);
+    assert.equal((await deleteAssistant.json()).deleted, true);
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);

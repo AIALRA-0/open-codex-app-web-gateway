@@ -4,7 +4,13 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { FileAudioVoiceStore, FileConversationStore, FileImageGenerationStore, FileResponseStore } = require("./store");
+const {
+  FileAssistantStore,
+  FileAudioVoiceStore,
+  FileConversationStore,
+  FileImageGenerationStore,
+  FileResponseStore,
+} = require("./store");
 const {
   createToolCallBudget,
   toolBudgetCompatibility,
@@ -260,6 +266,7 @@ function loadConfig(overrides = {}) {
     localPromptTemplates: loadLocalPromptTemplates(),
     stateDir,
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
+    assistantStateDir: process.env.CODEXCOMPAT_ASSISTANT_STATE_DIR || path.join(stateDir, "local-assistants"),
     requestTimeoutMs,
     backgroundLeaseTtlMs: numberFromEnv(
       "CODEXCOMPAT_BACKGROUND_LEASE_TTL_MS",
@@ -8853,6 +8860,512 @@ function parseLimit(value, fallback, max) {
   return Math.min(Math.trunc(parsed), max);
 }
 
+function handleAssistantsList(res, assistantStore, url) {
+  sendJson(res, 200, paginateList(assistantStore.listAssistants(), url));
+}
+
+async function handleAssistantCreate(req, res, assistantStore) {
+  const body = await readJson(req);
+  if (!stringifyContent(body.model).trim()) {
+    sendError(res, 400, "model is required", {
+      type: "invalid_request_error",
+      code: "missing_required_parameter",
+      param: "model",
+    });
+    return;
+  }
+  sendJson(res, 200, assistantStore.createAssistant(body));
+}
+
+function handleAssistantGet(res, assistantStore, assistantId) {
+  const assistant = assistantStore.getAssistant(assistantId);
+  if (!assistant) {
+    sendError(res, 404, `No assistant found for id '${assistantId}'`, {
+      type: "invalid_request_error",
+      code: "assistant_not_found",
+      param: "assistant_id",
+    });
+    return;
+  }
+  sendJson(res, 200, assistant);
+}
+
+async function handleAssistantUpdate(req, res, assistantStore, assistantId) {
+  const updated = assistantStore.updateAssistant(assistantId, await readJson(req));
+  if (!updated) {
+    sendError(res, 404, `No assistant found for id '${assistantId}'`, {
+      type: "invalid_request_error",
+      code: "assistant_not_found",
+      param: "assistant_id",
+    });
+    return;
+  }
+  sendJson(res, 200, updated);
+}
+
+function handleAssistantDelete(res, assistantStore, assistantId) {
+  const deleted = assistantStore.deleteAssistant(assistantId);
+  if (!deleted) {
+    sendError(res, 404, `No assistant found for id '${assistantId}'`, {
+      type: "invalid_request_error",
+      code: "assistant_not_found",
+      param: "assistant_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+async function handleAssistantThreadCreate(req, res, assistantStore) {
+  sendJson(res, 200, assistantStore.createThread(await readJson(req)));
+}
+
+function handleAssistantThreadGet(res, assistantStore, threadId) {
+  const thread = assistantStore.getThread(threadId);
+  if (!thread) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, thread);
+}
+
+async function handleAssistantThreadUpdate(req, res, assistantStore, threadId) {
+  const thread = assistantStore.updateThread(threadId, await readJson(req));
+  if (!thread) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, thread);
+}
+
+function handleAssistantThreadDelete(res, assistantStore, threadId) {
+  const deleted = assistantStore.deleteThread(threadId);
+  if (!deleted) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+function handleAssistantMessagesList(res, assistantStore, threadId, url) {
+  const messages = assistantStore.listMessages(threadId);
+  if (!messages) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(messages, url));
+}
+
+async function handleAssistantMessageCreate(req, res, assistantStore, threadId) {
+  const message = assistantStore.createMessage(threadId, await readJson(req));
+  if (!message) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, message);
+}
+
+function handleAssistantMessageGet(res, assistantStore, threadId, messageId) {
+  const message = assistantStore.getMessage(threadId, messageId);
+  if (!message) {
+    sendError(res, 404, `No message found for id '${messageId}'`, {
+      type: "invalid_request_error",
+      code: "message_not_found",
+      param: "message_id",
+    });
+    return;
+  }
+  sendJson(res, 200, message);
+}
+
+async function handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId) {
+  const message = assistantStore.updateMessage(threadId, messageId, await readJson(req));
+  if (!message) {
+    sendError(res, 404, `No message found for id '${messageId}'`, {
+      type: "invalid_request_error",
+      code: "message_not_found",
+      param: "message_id",
+    });
+    return;
+  }
+  sendJson(res, 200, message);
+}
+
+function handleAssistantMessageDelete(res, assistantStore, threadId, messageId) {
+  const deleted = assistantStore.deleteMessage(threadId, messageId);
+  if (!deleted) {
+    sendError(res, 404, `No message found for id '${messageId}'`, {
+      type: "invalid_request_error",
+      code: "message_not_found",
+      param: "message_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+function handleAssistantRunsList(res, assistantStore, threadId, url) {
+  const runs = assistantStore.listRuns(threadId);
+  if (!runs) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(runs, url));
+}
+
+async function handleAssistantRunCreate(req, res, config, assistantStore, threadId) {
+  const body = await readJson(req);
+  const result = await createAndCompleteAssistantRun({
+    body,
+    config,
+    assistantStore,
+    threadId,
+    incomingHeaders: req.headers,
+  });
+  if (!result.ok) {
+    sendJson(res, result.status, result.error);
+    return;
+  }
+  if (body.stream === true) {
+    writeAssistantRunStream(res, result.thread, result.initialRun, result.run, result.message, result.step);
+    return;
+  }
+  sendJson(res, 200, result.run);
+}
+
+async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore) {
+  const body = await readJson(req);
+  const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
+  const result = await createAndCompleteAssistantRun({
+    body,
+    config,
+    assistantStore,
+    threadId: thread.id,
+    incomingHeaders: req.headers,
+  });
+  if (!result.ok) {
+    sendJson(res, result.status, result.error);
+    return;
+  }
+  if (body.stream === true) {
+    writeAssistantRunStream(res, thread, result.initialRun, result.run, result.message, result.step);
+    return;
+  }
+  sendJson(res, 200, result.run);
+}
+
+function handleAssistantRunGet(res, assistantStore, threadId, runId) {
+  const run = assistantStore.getRun(threadId, runId);
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runId) {
+  const body = await readJson(req);
+  const run = assistantStore.updateRun(threadId, runId, (existing) => ({
+    ...existing,
+    metadata: isPlainObject(body.metadata) ? body.metadata : existing.metadata || {},
+  }));
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
+  const run = assistantStore.cancelRun(threadId, runId);
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+async function handleAssistantRunSubmitToolOutputs(req, res, assistantStore, threadId, runId) {
+  const body = await readJson(req);
+  const run = assistantStore.updateRun(threadId, runId, (existing) => ({
+    ...existing,
+    metadata: {
+      ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+      compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+        local_assistants: {
+          provider: "local",
+          submit_tool_outputs: "no_op_without_required_action",
+          tool_output_count: Array.isArray(body.tool_outputs) ? body.tool_outputs.length : 0,
+        },
+      }),
+    },
+  }));
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, run);
+}
+
+function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) {
+  const steps = assistantStore.listRunSteps(threadId, runId);
+  if (!steps) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(steps, url));
+}
+
+function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId) {
+  const step = assistantStore.getRunStep(threadId, runId, stepId);
+  if (!step) {
+    sendError(res, 404, `No run step found for id '${stepId}'`, {
+      type: "invalid_request_error",
+      code: "run_step_not_found",
+      param: "step_id",
+    });
+    return;
+  }
+  sendJson(res, 200, step);
+}
+
+async function createAndCompleteAssistantRun({ body, config, assistantStore, threadId, incomingHeaders }) {
+  const assistantId = stringifyContent(body.assistant_id).trim();
+  if (!assistantId) {
+    return {
+      ok: false,
+      status: 400,
+      error: openAiError("assistant_id is required", {
+        type: "invalid_request_error",
+        code: "missing_required_parameter",
+        param: "assistant_id",
+      }),
+    };
+  }
+  const assistant = assistantStore.getAssistant(assistantId);
+  if (!assistant) {
+    return {
+      ok: false,
+      status: 404,
+      error: openAiError(`No assistant found for id '${assistantId}'`, {
+        type: "invalid_request_error",
+        code: "assistant_not_found",
+        param: "assistant_id",
+      }),
+    };
+  }
+  const thread = assistantStore.getThread(threadId);
+  if (!thread) {
+    return {
+      ok: false,
+      status: 404,
+      error: openAiError(`No thread found for id '${threadId}'`, {
+        type: "invalid_request_error",
+        code: "thread_not_found",
+        param: "thread_id",
+      }),
+    };
+  }
+
+  const initialRun = assistantStore.createRun(threadId, body, assistant);
+  const startedAt = nowSeconds();
+  assistantStore.updateRun(threadId, initialRun.id, { ...initialRun, status: "in_progress", started_at: startedAt });
+  const messages = assistantStore.listMessages(threadId) || [];
+  const chat = assistantRunToChatRequest(initialRun, messages, config);
+  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(chat, config);
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, incomingHeaders);
+  const text = await upstream.text();
+  const upstreamJson = parseJsonOrNull(text);
+  if (!upstream.ok) {
+    const failedAt = nowSeconds();
+    const failedRun = assistantStore.updateRun(threadId, initialRun.id, {
+      ...initialRun,
+      status: "failed",
+      started_at: startedAt,
+      failed_at: failedAt,
+      expires_at: null,
+      last_error: {
+        code: upstreamJson?.error?.code || "upstream_provider_error",
+        message: upstreamJson?.error?.message || text || "assistant run provider call failed",
+      },
+    });
+    return {
+      ok: false,
+      status: upstream.status,
+      error: upstreamJson || openAiError(failedRun?.last_error?.message || "assistant run provider call failed", {
+        type: "upstream_provider_error",
+        code: upstream.status,
+      }),
+    };
+  }
+
+  const assistantText = extractChatCompletionText(upstreamJson) || "";
+  const message = assistantStore.createMessage(threadId, {
+    role: "assistant",
+    content: assistantText,
+  }, {
+    assistant_id: assistant.id,
+    run_id: initialRun.id,
+  });
+  const step = assistantStore.createMessageCreationStep(initialRun, message.id, assistantRunUsage(upstreamJson?.usage));
+  const completedAt = nowSeconds();
+  const completedRun = assistantStore.updateRun(threadId, initialRun.id, {
+    ...initialRun,
+    status: "completed",
+    started_at: startedAt,
+    expires_at: null,
+    completed_at: completedAt,
+    usage: assistantRunUsage(upstreamJson?.usage),
+    metadata: {
+      ...(isPlainObject(initialRun.metadata) ? initialRun.metadata : {}),
+      compatibility: mergeCompatibility(initialRun.metadata?.compatibility, {
+        local_assistants: {
+          provider: "local",
+          upstream: "chat_completions",
+          upstream_model: upstreamJson?.model || null,
+          run_mode: "synchronous",
+          tool_count: Array.isArray(initialRun.tools) ? initialRun.tools.length : 0,
+          tool_calls_supported: false,
+          streaming_supported: "event_shape_only",
+          ...(compatibility ? { chat_passthrough: compatibility } : {}),
+        },
+      }),
+    },
+  });
+  return {
+    ok: true,
+    thread,
+    initialRun,
+    run: completedRun,
+    message,
+    step,
+  };
+}
+
+function assistantRunToChatRequest(run, threadMessages, config) {
+  const messages = [];
+  const instructions = stringifyContent(run.instructions).trim();
+  if (instructions) messages.push({ role: "system", content: instructions });
+  for (const message of threadMessages) {
+    const role = message.role === "assistant" ? "assistant" : "user";
+    const content = assistantMessageContentText(message.content);
+    if (content) messages.push({ role, content });
+  }
+  if (!messages.some((message) => message.role !== "system")) {
+    messages.push({ role: "user", content: "Continue the assistant thread." });
+  }
+  const chat = {
+    model: run.model || config.defaultModel,
+    messages,
+    temperature: run.temperature,
+    top_p: run.top_p,
+    stream: false,
+  };
+  if (run.max_completion_tokens != null) chat.max_completion_tokens = run.max_completion_tokens;
+  if (run.response_format && run.response_format !== "auto") chat.response_format = run.response_format;
+  return chat;
+}
+
+function assistantMessageContentText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return stringifyContent(content);
+  return content
+    .map((part) => {
+      if (typeof part === "string") return part;
+      if (!isPlainObject(part)) return stringifyContent(part);
+      if (part.type === "text") return stringifyContent(part.text?.value ?? part.text ?? "");
+      if (part.type === "image_file") return `[image_file:${stringifyContent(part.image_file?.file_id || "")}]`;
+      if (part.type === "image_url") return `[image_url]`;
+      return stringifyContent(part.text ?? part.content ?? "");
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function assistantRunUsage(usage) {
+  if (!usage) return null;
+  const promptTokens = usage.prompt_tokens ?? usage.input_tokens ?? 0;
+  const completionTokens = usage.completion_tokens ?? usage.output_tokens ?? 0;
+  return {
+    prompt_tokens: promptTokens,
+    completion_tokens: completionTokens,
+    total_tokens: usage.total_tokens ?? promptTokens + completionTokens,
+  };
+}
+
+function writeAssistantRunStream(res, thread, initialRun, completedRun, message, step) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  writeSse(res, "thread.created", thread);
+  writeSse(res, "thread.run.created", initialRun);
+  writeSse(res, "thread.run.queued", initialRun);
+  writeSse(res, "thread.run.in_progress", { ...initialRun, status: "in_progress", started_at: completedRun.started_at });
+  writeSse(res, "thread.message.completed", message);
+  writeSse(res, "thread.run.step.completed", step);
+  writeSse(res, "thread.run.completed", completedRun);
+  res.write("event: done\n");
+  res.write("data: [DONE]\n\n");
+  res.end();
+}
+
+function openAiError(message, details = {}) {
+  return {
+    error: {
+      message,
+      type: details.type || "invalid_request_error",
+      param: details.param || null,
+      code: details.code || null,
+    },
+  };
+}
+
 function createServer(config = loadConfig()) {
   config = {
     ...config,
@@ -8870,6 +9383,10 @@ function createServer(config = loadConfig()) {
   const audioVoiceStore = config.audioVoiceStore || new FileAudioVoiceStore({
     dir: config.audioVoiceStateDir,
     maxVoices: config.audioVoiceMaxVoices,
+  });
+  const assistantStore = config.assistantStore || new FileAssistantStore({
+    dir: config.assistantStateDir || path.join(config.stateDir || process.cwd(), "local-assistants"),
+    maxRecords: config.assistantMaxRecords,
   });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
@@ -9156,6 +9673,139 @@ function createServer(config = loadConfig()) {
         }
         if (req.method === "DELETE") {
           handleEvalDelete(res, evalStore, evalId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/assistants") {
+        if (req.method === "GET") {
+          handleAssistantsList(res, assistantStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleAssistantCreate(req, res, assistantStore);
+          return;
+        }
+      }
+
+      const assistantRoute = url.pathname.match(/^\/v1\/assistants\/([^/]+)$/);
+      if (assistantRoute) {
+        const assistantId = decodeURIComponent(assistantRoute[1]);
+        if (req.method === "GET") {
+          handleAssistantGet(res, assistantStore, assistantId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleAssistantUpdate(req, res, assistantStore, assistantId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleAssistantDelete(res, assistantStore, assistantId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/threads/runs" && req.method === "POST") {
+        await handleAssistantThreadAndRunCreate(req, res, config, assistantStore);
+        return;
+      }
+
+      if (url.pathname === "/v1/threads") {
+        if (req.method === "POST") {
+          await handleAssistantThreadCreate(req, res, assistantStore);
+          return;
+        }
+      }
+
+      const assistantRunStepRoute = url.pathname.match(/^\/v1\/threads\/([^/]+)\/runs\/([^/]+)\/steps(?:\/([^/]+))?$/);
+      if (assistantRunStepRoute) {
+        const threadId = decodeURIComponent(assistantRunStepRoute[1]);
+        const runId = decodeURIComponent(assistantRunStepRoute[2]);
+        const stepId = assistantRunStepRoute[3] ? decodeURIComponent(assistantRunStepRoute[3]) : "";
+        if (req.method === "GET" && stepId) {
+          handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId);
+          return;
+        }
+        if (req.method === "GET") {
+          handleAssistantRunStepsList(res, assistantStore, threadId, runId, url);
+          return;
+        }
+      }
+
+      const assistantRunActionRoute = url.pathname.match(/^\/v1\/threads\/([^/]+)\/runs\/([^/]+)\/(cancel|submit_tool_outputs)$/);
+      if (assistantRunActionRoute && req.method === "POST") {
+        const threadId = decodeURIComponent(assistantRunActionRoute[1]);
+        const runId = decodeURIComponent(assistantRunActionRoute[2]);
+        const action = assistantRunActionRoute[3];
+        if (action === "cancel") {
+          handleAssistantRunCancel(res, assistantStore, threadId, runId);
+          return;
+        }
+        await handleAssistantRunSubmitToolOutputs(req, res, assistantStore, threadId, runId);
+        return;
+      }
+
+      const assistantRunsRoute = url.pathname.match(/^\/v1\/threads\/([^/]+)\/runs(?:\/([^/]+))?$/);
+      if (assistantRunsRoute) {
+        const threadId = decodeURIComponent(assistantRunsRoute[1]);
+        const runId = assistantRunsRoute[2] ? decodeURIComponent(assistantRunsRoute[2]) : "";
+        if (!runId && req.method === "GET") {
+          handleAssistantRunsList(res, assistantStore, threadId, url);
+          return;
+        }
+        if (!runId && req.method === "POST") {
+          await handleAssistantRunCreate(req, res, config, assistantStore, threadId);
+          return;
+        }
+        if (runId && req.method === "GET") {
+          handleAssistantRunGet(res, assistantStore, threadId, runId);
+          return;
+        }
+        if (runId && req.method === "POST") {
+          await handleAssistantRunUpdate(req, res, assistantStore, threadId, runId);
+          return;
+        }
+      }
+
+      const assistantMessagesRoute = url.pathname.match(/^\/v1\/threads\/([^/]+)\/messages(?:\/([^/]+))?$/);
+      if (assistantMessagesRoute) {
+        const threadId = decodeURIComponent(assistantMessagesRoute[1]);
+        const messageId = assistantMessagesRoute[2] ? decodeURIComponent(assistantMessagesRoute[2]) : "";
+        if (!messageId && req.method === "GET") {
+          handleAssistantMessagesList(res, assistantStore, threadId, url);
+          return;
+        }
+        if (!messageId && req.method === "POST") {
+          await handleAssistantMessageCreate(req, res, assistantStore, threadId);
+          return;
+        }
+        if (messageId && req.method === "GET") {
+          handleAssistantMessageGet(res, assistantStore, threadId, messageId);
+          return;
+        }
+        if (messageId && req.method === "POST") {
+          await handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId);
+          return;
+        }
+        if (messageId && req.method === "DELETE") {
+          handleAssistantMessageDelete(res, assistantStore, threadId, messageId);
+          return;
+        }
+      }
+
+      const assistantThreadRoute = url.pathname.match(/^\/v1\/threads\/([^/]+)$/);
+      if (assistantThreadRoute) {
+        const threadId = decodeURIComponent(assistantThreadRoute[1]);
+        if (req.method === "GET") {
+          handleAssistantThreadGet(res, assistantStore, threadId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleAssistantThreadUpdate(req, res, assistantStore, threadId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleAssistantThreadDelete(res, assistantStore, threadId);
           return;
         }
       }

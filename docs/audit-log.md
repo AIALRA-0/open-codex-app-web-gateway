@@ -4369,6 +4369,98 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants API local lifecycle compatibility
+
+- Evidence checked from official OpenAI documentation before implementation:
+  - The API endpoint list still includes deprecated Assistants and Threads
+    surfaces such as `/v1/assistants`, `/v1/threads`,
+    `/v1/threads/{thread_id}/messages`, `/v1/threads/{thread_id}/runs`,
+    run cancellation, tool-output submission, and run-step endpoints.
+  - The Assistants deep-dive documents the run lifecycle states, thread locks
+    while a run is in progress, and run-step types such as `message_creation`
+    and `tool_calls`.
+  - The OpenAPI schemas for `/v1/assistants`, `/v1/threads`, and
+    `/v1/threads/runs` confirmed assistant, thread, run, and streaming event
+    object fields that must be preserved where possible.
+- Added a local deprecated Assistants/Threads compatibility layer backed by
+  Chat Completions:
+  - added `FileAssistantStore` with JSON persistence for assistants, threads,
+    messages, runs, and run steps under
+    `CODEXCOMPAT_ASSISTANT_STATE_DIR`, outside Git;
+  - implemented assistant create/list/get/update/delete routes;
+  - implemented thread create/get/update/delete routes, including initial
+    messages;
+  - implemented thread message create/list/get/update/delete routes;
+  - implemented run create/list/get/update/cancel and submit-tool-output routes;
+  - implemented run-step list/get routes and `message_creation` step storage;
+  - implemented `/v1/threads/runs` create-thread-and-run compatibility;
+  - mapped assistant instructions plus chronological thread messages into one
+    upstream Chat Completions request, then persisted the assistant reply back
+    as a `thread.message`;
+  - added a basic Assistants-style SSE lifecycle shape for streamed
+    create/run calls.
+- Compatibility boundary:
+  - local runs are synchronous Chat-backed runs, not hosted OpenAI Assistants
+    jobs;
+  - `requires_action` tool loops, exact text-delta streaming parity, hosted
+    Code Interpreter/File Search behavior through Assistants, and async thread
+    locks remain future parity work;
+  - local run metadata records the compatibility mode under
+    `metadata.compatibility.local_assistants` so clients and audits can
+    distinguish this bridge behavior from hosted OpenAI Assistants execution.
+- Updated documentation and evaluation coverage:
+  - compatibility matrix now documents all local Assistants/Threads routes and
+    the remaining boundaries;
+  - deployment docs now include `CODEXCOMPAT_ASSISTANT_STATE_DIR` and the
+    focused Assistants lifecycle eval command;
+  - evaluation plan now lists the local Assistants lifecycle regression target;
+  - the eval harness now includes `assistants-lifecycle` for create/list/run,
+    message persistence, run steps, and SSE event-shape checks.
+- Verification:
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused server test
+    `node --test --test-name-pattern "Assistants API local lifecycle" test/server.test.js`:
+    passed 1/1.
+  - `npm test`: passed 178/178.
+  - Restarted `aialra-opencodexapp-bridge.service`; healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live
+    `npm run eval:bridge -- --case assistants-lifecycle --timeout-ms 90000 --verbose`:
+    passed 1/1 with 4420 ms latency, output `assistants-life-ok`, 2 thread
+    messages, 1 run, 1 run step, 8 streamed lifecycle events, and 71 total
+    tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 83/83,
+    pass rate 1.0, average latency 1589 ms, P95 latency 4748 ms, and 19778
+    total tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1396 ms, P95 latency 1506 ms, and 99 total tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, and saved-project cleanup without console warnings or errors.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1190 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 85905 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    85905 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 37 GB available;
+    `state/` was 16 MB, `output/` was 4.8 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 23 MB.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `.env.example` only
+  contains a placeholder-compatible local state path.
+
 ## 2026-06-11 - Videos edit and extension source compatibility
 
 - Re-checked current official OpenAI video and Batch surfaces through the

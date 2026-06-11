@@ -275,6 +275,463 @@ class FileConversationStore {
   }
 }
 
+class FileAssistantStore {
+  constructor(options = {}) {
+    this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-assistants"));
+    this.maxRecords = options.maxRecords || 5000;
+  }
+
+  ensureDir() {
+    fs.mkdirSync(this.assistantsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.threadsDir(), { recursive: true, mode: 0o700 });
+  }
+
+  assistantsDir() {
+    return path.join(this.dir, "assistants");
+  }
+
+  assistantPath(id) {
+    const clean = safeId(id);
+    if (!clean) return null;
+    return path.join(this.assistantsDir(), `${clean}.json`);
+  }
+
+  threadsDir() {
+    return path.join(this.dir, "threads");
+  }
+
+  threadDir(threadId) {
+    const clean = safeId(threadId);
+    if (!clean) return null;
+    return path.join(this.threadsDir(), clean);
+  }
+
+  threadPath(threadId) {
+    const dir = this.threadDir(threadId);
+    return dir ? path.join(dir, "thread.json") : null;
+  }
+
+  messagesDir(threadId) {
+    const dir = this.threadDir(threadId);
+    return dir ? path.join(dir, "messages") : null;
+  }
+
+  messagePath(threadId, messageId) {
+    const dir = this.messagesDir(threadId);
+    const clean = safeId(messageId);
+    if (!dir || !clean) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  runsDir(threadId) {
+    const dir = this.threadDir(threadId);
+    return dir ? path.join(dir, "runs") : null;
+  }
+
+  runDir(threadId, runId) {
+    const dir = this.runsDir(threadId);
+    const clean = safeId(runId);
+    if (!dir || !clean) return null;
+    return path.join(dir, clean);
+  }
+
+  runPath(threadId, runId) {
+    const dir = this.runDir(threadId, runId);
+    return dir ? path.join(dir, "run.json") : null;
+  }
+
+  stepsDir(threadId, runId) {
+    const dir = this.runDir(threadId, runId);
+    return dir ? path.join(dir, "steps") : null;
+  }
+
+  stepPath(threadId, runId, stepId) {
+    const dir = this.stepsDir(threadId, runId);
+    const clean = safeId(stepId);
+    if (!dir || !clean) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  createAssistant(body = {}) {
+    const now = nowSeconds();
+    const assistant = {
+      id: `asst_${randomToken(18)}`,
+      object: "assistant",
+      created_at: now,
+      name: nullableString(body.name),
+      description: nullableString(body.description),
+      model: stringOrDefault(body.model, "gpt-4o"),
+      instructions: nullableString(body.instructions),
+      tools: Array.isArray(body.tools) ? cloneJson(body.tools) : [],
+      tool_resources: isPlainObject(body.tool_resources) ? cloneJson(body.tool_resources) : {},
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      top_p: body.top_p ?? 1,
+      temperature: body.temperature ?? 1,
+      response_format: body.response_format ?? "auto",
+    };
+    this.writeJson(this.assistantPath(assistant.id), { assistant });
+    this.cleanup();
+    return cloneJson(assistant);
+  }
+
+  listAssistants() {
+    return this.listJson(this.assistantsDir())
+      .map((record) => record.assistant)
+      .filter(Boolean)
+      .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+      .map(cloneJson);
+  }
+
+  getAssistant(id) {
+    return cloneOrNull(this.readJson(this.assistantPath(id))?.assistant || null);
+  }
+
+  updateAssistant(id, body = {}) {
+    const record = this.readJson(this.assistantPath(id));
+    const assistant = record?.assistant;
+    if (!assistant) return null;
+    const updated = { ...assistant };
+    for (const key of ["name", "description", "instructions"]) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) updated[key] = nullableString(body[key]);
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "model")) updated.model = stringOrDefault(body.model, updated.model);
+    if (Object.prototype.hasOwnProperty.call(body, "tools")) updated.tools = Array.isArray(body.tools) ? cloneJson(body.tools) : [];
+    if (Object.prototype.hasOwnProperty.call(body, "tool_resources")) {
+      updated.tool_resources = isPlainObject(body.tool_resources) ? cloneJson(body.tool_resources) : {};
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    for (const key of ["top_p", "temperature", "response_format"]) {
+      if (Object.prototype.hasOwnProperty.call(body, key)) updated[key] = body[key];
+    }
+    this.writeJson(this.assistantPath(id), { assistant: updated });
+    return cloneJson(updated);
+  }
+
+  deleteAssistant(id) {
+    const assistant = this.getAssistant(id);
+    if (!assistant) return null;
+    this.deletePath(this.assistantPath(id));
+    return {
+      id,
+      object: "assistant.deleted",
+      deleted: true,
+    };
+  }
+
+  createThread(body = {}) {
+    const now = nowSeconds();
+    const thread = {
+      id: `thread_${randomToken(18)}`,
+      object: "thread",
+      created_at: now,
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      tool_resources: isPlainObject(body.tool_resources) ? cloneJson(body.tool_resources) : {},
+    };
+    this.writeJson(this.threadPath(thread.id), { thread });
+    const messages = Array.isArray(body.messages) ? body.messages : [];
+    for (const message of messages) {
+      this.createMessage(thread.id, message);
+    }
+    this.cleanup();
+    return cloneJson(thread);
+  }
+
+  getThread(threadId) {
+    return cloneOrNull(this.readJson(this.threadPath(threadId))?.thread || null);
+  }
+
+  updateThread(threadId, body = {}) {
+    const record = this.readJson(this.threadPath(threadId));
+    const thread = record?.thread;
+    if (!thread) return null;
+    const updated = { ...thread };
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
+      updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "tool_resources")) {
+      updated.tool_resources = isPlainObject(body.tool_resources) ? cloneJson(body.tool_resources) : {};
+    }
+    this.writeJson(this.threadPath(threadId), { thread: updated });
+    return cloneJson(updated);
+  }
+
+  deleteThread(threadId) {
+    const thread = this.getThread(threadId);
+    if (!thread) return null;
+    this.deletePath(this.threadDir(threadId));
+    return {
+      id: threadId,
+      object: "thread.deleted",
+      deleted: true,
+    };
+  }
+
+  createMessage(threadId, body = {}, options = {}) {
+    if (!this.getThread(threadId)) return null;
+    const now = nowSeconds();
+    const message = {
+      id: `msg_${randomToken(18)}`,
+      object: "thread.message",
+      created_at: now,
+      assistant_id: options.assistant_id || null,
+      thread_id: threadId,
+      run_id: options.run_id || null,
+      status: "completed",
+      incomplete_details: null,
+      incomplete_at: null,
+      completed_at: now,
+      role: stringOrDefault(body.role || options.role, "user"),
+      content: normalizeAssistantMessageContent(body.content ?? options.content ?? ""),
+      attachments: Array.isArray(body.attachments) ? cloneJson(body.attachments) : [],
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+    };
+    this.writeJson(this.messagePath(threadId, message.id), { message });
+    return cloneJson(message);
+  }
+
+  listMessages(threadId) {
+    if (!this.getThread(threadId)) return null;
+    return this.listJson(this.messagesDir(threadId))
+      .map((record) => record.message)
+      .filter(Boolean)
+      .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+      .map(cloneJson);
+  }
+
+  getMessage(threadId, messageId) {
+    if (!this.getThread(threadId)) return null;
+    return cloneOrNull(this.readJson(this.messagePath(threadId, messageId))?.message || null);
+  }
+
+  updateMessage(threadId, messageId, body = {}) {
+    const record = this.readJson(this.messagePath(threadId, messageId));
+    const message = record?.message;
+    if (!message) return null;
+    const updated = { ...message };
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
+      updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    }
+    this.writeJson(this.messagePath(threadId, messageId), { message: updated });
+    return cloneJson(updated);
+  }
+
+  deleteMessage(threadId, messageId) {
+    const message = this.getMessage(threadId, messageId);
+    if (!message) return null;
+    this.deletePath(this.messagePath(threadId, messageId));
+    return {
+      id: messageId,
+      object: "thread.message.deleted",
+      deleted: true,
+    };
+  }
+
+  createRun(threadId, body = {}, assistant = {}) {
+    if (!this.getThread(threadId)) return null;
+    const now = nowSeconds();
+    const run = {
+      id: `run_${randomToken(18)}`,
+      object: "thread.run",
+      created_at: now,
+      assistant_id: stringOrDefault(body.assistant_id || assistant.id, ""),
+      thread_id: threadId,
+      status: "queued",
+      started_at: null,
+      expires_at: now + 600,
+      cancelled_at: null,
+      failed_at: null,
+      completed_at: null,
+      required_action: null,
+      last_error: null,
+      model: stringOrDefault(body.model || assistant.model, "gpt-4o"),
+      instructions: nullableString(body.instructions ?? assistant.instructions),
+      tools: Array.isArray(body.tools) ? cloneJson(body.tools) : Array.isArray(assistant.tools) ? cloneJson(assistant.tools) : [],
+      tool_resources: isPlainObject(assistant.tool_resources) ? cloneJson(assistant.tool_resources) : {},
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      temperature: body.temperature ?? assistant.temperature ?? 1,
+      top_p: body.top_p ?? assistant.top_p ?? 1,
+      max_completion_tokens: body.max_completion_tokens ?? null,
+      max_prompt_tokens: body.max_prompt_tokens ?? null,
+      truncation_strategy: isPlainObject(body.truncation_strategy) ? cloneJson(body.truncation_strategy) : { type: "auto", last_messages: null },
+      incomplete_details: null,
+      usage: null,
+      response_format: body.response_format ?? assistant.response_format ?? "auto",
+      tool_choice: body.tool_choice ?? "auto",
+      parallel_tool_calls: body.parallel_tool_calls ?? true,
+    };
+    this.writeJson(this.runPath(threadId, run.id), { run });
+    return cloneJson(run);
+  }
+
+  listRuns(threadId) {
+    if (!this.getThread(threadId)) return null;
+    const runsDir = this.runsDir(threadId);
+    const records = this.listDirs(runsDir)
+      .map((dir) => this.readJson(path.join(dir, "run.json")));
+    return records
+      .map((record) => record.run)
+      .filter(Boolean)
+      .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+      .map(cloneJson);
+  }
+
+  getRun(threadId, runId) {
+    if (!this.getThread(threadId)) return null;
+    return cloneOrNull(this.readJson(this.runPath(threadId, runId))?.run || null);
+  }
+
+  updateRun(threadId, runId, updater) {
+    const record = this.readJson(this.runPath(threadId, runId));
+    const run = record?.run;
+    if (!run) return null;
+    const updated = typeof updater === "function" ? updater(cloneJson(run)) : { ...run, ...cloneJson(updater || {}) };
+    this.writeJson(this.runPath(threadId, runId), { run: updated });
+    return cloneJson(updated);
+  }
+
+  cancelRun(threadId, runId) {
+    const run = this.getRun(threadId, runId);
+    if (!run) return null;
+    if (!["completed", "failed", "cancelled", "expired", "incomplete"].includes(String(run.status || ""))) {
+      const now = nowSeconds();
+      return this.updateRun(threadId, runId, {
+        ...run,
+        status: "cancelled",
+        cancelled_at: now,
+        expires_at: null,
+      });
+    }
+    return run;
+  }
+
+  createMessageCreationStep(run, messageId, usage = null) {
+    const now = nowSeconds();
+    const step = {
+      id: `step_${randomToken(18)}`,
+      object: "thread.run.step",
+      created_at: now,
+      assistant_id: run.assistant_id,
+      thread_id: run.thread_id,
+      run_id: run.id,
+      type: "message_creation",
+      status: "completed",
+      cancelled_at: null,
+      completed_at: now,
+      expires_at: null,
+      failed_at: null,
+      last_error: null,
+      step_details: {
+        type: "message_creation",
+        message_creation: { message_id: messageId },
+      },
+      usage: usage || null,
+    };
+    this.writeJson(this.stepPath(run.thread_id, run.id, step.id), { step });
+    return cloneJson(step);
+  }
+
+  listRunSteps(threadId, runId) {
+    if (!this.getRun(threadId, runId)) return null;
+    return this.listJson(this.stepsDir(threadId, runId))
+      .map((record) => record.step)
+      .filter(Boolean)
+      .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0))
+      .map(cloneJson);
+  }
+
+  getRunStep(threadId, runId, stepId) {
+    if (!this.getRun(threadId, runId)) return null;
+    return cloneOrNull(this.readJson(this.stepPath(threadId, runId, stepId))?.step || null);
+  }
+
+  readJson(filePath) {
+    if (!filePath) return null;
+    try {
+      const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return isPlainObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  writeJson(filePath, value) {
+    if (!filePath) return;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+  }
+
+  listJson(dir) {
+    if (!dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => this.readJson(path.join(dir, name)))
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  listDirs(dir) {
+    if (!dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return fs.readdirSync(dir)
+        .map((name) => path.join(dir, name))
+        .filter((entry) => {
+          try {
+            return fs.statSync(entry).isDirectory();
+          } catch {
+            return false;
+          }
+        });
+    } catch {
+      return [];
+    }
+  }
+
+  deletePath(targetPath) {
+    if (!targetPath) return;
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    } catch {}
+  }
+
+  cleanup() {
+    this.ensureDir();
+    const assistantFiles = fs.readdirSync(this.assistantsDir())
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => {
+        const filePath = path.join(this.assistantsDir(), name);
+        return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of assistantFiles.slice(this.maxRecords)) this.deletePath(entry.filePath);
+
+    const threadDirs = fs.readdirSync(this.threadsDir())
+      .map((name) => path.join(this.threadsDir(), name))
+      .filter((dir) => {
+        try {
+          return fs.statSync(dir).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .map((dir) => ({ dir, mtimeMs: fs.statSync(dir).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of threadDirs.slice(this.maxRecords)) this.deletePath(entry.dir);
+  }
+}
+
 class FileImageGenerationStore {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-image-generations"));
@@ -542,4 +999,44 @@ function randomToken(bytes = 16) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-module.exports = { FileAudioVoiceStore, FileResponseStore, FileConversationStore, FileImageGenerationStore };
+function nowSeconds() {
+  return Math.floor(Date.now() / 1000);
+}
+
+function cloneJson(value) {
+  return JSON.parse(JSON.stringify(value));
+}
+
+function cloneOrNull(value) {
+  return value ? cloneJson(value) : null;
+}
+
+function nullableString(value) {
+  if (value === undefined || value === null) return null;
+  return String(value);
+}
+
+function stringOrDefault(value, fallback) {
+  const text = value === undefined || value === null ? "" : String(value);
+  return text || fallback;
+}
+
+function normalizeAssistantMessageContent(content) {
+  if (Array.isArray(content)) return cloneJson(content);
+  if (isPlainObject(content)) return [cloneJson(content)];
+  return [{
+    type: "text",
+    text: {
+      value: String(content ?? ""),
+      annotations: [],
+    },
+  }];
+}
+
+module.exports = {
+  FileAssistantStore,
+  FileAudioVoiceStore,
+  FileResponseStore,
+  FileConversationStore,
+  FileImageGenerationStore,
+};

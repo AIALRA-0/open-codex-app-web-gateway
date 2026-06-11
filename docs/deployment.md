@@ -104,6 +104,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_PYTHON_GRADER_MEMORY_BYTES` | `2147483648` | Address-space limit applied by the Python runner when supported |
 | `CODEXCOMPAT_PYTHON_GRADER_BIN` | `python3` | Python interpreter used by local Python graders |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
+| `CODEXCOMPAT_ASSISTANT_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-assistants` | Local deprecated Assistants/Threads compatibility state path; keeps assistants, thread messages, runs, and run steps outside Git |
 | `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS` | `400000` | Local estimated input-character budget used to emulate Responses `truncation`. With `truncation:"auto"`, old replay messages are dropped from the beginning of conversation state until under this budget; with `disabled`, the bridge returns `400 context_length_exceeded` before calling the provider when this budget is exceeded |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |
 | `CODEXCOMPAT_COMPACTION_SECRET_FILE` | `$CODEXCOMPAT_STATE_DIR/compaction.key` | AES-GCM key file for local compaction `encrypted_content` and local Responses `reasoning.encrypted_content` emulation; keep outside Git and mode `0600` |
@@ -238,6 +239,7 @@ npm run eval:bridge -- --case responses-logprobs --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-url --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case assistants-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose

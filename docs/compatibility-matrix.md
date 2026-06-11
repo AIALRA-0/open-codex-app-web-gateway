@@ -11,6 +11,10 @@ Primary sources:
 - OpenAI encrypted reasoning guidance: https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
+- OpenAI Assistants deep dive run lifecycle: https://developers.openai.com/api/docs/assistants/deep-dive#runs-and-run-steps
+- OpenAI Assistants OpenAPI operation `createAssistant`: https://api.openai.com/v1/assistants
+- OpenAI Threads OpenAPI operation `createThread`: https://api.openai.com/v1/threads
+- OpenAI Threads OpenAPI operation `createThreadAndRun`: https://api.openai.com/v1/threads/runs
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI audio guide: https://developers.openai.com/api/docs/guides/audio
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
@@ -219,6 +223,53 @@ Returned non-stream objects use local `cmpl-...` ids, `object:"text_completion"`
 upstream `created` when available, upstream `model`, mapped legacy choices,
 optional `system_fingerprint`, and usage mapped from Chat
 `prompt_tokens`/`completion_tokens`/`total_tokens`.
+
+## Assistants API Compatibility
+
+The official OpenAPI spec still lists Assistants/Threads endpoints, although
+the `/v1/assistants` operations are marked deprecated in favor of newer
+Responses workflows. The bridge implements a local compatibility layer so
+older SDKs and Assistants-style demos can run against a Chat-Completions-only
+provider.
+
+Runs are synchronous locally: creating a run immediately builds a Chat
+Completions request from the Assistant instructions plus Thread messages,
+calls the configured upstream Chat provider, appends the returned text as a
+`thread.message`, writes a `message_creation` Run Step, and returns a terminal
+`thread.run`. Streaming create/run requests emit Assistants-style SSE lifecycle
+events around that same completed local run.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /v1/assistants` | Implemented locally | Lists local `assistant` records with OpenAI-style `limit`, `after`, `before`, and `order` pagination |
+| `POST /v1/assistants` | Implemented locally | Creates local `asst_...` records with `model`, `instructions`, `tools`, `tool_resources`, `metadata`, `temperature`, `top_p`, and `response_format` |
+| `GET /v1/assistants/{assistant_id}` | Implemented locally | Retrieves local assistant metadata by id |
+| `POST /v1/assistants/{assistant_id}` | Implemented locally | Updates mutable local assistant fields |
+| `DELETE /v1/assistants/{assistant_id}` | Implemented locally | Deletes the local assistant record and returns `object:"assistant.deleted"` |
+| `POST /v1/threads` | Implemented locally | Creates local `thread_...` records and optional initial `messages` |
+| `GET /v1/threads/{thread_id}` | Implemented locally | Retrieves local thread metadata |
+| `POST /v1/threads/{thread_id}` | Implemented locally | Updates `metadata` and `tool_resources` |
+| `DELETE /v1/threads/{thread_id}` | Implemented locally | Deletes local thread state, including messages/runs/steps |
+| `GET /v1/threads/{thread_id}/messages` | Implemented locally | Lists local `thread.message` records with pagination |
+| `POST /v1/threads/{thread_id}/messages` | Implemented locally | Adds a local user/assistant message; string content is normalized to `[{type:"text", text:{value, annotations:[]}}]` |
+| `GET /v1/threads/{thread_id}/messages/{message_id}` | Implemented locally | Retrieves a local message |
+| `POST /v1/threads/{thread_id}/messages/{message_id}` | Implemented locally | Updates message `metadata` |
+| `DELETE /v1/threads/{thread_id}/messages/{message_id}` | Implemented locally | Deletes the local message record |
+| `GET /v1/threads/{thread_id}/runs` | Implemented locally | Lists local runs for a thread |
+| `POST /v1/threads/{thread_id}/runs` | Implemented via upstream Chat | Creates and completes a local run by calling the configured Chat provider; appends one assistant message and one `message_creation` step |
+| `GET /v1/threads/{thread_id}/runs/{run_id}` | Implemented locally | Retrieves local run state |
+| `POST /v1/threads/{thread_id}/runs/{run_id}` | Implemented locally | Updates run `metadata` |
+| `POST /v1/threads/{thread_id}/runs/{run_id}/cancel` | Compatibility no-op for terminal local runs | Local runs complete synchronously, so completed runs are returned unchanged |
+| `POST /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs` | Compatibility no-op unless future required-action runs exist | Records compatibility metadata and returns the run |
+| `GET /v1/threads/{thread_id}/runs/{run_id}/steps` | Implemented locally | Lists local `thread.run.step` records |
+| `GET /v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}` | Implemented locally | Retrieves one run step |
+| `POST /v1/threads/runs` | Implemented via upstream Chat | Creates a thread and immediately creates/completes a run; `stream:true` emits Assistants-style lifecycle SSE frames |
+
+Current boundary: tool-call `requires_action` execution and exact streamed text
+delta parity remain future work. The local layer records
+`metadata.compatibility.local_assistants` on completed runs so callers can see
+that the run was completed synchronously through Chat Completions rather than
+OpenAI hosted Assistants.
 
 ## Chat Completions Endpoint Coverage
 
@@ -1255,6 +1306,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
+| OpenAI Assistants full parity | The local adapter covers Assistants CRUD, Threads CRUD, Messages CRUD, synchronous Chat-backed Runs, Run Step listing/retrieval, terminal cancel no-op, create-thread-and-run, and basic lifecycle SSE event shape, but it is not OpenAI hosted Assistants and does not yet implement model-driven `requires_action` tool-call loops, exact streaming text deltas, hosted Code Interpreter/File Search behavior through Assistants, or async thread locks | Add tool-call required-action state, submit-tool-output continuation, streaming delta relay, async run workers/thread locks, and mapping Assistants tools onto the existing local file-search/shell/MCP adapters |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
