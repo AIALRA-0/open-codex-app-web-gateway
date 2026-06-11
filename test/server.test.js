@@ -1396,6 +1396,100 @@ test("POST /v1/audio/translations accepts multipart and JSON audio data", async 
   });
 });
 
+test("Audio custom voice consent and voice endpoints store local metadata", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local custom voice endpoints");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const consentForm = new FormData();
+    consentForm.append("name", "Test Consent");
+    consentForm.append("language", "en-US");
+    consentForm.append("recording", new Blob([Buffer.from("consent recording")], { type: "audio/wav" }), "consent.wav");
+
+    const consentResponse = await fetch(`${baseUrl}/v1/audio/voice_consents`, {
+      method: "POST",
+      body: consentForm,
+    });
+    assert.equal(consentResponse.status, 200);
+    const consent = await consentResponse.json();
+    assert.match(consent.id, /^cons_/);
+    assert.equal(consent.object, "audio.voice_consent");
+    assert.equal(consent.name, "Test Consent");
+    assert.equal(consent.language, "en-US");
+    assert.equal(consent.status, "active");
+    assert.equal(consent.recording.filename, "consent.wav");
+    assert.equal(consent.recording.bytes, Buffer.byteLength("consent recording"));
+    assert.equal(consent.recording.content_type, "audio/wav");
+    assert.match(consent.recording.sha256, /^[a-f0-9]{64}$/);
+    assert.equal(consent.recording.content, undefined);
+    assert.equal(consent.compatibility.provider, "local");
+
+    const consentList = await fetch(`${baseUrl}/v1/audio/voice_consents?limit=1`);
+    assert.equal(consentList.status, 200);
+    const consentListJson = await consentList.json();
+    assert.equal(consentListJson.object, "list");
+    assert.equal(consentListJson.data[0].id, consent.id);
+
+    const consentGet = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
+    assert.equal(consentGet.status, 200);
+    assert.equal((await consentGet.json()).id, consent.id);
+
+    const voiceForm = new FormData();
+    voiceForm.append("name", "Test Voice");
+    voiceForm.append("consent", consent.id);
+    voiceForm.append("audio_sample", new Blob([Buffer.from("voice sample")], { type: "audio/wav" }), "sample.wav");
+
+    const voiceResponse = await fetch(`${baseUrl}/v1/audio/voices`, {
+      method: "POST",
+      body: voiceForm,
+    });
+    assert.equal(voiceResponse.status, 200);
+    const voice = await voiceResponse.json();
+    assert.match(voice.id, /^voice_/);
+    assert.equal(voice.object, "audio.voice");
+    assert.equal(voice.name, "Test Voice");
+    assert.equal(voice.consent, consent.id);
+    assert.equal(voice.status, "ready");
+    assert.equal(voice.audio_sample.filename, "sample.wav");
+    assert.equal(voice.audio_sample.bytes, Buffer.byteLength("voice sample"));
+    assert.equal(voice.audio_sample.content, undefined);
+    assert.equal(voice.compatibility.synthetic_voice_model_created, false);
+
+    const voiceList = await fetch(`${baseUrl}/v1/audio/voices`);
+    assert.equal(voiceList.status, 200);
+    const voiceListJson = await voiceList.json();
+    assert.equal(voiceListJson.data[0].id, voice.id);
+
+    const voiceGet = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`);
+    assert.equal(voiceGet.status, 200);
+    assert.equal((await voiceGet.json()).id, voice.id);
+
+    const missingRecording = await fetch(`${baseUrl}/v1/audio/voice_consents`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Missing Recording", language: "en" }),
+    });
+    assert.equal(missingRecording.status, 400);
+    assert.equal((await missingRecording.json()).error.param, "recording");
+
+    const missingConsent = await fetch(`${baseUrl}/v1/audio/voices`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "No Consent Voice",
+        consent: "cons_missing",
+        audio_sample: {
+          data: `data:audio/wav;base64,${Buffer.from("sample").toString("base64")}`,
+          filename: "sample.wav",
+        },
+      }),
+    });
+    assert.equal(missingConsent.status, 404);
+    assert.equal((await missingConsent.json()).error.code, "voice_consent_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);

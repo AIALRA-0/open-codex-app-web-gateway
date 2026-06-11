@@ -21,6 +21,9 @@ Primary sources:
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
 - OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
 - OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
+- OpenAI custom voices guide: https://developers.openai.com/api/docs/guides/text-to-speech#creating-a-voice
+- OpenAI Audio voice consent OpenAPI operation `createVoiceConsent`: https://api.openai.com/v1/audio/voice_consents
+- OpenAI Audio voice OpenAPI operation `createVoice`: https://api.openai.com/v1/audio/voices
 - OpenAI Images variation OpenAPI operation `createImageVariation`: https://api.openai.com/v1/images/variations
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
@@ -901,18 +904,26 @@ Chat-only.
 | `POST /v1/audio/speech` | Implemented locally | Accepts JSON `input`, `model`, `voice`, `response_format`, `speed`, `instructions`, and optional `stream`; returns deterministic placeholder audio bytes for `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm`, or SSE `speech.audio.*` events when streaming is requested |
 | `POST /v1/audio/transcriptions` | Implemented locally | Accepts official multipart `file` requests plus JSON/base64 file shapes for Batch; supports `json`, `verbose_json`, `diarized_json`, `text`, `srt`, `vtt`, and transcription SSE events |
 | `POST /v1/audio/translations` | Implemented locally | Accepts official multipart `file` requests plus JSON/base64 file shapes for Batch; supports `json`, `verbose_json`, `text`, `srt`, and `vtt` response formats |
+| `POST /v1/audio/voice_consents` | Implemented locally | Accepts official-style multipart `name`, `language`, and `recording` plus JSON/base64 compatibility; stores local metadata only with `cons_*` ids, file byte counts, content type, format, and sha256 |
+| `GET /v1/audio/voice_consents` | Implemented locally | Lists local consent recording metadata with OpenAI-style list pagination |
+| `GET /v1/audio/voice_consents/{consent_id}` | Implemented locally | Retrieves local consent metadata by id |
+| `POST /v1/audio/voices` | Implemented locally | Accepts official-style multipart `name`, `consent`, and `audio_sample` plus JSON/base64 compatibility; requires an existing local `cons_*` id and enforces a local 20-voice cap |
+| `GET /v1/audio/voices` | Implemented locally | Lists local custom voice metadata; this is included for local UI and SDK compatibility even though the current public OpenAPI path metadata only expands `createVoice` |
+| `GET /v1/audio/voices/{voice_id}` | Implemented locally | Retrieves local custom voice metadata by id; custom voice ids can also be passed as `/v1/audio/speech` `voice` values for placeholder speech protocol tests |
 
 Local Batch JSONL can execute `/v1/audio/transcriptions` and
 `/v1/audio/translations` when each request carries JSON/base64 audio data.
 `/v1/audio/speech` intentionally remains a direct API path because its primary
 response is binary audio, while Batch output files are JSONL.
 
-This is protocol compatibility, not model-side listening or production-grade
-speech synthesis. Placeholder mode returns deterministic bytes/text and records
-`compatibility.provider:"local"` for transcription and translation responses.
-Text-only Chat providers such as DeepSeek still do not natively process audio
-content, and Realtime sessions plus custom voice-consent governance remain
-future work.
+This is protocol compatibility, not model-side listening, production-grade
+speech synthesis, or real voice cloning. Placeholder mode returns deterministic
+bytes/text and records `compatibility.provider:"local"` for transcription and
+translation responses. Custom voice compatibility stores governance metadata
+only and records `synthetic_voice_model_created:false`; it does not create a
+usable cloned voice model. Text-only Chat providers such as DeepSeek still do
+not natively process audio content, and Realtime sessions plus provider-backed
+audio quality remain future work.
 
 The bridge also exposes a direct OpenAI-compatible
 `POST /v1/images/generations` endpoint for clients that call the Image API
@@ -1033,7 +1044,7 @@ Configuration:
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |
-| Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; the bridge also implements direct request-based `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations` protocol compatibility. Text-only providers such as DeepSeek still do not natively understand audio input or synthesize semantic audio | Add optional provider/model adapters for audio-capable Chat or Realtime models, provider-backed speech/transcription, custom voice governance, and audio-quality evals |
+| Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; the bridge also implements direct request-based `/v1/audio/speech`, `/v1/audio/transcriptions`, `/v1/audio/translations`, `/v1/audio/voice_consents`, and `/v1/audio/voices` protocol compatibility. Text-only providers such as DeepSeek still do not natively understand audio input, synthesize semantic audio, or create real cloned voice models | Add optional provider/model adapters for audio-capable Chat or Realtime models, provider-backed speech/transcription/custom voices, and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
 | Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests, token aliases, reasoning effort, DeepSeek `user_id`, local stored-chat `store`/`metadata` semantics, direct Chat `tool_choice` thinking compatibility, and filters known unsupported OpenAI-only fields such as `parallel_tool_calls` for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |

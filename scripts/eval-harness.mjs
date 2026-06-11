@@ -359,6 +359,26 @@ function buildSuites(defaultModel) {
           && json.usage?.type === "duration",
       },
       {
+        id: "audio-voice-lifecycle",
+        mode: "audio-voice-lifecycle",
+        request: {
+          language: "en-US",
+        },
+        check: ({ consent, voice, consentList, voiceList, consentGet, voiceGet }) => consent?.id?.startsWith("cons_")
+          && consent.object === "audio.voice_consent"
+          && consent.recording?.sha256
+          && voice?.id?.startsWith("voice_")
+          && voice.object === "audio.voice"
+          && voice.consent === consent.id
+          && voice.compatibility?.synthetic_voice_model_created === false
+          && consentGet?.id === consent.id
+          && voiceGet?.id === voice.id
+          && Array.isArray(consentList?.data)
+          && consentList.data.some((item) => item.id === consent.id)
+          && Array.isArray(voiceList?.data)
+          && voiceList.data.some((item) => item.id === voice.id),
+      },
+      {
         id: "responses-inline-moderation",
         mode: "responses",
         request: {
@@ -2258,6 +2278,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "audio-translation") {
       return await runJsonCase(testCase, context, started, "/v1/audio/translations", audioOutputText, audioUsage);
     }
+    if (testCase.mode === "audio-voice-lifecycle") {
+      return await runAudioVoiceLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
@@ -2406,6 +2429,106 @@ async function runAudioSpeechCase(testCase, context, started) {
     usage: audioUsage(null),
     output_text: `audio_speech:${contentType}:${buffer.length}`,
   });
+}
+
+async function runAudioVoiceLifecycleCase(testCase, context, started) {
+  const marker = testCase.id;
+  const request = resolveRequest(testCase.request, {});
+  const stableConsentName = `Eval Consent ${marker}`;
+  const stableVoiceName = `Eval Voice ${marker}`;
+  const existingVoices = await getJson(`${baseUrl}/v1/audio/voices?limit=100`);
+  const existingVoice = (existingVoices.json?.data || []).find((item) => item?.name === stableVoiceName);
+  if (existingVoice?.id) {
+    const consentGet = await getJson(`${baseUrl}/v1/audio/voice_consents/${existingVoice.consent}`);
+    const voiceGet = await getJson(`${baseUrl}/v1/audio/voices/${existingVoice.id}`);
+    const consentList = await getJson(`${baseUrl}/v1/audio/voice_consents?limit=100`);
+    const voiceList = await getJson(`${baseUrl}/v1/audio/voices?limit=100`);
+    const ok = !!testCase.check({
+      consent: consentGet.json,
+      voice: voiceGet.json,
+      consentGet: consentGet.json,
+      voiceGet: voiceGet.json,
+      consentList: consentList.json,
+      voiceList: voiceList.json,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: voiceGet.status,
+      consent_id: existingVoice.consent,
+      voice_id: existingVoice.id,
+      reused: true,
+      usage: audioUsage(null),
+      output_text: `audio_voice:${existingVoice.id}:reused`,
+    });
+  }
+
+  const consentForm = new FormData();
+  consentForm.append("name", stableConsentName);
+  consentForm.append("language", request.language || "en-US");
+  consentForm.append("recording", new Blob([Buffer.from(`consent ${marker}`)], { type: "audio/wav" }), `${marker}-consent.wav`);
+  const voiceForm = new FormData();
+  voiceForm.append("name", stableVoiceName);
+  voiceForm.append("audio_sample", new Blob([Buffer.from(`sample ${marker}`)], { type: "audio/wav" }), `${marker}-sample.wav`);
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const consentResponse = await fetch(`${baseUrl}/v1/audio/voice_consents`, {
+      method: "POST",
+      body: consentForm,
+      signal: controller.signal,
+    });
+    const consentBody = await consentResponse.text();
+    if (!consentResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: consentResponse.status,
+        error: truncate(consentBody),
+      });
+    }
+    const consent = JSON.parse(consentBody);
+    voiceForm.append("consent", consent.id);
+    const voiceResponse = await fetch(`${baseUrl}/v1/audio/voices`, {
+      method: "POST",
+      body: voiceForm,
+      signal: controller.signal,
+    });
+    const voiceBody = await voiceResponse.text();
+    if (!voiceResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: voiceResponse.status,
+        error: truncate(voiceBody),
+      });
+    }
+    const voice = JSON.parse(voiceBody);
+    const consentGet = await getJson(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
+    const voiceGet = await getJson(`${baseUrl}/v1/audio/voices/${voice.id}`);
+    const consentList = await getJson(`${baseUrl}/v1/audio/voice_consents?limit=100`);
+    const voiceList = await getJson(`${baseUrl}/v1/audio/voices?limit=100`);
+    const ok = !!testCase.check({
+      consent,
+      voice,
+      consentGet: consentGet.json,
+      voiceGet: voiceGet.json,
+      consentList: consentList.json,
+      voiceList: voiceList.json,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: voiceResponse.status,
+      consent_id: consent.id,
+      voice_id: voice.id,
+      consent_get_status: consentGet.status,
+      voice_get_status: voiceGet.status,
+      consent_list_status: consentList.status,
+      voice_list_status: voiceList.status,
+      usage: audioUsage(null),
+      output_text: `audio_voice:${voice.id}`,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 async function runVideoLifecycleCase(testCase, context, started) {

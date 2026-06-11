@@ -363,6 +363,157 @@ class FileImageGenerationStore {
   }
 }
 
+class FileAudioVoiceStore {
+  constructor(options = {}) {
+    this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-audio-voices"));
+    this.maxVoices = options.maxVoices || 20;
+    this.maxRecords = options.maxRecords || 5000;
+  }
+
+  ensureDir() {
+    fs.mkdirSync(path.join(this.dir, "consents"), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(path.join(this.dir, "voices"), { recursive: true, mode: 0o700 });
+  }
+
+  filePath(kind, id) {
+    const clean = safeId(id);
+    if (!clean || !["consents", "voices"].includes(kind)) return null;
+    return path.join(this.dir, kind, `${clean}.json`);
+  }
+
+  getConsent(id) {
+    return this.read("consents", id)?.voice_consent || null;
+  }
+
+  getVoice(id) {
+    return this.read("voices", id)?.voice || null;
+  }
+
+  listConsents() {
+    return this.list("consents", "voice_consent");
+  }
+
+  listVoices() {
+    return this.list("voices", "voice");
+  }
+
+  createConsent({ name, language, recording }) {
+    const now = Math.floor(Date.now() / 1000);
+    const consent = {
+      id: `cons_${randomToken(18)}`,
+      object: "audio.voice_consent",
+      created_at: now,
+      name,
+      language,
+      status: "active",
+      recording,
+      compatibility: {
+        provider: "local",
+        governance: "metadata_only",
+        reason: "custom_voice_consent_protocol_compatibility",
+      },
+    };
+    this.write("consents", consent.id, { voice_consent: consent });
+    return consent;
+  }
+
+  createVoice({ name, consent, audioSample }) {
+    const voices = this.listVoices();
+    if (voices.length >= this.maxVoices) {
+      const error = new Error(`local custom voice limit of ${this.maxVoices} reached`);
+      error.status = 400;
+      error.code = "custom_voice_limit_exceeded";
+      error.param = "voice";
+      throw error;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const voice = {
+      id: `voice_${randomToken(18)}`,
+      object: "audio.voice",
+      created_at: now,
+      name,
+      consent,
+      status: "ready",
+      audio_sample: audioSample,
+      compatibility: {
+        provider: "local",
+        governance: "metadata_only",
+        reason: "custom_voice_protocol_compatibility",
+        synthetic_voice_model_created: false,
+      },
+    };
+    this.write("voices", voice.id, { voice });
+    return voice;
+  }
+
+  read(kind, id) {
+    const filePath = this.filePath(kind, id);
+    if (!filePath) return null;
+    try {
+      const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return isPlainObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  list(kind, field) {
+    this.ensureDir();
+    const dir = path.join(this.dir, kind);
+    try {
+      return fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          try {
+            const value = JSON.parse(fs.readFileSync(path.join(dir, name), "utf8"));
+            return value?.[field] || null;
+          } catch {
+            return null;
+          }
+        })
+        .filter(Boolean)
+        .sort((a, b) => Number(a.created_at || 0) - Number(b.created_at || 0));
+    } catch {
+      return [];
+    }
+  }
+
+  write(kind, id, value) {
+    const filePath = this.filePath(kind, id);
+    if (!filePath) return;
+    this.ensureDir();
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+    this.cleanup();
+  }
+
+  cleanup() {
+    this.ensureDir();
+    for (const kind of ["consents", "voices"]) {
+      const dir = path.join(this.dir, kind);
+      const entries = fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          const filePath = path.join(dir, name);
+          const stat = fs.statSync(filePath);
+          return { filePath, mtimeMs: stat.mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+      for (const entry of entries.slice(this.maxRecords)) {
+        try { fs.unlinkSync(entry.filePath); } catch {}
+      }
+    }
+  }
+}
+
 function conversationResource(record) {
   return {
     id: record.id,
@@ -391,4 +542,4 @@ function randomToken(bytes = 16) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-module.exports = { FileResponseStore, FileConversationStore, FileImageGenerationStore };
+module.exports = { FileAudioVoiceStore, FileResponseStore, FileConversationStore, FileImageGenerationStore };

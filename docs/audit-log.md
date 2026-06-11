@@ -6278,3 +6278,67 @@ Open follow-ups:
     5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Direct Audio custom voice metadata compatibility
+
+- Used current official OpenAI docs and OpenAPI endpoint metadata to confirm
+  the direct Audio custom voice flow:
+  - `POST /v1/audio/voice_consents`;
+  - `GET /v1/audio/voice_consents`;
+  - `GET /v1/audio/voice_consents/{consent_id}`;
+  - `POST /v1/audio/voices`.
+- Added a local metadata-only compatibility layer for Chat-only providers:
+  - `POST/GET /v1/audio/voice_consents`;
+  - `GET /v1/audio/voice_consents/{consent_id}`;
+  - `POST/GET /v1/audio/voices`;
+  - `GET /v1/audio/voices/{voice_id}` as a local retrieval extension for SDK
+    and UI compatibility.
+- Stored consent and voice records under a dedicated local state directory with
+  `0700` directories and `0600` JSON files. The bridge records filename, byte
+  length, content type, detected format, and SHA-256 digest, but does not store
+  uploaded audio bytes.
+- Enforced a default 20-voice cap matching the documented organization limit
+  and bounded upload parsing with `CODEXCOMPAT_AUDIO_VOICE_MAX_INPUT_BYTES`.
+- Marked generated voice records with compatibility metadata including
+  `synthetic_voice_model_created:false` so callers can distinguish protocol
+  compatibility from a real provider-backed cloned voice model.
+- Updated `.env.example`, deployment docs, compatibility matrix, evaluation
+  plan, and the bridge regression harness with the
+  `audio-voice-lifecycle` case.
+- Verification:
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused direct Audio tests passed through `test/server.test.js`, including
+    custom voice lifecycle, missing recording validation, and missing consent
+    validation.
+  - `npm test`: 159/159 passing tests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 729 runtime
+    candidates, selected 92 old UI screenshots by retention policy, deleted 0
+    files, selected 7555293 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `audio-voice-lifecycle` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, creating consent `cons_LvqCugPLFeOPl-GCWJQIh3tR` and
+    voice `voice_Wugjq5bEjBvs7uG16QFvJwhE`, with consent get/list and voice
+    get/list all returning 200.
+  - Full live `npm run eval:bridge`: 69/69 passing cases, pass rate 1.0,
+    average latency 1095 ms, P95 latency 3064 ms, and total usage 10696
+    tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, and saved-project
+    cleanup with no console errors or warnings.
+  - Disk/storage check: the filesystem has 41 GB available; `state/` is
+    7.6 MB, `output/` is 13 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

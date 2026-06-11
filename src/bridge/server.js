@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { FileConversationStore, FileImageGenerationStore, FileResponseStore } = require("./store");
+const { FileAudioVoiceStore, FileConversationStore, FileImageGenerationStore, FileResponseStore } = require("./store");
 const {
   createToolCallBudget,
   toolBudgetCompatibility,
@@ -116,6 +116,21 @@ const AUDIO_SPEECH_CONTENT_TYPES = Object.freeze({
   pcm: "application/octet-stream",
   wav: "audio/wav",
 });
+const AUDIO_CUSTOM_VOICE_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "mp4", "mpeg", "oga", "ogg", "wav", "webm"]);
+const AUDIO_CUSTOM_VOICE_CONTENT_TYPES = new Set([
+  "audio/aac",
+  "audio/flac",
+  "audio/m4a",
+  "audio/mp4",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/ogg",
+  "audio/wav",
+  "audio/webm",
+  "audio/x-m4a",
+  "audio/x-wav",
+  "video/mp4",
+]);
 const LOCAL_VIDEO_CONTENT_VARIANTS = new Set(["video", "thumbnail", "spritesheet"]);
 const LOCAL_PLACEHOLDER_MP4 = Buffer.from("AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAGG1kYXQ=", "base64");
 const LOCAL_PLACEHOLDER_WEBP = Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64");
@@ -271,6 +286,9 @@ function loadConfig(overrides = {}) {
     audioTranslationModel: process.env.CODEXCOMPAT_AUDIO_TRANSLATION_MODEL || "whisper-1",
     audioDefaultVoice: process.env.CODEXCOMPAT_AUDIO_DEFAULT_VOICE || "alloy",
     audioMaxInputBytes: numberFromEnv("CODEXCOMPAT_AUDIO_MAX_INPUT_BYTES", 25 * 1024 * 1024, 1024, 100 * 1024 * 1024),
+    audioVoiceStateDir: process.env.CODEXCOMPAT_AUDIO_VOICE_STATE_DIR || path.join(stateDir, "local-audio-voices"),
+    audioVoiceMaxVoices: numberFromEnv("CODEXCOMPAT_AUDIO_VOICE_MAX_VOICES", 20, 1, 20),
+    audioVoiceMaxInputBytes: numberFromEnv("CODEXCOMPAT_AUDIO_VOICE_MAX_INPUT_BYTES", 25 * 1024 * 1024, 1024, 100 * 1024 * 1024),
     imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
     imageGenerationStateDir: process.env.CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR || path.join(stateDir, "local-image-generations"),
     imageGenerationMaxStoredImages: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES", 5000, 1, 100000),
@@ -5246,6 +5264,273 @@ function writeAudioTranscriptStream(res, normalized, text) {
   res.end();
 }
 
+async function handleAudioVoiceConsentsCreate(req, res, config, audioVoiceStore) {
+  try {
+    if (!canUseLocalAudio(config)) {
+      sendError(res, 400, "local audio compatibility is disabled", {
+        type: "invalid_request_error",
+        code: "audio_disabled",
+        param: "provider",
+      });
+      return;
+    }
+    const request = await readAudioNamedFileRequest(req, config, "recording");
+    const consent = audioVoiceStore.createConsent({
+      name: normalizeCustomVoiceName(request.name, "name"),
+      language: normalizeVoiceConsentLanguage(request.language),
+      recording: resolveCustomVoiceAudioFile(request, config, "recording"),
+    });
+    sendJson(res, 200, consent);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "voice consent request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "voice_consent_error",
+      param: error.param || null,
+    });
+  }
+}
+
+function handleAudioVoiceConsentsList(res, audioVoiceStore, url) {
+  sendJson(res, 200, paginateList(audioVoiceStore.listConsents(), url));
+}
+
+function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId) {
+  const consent = audioVoiceStore.getConsent(consentId);
+  if (!consent) {
+    sendError(res, 404, `voice consent not found: ${consentId}`, {
+      type: "invalid_request_error",
+      code: "voice_consent_not_found",
+      param: "consent_id",
+    });
+    return;
+  }
+  sendJson(res, 200, consent);
+}
+
+async function handleAudioVoicesCreate(req, res, config, audioVoiceStore) {
+  try {
+    if (!canUseLocalAudio(config)) {
+      sendError(res, 400, "local audio compatibility is disabled", {
+        type: "invalid_request_error",
+        code: "audio_disabled",
+        param: "provider",
+      });
+      return;
+    }
+    const request = await readAudioNamedFileRequest(req, config, "audio_sample");
+    const consentId = normalizeVoiceConsentReference(request.consent);
+    if (!audioVoiceStore.getConsent(consentId)) {
+      throw requestError(`voice consent not found: ${consentId}`, {
+        status: 404,
+        code: "voice_consent_not_found",
+        param: "consent",
+      });
+    }
+    const voice = audioVoiceStore.createVoice({
+      name: normalizeCustomVoiceName(request.name, "name"),
+      consent: consentId,
+      audioSample: resolveCustomVoiceAudioFile(request, config, "audio_sample"),
+    });
+    sendJson(res, 200, voice);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "custom voice request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "custom_voice_error",
+      param: error.param || null,
+    });
+  }
+}
+
+function handleAudioVoicesList(res, audioVoiceStore, url) {
+  sendJson(res, 200, paginateList(audioVoiceStore.listVoices(), url));
+}
+
+function handleAudioVoiceGet(res, audioVoiceStore, voiceId) {
+  const voice = audioVoiceStore.getVoice(voiceId);
+  if (!voice) {
+    sendError(res, 404, `voice not found: ${voiceId}`, {
+      type: "invalid_request_error",
+      code: "voice_not_found",
+      param: "voice_id",
+    });
+    return;
+  }
+  sendJson(res, 200, voice);
+}
+
+async function readAudioNamedFileRequest(req, config = {}, fileField = "file") {
+  const contentType = req.headers["content-type"] || "";
+  if (/^multipart\/form-data\b/i.test(contentType)) {
+    const maxBytes = Number(config.audioVoiceMaxInputBytes || config.audioMaxInputBytes || 25 * 1024 * 1024);
+    const form = parseMultipartFormBinary(await readRawBody(req, maxBytes + 1024 * 1024), contentType);
+    const file = form.files.find((item) => item.name === fileField);
+    return {
+      ...form.fields,
+      ...(file ? {
+        [`${fileField}_upload`]: {
+          filename: file.filename,
+          content_type: file.content_type || "application/octet-stream",
+          content: file.content,
+        },
+      } : {}),
+    };
+  }
+  if (!contentType || contentType.includes("application/json")) return await readJson(req);
+  throw requestError("custom voice requests must use application/json or multipart/form-data", {
+    status: 415,
+    code: "unsupported_content_type",
+    param: "content-type",
+  });
+}
+
+function normalizeCustomVoiceName(value, param = "name") {
+  const name = stringifyContent(value).trim();
+  if (!name) {
+    throw requestError(`${param} is required`, {
+      code: "missing_required_parameter",
+      param,
+    });
+  }
+  if (name.length > 128) {
+    throw requestError(`${param} must be at most 128 characters`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return name;
+}
+
+function normalizeVoiceConsentLanguage(value) {
+  const language = stringifyContent(value).trim();
+  if (!language) {
+    throw requestError("language is required", {
+      code: "missing_required_parameter",
+      param: "language",
+    });
+  }
+  if (!/^[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]{2,8})*$/.test(language)) {
+    throw requestError("language must be a BCP-47-like language code", {
+      code: "invalid_request_parameter",
+      param: "language",
+    });
+  }
+  return language.replace(/_/g, "-");
+}
+
+function normalizeVoiceConsentReference(value) {
+  const consent = stringifyContent(value).trim();
+  if (!consent) {
+    throw requestError("consent is required", {
+      code: "missing_required_parameter",
+      param: "consent",
+    });
+  }
+  if (!/^cons_[A-Za-z0-9_-]+$/.test(consent)) {
+    throw requestError("consent must be a voice consent id", {
+      code: "invalid_request_parameter",
+      param: "consent",
+    });
+  }
+  return consent;
+}
+
+function resolveCustomVoiceAudioFile(request = {}, config = {}, fieldName = "recording") {
+  const maxBytes = Number(config.audioVoiceMaxInputBytes || config.audioMaxInputBytes || 25 * 1024 * 1024);
+  const upload = request[`${fieldName}_upload`];
+  let file = null;
+  if (upload?.content) {
+    file = normalizeAudioBuffer({
+      buffer: upload.content,
+      filename: upload.filename || fieldName,
+      contentType: upload.content_type,
+      maxBytes,
+    });
+  } else {
+    const source = customVoiceAudioDataSource(request, fieldName);
+    if (!source) {
+      throw requestError(`${fieldName} is required`, {
+        code: "missing_required_parameter",
+        param: fieldName,
+      });
+    }
+    const parsed = parseAudioData(source.value, source.contentType);
+    if (!parsed) {
+      throw requestError(`${fieldName} must be base64 encoded`, {
+        code: "invalid_audio_file",
+        param: fieldName,
+      });
+    }
+    file = normalizeAudioBuffer({
+      buffer: parsed.buffer,
+      filename: source.filename || fieldName,
+      contentType: parsed.contentType || source.contentType,
+      maxBytes,
+    });
+  }
+  validateCustomVoiceAudioFile(file, fieldName);
+  return customVoiceAudioMetadata(file);
+}
+
+function customVoiceAudioDataSource(request = {}, fieldName = "recording") {
+  const source = request[fieldName];
+  if (isPlainObject(source)) {
+    const value = source.data || source.file_data || source.audio_data || source.content_base64 || source.b64_json;
+    if (value) {
+      return {
+        value,
+        filename: source.filename || source.name,
+        contentType: source.content_type || source.mime_type || source.media_type,
+      };
+    }
+  }
+  if (typeof source === "string" && source.trim()) {
+    return {
+      value: source,
+      filename: request[`${fieldName}_filename`] || request.filename,
+      contentType: request[`${fieldName}_content_type`] || request.content_type,
+    };
+  }
+  const fallbackKeys = [`${fieldName}_data`, `${fieldName}_base64`, `${fieldName}_content_base64`];
+  for (const key of fallbackKeys) {
+    if (typeof request[key] === "string" && request[key].trim()) {
+      return {
+        value: request[key],
+        filename: request[`${fieldName}_filename`] || request.filename,
+        contentType: request[`${fieldName}_content_type`] || request.content_type,
+      };
+    }
+  }
+  return null;
+}
+
+function validateCustomVoiceAudioFile(file = {}, param = "file") {
+  const extension = audioFileExtension(file.filename);
+  const contentType = String(file.content_type || "").toLowerCase();
+  if (AUDIO_CUSTOM_VOICE_EXTENSIONS.has(extension)) return;
+  if (AUDIO_CUSTOM_VOICE_CONTENT_TYPES.has(contentType)) return;
+  throw requestError(`${param} must be an audio sample of type mpeg, wav, ogg, aac, flac, webm, or mp4`, {
+    code: "unsupported_audio_format",
+    param,
+  });
+}
+
+function audioFileExtension(filename = "") {
+  const match = String(filename || "").toLowerCase().match(/\.([a-z0-9]+)$/);
+  if (!match) return "";
+  return match[1] === "mp3" ? "mpeg" : match[1];
+}
+
+function customVoiceAudioMetadata(file = {}) {
+  const format = audioFileExtension(file.filename) || String(file.content_type || "").split("/").pop() || "audio";
+  return {
+    filename: file.filename,
+    bytes: file.bytes,
+    content_type: file.content_type,
+    format,
+    sha256: crypto.createHash("sha256").update(file.content || Buffer.alloc(0)).digest("hex"),
+  };
+}
+
 function requestError(message, details = {}) {
   const error = new Error(message);
   error.status = details.status || 400;
@@ -7189,6 +7474,10 @@ function createServer(config = loadConfig()) {
     maxRecords: config.imageGenerationMaxStoredImages,
     ttlMs: config.imageGenerationStoreTtlMs,
   });
+  const audioVoiceStore = config.audioVoiceStore || new FileAudioVoiceStore({
+    dir: config.audioVoiceStateDir,
+    maxVoices: config.audioVoiceMaxVoices,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -7248,6 +7537,40 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/audio/translations") {
         await handleAudioTranslations(req, res, config);
+        return;
+      }
+
+      if (url.pathname === "/v1/audio/voice_consents") {
+        if (req.method === "GET") {
+          handleAudioVoiceConsentsList(res, audioVoiceStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleAudioVoiceConsentsCreate(req, res, config, audioVoiceStore);
+          return;
+        }
+      }
+
+      const voiceConsentRoute = url.pathname.match(/^\/v1\/audio\/voice_consents\/([^/]+)$/);
+      if (voiceConsentRoute && req.method === "GET") {
+        handleAudioVoiceConsentGet(res, audioVoiceStore, decodeURIComponent(voiceConsentRoute[1]));
+        return;
+      }
+
+      if (url.pathname === "/v1/audio/voices") {
+        if (req.method === "GET") {
+          handleAudioVoicesList(res, audioVoiceStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleAudioVoicesCreate(req, res, config, audioVoiceStore);
+          return;
+        }
+      }
+
+      const audioVoiceRoute = url.pathname.match(/^\/v1\/audio\/voices\/([^/]+)$/);
+      if (audioVoiceRoute && req.method === "GET") {
+        handleAudioVoiceGet(res, audioVoiceStore, decodeURIComponent(audioVoiceRoute[1]));
         return;
       }
 

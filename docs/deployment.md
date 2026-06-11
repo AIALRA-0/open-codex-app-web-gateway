@@ -112,6 +112,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_AUDIO_TRANSLATION_MODEL` | `whisper-1` | Default model id for local translation compatibility when a client omits `model` |
 | `CODEXCOMPAT_AUDIO_DEFAULT_VOICE` | `alloy` | Default speech voice when `/v1/audio/speech` omits `voice` |
 | `CODEXCOMPAT_AUDIO_MAX_INPUT_BYTES` | `26214400` | Maximum multipart or JSON-base64 audio input bytes accepted by local transcription/translation compatibility |
+| `CODEXCOMPAT_AUDIO_VOICE_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-audio-voices` | Local JSON metadata store for request-based custom voice consent and voice compatibility; keep outside Git |
+| `CODEXCOMPAT_AUDIO_VOICE_MAX_VOICES` | `20` | Local custom voice cap, matching the documented OpenAI organization limit |
+| `CODEXCOMPAT_AUDIO_VOICE_MAX_INPUT_BYTES` | `26214400` | Maximum local consent recording or voice sample upload bytes accepted by custom voice compatibility |
 | `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Local Responses `image_generation` plus direct `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations` provider. Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled`; provider-backed modes call an OpenAI-compatible Images API |
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation; keep provider-specific endpoints and secrets outside Git |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed Responses-tool and direct Images API calls |
