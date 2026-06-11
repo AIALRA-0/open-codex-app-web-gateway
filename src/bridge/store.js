@@ -565,6 +565,7 @@ class FileAssistantStore {
       cancelled_at: null,
       failed_at: null,
       completed_at: null,
+      expired_at: null,
       required_action: null,
       last_error: null,
       model: stringOrDefault(body.model || assistant.model, "gpt-4o"),

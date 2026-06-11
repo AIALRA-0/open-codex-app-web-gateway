@@ -51,6 +51,14 @@ function expireVectorStoreForTest(stateDir, storeId) {
   });
 }
 
+function updateAssistantRunForTest(stateDir, threadId, runId, updater) {
+  const runPath = path.join(stateDir, "local-assistants", "threads", threadId, "runs", runId, "run.json");
+  const record = JSON.parse(fs.readFileSync(runPath, "utf8"));
+  record.run = typeof updater === "function" ? updater(record.run) : { ...record.run, ...updater };
+  fs.writeFileSync(runPath, `${JSON.stringify(record, null, 2)}\n`);
+  return record.run;
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -1796,6 +1804,23 @@ test("Assistants API required_action submits tool outputs through upstream Chat"
     assert.equal(run.metadata.compatibility.local_assistants.run_mode, "required_action");
     assert.deepEqual(run.usage, { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 });
 
+    const lockedMessage = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "user", content: "this should wait for the active run" }),
+    });
+    assert.equal(lockedMessage.status, 400);
+    assert.equal((await lockedMessage.json()).error.code, "thread_locked");
+
+    const lockedRun = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(lockedRun.status, 400);
+    assert.equal((await lockedRun.json()).error.code, "thread_locked");
+    assert.equal(requests.length, 1);
+
     const missingSubmit = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -1819,6 +1844,14 @@ test("Assistants API required_action submits tool outputs through upstream Chat"
     assert.equal(completedRun.metadata.compatibility.local_assistants.run_mode, "submit_tool_outputs");
     assert.equal(completedRun.metadata.compatibility.local_assistants.submitted_tool_output_count, 1);
 
+    const unlockedMessage = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "user", content: "thanks after completion" }),
+    });
+    assert.equal(unlockedMessage.status, 200);
+    assert.equal((await unlockedMessage.json()).role, "user");
+
     assert.equal(requests.length, 2);
     assert.deepEqual(requests[1].body.messages.map((message) => message.role), ["system", "user", "assistant", "tool"]);
 
@@ -1834,6 +1867,118 @@ test("Assistants API required_action submits tool outputs through upstream Chat"
     const listedMessagesJson = await listedMessages.json();
     const assistantMessage = listedMessagesJson.data.find((message) => message.role === "assistant");
     assert.equal(assistantMessage.content[0].text.value, "tool-output-ok");
+  });
+});
+
+test("Assistants API expires stale required_action runs and unlocks the thread", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools[0].function.name, "lookup_weather");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_assistant_expire_${request.body.messages.length}`,
+      object: "chat.completion",
+      created: 1700000004,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_expire_1",
+            type: "function",
+            function: {
+              name: "lookup_weather",
+              arguments: "{\"city\":\"Berlin\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        tools: [{
+          type: "function",
+          function: {
+            name: "lookup_weather",
+            parameters: {
+              type: "object",
+              properties: { city: { type: "string" } },
+              required: ["city"],
+            },
+          },
+        }],
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ messages: [{ role: "user", content: "Weather in Berlin?" }] }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "requires_action");
+    assert.equal(requests.length, 1);
+
+    const staleExpiresAt = Math.floor(Date.now() / 1000) - 5;
+    updateAssistantRunForTest(stateDir, thread.id, run.id, (record) => ({
+      ...record,
+      expires_at: staleExpiresAt,
+    }));
+
+    const expiredResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}`);
+    assert.equal(expiredResponse.status, 200);
+    const expiredRun = await expiredResponse.json();
+    assert.equal(expiredRun.status, "expired");
+    assert.equal(expiredRun.expires_at, null);
+    assert.ok(Number.isInteger(expiredRun.expired_at));
+    assert.equal(expiredRun.required_action, null);
+    assert.equal(expiredRun.last_error.code, "run_expired");
+    assert.equal(expiredRun.metadata.compatibility.local_assistants.expiration, "expires_at_elapsed");
+    assert.equal(expiredRun.metadata.compatibility.local_assistants.expired_expires_at, staleExpiresAt);
+
+    const expiredSubmit = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ tool_outputs: [{ tool_call_id: "call_expire_1", output: "weather=clear" }] }),
+    });
+    assert.equal(expiredSubmit.status, 200);
+    assert.equal((await expiredSubmit.json()).status, "expired");
+    assert.equal(requests.length, 1);
+
+    const unlockedMessage = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "user", content: "start over after expiry" }),
+    });
+    assert.equal(unlockedMessage.status, 200);
+
+    const nextRunResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(nextRunResponse.status, 200);
+    assert.equal((await nextRunResponse.json()).status, "requires_action");
+    assert.equal(requests.length, 2);
   });
 });
 

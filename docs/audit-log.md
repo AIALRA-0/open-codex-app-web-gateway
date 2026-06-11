@@ -4369,6 +4369,72 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants active-run locks and expiration
+
+- Used the official OpenAI Assistants Run lifecycle documentation to pin the
+  local compatibility target:
+  - `requires_action` runs must receive tool outputs before `expires_at`;
+  - elapsed `expires_at` moves a run to `expired`;
+  - callers continue a thread by adding messages and creating another run only
+    after the previous run reaches a terminal state.
+- Closed the local Assistants thread-lock gap for Chat-only providers:
+  - non-terminal local runs now lock `POST /v1/threads/{thread_id}/messages`
+    and `POST /v1/threads/{thread_id}/runs` with OpenAI-style
+    `thread_locked` errors;
+  - run/list/step/cancel/submit paths refresh stale non-terminal runs before
+    returning state, so elapsed `expires_at` runs become `status:"expired"`;
+  - expired runs record `expired_at`, clear `required_action`, and include
+    `last_error.code:"run_expired"` plus compatibility metadata;
+  - once a run is terminal, the same thread accepts new messages and new runs.
+- Extended regression coverage:
+  - unit/mock-provider Assistants required-action tests now assert message and
+    run creation are rejected while the run waits for tool outputs;
+  - a new unit/mock-provider test edits a temp run's `expires_at` into the
+    past, verifies retrieval expires it, verifies stale submit does not call the
+    provider, and verifies the thread unlocks afterward;
+  - live `assistants-required-action` now checks both lock errors before
+    submitting tool outputs.
+- Updated docs:
+  - compatibility matrix documents active-run locks, elapsed run expiration,
+    `expired_at`, and the remaining hosted async-worker boundary;
+  - evaluation plan records active-run lock and stale-run expiration coverage.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 10/10.
+  - `npm test`: passed 187/187.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 87/87,
+    pass rate 1.0, average latency 1437 ms, P95 latency 3994 ms, and total
+    usage 22025 tokens. The `assistants-required-action` case observed
+    `first_status:"requires_action"`, `message_lock_status:400`,
+    `run_lock_status:400`, and `final_status:"completed"`.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1200 ms, P95 latency 1224 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising existing-session/public
+    load, sidebar controls, core page navigation, project dialog/upload,
+    prompt submission, completed-turn actions, reload persistence, generated
+    image artifact display, saved project reopen/cleanup, and console
+    error/warning checks.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1392 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 29427 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    29427 bytes, and reported 0 errors.
+  - Service/storage check after verification: app-server, bridge, and web
+    services were active; the filesystem had 40 GB available; `state/` was
+    19 MB, `output/` was 4.8 MB, `/srv/aialra/data/opencodexapp` was 84 KB,
+    and `/srv/aialra/logs/opencodexapp` was 24 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants message-attachment resource materialization
 
 - Implemented Assistants message `attachments` materialization before local

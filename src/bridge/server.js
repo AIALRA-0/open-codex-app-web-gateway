@@ -9063,6 +9063,76 @@ function firstLocalThreadVectorStoreId(resources, fileSearchStore) {
   return ids.find((id) => fileSearchStore.getVectorStore(id)) || "";
 }
 
+const ASSISTANT_TERMINAL_RUN_STATUSES = new Set(["completed", "failed", "cancelled", "expired", "incomplete"]);
+
+function assistantRunIsTerminal(run) {
+  return ASSISTANT_TERMINAL_RUN_STATUSES.has(String(run?.status || ""));
+}
+
+function assistantRunExpiresAt(run) {
+  const expiresAt = Number(run?.expires_at || 0);
+  return Number.isFinite(expiresAt) && expiresAt > 0 ? expiresAt : 0;
+}
+
+function expireAssistantRunIfNeeded(assistantStore, run, now = nowSeconds()) {
+  if (!run || assistantRunIsTerminal(run)) return run || null;
+  const expiresAt = assistantRunExpiresAt(run);
+  if (!expiresAt || expiresAt > now) return run;
+  return assistantStore.updateRun(run.thread_id, run.id, (existing) => {
+    if (!existing || assistantRunIsTerminal(existing)) return existing;
+    const currentExpiresAt = assistantRunExpiresAt(existing);
+    if (!currentExpiresAt || currentExpiresAt > now) return existing;
+    return {
+      ...existing,
+      status: "expired",
+      expires_at: null,
+      expired_at: now,
+      required_action: null,
+      last_error: {
+        code: "run_expired",
+        message: "Run expired before required tool outputs were submitted.",
+      },
+      metadata: {
+        ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+        compatibility: mergeCompatibility(existing.metadata?.compatibility, {
+          local_assistants: {
+            provider: "local",
+            expiration: "expires_at_elapsed",
+            expired_expires_at: currentExpiresAt,
+          },
+        }),
+      },
+    };
+  }) || { ...run, status: "expired", expires_at: null, expired_at: now, required_action: null };
+}
+
+function refreshAssistantThreadRuns(assistantStore, threadId) {
+  const runs = assistantStore.listRuns(threadId);
+  if (!runs) return null;
+  const now = nowSeconds();
+  return runs.map((run) => expireAssistantRunIfNeeded(assistantStore, run, now)).filter(Boolean);
+}
+
+function refreshAssistantRunState(assistantStore, threadId, runId) {
+  const run = assistantStore.getRun(threadId, runId);
+  return expireAssistantRunIfNeeded(assistantStore, run);
+}
+
+function activeAssistantRunForThread(assistantStore, threadId) {
+  const runs = refreshAssistantThreadRuns(assistantStore, threadId);
+  if (!runs) return null;
+  return runs.find((run) => run && !assistantRunIsTerminal(run)) || null;
+}
+
+function assistantThreadLockedError(threadId, run, operation) {
+  const action = operation === "message" ? "add messages" : "create another run";
+  return openAiError(`Thread '${threadId}' already has an active run '${run.id}'. Wait until the run reaches a terminal status before you ${action}.`, {
+    type: "invalid_request_error",
+    code: "thread_locked",
+    param: "thread_id",
+  });
+}
+
 async function handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore) {
   const thread = assistantStore.createThread(await readJson(req));
   const materialized = materializeAssistantThreadMessageAttachments({
@@ -9131,6 +9201,20 @@ function handleAssistantMessagesList(res, assistantStore, threadId, url) {
 }
 
 async function handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId) {
+  const thread = assistantStore.getThread(threadId);
+  if (!thread) {
+    sendError(res, 404, `No thread found for id '${threadId}'`, {
+      type: "invalid_request_error",
+      code: "thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  const activeRun = activeAssistantRunForThread(assistantStore, threadId);
+  if (activeRun) {
+    sendJson(res, 400, assistantThreadLockedError(threadId, activeRun, "message"));
+    return;
+  }
   const message = assistantStore.createMessage(threadId, await readJson(req));
   if (!message) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -9194,7 +9278,7 @@ function handleAssistantMessageDelete(res, assistantStore, threadId, messageId) 
 }
 
 function handleAssistantRunsList(res, assistantStore, threadId, url) {
-  const runs = assistantStore.listRuns(threadId);
+  const runs = refreshAssistantThreadRuns(assistantStore, threadId);
   if (!runs) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
       type: "invalid_request_error",
@@ -9287,7 +9371,7 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
 }
 
 function handleAssistantRunGet(res, assistantStore, threadId, runId) {
-  const run = assistantStore.getRun(threadId, runId);
+  const run = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
       type: "invalid_request_error",
@@ -9301,6 +9385,15 @@ function handleAssistantRunGet(res, assistantStore, threadId, runId) {
 
 async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runId) {
   const body = await readJson(req);
+  const currentRun = refreshAssistantRunState(assistantStore, threadId, runId);
+  if (!currentRun) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
   const run = assistantStore.updateRun(threadId, runId, (existing) => ({
     ...existing,
     metadata: isPlainObject(body.metadata) ? body.metadata : existing.metadata || {},
@@ -9317,6 +9410,19 @@ async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runI
 }
 
 function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
+  const currentRun = refreshAssistantRunState(assistantStore, threadId, runId);
+  if (!currentRun) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
+  if (assistantRunIsTerminal(currentRun)) {
+    sendJson(res, 200, currentRun);
+    return;
+  }
   const run = assistantStore.cancelRun(threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -9365,6 +9471,15 @@ async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantSt
 }
 
 function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) {
+  const run = refreshAssistantRunState(assistantStore, threadId, runId);
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
   const steps = assistantStore.listRunSteps(threadId, runId);
   if (!steps) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -9378,6 +9493,15 @@ function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) 
 }
 
 function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId) {
+  const run = refreshAssistantRunState(assistantStore, threadId, runId);
+  if (!run) {
+    sendError(res, 404, `No run found for id '${runId}'`, {
+      type: "invalid_request_error",
+      code: "run_not_found",
+      param: "run_id",
+    });
+    return;
+  }
   const step = assistantStore.getRunStep(threadId, runId, stepId);
   if (!step) {
     sendError(res, 404, `No run step found for id '${stepId}'`, {
@@ -9484,6 +9608,14 @@ function prepareAssistantRunStart({ body, assistantStore, threadId }) {
         code: "thread_not_found",
         param: "thread_id",
       }),
+    };
+  }
+  const activeRun = activeAssistantRunForThread(assistantStore, threadId);
+  if (activeRun) {
+    return {
+      ok: false,
+      status: 400,
+      error: assistantThreadLockedError(threadId, activeRun, "run"),
     };
   }
 
@@ -9641,7 +9773,7 @@ async function streamAssistantToolOutputs({
 
 function prepareAssistantToolOutputSubmission({ body, assistantStore, threadId, runId }) {
   const thread = assistantStore.getThread(threadId);
-  const existingRun = assistantStore.getRun(threadId, runId);
+  const existingRun = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!existingRun) {
     return {
       ok: false,

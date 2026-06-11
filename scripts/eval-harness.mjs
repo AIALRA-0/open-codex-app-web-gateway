@@ -405,9 +405,13 @@ function buildSuites(defaultModel) {
         request: {
           model: defaultModel,
         },
-        check: ({ assistant, thread, firstRun, finalRun, messages, steps, toolCallCount }) => assistant?.id?.startsWith("asst_")
+        check: ({ assistant, thread, firstRun, finalRun, messages, steps, toolCallCount, messageLock, runLock }) => assistant?.id?.startsWith("asst_")
           && thread?.id?.startsWith("thread_")
           && firstRun?.status === "requires_action"
+          && messageLock?.status === 400
+          && messageLock?.json?.error?.code === "thread_locked"
+          && runLock?.status === 400
+          && runLock?.json?.error?.code === "thread_locked"
           && finalRun?.status === "completed"
           && finalRun.metadata?.compatibility?.local_assistants?.upstream === "chat_completions"
           && finalRun.metadata?.compatibility?.local_assistants?.tool_calls_supported === true
@@ -3069,6 +3073,8 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
   let firstRun = null;
   let finalRun = null;
   let toolCallCount = 0;
+  let messageLock = null;
+  let runLock = null;
   try {
     const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
       model: request.model,
@@ -3133,6 +3139,17 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
     firstRun = run.json;
     finalRun = run.json;
 
+    if (finalRun?.status === "requires_action") {
+      messageLock = await postJsonCapture(`${baseUrl}/v1/threads/${thread.json.id}/messages`, {
+        role: "user",
+        content: "This message should be rejected while the required_action run is active.",
+      });
+      runLock = await postJsonCapture(`${baseUrl}/v1/threads/${thread.json.id}/runs`, {
+        assistant_id: assistantId,
+        metadata: { suite: testCase.id, blocked_by: finalRun.id },
+      });
+    }
+
     for (let round = 0; finalRun?.status === "requires_action" && round < 3; round += 1) {
       const toolCalls = finalRun.required_action?.submit_tool_outputs?.tool_calls || [];
       toolCallCount += toolCalls.length;
@@ -3169,6 +3186,8 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
       messages: messages.json,
       steps: steps.json,
       toolCallCount,
+      messageLock,
+      runLock,
     });
 
     return finishResult(testCase, context, started, {
@@ -3179,6 +3198,8 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
       run_id: finalRun?.id || run.json.id,
       first_status: firstRun?.status,
       final_status: finalRun?.status,
+      message_lock_status: messageLock?.status,
+      run_lock_status: runLock?.status,
       tool_call_count: toolCallCount,
       step_count: steps.json?.data?.length || 0,
       message_count: messages.json?.data?.length || 0,
@@ -3190,6 +3211,8 @@ async function runAssistantsRequiredActionCase(testCase, context, started) {
         messages: messages.json,
         steps: steps.json,
         toolCallCount,
+        messageLock,
+        runLock,
       })),
     });
   } finally {
