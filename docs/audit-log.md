@@ -5617,3 +5617,64 @@ Open follow-ups:
     5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Provider-backed image_generation adapter
+
+- Extended the local Responses `image_generation` hosted-tool adapter from
+  placeholder-only protocol coverage to configurable provider-backed image
+  generation:
+  - added `openai-compatible` / `openai` / `images` provider modes;
+  - calls an OpenAI-compatible JSON Images API generation endpoint at
+    `POST /images/generations`;
+  - sends a dedicated image model, prompt, one requested image, and supported
+    generation options such as `size`, `quality`, `background`,
+    `output_format`, `output_compression`, and `moderation`;
+  - maps provider `data[0].b64_json` into
+    `image_generation_call.result`;
+  - preserves provider `data[0].revised_prompt` when present;
+  - records provider model metadata in
+    `metadata.compatibility.local_image_generation.model`;
+  - surfaces provider errors as failed `image_generation_call` items and
+    compatibility metadata instead of fabricating an image.
+- Added configuration for real image providers while keeping secrets outside
+  Git:
+  - `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_PATH`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_MODEL`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT`;
+  - `CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS`.
+- Kept the default provider as `placeholder`, so development and CI can still
+  exercise Responses image output without requiring an image-generation API
+  key. Real image-provider keys must be placed in deployment-local environment
+  files, not in the repository.
+- Updated compatibility/deployment/evaluation docs. The known gap is now
+  narrowed to multipart edits/masks, true upstream partial-image streaming
+  relay, full hosted prompt-rewrite parity, multi-turn high-fidelity image
+  persistence, and image-quality evaluation suites.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused image-generation tests passed 6/6:
+    `node --test --test-name-pattern='image_generation|Images API|image provider|reserve image_generation' test/translator.test.js test/server.test.js`.
+  - `npm test`: 136/136 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 945 ms, P95 latency 1047 ms, and total usage 99 tokens.
+  - Live `responses-image-generation` bridge-regression case passed 1/1
+    against `deepseek-v4-pro` after deployment restart, latency 1219 ms, and
+    total usage 186 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 637 runtime candidates,
+    selected 89 old UI screenshots by retention policy, deleted 0, selected
+    7324221 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`; bridge healthz returned `ok:true`, DeepSeek
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 41 GB available; `state/` is
+    5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+  - No API keys, account credentials, or local secret files were committed.

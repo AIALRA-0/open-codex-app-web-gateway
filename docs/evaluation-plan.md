@@ -311,7 +311,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Hosted-tool emulation returns auditable call items and citations for file search.
 - Hosted-tool emulation returns auditable `image_generation_call` items with
   base64 PNG `result` data, `revised_prompt`, streaming partial-image events,
-  and local placeholder metadata for image-generation protocol coverage.
+  local placeholder metadata, OpenAI-compatible Images API `data[0].b64_json`
+  mapping, and failed provider call mapping for image-generation protocol
+  coverage.
 - Local vector-store file batches accept both OpenAI batch request shapes and remain compatible with file-search retrieval.
 - Local vector-store files honor static `chunking_strategy` limits and expose chunk metadata through file content and search results.
 - Local vector stores refresh `last_active_at` / `expires_at` when searched and

@@ -8,6 +8,9 @@ const { prefixedId, stringifyContent } = require("./translator");
 const IMAGE_GENERATION_TOOL_TYPES = new Set(["image_generation"]);
 const MAX_PROMPT_CHARS = 2000;
 const MAX_REVISED_PROMPT_CHARS = 1000;
+const PROVIDER_IMAGE_GENERATION_TYPES = new Set(["openai", "openai-compatible", "images"]);
+const DEFAULT_IMAGE_GENERATION_BASE_URL = "https://api.openai.com/v1";
+const DEFAULT_IMAGE_GENERATION_PATH = "/images/generations";
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -67,11 +70,18 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
   const call = {
     id: prefixedId("ig"),
     type: "image_generation_call",
-    status: "completed",
-    revised_prompt: revisedPromptFor(prompt, action),
-    result: makePlaceholderImageBase64(prompt, tool, config),
+    ...(await imageGenerationCallPayload({
+      action,
+      config,
+      context,
+      prompt,
+      tool,
+      signal: options.signal,
+    })),
   };
   context.calls.push(call);
+  context.status = call.status || "completed";
+  if (call.status === "failed") context.error = call.error || "local image generation failed";
   return context;
 }
 
@@ -122,6 +132,7 @@ function imageGenerationCompatibility(context) {
       prior_image_call_count: context.prior_image_call_count || 0,
       input_image_mask: !!context.input_image_mask,
       requested: context.requested || {},
+      ...(context.model ? { model: context.model } : {}),
       ...(context.warning ? { warning: context.warning } : {}),
       ...(context.error ? { error: context.error } : {}),
       ...(String(context.provider || "placeholder").toLowerCase() === "placeholder"
@@ -132,10 +143,10 @@ function imageGenerationCompatibility(context) {
 }
 
 function imageGenerationPrompt(context) {
-  if (context.warning) {
+  if (context.warning || context.status === "failed") {
     return [
-      "Local Responses image_generation compatibility was requested but did not create an image.",
-      context.warning,
+      "Local Responses image_generation compatibility was requested but did not complete image generation.",
+      context.warning || context.error || "local image generation failed",
       "Do not claim that a new image was produced unless an image_generation_call appears in the response output.",
     ].join("\n");
   }
@@ -191,6 +202,141 @@ function requestedImageOptions(tool = {}) {
     if (tool[key] !== undefined) options[key] = stringifyContent(tool[key]);
   }
   return options;
+}
+
+async function imageGenerationCallPayload({ action, config, context, prompt, signal, tool }) {
+  if (PROVIDER_IMAGE_GENERATION_TYPES.has(context.provider)) {
+    try {
+      const generated = await generateWithImageProvider({ config, prompt, signal, tool });
+      context.model = generated.model || config.imageGenerationModel || "";
+      return {
+        status: "completed",
+        revised_prompt: generated.revised_prompt || revisedPromptFor(prompt, action),
+        result: generated.b64_json,
+      };
+    } catch (error) {
+      context.error = error.message || "image provider request failed";
+      return {
+        status: "failed",
+        revised_prompt: revisedPromptFor(prompt, action),
+        error: context.error,
+      };
+    }
+  }
+
+  return {
+    status: "completed",
+    revised_prompt: revisedPromptFor(prompt, action),
+    result: makePlaceholderImageBase64(prompt, tool, config),
+  };
+}
+
+async function generateWithImageProvider({ config = {}, prompt, signal, tool = {} }) {
+  const apiKey = config.imageGenerationApiKey || "";
+  if (!apiKey) {
+    throw new Error(`${config.imageGenerationApiKeyEnv || "OPENAI_API_KEY"} is required for image generation provider calls`);
+  }
+
+  const body = imageGenerationProviderBody({ config, prompt, tool });
+  const controller = new AbortController();
+  const timeoutMs = config.imageGenerationTimeoutMs || 120000;
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const abortFromCaller = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) controller.abort();
+    else signal.addEventListener("abort", abortFromCaller, { once: true });
+  }
+
+  try {
+    const response = await fetch(imageGenerationProviderUrl(config), {
+      method: "POST",
+      headers: {
+        "authorization": `Bearer ${apiKey}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const text = await response.text();
+    const json = parseJson(text);
+    if (!response.ok) {
+      const message = stringifyContent(json?.error?.message || text || `image provider returned HTTP ${response.status}`);
+      const error = new Error(message);
+      error.status = response.status;
+      error.code = json?.error?.code;
+      error.type = json?.error?.type;
+      throw error;
+    }
+
+    const first = Array.isArray(json?.data) ? json.data[0] : null;
+    const b64 = first?.b64_json || first?.image_b64 || first?.result;
+    if (!b64) {
+      throw new Error("image provider did not return data[0].b64_json");
+    }
+    return {
+      b64_json: stringifyContent(b64),
+      revised_prompt: stringifyOptional(first?.revised_prompt),
+      model: stringifyOptional(json?.model || body.model),
+    };
+  } catch (error) {
+    if (error?.name === "AbortError") throw new Error("image provider request timed out");
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+    if (signal) signal.removeEventListener?.("abort", abortFromCaller);
+  }
+}
+
+function imageGenerationProviderBody({ config = {}, prompt, tool = {} }) {
+  const body = {
+    model: config.imageGenerationModel || "gpt-image-2",
+    prompt,
+    n: 1,
+  };
+  copyImageProviderOption(tool, body, "background");
+  copyImageProviderOption(tool, body, "moderation");
+  copyImageProviderOption(tool, body, "output_compression");
+  copyImageProviderOption(tool, body, "output_format");
+  copyImageProviderOption(tool, body, "quality");
+  copyImageProviderOption(tool, body, "size");
+  if (config.imageGenerationResponseFormat) {
+    body.response_format = config.imageGenerationResponseFormat;
+  }
+  if (config.imageGenerationUser) body.user = stringifyContent(config.imageGenerationUser);
+  return body;
+}
+
+function copyImageProviderOption(source, target, key) {
+  if (source?.[key] !== undefined) target[key] = source[key];
+}
+
+function imageGenerationProviderUrl(config = {}) {
+  const base = trimTrailingSlash(config.imageGenerationBaseUrl || DEFAULT_IMAGE_GENERATION_BASE_URL);
+  const route = normalizeRoute(config.imageGenerationPath || DEFAULT_IMAGE_GENERATION_PATH);
+  return `${base}${route}`;
+}
+
+function normalizeRoute(value) {
+  const route = String(value || "").trim();
+  if (!route) return "/";
+  return route.startsWith("/") ? route : `/${route}`;
+}
+
+function trimTrailingSlash(value) {
+  return String(value || "").replace(/\/+$/, "");
+}
+
+function parseJson(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function stringifyOptional(value) {
+  if (value == null) return "";
+  return stringifyContent(value);
 }
 
 function extractImagePrompt(request = {}) {

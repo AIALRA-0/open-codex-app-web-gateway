@@ -853,15 +853,25 @@ tool:
 The default provider is `placeholder`. It generates a deterministic, non-empty
 PNG from the prompt and requested options so CodexApp UI rendering, SDK
 parsing, background jobs, stored responses, and streaming workflows can exercise
-the full Responses protocol without an external image key. This is protocol and
-workflow compatibility, not GPT Image quality parity. Real production image
-quality still requires adding a provider-backed image-generation adapter.
+the full Responses protocol without an external image key. For real generation,
+set `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER=openai-compatible` (or `openai` /
+`images`) and configure an OpenAI-compatible Images API endpoint. Provider-backed
+generation calls `POST /images/generations`, requests one image, maps
+`data[0].b64_json` into `image_generation_call.result`, preserves
+provider `revised_prompt` when present, and surfaces provider failures as
+failed `image_generation_call` output items instead of fabricating an image.
 
 Configuration:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Use `disabled` to leave `image_generation` as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER` | `placeholder` | Use `placeholder`, `openai-compatible`, `openai`, `images`, or `disabled` |
+| `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation |
+| `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path |
+| `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
+| `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
+| `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override, for example `b64_json` for providers/models that require it |
+| `CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS` | `120000` | Timeout for provider-backed image generation requests |
 | `CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE` | `96` | Pixel width/height for the deterministic local PNG placeholder, bounded from 16 to 512 |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_IMAGE_GENERATION` | `true` | Disables DeepSeek thinking mode when the bridge injects local image-generation context so visible text still returns under small output budgets |
 
@@ -878,7 +888,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
-| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, streaming partial-image events, background/stored response preservation, and UI/SDK workflow compatibility with deterministic placeholder PNGs, but it is not a real GPT Image or third-party image model and does not perform semantic image generation or high-fidelity edits | Add provider-backed image generation and edit adapters, moderation/error parity, multi-turn image persistence, and image-quality evals |
+| OpenAI hosted `image_generation` full parity | The local adapter covers Responses output shape, provider-backed Images API generations, placeholder fallback, streaming partial-image events from final output, provider failure mapping, background/stored response preservation, and UI/SDK workflow compatibility. It does not yet perform multipart edit requests for `action:"edit"` / masks, true upstream streaming partial-image relay, OpenAI hosted model-side prompt rewriting, or high-fidelity multi-turn image persistence | Add image edit/mask adapters, real streaming relay, moderation/error-detail parity, multi-turn image persistence, and image-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |

@@ -152,6 +152,7 @@ function streamOptionFieldsFromEnv(fallback) {
 
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
+  const imageGenerationApiKeyEnv = process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV || "OPENAI_API_KEY";
   const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
   const providerBaseUrl = trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL);
   const deepseekProvider = isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl);
@@ -241,6 +242,14 @@ function loadConfig(overrides = {}) {
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
     imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
+    imageGenerationBaseUrl: trimTrailingSlash(process.env.CODEXCOMPAT_IMAGE_GENERATION_BASE_URL || "https://api.openai.com/v1"),
+    imageGenerationPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_PATH || "/images/generations"),
+    imageGenerationApiKey: process.env[imageGenerationApiKeyEnv] || process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY || "",
+    imageGenerationApiKeyEnv,
+    imageGenerationModel: process.env.CODEXCOMPAT_IMAGE_GENERATION_MODEL || "gpt-image-2",
+    imageGenerationResponseFormat: process.env.CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT || "",
+    imageGenerationUser: process.env.CODEXCOMPAT_IMAGE_GENERATION_USER || "",
+    imageGenerationTimeoutMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_TIMEOUT_MS", 120 * 1000, 1000, 10 * 60 * 1000),
     imageGenerationPlaceholderSize: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE", 96, 16, 512),
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),

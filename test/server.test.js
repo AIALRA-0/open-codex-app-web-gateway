@@ -67,7 +67,9 @@ async function withMockProvider(handler, run, configOverrides = {}) {
     providerApiKey: "test-key",
     defaultModel: "mock-model",
     stateDir,
-    ...configOverrides,
+    ...(typeof configOverrides === "function"
+      ? configOverrides({ providerAddress, stateDir })
+      : configOverrides),
   });
   const bridge = createServer(config);
   const bridgeAddress = await listen(bridge);
@@ -2546,6 +2548,151 @@ test("POST /v1/responses emits local image_generation_call for image_generation 
   });
 });
 
+test("POST /v1/responses can back image_generation with an OpenAI-compatible Images API", async () => {
+  const generatedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (req, res, call) => {
+    if (req.url === "/images/generations") {
+      assert.equal(req.headers.authorization, "Bearer image-test-key");
+      assert.equal(call.body.model, "gpt-image-test");
+      assert.match(call.body.prompt, /quiet terminal dashboard/);
+      assert.equal(call.body.n, 1);
+      assert.equal(call.body.size, "1024x1024");
+      assert.equal(call.body.quality, "low");
+      assert.equal(call.body.response_format, "b64_json");
+      assert.equal(call.body.partial_images, undefined);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        created: 100,
+        model: "gpt-image-test",
+        data: [{
+          b64_json: generatedPng,
+          revised_prompt: "Provider revised prompt for a quiet terminal dashboard.",
+        }],
+      }));
+      return;
+    }
+
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Provider revised prompt for a quiet terminal dashboard/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_provider",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-provider-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate an image of a quiet terminal dashboard.",
+        tools: [{
+          type: "image_generation",
+          action: "generate",
+          size: "1024x1024",
+          quality: "low",
+        }],
+        tool_choice: { type: "image_generation" },
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.equal(json.output[0].result, generatedPng);
+    assert.equal(json.output[0].revised_prompt, "Provider revised prompt for a quiet terminal dashboard.");
+    assert.equal(json.output[1].content[0].text, "image-provider-ok");
+    assert.equal(json.metadata.compatibility.local_image_generation.provider, "openai-compatible");
+    assert.equal(json.metadata.compatibility.local_image_generation.placeholder, undefined);
+    assert.equal(json.metadata.compatibility.local_image_generation.model, "gpt-image-test");
+    assert.equal(json.metadata.compatibility.local_image_generation.call_count, 1);
+    assert.equal(json.metadata.compatibility.local_image_generation.deepseek_thinking, "disabled_for_local_image_generation");
+    assert.ok(requests.some((request) => request.req.url === "/images/generations"));
+    assert.ok(requests.some((request) => request.req.url === "/chat/completions"));
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
+    imageGenerationResponseFormat: "b64_json",
+  }));
+});
+
+test("POST /v1/responses surfaces image provider failures as failed image_generation_call items", async () => {
+  await withMockProvider(async (req, res, call) => {
+    if (req.url === "/images/generations") {
+      res.writeHead(400, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        error: {
+          type: "image_generation_user_error",
+          code: "moderation_blocked",
+          message: "image blocked by mock policy",
+        },
+      }));
+      return;
+    }
+
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /did not complete image generation/);
+    assert.match(prompt, /image blocked by mock policy/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_provider_failed",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-provider-failed-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate an image that the mock provider blocks.",
+        tools: [{ type: "image_generation" }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "failed");
+    assert.equal(json.output[0].result, undefined);
+    assert.match(json.output[0].error, /image blocked by mock policy/);
+    assert.equal(json.output[1].content[0].text, "image-provider-failed-ok");
+    assert.equal(json.metadata.compatibility.local_image_generation.provider, "openai-compatible");
+    assert.equal(json.metadata.compatibility.local_image_generation.status, "failed");
+    assert.match(json.metadata.compatibility.local_image_generation.error, /image blocked by mock policy/);
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
+  }));
+});
+
 test("POST /v1/responses skips local computer_call when max_tool_calls is exhausted", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -2600,7 +2747,7 @@ test("POST /v1/responses skips local computer_call when max_tool_calls is exhaus
 test("POST /v1/responses skips local image_generation when max_tool_calls is exhausted", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
-    assert.match(prompt, /did not create an image/);
+    assert.match(prompt, /did not complete image generation/);
     assert.match(prompt, /max_tool_calls was exhausted/);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
