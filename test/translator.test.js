@@ -230,6 +230,21 @@ test("can reserve computer hosted tools for local bridge execution", () => {
   assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
 });
 
+test("can reserve image_generation for local bridge execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Generate an image locally.",
+    tools: [{ type: "image_generation", action: "generate", size: "1024x1024" }],
+    tool_choice: { type: "image_generation" },
+  }, [], { localHostedTools: ["image_generation"] });
+
+  assert.equal(chat.tools, undefined);
+  assert.equal(chat.tool_choice, undefined);
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.equal(compatibility.local_tool_choice, "handled_by_bridge");
+  assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+});
+
 test("maps computer_call_output input to readable chat context", () => {
   const messages = responseInputToChatMessages([{
     type: "computer_call_output",

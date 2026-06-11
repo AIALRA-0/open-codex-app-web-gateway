@@ -1257,6 +1257,35 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-image-generation",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          instructions: "The local bridge handles image_generation. Return exactly this text and nothing else: image-generation-ok.",
+          input: "Exercise the image_generation tool and then return the requested marker.",
+          tools: [{ type: "image_generation", action: "generate", partial_images: 1 }],
+          tool_choice: { type: "image_generation" },
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const call = (json.output || []).find((item) => item.type === "image_generation_call");
+          const localImage = json.metadata?.compatibility?.local_image_generation || {};
+          return call?.status === "completed"
+            && /^ig_/.test(call?.id || "")
+            && /^iVBORw0KGgo/.test(call?.result || "")
+            && /Generate an image from this prompt/.test(call?.revised_prompt || "")
+            && text.trim().length > 0
+            && localImage.provider === "placeholder"
+            && localImage.placeholder === true
+            && localImage.call_count === 1
+            && localImage.partial_image_count === 1
+            && localImage.deepseek_thinking === "disabled_for_local_image_generation"
+            && json.metadata?.compatibility?.local_tool_choice === "handled_by_bridge";
+        },
+      },
+      {
         id: "responses-shell",
         mode: "responses-shell",
         container: { name: "bridge-shell-eval" },

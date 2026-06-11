@@ -2229,6 +2229,59 @@ test("POST /v1/responses streams local computer_call items", async () => {
   });
 });
 
+test("POST /v1/responses streams local image_generation_call partial images", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.ok(call.body.messages.some((message) => /Local Responses image_generation compatibility is active/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_image_generation",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: { role: "assistant", content: "stream-image-ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate a streamable image artifact.",
+        tools: [{ type: "image_generation", partial_images: 2 }],
+        stream: true,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const imageEvent = events.find((event) => (
+      event.event === "response.output_item.added"
+      && event.data?.item?.type === "image_generation_call"
+    ));
+    assert.ok(imageEvent);
+    assert.equal(imageEvent.data.item.status, "completed");
+    assert.deepEqual(Buffer.from(imageEvent.data.item.result, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+
+    const partialEvents = events.filter((event) => event.event === "response.image_generation_call.partial_image");
+    assert.equal(partialEvents.length, 2);
+    assert.equal(partialEvents[0].data.item_id, imageEvent.data.item.id);
+    assert.equal(partialEvents[0].data.partial_image_index, 0);
+    assert.deepEqual(Buffer.from(partialEvents[0].data.partial_image_b64, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.match(events.map((event) => event.data?.delta || "").join(""), /stream-image-ok/);
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output[0].type, "image_generation_call");
+    assert.equal(completed.metadata.compatibility.local_image_generation.call_count, 1);
+    assert.equal(completed.metadata.compatibility.local_image_generation.partial_image_count, 2);
+    assert.equal(completed.metadata.compatibility.local_image_generation.deepseek_thinking, "disabled_for_local_image_generation");
+  }, {
+    imageGenerationPlaceholderSize: 24,
+  });
+});
+
 test("POST /v1/responses limits local web_search actions with max_tool_calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -2423,6 +2476,76 @@ test("POST /v1/responses emits local computer_call for computer tools", async ()
   });
 });
 
+test("POST /v1/responses emits local image_generation_call for image_generation tools", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.equal(call.body.tool_choice, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses image_generation compatibility is active/);
+    assert.match(prompt, /Generated image call items/);
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate an image of a quiet terminal dashboard.",
+        tools: [{
+          type: "image_generation",
+          action: "generate",
+          size: "1024x1024",
+          quality: "low",
+          partial_images: 2,
+        }],
+        tool_choice: { type: "image_generation" },
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "image_generation_call");
+    assert.equal(json.output[0].status, "completed");
+    assert.match(json.output[0].id, /^ig_/);
+    assert.match(json.output[0].revised_prompt, /Generate an image from this prompt/);
+    assert.deepEqual(Buffer.from(json.output[0].result, "base64").subarray(0, 8), Buffer.from("89504e470d0a1a0a", "hex"));
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "image-ok");
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 0,
+      exhausted: true,
+    });
+    assert.equal(json.metadata.compatibility.local_tool_choice, "handled_by_bridge");
+    assert.equal(json.metadata.compatibility.local_image_generation.provider, "placeholder");
+    assert.equal(json.metadata.compatibility.local_image_generation.placeholder, true);
+    assert.equal(json.metadata.compatibility.local_image_generation.status, "completed");
+    assert.equal(json.metadata.compatibility.local_image_generation.call_count, 1);
+    assert.equal(json.metadata.compatibility.local_image_generation.partial_image_count, 2);
+    assert.equal(json.metadata.compatibility.local_image_generation.requested.size, "1024x1024");
+    assert.equal(json.metadata.compatibility.local_image_generation.deepseek_thinking, "disabled_for_local_image_generation");
+  }, {
+    imageGenerationPlaceholderSize: 32,
+  });
+});
+
 test("POST /v1/responses skips local computer_call when max_tool_calls is exhausted", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -2468,6 +2591,57 @@ test("POST /v1/responses skips local computer_call when max_tool_calls is exhaus
         type: "computer_call",
         tool_type: "computer",
         action: "screenshot",
+        reason: "max_tool_calls_exhausted",
+      }],
+    });
+  });
+});
+
+test("POST /v1/responses skips local image_generation when max_tool_calls is exhausted", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /did not create an image/);
+    assert.match(prompt, /max_tool_calls was exhausted/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_generation_budget",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image-budget-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate an image and return image-budget-ok.",
+        tools: [{ type: "image_generation" }],
+        max_tool_calls: 0,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output.filter((item) => item.type === "image_generation_call").length, 0);
+    assert.equal(json.metadata.compatibility.local_image_generation.status, "skipped");
+    assert.equal(json.metadata.compatibility.local_image_generation.skipped_count, 1);
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 0,
+      used: 0,
+      skipped: 1,
+      exhausted: true,
+      skipped_calls: [{
+        type: "image_generation_call",
+        tool_type: "image_generation",
+        action: "auto",
         reason: "max_tool_calls_exhausted",
       }],
     });

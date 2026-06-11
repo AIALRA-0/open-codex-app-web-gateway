@@ -52,6 +52,15 @@ const {
   localComputerToolTypes,
   prepareComputerContext,
 } = require("./local_computer");
+const {
+  attachImageGenerationOutput,
+  imageGenerationCompatibility,
+  imageGenerationOutputItems,
+  imageGenerationPartialImages,
+  injectImageGenerationMessages,
+  localImageGenerationToolTypes,
+  prepareImageGenerationContext,
+} = require("./local_image_generation");
 const { LocalSkillStore } = require("./local_skills");
 const {
   chatCompatibilityMetadata,
@@ -231,6 +240,8 @@ function loadConfig(overrides = {}) {
     shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
+    imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
+    imageGenerationPlaceholderSize: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE", 96, 16, 512),
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     skillMaxFileCount: numberFromEnv("CODEXCOMPAT_SKILL_MAX_FILE_COUNT", 500, 1, 500),
@@ -242,6 +253,7 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
     deepseekDisableThinkingForLocalComputer: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_COMPUTER, true),
+    deepseekDisableThinkingForLocalImageGeneration: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_IMAGE_GENERATION, true),
     deepseekDisableThinkingForInputFiles: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES, true),
     chatDeveloperRoleCompat: parseBoolean(process.env.CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT, deepseekProvider),
     chatDeveloperRole: process.env.CODEXCOMPAT_CHAT_DEVELOPER_ROLE || "system",
@@ -440,6 +452,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     ...localFileSearchToolTypes(request.tools || [], config),
     ...localShellToolTypes(request.tools || [], config),
     ...localComputerToolTypes(request.tools || [], config),
+    ...localImageGenerationToolTypes(request.tools || [], config),
   ];
   const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
   const translatorRequest = localInputImages?.request || request;
@@ -473,6 +486,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localComputer) {
     applyLocalComputerToChat(chat, compatibility, localComputer, config);
   }
+  const localImageGeneration = await prepareImageGenerationContext(request, config, { toolBudget });
+  if (localImageGeneration) {
+    applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config);
+  }
   const localWebSearch = await prepareWebSearchContext(request, config, { toolBudget });
   if (localWebSearch) {
     applyLocalWebSearchToChat(chat, compatibility, localWebSearch, config);
@@ -492,7 +509,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
-    }, localWebSearch, localFileSearch, localShell, localComputer, conversationStore, conversation);
+    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, conversationStore, conversation);
     return;
   }
 
@@ -514,6 +531,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
+  attachImageGenerationOutput(response, localImageGeneration);
   attachWebSearchOutput(response, localWebSearch, { includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config, { force: true });
@@ -632,7 +650,7 @@ function startBackgroundJob(params) {
   return job;
 }
 
-const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "web_search", "file_search", "truncation"];
+const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "image_generation", "web_search", "file_search", "truncation"];
 
 async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
   try {
@@ -793,6 +811,15 @@ async function runBackgroundPrepareStep(step, { config, job, request, previousMe
     return {};
   }
 
+  if (step === "image_generation") {
+    const localImageGeneration = await prepareImageGenerationContext(request, config, { toolBudget: runtime.toolBudget });
+    runtime.contexts.image_generation = localImageGeneration;
+    if (localImageGeneration) {
+      runtime.compatibility = applyLocalImageGenerationToChat(runtime.chat, { ...runtime.compatibility }, localImageGeneration, config);
+    }
+    return {};
+  }
+
   if (step === "web_search") {
     const localWebSearch = await prepareWebSearchContext(request, config, { signal: job.controller.signal, toolBudget: runtime.toolBudget });
     runtime.contexts.web_search = localWebSearch;
@@ -857,6 +884,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
   return [
     ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
+    ...imageGenerationOutputItems(contexts.image_generation),
     ...webSearchOutputItems(contexts.web_search, { includeSources: true }),
     ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
   ];
@@ -1506,6 +1534,19 @@ function applyLocalComputerToChat(chat, compatibility, localComputer, config) {
     compatibility.local_computer = {
       ...(compatibility.local_computer || {}),
       deepseek_thinking: "disabled_for_local_computer",
+    };
+  }
+  return compatibility;
+}
+
+function applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config) {
+  injectImageGenerationMessages(chat, localImageGeneration);
+  Object.assign(compatibility, imageGenerationCompatibility(localImageGeneration));
+  if (config.deepseekDisableThinkingForLocalImageGeneration && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_image_generation = {
+      ...(compatibility.local_image_generation || {}),
+      deepseek_thinking: "disabled_for_local_image_generation",
     };
   }
   return compatibility;
@@ -2633,7 +2674,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, conversationStore = null, conversation = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, conversationStore = null, conversation = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
@@ -2649,6 +2690,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   writeSse(res, "response.in_progress", sequence(state, { type: "response.in_progress", response: clone(response) }));
   emitShellStreamItems(res, state, localShell);
   emitComputerStreamItems(res, state, localComputer);
+  emitImageGenerationStreamItems(res, state, localImageGeneration);
   emitWebSearchStreamItems(res, state, localWebSearch);
   emitFileSearchStreamItems(res, state, localFileSearch);
 
@@ -2709,6 +2751,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
         localShell,
         localWebSearch,
         localFileSearch,
+        localImageGeneration,
       });
       store.put(response.id, {
         response: storedResponse,
@@ -2834,6 +2877,36 @@ function emitComputerStreamItems(res, state, context) {
       output_index: state.response.output.length - 1,
       item: clone(item),
     }));
+  }
+}
+
+function emitImageGenerationStreamItems(res, state, context) {
+  const partialsByItemId = new Map();
+  for (const partial of imageGenerationPartialImages(context)) {
+    if (!partialsByItemId.has(partial.item_id)) partialsByItemId.set(partial.item_id, []);
+    partialsByItemId.get(partial.item_id).push(partial);
+  }
+
+  for (const item of imageGenerationOutputItems(context)) {
+    state.response.output.push(item);
+    const outputIndex = state.response.output.length - 1;
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: outputIndex,
+      item: clone(item),
+    }));
+
+    for (const partial of partialsByItemId.get(item.id) || []) {
+      writeSse(res, "response.image_generation_call.partial_image", sequence(state, {
+        type: "response.image_generation_call.partial_image",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        partial_image_index: partial.partial_image_index,
+        partial_image_b64: partial.partial_image_b64,
+      }));
+    }
   }
 }
 

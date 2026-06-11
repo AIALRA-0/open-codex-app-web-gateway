@@ -5559,3 +5559,61 @@ Open follow-ups:
     5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Local image_generation Responses compatibility
+
+- Added a local hosted-tool adapter for Responses
+  `tools:[{type:"image_generation"}]`:
+  - reserves `image_generation` so Chat Completions providers do not receive an
+    unsupported hosted tool or hosted `tool_choice`;
+  - emits `image_generation_call` output items with `status`, `revised_prompt`,
+    and base64 PNG `result`;
+  - emits streaming `response.image_generation_call.partial_image` events when
+    `partial_images` is requested;
+  - participates in the shared local `max_tool_calls` budget and records
+    skipped image calls in compatibility metadata;
+  - injects bounded local context into upstream Chat requests without putting
+    base64 image bytes into the prompt;
+  - is included in background response preparation checkpoints and persisted
+    local output items.
+- The default provider is `placeholder`, which creates deterministic non-empty
+  PNGs from the prompt and requested image options. This closes the protocol,
+  SDK, UI rendering, streaming, and background workflow gap for Chat-only
+  providers, but it is not GPT Image semantic quality parity or high-fidelity
+  editing. Provider-backed image generation/editing remains a future parity
+  task.
+- Updated configuration and docs:
+  - `.env.example` now lists `CODEXCOMPAT_IMAGE_GENERATION_PROVIDER`,
+    `CODEXCOMPAT_IMAGE_GENERATION_PLACEHOLDER_SIZE`, and
+    `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_IMAGE_GENERATION`;
+  - compatibility docs now describe the adapter boundary and updated known gap;
+  - deployment docs list the new environment variables;
+  - evaluation docs and `scripts/eval-harness.mjs` include a
+    `responses-image-generation` bridge-regression case.
+- Verification:
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused image-generation tests passed 4/4:
+    `node --test --test-name-pattern='image_generation|reserve image_generation' test/translator.test.js test/server.test.js`.
+  - `npm test`: 134/134 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1126 ms, P95 latency 1159 ms, and total usage 99 tokens.
+  - Live `responses-image-generation` bridge-regression case passed 1/1
+    against `deepseek-v4-pro`, latency 1153 ms, and total usage 186 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `git diff --check`: passed.
+  - `npm run prune:runtime -- --dry-run` scanned 637 runtime candidates,
+    selected 89 old UI screenshots by retention policy, deleted 0, selected
+    7324221 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`; bridge healthz returned `ok:true`, DeepSeek
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 41 GB available; `state/` is
+    5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+  - No API keys, account credentials, or local secret files were committed.
