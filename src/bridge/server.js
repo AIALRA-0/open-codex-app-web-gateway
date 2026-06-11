@@ -5977,12 +5977,57 @@ async function handleVideosCreate(req, res, config, store, options = {}) {
   }
 }
 
+async function handleVideoCharacterCreate(req, res, config, store) {
+  try {
+    const request = await readVideoCharacterCreateRequest(req, config);
+    const character = createLocalVideoCharacterResource(request, config);
+    store.put(character.id, {
+      video_character: character,
+      video_character_request: sanitizeVideoCharacterRequestForStore(request),
+    });
+    sendJson(res, 200, character);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "video character request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "video_character_error",
+      param: error.param || null,
+    });
+  }
+}
+
 function handleVideosList(res, store, url) {
   const videos = store.list()
     .filter((record) => record?.video)
     .map((record) => clone(record.video))
     .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
   sendJson(res, 200, paginateVideosList(videos, url));
+}
+
+function handleVideoCharacterGet(res, store, characterId) {
+  const record = store.get(characterId);
+  if (!record?.video_character) {
+    sendError(res, 404, `video character not found: ${characterId}`, { code: "video_character_not_found" });
+    return;
+  }
+  sendJson(res, 200, record.video_character);
+}
+
+function handleVideoCharacterDelete(res, store, characterId) {
+  const record = store.get(characterId);
+  if (!record?.video_character) {
+    sendError(res, 404, `video character not found: ${characterId}`, { code: "video_character_not_found" });
+    return;
+  }
+  const deleted = store.delete(characterId);
+  if (!deleted) {
+    sendError(res, 404, `video character not found: ${characterId}`, { code: "video_character_not_found" });
+    return;
+  }
+  sendJson(res, 200, {
+    id: characterId,
+    object: "video.character.deleted",
+    deleted: true,
+  });
 }
 
 function handleVideoGet(res, store, videoId) {
@@ -6059,6 +6104,7 @@ async function readVideoCreateRequest(req, config) {
       ...form.fields,
       ...(form.fields.metadata ? { metadata: parseJsonOrNull(form.fields.metadata) || form.fields.metadata } : {}),
       ...(form.fields.input_reference ? { input_reference: parseJsonOrNull(form.fields.input_reference) || form.fields.input_reference } : {}),
+      ...(form.fields.characters ? { characters: parseJsonOrNull(form.fields.characters) || form.fields.characters } : {}),
       reference_files: form.files.map((file) => ({
         name: file.name,
         filename: file.filename,
@@ -6079,6 +6125,41 @@ async function readVideoCreateRequest(req, config) {
   throw error;
 }
 
+async function readVideoCharacterCreateRequest(req, config) {
+  const contentType = req.headers["content-type"] || "";
+  if (contentType.includes("multipart/form-data")) {
+    const form = parseMultipartFormBinary(
+      await readRawBody(req, (config.videoGenerationMaxInputBytes || 50 * 1024 * 1024) + 1024 * 1024),
+      contentType,
+    );
+    const video = form.files.find((file) => file.name === "video") || form.files[0];
+    return normalizeVideoCharacterRequest({
+      name: form.fields.name,
+      metadata: parseJsonOrNull(form.fields.metadata) || {},
+      video: video ? {
+        name: video.name,
+        filename: video.filename,
+        content_type: video.content_type || "application/octet-stream",
+        bytes: video.content.length,
+      } : null,
+    });
+  }
+
+  if (!contentType || contentType.includes("application/json")) {
+    const body = await readJson(req);
+    return normalizeVideoCharacterRequest({
+      ...body,
+      video: normalizeVideoCharacterJsonVideo(body?.video),
+    });
+  }
+
+  const error = new Error("video character requests must use application/json or multipart/form-data");
+  error.status = 415;
+  error.code = "unsupported_content_type";
+  error.param = "content-type";
+  throw error;
+}
+
 function normalizeVideoRequest(body) {
   if (!isPlainObject(body)) {
     const error = new Error("video request body must be an object");
@@ -6087,6 +6168,41 @@ function normalizeVideoRequest(body) {
     throw error;
   }
   return clone(body);
+}
+
+function normalizeVideoCharacterRequest(body) {
+  if (!isPlainObject(body)) {
+    const error = new Error("video character request body must be an object");
+    error.status = 400;
+    error.code = "invalid_video_character_request";
+    throw error;
+  }
+  return clone(body);
+}
+
+function normalizeVideoCharacterJsonVideo(video) {
+  if (video == null) return null;
+  if (typeof video === "string") {
+    const data = decodeBase64Payload(video);
+    return {
+      filename: "character.mp4",
+      content_type: "video/mp4",
+      bytes: data.length,
+    };
+  }
+  if (isPlainObject(video)) {
+    const data = typeof video.data_base64 === "string"
+      ? decodeBase64Payload(video.data_base64)
+      : typeof video.data === "string"
+        ? decodeBase64Payload(video.data)
+        : null;
+    return {
+      filename: stringifyContent(video.filename || video.name || "character.mp4") || "character.mp4",
+      content_type: stringifyContent(video.content_type || video.mime_type || "video/mp4") || "video/mp4",
+      bytes: data ? data.length : Number(video.bytes || 0),
+    };
+  }
+  return null;
 }
 
 function createLocalVideoResource(request, config, options = {}) {
@@ -6105,6 +6221,7 @@ function createLocalVideoResource(request, config, options = {}) {
   const size = stringifyContent(request.size || config.videoGenerationDefaultSize || "1280x720").trim() || "1280x720";
   const seconds = stringifyContent(request.seconds ?? request.duration ?? config.videoGenerationDefaultSeconds ?? "4").trim() || "4";
   const quality = stringifyContent(request.quality || config.videoGenerationDefaultQuality || "standard").trim() || "standard";
+  const characters = normalizeVideoCharacterReferences(request.characters);
   const metadata = isPlainObject(request.metadata) ? clone(request.metadata) : {};
   metadata.compatibility = mergeCompatibility(metadata.compatibility, {
     provider: "local",
@@ -6113,6 +6230,7 @@ function createLocalVideoResource(request, config, options = {}) {
     status: "synchronously_completed",
     content_variants: Array.from(LOCAL_VIDEO_CONTENT_VARIANTS),
     batch_supported: operation === "create",
+    character_count: characters.length,
     upstream_provider: "chat_completion_incompatible",
   });
 
@@ -6126,9 +6244,103 @@ function createLocalVideoResource(request, config, options = {}) {
     seconds,
     size,
     quality,
+    ...(characters.length ? { characters } : {}),
     ...(options.sourceVideoId ? { source_video_id: options.sourceVideoId } : {}),
     metadata,
   };
+}
+
+function createLocalVideoCharacterResource(request, config) {
+  const name = stringifyContent(request.name).trim();
+  if (!name) {
+    const error = new Error("name is required");
+    error.status = 400;
+    error.code = "missing_required_parameter";
+    error.param = "name";
+    throw error;
+  }
+  if (!isPlainObject(request.video) || !Number.isFinite(Number(request.video.bytes)) || Number(request.video.bytes) <= 0) {
+    const error = new Error("video is required");
+    error.status = 400;
+    error.code = "missing_required_parameter";
+    error.param = "video";
+    throw error;
+  }
+
+  const now = nowSeconds();
+  const sourceVideo = {
+    filename: stringifyContent(request.video.filename || "character.mp4") || "character.mp4",
+    content_type: stringifyContent(request.video.content_type || "video/mp4") || "video/mp4",
+    bytes: Number(request.video.bytes),
+  };
+  const metadata = isPlainObject(request.metadata) ? clone(request.metadata) : {};
+  metadata.compatibility = mergeCompatibility(metadata.compatibility, {
+    provider: "local",
+    mode: config.videoGenerationProvider || "placeholder",
+    operation: "create_character",
+    status: "synchronously_completed",
+    source_video: sourceVideo,
+    upstream_provider: "chat_completion_incompatible",
+  });
+
+  return {
+    id: prefixedId("char"),
+    object: "video.character",
+    created_at: now,
+    name,
+    status: "completed",
+    metadata,
+    source_video: sourceVideo,
+  };
+}
+
+function normalizeVideoCharacterReferences(value) {
+  if (value == null || value === "") return [];
+  const raw = typeof value === "string"
+    ? (parseJsonOrNull(value) || value)
+    : value;
+  const entries = Array.isArray(raw) ? raw : [raw];
+  if (entries.length > 2) {
+    const error = new Error("characters must contain at most 2 entries");
+    error.status = 400;
+    error.code = "invalid_video_characters";
+    error.param = "characters";
+    throw error;
+  }
+
+  return entries.map((entry, index) => {
+    if (typeof entry === "string") {
+      const id = entry.trim();
+      if (!id) {
+        const error = new Error("character id is required");
+        error.status = 400;
+        error.code = "invalid_video_character";
+        error.param = `characters[${index}].id`;
+        throw error;
+      }
+      return { id };
+    }
+    if (isPlainObject(entry)) {
+      const id = stringifyContent(entry.id || entry.character_id || entry.character).trim();
+      if (!id) {
+        const error = new Error("character id is required");
+        error.status = 400;
+        error.code = "invalid_video_character";
+        error.param = `characters[${index}].id`;
+        throw error;
+      }
+      const normalized = { id };
+      for (const key of ["name", "role"]) {
+        if (entry[key] != null) normalized[key] = stringifyContent(entry[key]);
+      }
+      return normalized;
+    }
+    const error = new Error("character reference must be a string or object");
+    error.status = 400;
+    error.code = "invalid_video_character";
+    error.param = `characters[${index}]`;
+    throw error;
+  });
 }
 
 function sanitizeVideoRequestForStore(request) {
@@ -6137,6 +6349,17 @@ function sanitizeVideoRequestForStore(request) {
     if (isPlainObject(sanitized[field]) && typeof sanitized[field].data === "string") {
       sanitized[field] = { ...sanitized[field], data: `[base64:${sanitized[field].data.length}]` };
     }
+  }
+  return sanitized;
+}
+
+function sanitizeVideoCharacterRequestForStore(request) {
+  const sanitized = clone(request || {});
+  if (isPlainObject(sanitized.video) && typeof sanitized.video.data === "string") {
+    sanitized.video = { ...sanitized.video, data: `[base64:${sanitized.video.data.length}]` };
+  }
+  if (isPlainObject(sanitized.video) && typeof sanitized.video.data_base64 === "string") {
+    sanitized.video = { ...sanitized.video, data_base64: `[base64:${sanitized.video.data_base64.length}]` };
   }
   return sanitized;
 }
@@ -8712,6 +8935,11 @@ function createServer(config = loadConfig()) {
         }
       }
 
+      if (req.method === "POST" && url.pathname === "/v1/videos/characters") {
+        await handleVideoCharacterCreate(req, res, config, store);
+        return;
+      }
+
       if (req.method === "POST" && url.pathname === "/v1/videos/edits") {
         await handleVideosCreate(req, res, config, store, { operation: "edit" });
         return;
@@ -8735,6 +8963,19 @@ function createServer(config = loadConfig()) {
       if (videoContentRoute && req.method === "GET") {
         handleVideoContent(res, store, decodeURIComponent(videoContentRoute[1]), url);
         return;
+      }
+
+      const videoCharacterRoute = url.pathname.match(/^\/v1\/videos\/characters\/([^/]+)$/);
+      if (videoCharacterRoute) {
+        const characterId = decodeURIComponent(videoCharacterRoute[1]);
+        if (req.method === "GET") {
+          handleVideoCharacterGet(res, store, characterId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleVideoCharacterDelete(res, store, characterId);
+          return;
+        }
       }
 
       const videoRoute = url.pathname.match(/^\/v1\/videos\/([^/]+)$/);

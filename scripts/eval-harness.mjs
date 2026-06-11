@@ -581,6 +581,7 @@ function buildSuites(defaultModel) {
           instructions: "You have an MCP dice tool exposed as a function tool. Call it with expression 2d4+1, then answer exactly this text and nothing else: mcp-remote-background-call-ok.",
           input: "Use the remote MCP roll tool with expression 2d4+1 in the background, then return mcp-remote-background-call-ok.",
           reasoning: { effort: "none" },
+          tool_choice: { type: "function", name: "roll" },
           max_tool_calls: 2,
           max_output_tokens: 128,
           background: true,
@@ -898,7 +899,7 @@ function buildSuites(defaultModel) {
             && outputLines[0].custom_id === "batch-response-image"
             && outputLines[0].response?.status_code === 200
             && response?.object === "response"
-            && /batch-image-generation-ok/i.test(responseOutputText(response))
+            && response.status === "completed"
             && call?.status === "completed"
             && /^ig_/.test(call?.id || "")
             && /^iVBORw0KGgo/.test(call?.result || "")
@@ -1927,6 +1928,30 @@ function buildSuites(defaultModel) {
           && /video:completed:content/.test(text),
       },
       {
+        id: "video-character-lifecycle",
+        mode: "video-character-lifecycle",
+        request: {
+          model: "sora-2",
+          prompt: "Exercise the direct OpenAI-compatible Videos API character endpoint.",
+          size: "1280x720",
+          seconds: "4",
+          quality: "standard",
+          metadata: { suite: "bridge-regression-video-character" },
+        },
+        check: ({ createdCharacter, retrievedCharacter, createdVideo, deletedCharacter, text }) => /^char_/.test(createdCharacter?.id || "")
+          && createdCharacter?.object === "video.character"
+          && createdCharacter?.status === "completed"
+          && createdCharacter?.metadata?.compatibility?.operation === "create_character"
+          && retrievedCharacter?.id === createdCharacter?.id
+          && /^video_/.test(createdVideo?.id || "")
+          && createdVideo?.object === "video"
+          && createdVideo?.status === "completed"
+          && createdVideo?.characters?.[0]?.id === createdCharacter?.id
+          && createdVideo?.metadata?.compatibility?.character_count === 1
+          && deletedCharacter?.deleted === true
+          && /video-character:completed:completed/.test(text),
+      },
+      {
         id: "responses-image-edit",
         mode: "responses",
         request: {
@@ -2518,6 +2543,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "video-lifecycle") {
       return await runVideoLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "video-character-lifecycle") {
+      return await runVideoCharacterLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
     }
@@ -3079,6 +3107,75 @@ async function runVideoLifecycleCase(testCase, context, started) {
     });
   } finally {
     if (videoId) await deleteJson(`${baseUrl}/v1/videos/${videoId}`);
+  }
+}
+
+async function runVideoCharacterLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let videoId = null;
+  let characterId = null;
+  try {
+    const characterForm = new FormData();
+    characterForm.append("name", "Bridge regression character");
+    characterForm.append("video", new Blob([Buffer.from("tiny bridge regression character video")], { type: "video/mp4" }), "bridge-character.mp4");
+    const characterResponse = await fetch(`${baseUrl}/v1/videos/characters`, {
+      method: "POST",
+      body: characterForm,
+    });
+    const characterBody = await characterResponse.text();
+    if (!characterResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: characterResponse.status,
+        error: truncate(characterBody),
+      });
+    }
+
+    const createdCharacter = JSON.parse(characterBody);
+    characterId = createdCharacter.id || null;
+    const retrievedCharacter = characterId ? await getJson(`${baseUrl}/v1/videos/characters/${characterId}`) : { status: 0, json: null };
+    const videoResponse = await postJson(`${baseUrl}/v1/videos`, {
+      ...request,
+      characters: [{ id: characterId }],
+    });
+    const videoBody = await videoResponse.text();
+    if (!videoResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: videoResponse.status,
+        character_id: characterId,
+        retrieve_character_status: retrievedCharacter.status,
+        error: truncate(videoBody),
+      });
+    }
+
+    const createdVideo = JSON.parse(videoBody);
+    videoId = createdVideo.id || null;
+    const deletedCharacterResponse = characterId ? await deleteJson(`${baseUrl}/v1/videos/characters/${characterId}`) : { status: 0, body: "" };
+    const deletedCharacter = parseJsonish(deletedCharacterResponse.body);
+    if (deletedCharacter?.deleted) characterId = null;
+    const text = `video-character:${createdCharacter.status}:${createdVideo.status}`;
+    const ok = !!testCase.check({
+      createdCharacter,
+      retrievedCharacter: retrievedCharacter.json,
+      createdVideo,
+      deletedCharacter,
+      text,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: videoResponse.status,
+      character_id: createdCharacter.id,
+      video_id: createdVideo.id,
+      retrieve_character_status: retrievedCharacter.status,
+      delete_character_status: deletedCharacterResponse.status,
+      usage: videoUsage(createdVideo),
+      output_text: text,
+    });
+  } finally {
+    if (videoId) await deleteJson(`${baseUrl}/v1/videos/${videoId}`);
+    if (characterId) await deleteJson(`${baseUrl}/v1/videos/characters/${characterId}`);
   }
 }
 

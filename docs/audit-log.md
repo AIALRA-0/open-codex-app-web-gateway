@@ -4369,6 +4369,77 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Local Videos Characters API compatibility
+
+- Used current official OpenAI endpoint/spec documentation through the OpenAI
+  developer-docs MCP before changing behavior. The endpoint list includes
+  `/videos/characters` and `/videos/characters/{character_id}`; the
+  `POST /v1/videos/characters` spec describes multipart character creation
+  with `name` and uploaded `video`, returning a `VideoCharacterResource`.
+- Added local compatibility for reusable video character references in the
+  bridge:
+  - `POST /v1/videos/characters` accepts JSON or multipart input, records
+    `name`, non-secret metadata, and source video descriptors, and returns a
+    local `object:"video.character"` resource with `char_` id and
+    `status:"completed"`;
+  - `GET /v1/videos/characters/{character_id}` retrieves the local character;
+  - `DELETE /v1/videos/characters/{character_id}` removes the local character
+    record for cleanup;
+  - `POST /v1/videos` now preserves up to two `characters` references and
+    records `metadata.compatibility.character_count`.
+- Storage boundary: uploaded character video bytes are inspected for size/type
+  and converted into source descriptors; the binary reference video itself is
+  not persisted in the local character resource.
+- Hardened live regression stability after repeated full-suite runs:
+  - `batch-responses-image-generation` now validates the protocol facts that
+    matter for compatibility (`response.status`, completed
+    `image_generation_call`, `ig_` id, PNG payload prefix, and local
+    compatibility metadata) instead of requiring exact stochastic model text;
+  - `responses-mcp-remote-background-call` now uses explicit Responses
+    `tool_choice` for the imported `roll` function so the live suite tests
+    remote MCP `tools/call` execution instead of model willingness to call the
+    tool.
+- Updated compatibility, deployment, and evaluation docs with the Videos
+  Characters lifecycle and the new `video-character-lifecycle` live case.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Videos API server test passed, including character create, retrieve,
+    video reference preservation, two-character limit rejection, delete, and
+    404 after delete.
+  - Focused live `video-character-lifecycle`: passed 1/1 against
+    `deepseek-v4-pro`, latency 139 ms, returned `char_` and `video_` ids,
+    retrieved the character, created a video with a character reference, and
+    deleted the character.
+  - Focused live `batch-responses-image-generation`: passed 1/1 after protocol
+    assertion hardening.
+  - Focused live `responses-mcp-remote-background-call`: passed 1/1 after
+    forced tool selection, with remote methods `initialize`,
+    `notifications/initialized`, `tools/list`, `tools/call`, authorization
+    forwarding, and session forwarding.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 81/81,
+    pass rate 1.0, average latency 1423 ms, P95 latency 3975 ms, and total
+    usage 19768 tokens.
+  - `npm test`: passed 177/177.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1273 ms, P95 latency 1421 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Bridge healthz returned `ok:true`, provider base `https://api.deepseek.com`,
+    default model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1117 runtime
+    candidates, selected 0 files, selected 0 bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 1117 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 38 GB available;
+    `state/` was 15 MB, `output/` was 4.7 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, uploaded
+  video bytes, or local deployment env files were added to the repository.
+
 ## 2026-06-11 - Streaming remote MCP approval-response continuation
 
 - Rechecked the current official OpenAI Responses MCP/Connectors documentation

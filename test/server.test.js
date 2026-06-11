@@ -9336,6 +9336,31 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     res.end(JSON.stringify({ error: { message: "videos should not call upstream" } }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const characterForm = new FormData();
+    characterForm.append("name", "Protocol Character");
+    characterForm.append("metadata", JSON.stringify({ suite: "video-character-local" }));
+    characterForm.append("video", new Blob([Buffer.from("tiny character video")], { type: "video/mp4" }), "character.mp4");
+    const createdCharacter = await fetch(`${baseUrl}/v1/videos/characters`, {
+      method: "POST",
+      body: characterForm,
+    });
+    assert.equal(createdCharacter.status, 200);
+    const character = await createdCharacter.json();
+    assert.match(character.id, /^char_/);
+    assert.equal(character.object, "video.character");
+    assert.equal(character.name, "Protocol Character");
+    assert.equal(character.status, "completed");
+    assert.equal(character.source_video.filename, "character.mp4");
+    assert.equal(character.source_video.content_type, "video/mp4");
+    assert.equal(character.source_video.bytes, "tiny character video".length);
+    assert.equal(character.metadata.suite, "video-character-local");
+    assert.equal(character.metadata.compatibility.provider, "local");
+    assert.equal(character.metadata.compatibility.operation, "create_character");
+
+    const retrievedCharacter = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`);
+    assert.equal(retrievedCharacter.status, 200);
+    assert.equal((await retrievedCharacter.json()).id, character.id);
+
     const created = await fetch(`${baseUrl}/v1/videos`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -9345,6 +9370,7 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
         size: "1280x720",
         seconds: "4",
         quality: "standard",
+        characters: [{ id: character.id, role: "lead" }],
         metadata: { suite: "video-local" },
       }),
     });
@@ -9358,9 +9384,24 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(video.size, "1280x720");
     assert.equal(video.seconds, "4");
     assert.equal(video.quality, "standard");
+    assert.deepEqual(video.characters, [{ id: character.id, role: "lead" }]);
     assert.equal(video.metadata.suite, "video-local");
     assert.equal(video.metadata.compatibility.provider, "local");
     assert.equal(video.metadata.compatibility.operation, "create");
+    assert.equal(video.metadata.compatibility.character_count, 1);
+
+    const tooManyCharacters = await fetch(`${baseUrl}/v1/videos`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "This should reject too many character references.",
+        characters: ["char_one", "char_two", "char_three"],
+      }),
+    });
+    assert.equal(tooManyCharacters.status, 400);
+    const tooManyCharactersJson = await tooManyCharacters.json();
+    assert.equal(tooManyCharactersJson.error.code, "invalid_video_characters");
+    assert.equal(tooManyCharactersJson.error.param, "characters");
 
     const retrieved = await fetch(`${baseUrl}/v1/videos/${video.id}`);
     assert.equal(retrieved.status, 200);
@@ -9424,6 +9465,17 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     });
     const missing = await fetch(`${baseUrl}/v1/videos/${video.id}`);
     assert.equal(missing.status, 404);
+
+    const deletedCharacter = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`, { method: "DELETE" });
+    assert.equal(deletedCharacter.status, 200);
+    assert.deepEqual(await deletedCharacter.json(), {
+      id: character.id,
+      object: "video.character.deleted",
+      deleted: true,
+    });
+    const missingCharacter = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`);
+    assert.equal(missingCharacter.status, 404);
+    assert.equal((await missingCharacter.json()).error.code, "video_character_not_found");
     assert.equal(requests.length, 0);
   });
 });
