@@ -96,6 +96,13 @@ Useful bridge flags:
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
 | `CODEXCOMPAT_EVAL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-evals` | Local Evals API state path for eval definitions, runs, and output items; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_EVAL_MAX_ROWS` | `100` | Maximum JSONL rows loaded for a local synchronous Eval run; raise only after disk/quota and runtime controls are ready |
+| `CODEXCOMPAT_PYTHON_GRADER_PROVIDER` | `local` | Local Python grader execution provider; use `disabled` to reject Python grader runs |
+| `CODEXCOMPAT_PYTHON_GRADER_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-python-graders` | Temporary local Python grader workdir root; keep outside Git |
+| `CODEXCOMPAT_PYTHON_GRADER_TIMEOUT_MS` | `120000` | Per-grader subprocess timeout, capped at the documented 2 minute limit |
+| `CODEXCOMPAT_PYTHON_GRADER_MAX_SOURCE_BYTES` | `262144` | Maximum Python grader source size |
+| `CODEXCOMPAT_PYTHON_GRADER_DISK_BYTES` | `1073741824` | File-size limit applied by the Python runner when supported |
+| `CODEXCOMPAT_PYTHON_GRADER_MEMORY_BYTES` | `2147483648` | Address-space limit applied by the Python runner when supported |
+| `CODEXCOMPAT_PYTHON_GRADER_BIN` | `python3` | Python interpreter used by local Python graders |
 | `CODEXCOMPAT_CONVERSATION_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-conversations` | Local Conversations API state path; keeps conversation items durable and outside Git |
 | `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS` | `400000` | Local estimated input-character budget used to emulate Responses `truncation`. With `truncation:"auto"`, old replay messages are dropped from the beginning of conversation state until under this budget; with `disabled`, the bridge returns `400 context_length_exceeded` before calling the provider when this budget is exceeded |
 | `CODEXCOMPAT_COMPACTION_MAX_OUTPUT_TOKENS` | `512` | Output budget for local `/v1/responses/compact` summaries |

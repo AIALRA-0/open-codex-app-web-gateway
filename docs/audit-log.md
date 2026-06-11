@@ -6561,3 +6561,77 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 23 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Local Python grader compatibility
+
+- Used current official OpenAI Graders docs and OpenAPI metadata for
+  `/v1/fine_tuning/alpha/graders/run` and
+  `/v1/fine_tuning/alpha/graders/validate` to confirm the `python` grader
+  shape: `type:"python"`, `source`, optional `image_tag`, a required
+  `grade(sample, item)` function with exactly two arguments, float reward
+  output, 256 KiB source cap, 2 minute execution limit, no network, 2 GB memory,
+  1 GB disk, and 2 CPU cores in the hosted environment.
+- Added local Python grader compatibility:
+  - `validate` now accepts `python` graders and enforces source shape, optional
+    `image_tag`, and the documented source-size cap;
+  - `run` executes `grade(sample, item)` in a short-lived Python subprocess
+    with a sanitized environment, isolated temporary workdir, local timeout,
+    Python `resource` limits where supported, common network/process import and
+    audit guards, bounded captured output, reward clamping, and best-effort
+    workdir cleanup;
+  - Python runtime errors, invalid returns, and timeouts return reward `0`
+    with `python_grader_runtime_error` metadata instead of crashing the bridge;
+  - local Evals criteria and `multi` graders can include Python subgraders.
+- Reused the same configured Python grader options when validating nested
+  `multi` subgraders during sync and async execution, so custom source, memory,
+  disk, timeout, and interpreter settings behave consistently.
+- Added configuration knobs:
+  - `CODEXCOMPAT_PYTHON_GRADER_PROVIDER`;
+  - `CODEXCOMPAT_PYTHON_GRADER_STATE_DIR`;
+  - `CODEXCOMPAT_PYTHON_GRADER_TIMEOUT_MS`;
+  - `CODEXCOMPAT_PYTHON_GRADER_MAX_SOURCE_BYTES`;
+  - `CODEXCOMPAT_PYTHON_GRADER_DISK_BYTES`;
+  - `CODEXCOMPAT_PYTHON_GRADER_MEMORY_BYTES`;
+  - `CODEXCOMPAT_PYTHON_GRADER_BIN`.
+- Kept the compatibility boundary explicit: this is a local subprocess runner,
+  not OpenAI's hosted Python grader image and not a hardened container or
+  microVM sandbox. Full parity still needs stronger OS-level isolation,
+  dependency-image parity, and larger adversarial grader tests.
+- Updated `.env.example`, compatibility matrix, deployment docs, evaluation
+  plan, unit tests, and the bridge regression harness. The live
+  `graders-api-local` case now validates Python grader execution and keeps an
+  unknown `javascript` grader as the `unsupported_grader_type` check.
+- Verification:
+  - `node --check src/bridge/local_graders.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Graders/Evals server tests passed through `test/server.test.js`,
+    including direct Python grader validate/run, runtime-error reward `0`, and
+    Evals Python criteria execution.
+  - `npm test`: passed 164/164.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `graders-api-local` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, including `python_status:200` and `python_reward:1`
+    with zero provider token usage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` after bridge
+    restart: 72/72 passing cases, pass rate 1.0, average latency 1096 ms, P95
+    latency 2826 ms, and total usage 11161 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 818 runtime
+    candidates, selected 0 files, deleted 0 files, selected 0 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 818 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem has 37 GB available;
+    `state/` is 11 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

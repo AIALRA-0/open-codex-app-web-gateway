@@ -413,13 +413,17 @@ function buildSuites(defaultModel) {
       {
         id: "graders-api-local",
         mode: "graders-api-local",
-        check: ({ validate, similarity, multi, unsupported }) => validate?.grader?.type === "string_check"
+        check: ({ validate, similarity, multi, python, unsupported }) => validate?.grader?.type === "string_check"
           && similarity?.reward >= 0.5
           && similarity?.metadata?.type === "text_similarity"
           && similarity?.metadata?.errors?.other_error === false
           && multi?.metadata?.type === "multi"
           && multi?.reward >= 0.8
           && multi?.sub_rewards?.email === 1
+          && python?.metadata?.type === "python"
+          && python?.reward === 1
+          && python?.metadata?.errors?.python_grader_runtime_error === false
+          && python?.metadata?.errors?.python_grader_server_error === false
           && unsupported?.status === 400
           && unsupported?.json?.error?.code === "unsupported_grader_type",
       },
@@ -2797,10 +2801,22 @@ async function runGradersApiLocalCase(testCase, context, started) {
       output_json: { name: "Jane Do", email: "jane@example.com" },
     },
   });
-  const unsupported = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+  const python = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
     grader: {
       type: "python",
-      source: "def grade(sample, item):\n    return 1.0",
+      name: "exact_python",
+      source: [
+        "def grade(sample, item):",
+        "    return 1.0 if sample.get('output_text') == item.get('expected') else 0.0",
+      ].join("\n"),
+    },
+    item: { expected: "python-grader-ok" },
+    model_sample: "python-grader-ok",
+  });
+  const unsupported = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+    grader: {
+      type: "javascript",
+      source: "function grade() { return 1; }",
     },
   });
 
@@ -2808,6 +2824,7 @@ async function runGradersApiLocalCase(testCase, context, started) {
     validate: validate.json,
     similarity: similarity.json,
     multi: multi.json,
+    python: python.json,
     unsupported,
   });
   return finishResult(testCase, context, started, {
@@ -2815,11 +2832,13 @@ async function runGradersApiLocalCase(testCase, context, started) {
     status: multi.status,
     validate_status: validate.status,
     similarity_status: similarity.status,
+    python_status: python.status,
     unsupported_status: unsupported.status,
     similarity_reward: similarity.json?.reward || 0,
     multi_reward: multi.json?.reward || 0,
+    python_reward: python.json?.reward || 0,
     usage: moderationUsage(),
-    output_text: `graders:${similarity.json?.reward || 0}:${multi.json?.reward || 0}`,
+    output_text: `graders:${similarity.json?.reward || 0}:${multi.json?.reward || 0}:${python.json?.reward || 0}`,
   });
 }
 

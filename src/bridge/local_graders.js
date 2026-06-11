@@ -1,11 +1,22 @@
 "use strict";
 
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const { spawn } = require("node:child_process");
+
 const {
   inputItemToChatMessages,
   stringifyContent,
 } = require("./translator");
 
-const SUPPORTED_GRADER_TYPES = Object.freeze(["string_check", "text_similarity", "score_model", "multi"]);
+const PYTHON_GRADER_MAX_SOURCE_BYTES = 256 * 1024;
+const PYTHON_GRADER_DEFAULT_TIMEOUT_MS = 120 * 1000;
+const PYTHON_GRADER_DEFAULT_DISK_BYTES = 1024 * 1024 * 1024;
+const PYTHON_GRADER_DEFAULT_MEMORY_BYTES = 2 * 1024 * 1024 * 1024;
+const PYTHON_GRADER_OUTPUT_LIMIT = 8192;
+const SUPPORTED_GRADER_TYPES = Object.freeze(["string_check", "text_similarity", "score_model", "python", "multi"]);
 const TEXT_SIMILARITY_METRICS = new Set([
   "fuzzy_match",
   "bleu",
@@ -39,6 +50,7 @@ function validateGrader(grader, options = {}) {
   if (type === "string_check") validateStringCheckGrader(grader, options);
   else if (type === "text_similarity") validateTextSimilarityGrader(grader, options);
   else if (type === "score_model") validateScoreModelGrader(grader, options);
+  else if (type === "python") validatePythonGrader(grader, options);
   else if (type === "multi") validateMultiGrader(grader, options);
   else {
     throw graderError(`unsupported local grader type: ${type}`, {
@@ -80,6 +92,7 @@ function graderRunResponse(grader, result, started) {
         supported_grader_types: SUPPORTED_GRADER_TYPES,
         reason: result.compatibility_reason || "local_grader_protocol_compatibility",
         ...(result.model_grader_output_text ? { model_grader_output_text: result.model_grader_output_text } : {}),
+        ...(result.python_grader_details ? { python_grader: result.python_grader_details } : {}),
       },
     },
     sub_rewards: result.sub_rewards || {},
@@ -95,6 +108,13 @@ function evaluateGrader(grader, context = {}) {
   try {
     if (type === "string_check") return evaluateStringCheck(grader, context);
     if (type === "text_similarity") return evaluateTextSimilarity(grader, context);
+    if (type === "python") {
+      return errorGraderResult(
+        grader,
+        "python_grader_runner_missing",
+        "python graders require an async local python runner",
+      );
+    }
     if (type === "score_model") {
       return errorGraderResult(
         grader,
@@ -119,6 +139,7 @@ async function evaluateGraderAsync(grader, context = {}) {
   }
   const type = String(grader.type || "string_check");
   try {
+    if (type === "python") return await evaluatePythonGrader(grader, context);
     if (type === "score_model") return await evaluateScoreModelGrader(grader, context);
     if (type === "multi") return await evaluateMultiGraderAsync(grader, context);
     return evaluateGrader(grader, context);
@@ -395,6 +416,263 @@ function clampToRange(value, range) {
   return Math.max(min, Math.min(max, number));
 }
 
+function validatePythonGrader(grader, options = {}) {
+  const pythonOptions = normalizePythonGraderOptions(options.pythonGraderOptions || options);
+  if (typeof grader.source !== "string" || !grader.source.trim()) {
+    throw graderError("python grader source is required", {
+      code: "missing_required_parameter",
+      param: "grader.source",
+    });
+  }
+  if (Buffer.byteLength(grader.source, "utf8") > pythonOptions.maxSourceBytes) {
+    throw graderError(`python grader source exceeds local limit of ${pythonOptions.maxSourceBytes} bytes`, {
+      code: "invalid_grader",
+      param: "grader.source",
+    });
+  }
+  if (grader.image_tag != null && typeof grader.image_tag !== "string") {
+    throw graderError("python grader image_tag must be a string", {
+      code: "invalid_grader",
+      param: "grader.image_tag",
+    });
+  }
+}
+
+async function evaluatePythonGrader(grader, context = {}) {
+  const pythonOptions = normalizePythonGraderOptions(context.pythonGraderOptions || {});
+  validatePythonGrader(grader, { pythonGraderOptions: pythonOptions });
+  if (pythonOptions.provider === "disabled") {
+    return {
+      id: grader.id || grader.name || "python",
+      name: grader.name || "python",
+      type: "python",
+      status: "errored",
+      passed: false,
+      score: 0,
+      error: {
+        code: "python_grader_server_error",
+        message: "local python grader provider is disabled",
+        param: "grader.type",
+        server_error_type: "disabled",
+      },
+      compatibility_provider: "disabled",
+      compatibility_reason: "python_grader_disabled",
+      python_grader_details: pythonGraderAuditDetails(grader, pythonOptions),
+    };
+  }
+
+  const runner = typeof context.pythonGraderRunner === "function"
+    ? context.pythonGraderRunner
+    : runLocalPythonGrader;
+  const sample = isPlainObject(context.sample) ? sampleFromObject(context.sample) : sampleFromObject({});
+  const item = isPlainObject(context.item) ? clone(context.item) : {};
+  const threshold = finiteNumber(grader.pass_threshold, 0.5);
+  try {
+    const result = await runner({
+      grader: clone(grader),
+      source: String(grader.source || ""),
+      sample,
+      item,
+      image_tag: grader.image_tag || "2025-05-08",
+      options: pythonOptions,
+    });
+    const score = clampScore(result.score);
+    const passed = score >= threshold;
+    return {
+      id: grader.id || grader.name || "python",
+      name: grader.name || "python",
+      type: "python",
+      status: passed ? "passed" : "failed",
+      passed,
+      score,
+      pass_threshold: threshold,
+      compatibility_provider: "local_python",
+      compatibility_reason: "python_grader_local_sandbox_compatibility",
+      python_grader_details: {
+        ...pythonGraderAuditDetails(grader, pythonOptions),
+        execution_ms: Number(result.execution_ms || 0),
+        sandbox: result.sandbox || "python_subprocess_isolated_env",
+      },
+    };
+  } catch (error) {
+    return {
+      id: grader.id || grader.name || "python",
+      name: grader.name || "python",
+      type: "python",
+      status: "errored",
+      passed: false,
+      score: 0,
+      pass_threshold: threshold,
+      compatibility_provider: "local_python",
+      compatibility_reason: "python_grader_local_runtime_error",
+      python_grader_details: {
+        ...pythonGraderAuditDetails(grader, pythonOptions),
+        execution_ms: Number(error.execution_ms || 0),
+        sandbox: "python_subprocess_isolated_env",
+      },
+      error: {
+        code: error.code || "python_grader_runtime_error",
+        message: error.message || "python grader failed",
+        param: error.param || null,
+        runtime_error_type: error.runtime_error_type || null,
+        runtime_error_details: error.runtime_error_details || null,
+        server_error_type: error.server_error_type || null,
+      },
+    };
+  }
+}
+
+function pythonGraderAuditDetails(grader, options) {
+  return {
+    image_tag: grader.image_tag || "2025-05-08",
+    source_bytes: Buffer.byteLength(String(grader.source || ""), "utf8"),
+    source_sha256: crypto.createHash("sha256").update(String(grader.source || "")).digest("hex"),
+    timeout_ms: options.timeoutMs,
+    max_source_bytes: options.maxSourceBytes,
+    disk_bytes: options.diskBytes,
+    memory_bytes: options.memoryBytes,
+    network: "blocked_by_local_runner",
+  };
+}
+
+function normalizePythonGraderOptions(options = {}) {
+  const stateDir = path.resolve(
+    options.stateDir
+    || process.env.CODEXCOMPAT_PYTHON_GRADER_STATE_DIR
+    || path.join(os.tmpdir(), "open-codex-python-graders"),
+  );
+  return {
+    provider: String(options.provider || process.env.CODEXCOMPAT_PYTHON_GRADER_PROVIDER || "local").toLowerCase(),
+    pythonBin: String(options.pythonBin || process.env.CODEXCOMPAT_PYTHON_GRADER_BIN || "python3"),
+    stateDir,
+    timeoutMs: boundedNumber(options.timeoutMs, PYTHON_GRADER_DEFAULT_TIMEOUT_MS, 1000, PYTHON_GRADER_DEFAULT_TIMEOUT_MS),
+    maxSourceBytes: boundedNumber(options.maxSourceBytes, PYTHON_GRADER_MAX_SOURCE_BYTES, 1, PYTHON_GRADER_MAX_SOURCE_BYTES),
+    diskBytes: boundedNumber(options.diskBytes, PYTHON_GRADER_DEFAULT_DISK_BYTES, 1024 * 1024, PYTHON_GRADER_DEFAULT_DISK_BYTES),
+    memoryBytes: boundedNumber(options.memoryBytes, PYTHON_GRADER_DEFAULT_MEMORY_BYTES, 64 * 1024 * 1024, PYTHON_GRADER_DEFAULT_MEMORY_BYTES),
+  };
+}
+
+async function runLocalPythonGrader({ source, sample, item, image_tag: imageTag, options }) {
+  const started = Date.now();
+  fs.mkdirSync(options.stateDir, { recursive: true, mode: 0o700 });
+  const workDir = fs.mkdtempSync(path.join(options.stateDir, "pygrader-"));
+  const payload = JSON.stringify({
+    source,
+    sample,
+    item,
+    image_tag: imageTag,
+    limits: {
+      timeout_ms: options.timeoutMs,
+      disk_bytes: options.diskBytes,
+      memory_bytes: options.memoryBytes,
+    },
+  });
+  try {
+    const result = await spawnPythonGrader(options.pythonBin, payload, workDir, options.timeoutMs);
+    if (!result.ok) {
+      const error = new Error(result.message || "python grader runtime error");
+      error.code = result.code || "python_grader_runtime_error";
+      error.runtime_error_type = result.error_type || null;
+      error.runtime_error_details = result.details || result.message || null;
+      error.execution_ms = Date.now() - started;
+      throw error;
+    }
+    return {
+      score: result.score,
+      execution_ms: Date.now() - started,
+      sandbox: "python_subprocess_isolated_env",
+    };
+  } finally {
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup; audit metadata still keeps the run bounded.
+    }
+  }
+}
+
+function spawnPythonGrader(pythonBin, payload, workDir, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let stdout = "";
+    let stderr = "";
+    const child = spawn(pythonBin, ["-I", "-c", PYTHON_GRADER_RUNNER], {
+      cwd: workDir,
+      env: {
+        PATH: process.env.PATH || "/usr/local/bin:/usr/bin:/bin",
+        PYTHONIOENCODING: "utf-8",
+        PYTHONDONTWRITEBYTECODE: "1",
+        PYTHONUNBUFFERED: "1",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const finish = (fn) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // ignore
+      }
+      finish(() => {
+        const error = new Error(`python grader timed out after ${timeoutMs}ms`);
+        error.code = "python_grader_runtime_error";
+        error.runtime_error_type = "TimeoutError";
+        error.runtime_error_details = `timeout_ms=${timeoutMs}`;
+        reject(error);
+      });
+    }, timeoutMs);
+
+    child.on("error", (error) => {
+      finish(() => {
+        const wrapped = new Error(error.message || "failed to start python grader");
+        wrapped.code = "python_grader_server_error";
+        wrapped.server_error_type = error.code || "spawn_error";
+        reject(wrapped);
+      });
+    });
+    child.stdout.on("data", (chunk) => {
+      stdout = capString(stdout + chunk.toString("utf8"), PYTHON_GRADER_OUTPUT_LIMIT * 2);
+    });
+    child.stderr.on("data", (chunk) => {
+      stderr = capString(stderr + chunk.toString("utf8"), PYTHON_GRADER_OUTPUT_LIMIT * 2);
+    });
+    child.on("close", (code, signal) => {
+      finish(() => {
+        if (code !== 0) {
+          const error = new Error(`python grader exited with code ${code}${signal ? ` signal ${signal}` : ""}`);
+          error.code = "python_grader_runtime_error";
+          error.runtime_error_type = signal || `Exit${code}`;
+          error.runtime_error_details = capString(stderr || stdout, PYTHON_GRADER_OUTPUT_LIMIT);
+          reject(error);
+          return;
+        }
+        try {
+          resolve(JSON.parse(stdout.trim() || "{}"));
+        } catch (error) {
+          const wrapped = new Error("python grader did not return valid runner JSON");
+          wrapped.code = "python_grader_server_error";
+          wrapped.server_error_type = "invalid_runner_json";
+          wrapped.runtime_error_details = capString(`${stdout}\n${stderr}`.trim(), PYTHON_GRADER_OUTPUT_LIMIT);
+          reject(wrapped);
+        }
+      });
+    });
+
+    child.stdin.end(payload);
+  });
+}
+
+function capString(value, maxLength) {
+  const text = String(value || "");
+  return text.length > maxLength ? text.slice(text.length - maxLength) : text;
+}
+
 function textSimilarityScore(input, reference, metric) {
   const normalizedInput = normalizeText(input);
   const normalizedReference = normalizeText(reference);
@@ -414,7 +692,7 @@ function textSimilarityScore(input, reference, metric) {
   return normalizedLevenshteinSimilarity(normalizedInput, normalizedReference);
 }
 
-function validateMultiGrader(grader) {
+function validateMultiGrader(grader, options = {}) {
   if (!isPlainObject(grader.graders) || !Object.keys(grader.graders).length) {
     throw graderError("multi grader requires a non-empty graders object", {
       code: "missing_required_parameter",
@@ -428,7 +706,7 @@ function validateMultiGrader(grader) {
         param: `grader.graders.${name}.type`,
       });
     }
-    validateGrader(subGrader, { nested: true });
+    validateGrader(subGrader, { ...options, nested: true });
   }
   if (grader.calculate_output != null && typeof grader.calculate_output !== "string") {
     throw graderError("multi grader calculate_output must be a string", {
@@ -439,7 +717,7 @@ function validateMultiGrader(grader) {
 }
 
 function evaluateMultiGrader(grader, context) {
-  validateMultiGrader(grader);
+  validateMultiGrader(grader, { pythonGraderOptions: context?.pythonGraderOptions });
   const subResults = {};
   const variables = {};
   let hasError = false;
@@ -484,7 +762,7 @@ function evaluateMultiGrader(grader, context) {
 }
 
 async function evaluateMultiGraderAsync(grader, context) {
-  validateMultiGrader(grader);
+  validateMultiGrader(grader, { pythonGraderOptions: context?.pythonGraderOptions });
   const subResults = {};
   const variables = {};
   let hasError = false;
@@ -590,17 +868,27 @@ function sampleFromObject(value) {
 function graderErrorFlags(result = {}) {
   const hasError = result.status === "errored";
   const code = result.error?.code || "";
+  const pythonRuntimeDetails = result.error?.runtime_error_details
+    || result.error?.message
+    || null;
   return {
     formula_parse_error: hasError && code === "formula_parse_error",
     sample_parse_error: false,
     truncated_observation_error: false,
     unresponsive_reward_error: false,
     invalid_variable_error: hasError && code === "invalid_variable",
-    other_error: hasError && !["formula_parse_error", "invalid_variable", "model_grader_server_error"].includes(code),
-    python_grader_server_error: false,
-    python_grader_server_error_type: null,
-    python_grader_runtime_error: false,
-    python_grader_runtime_error_details: null,
+    other_error: hasError && ![
+      "formula_parse_error",
+      "invalid_variable",
+      "model_grader_server_error",
+      "model_grader_parse_error",
+      "python_grader_server_error",
+      "python_grader_runtime_error",
+    ].includes(code),
+    python_grader_server_error: code === "python_grader_server_error",
+    python_grader_server_error_type: result.error?.server_error_type || null,
+    python_grader_runtime_error: code === "python_grader_runtime_error",
+    python_grader_runtime_error_details: code === "python_grader_runtime_error" ? pythonRuntimeDetails : null,
     model_grader_server_error: code === "model_grader_server_error",
     model_grader_refusal_error: false,
     model_grader_parse_error: code === "model_grader_parse_error",
@@ -935,6 +1223,12 @@ function finiteNumber(value, fallback) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function boundedNumber(value, fallback, min, max) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(number)));
+}
+
 function emptyTokenUsage() {
   return {
     prompt_tokens: 0,
@@ -1002,6 +1296,125 @@ function graderError(message, details = {}) {
   error.param = details.param || null;
   return error;
 }
+
+const PYTHON_GRADER_RUNNER = String.raw`
+import builtins
+import contextlib
+import inspect
+import io
+import json
+import math
+import os
+import sys
+import traceback
+
+try:
+    import resource
+except Exception:
+    resource = None
+
+BLOCKED_IMPORT_ROOTS = {
+    "_socket",
+    "aiohttp",
+    "ftplib",
+    "http",
+    "httpx",
+    "requests",
+    "socket",
+    "subprocess",
+    "telnetlib",
+    "urllib",
+    "websocket",
+}
+BLOCKED_AUDIT_PREFIXES = ("socket.", "subprocess.")
+BLOCKED_AUDIT_EVENTS = {"os.fork", "os.forkpty", "os.posix_spawn", "os.system", "pty.spawn"}
+CAPTURE_LIMIT = 8192
+
+def _cap(value):
+    text = str(value or "")
+    return text[-CAPTURE_LIMIT:]
+
+def _emit(payload):
+    sys.__stdout__.write(json.dumps(payload, separators=(",", ":")) + "\n")
+    sys.__stdout__.flush()
+
+def _install_limits(limits):
+    if resource is None:
+        return
+    try:
+        cpu_seconds = max(1, int(math.ceil(float(limits.get("timeout_ms", 120000)) / 1000.0)))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds + 1))
+    except Exception:
+        pass
+    try:
+        disk_bytes = int(limits.get("disk_bytes", 1073741824))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (disk_bytes, disk_bytes))
+    except Exception:
+        pass
+    try:
+        memory_bytes = int(limits.get("memory_bytes", 2147483648))
+        resource.setrlimit(resource.RLIMIT_AS, (memory_bytes, memory_bytes))
+    except Exception:
+        pass
+
+_real_import = builtins.__import__
+
+def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = str(name or "").split(".", 1)[0]
+    if root in BLOCKED_IMPORT_ROOTS:
+        raise RuntimeError("blocked import: " + root)
+    return _real_import(name, globals, locals, fromlist, level)
+
+def _audit(event, args):
+    if event in BLOCKED_AUDIT_EVENTS or any(str(event).startswith(prefix) for prefix in BLOCKED_AUDIT_PREFIXES):
+        raise RuntimeError("blocked operation: " + str(event))
+
+try:
+    sys.addaudithook(_audit)
+except Exception:
+    pass
+builtins.__import__ = _guarded_import
+
+try:
+    payload = json.load(sys.stdin)
+    _install_limits(payload.get("limits") or {})
+    os.chdir(os.getcwd())
+    source = payload.get("source") or ""
+    sample = payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
+    item = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+    namespace = {
+        "__builtins__": builtins.__dict__,
+        "__name__": "__open_codex_python_grader__",
+    }
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    with contextlib.redirect_stdout(stdout_capture), contextlib.redirect_stderr(stderr_capture):
+        exec(compile(source, "<python_grader>", "exec"), namespace, namespace)
+        grade = namespace.get("grade")
+        if not callable(grade):
+            raise TypeError("python grader source must define callable grade(sample, item)")
+        signature = inspect.signature(grade)
+        if len(signature.parameters) != 2:
+            raise TypeError("grade must take exactly two arguments")
+        value = grade(sample, item)
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+        raise TypeError("grade must return a finite float")
+    score = max(0.0, min(1.0, float(value)))
+    _emit({
+        "ok": True,
+        "score": score,
+        "stdout": _cap(stdout_capture.getvalue()),
+        "stderr": _cap(stderr_capture.getvalue()),
+    })
+except BaseException as exc:
+    _emit({
+        "ok": False,
+        "code": "python_grader_runtime_error",
+        "error_type": type(exc).__name__,
+        "message": str(exc) or type(exc).__name__,
+        "details": _cap(traceback.format_exc()),
+    })
+`;
 
 module.exports = {
   SUPPORTED_GRADER_TYPES,

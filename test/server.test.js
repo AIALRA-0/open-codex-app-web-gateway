@@ -9166,7 +9166,7 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
   });
 });
 
-test("Graders API validates and runs local text similarity and multi graders", async () => {
+test("Graders API validates and runs local text similarity, python, and multi graders", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "provider should not be called for local graders" } }));
@@ -9251,13 +9251,73 @@ test("Graders API validates and runs local text similarity and multi graders", a
     assert.ok(multi.sub_rewards.name >= 0.7);
     assert.equal(multi.sub_rewards.email, 1);
 
-    const unsupportedResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+    const pythonValidateResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         grader: {
           type: "python",
           source: "def grade(sample, item):\n    return 1.0",
+        },
+      }),
+    });
+    assert.equal(pythonValidateResponse.status, 200);
+    assert.equal((await pythonValidateResponse.json()).grader.type, "python");
+
+    const pythonRunResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "python",
+          name: "length_ratio",
+          source: [
+            "def grade(sample, item):",
+            "    output_text = sample.get('output_text', '')",
+            "    expected = item.get('expected', '')",
+            "    return 1.0 if output_text.strip() == expected else 0.25",
+          ].join("\n"),
+        },
+        item: { expected: "deploy-ok" },
+        model_sample: "deploy-ok",
+      }),
+    });
+    assert.equal(pythonRunResponse.status, 200);
+    const pythonRun = await pythonRunResponse.json();
+    assert.equal(pythonRun.reward, 1);
+    assert.equal(pythonRun.metadata.type, "python");
+    assert.equal(pythonRun.metadata.errors.python_grader_runtime_error, false);
+    assert.equal(pythonRun.metadata.errors.python_grader_server_error, false);
+    assert.equal(pythonRun.metadata.compatibility.python_grader.image_tag, "2025-05-08");
+    assert.equal(pythonRun.metadata.compatibility.python_grader.network, "blocked_by_local_runner");
+
+    const pythonRuntimeErrorResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "python",
+          name: "broken",
+          source: "def grade(sample, item):\n    raise ValueError('bad sample')",
+        },
+        item: {},
+        model_sample: "anything",
+      }),
+    });
+    assert.equal(pythonRuntimeErrorResponse.status, 200);
+    const pythonRuntimeError = await pythonRuntimeErrorResponse.json();
+    assert.equal(pythonRuntimeError.reward, 0);
+    assert.equal(pythonRuntimeError.metadata.errors.python_grader_runtime_error, true);
+    assert.equal(pythonRuntimeError.metadata.errors.python_grader_server_error, false);
+    assert.match(pythonRuntimeError.metadata.errors.python_grader_runtime_error_details, /ValueError|bad sample/);
+
+    const unsupportedResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "javascript",
+          source: "function grade() { return 1 }",
         },
       }),
     });
@@ -9345,7 +9405,7 @@ test("Graders API runs provider-backed score_model graders", async () => {
   });
 });
 
-test("Evals API runs local text similarity and multi graders", async () => {
+test("Evals API runs local text similarity, python, and multi graders", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "provider should not be called for sample-driven evals" } }));
@@ -9399,6 +9459,16 @@ test("Evals API runs local text similarity and multi graders", async () => {
             calculate_output: "(name + email) / 2",
             pass_threshold: 0.8,
           },
+          {
+            type: "python",
+            name: "Python sample check",
+            source: [
+              "def grade(sample, item):",
+              "    output_text = sample.get('output_text', '')",
+              "    reference = item.get('reference_answer', '')",
+              "    return 1.0 if 'router' in output_text.lower() and 'router' in reference.lower() else 0.0",
+            ].join("\n"),
+          },
         ],
       }),
     });
@@ -9449,8 +9519,8 @@ test("Evals API runs local text similarity and multi graders", async () => {
     assert.equal(run.status, "completed");
     assert.equal(run.result_counts.total, 1);
     assert.equal(run.result_counts.passed, 1);
-    assert.deepEqual(run.metadata.compatibility.supported_graders, ["string_check", "text_similarity", "score_model", "multi"]);
-    assert.equal(run.per_testing_criteria_results.length, 2);
+    assert.deepEqual(run.metadata.compatibility.supported_graders, ["string_check", "text_similarity", "score_model", "python", "multi"]);
+    assert.equal(run.per_testing_criteria_results.length, 3);
     assert.equal(run.per_testing_criteria_results.every((result) => result.passed === 1), true);
 
     const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items`);
@@ -9461,6 +9531,9 @@ test("Evals API runs local text similarity and multi graders", async () => {
     assert.ok(outputItems.data[0].results[0].score >= 0.5);
     assert.equal(outputItems.data[0].results[1].type, "multi");
     assert.ok(outputItems.data[0].results[1].sub_rewards.email === 1);
+    assert.equal(outputItems.data[0].results[2].type, "python");
+    assert.equal(outputItems.data[0].results[2].score, 1);
+    assert.equal(outputItems.data[0].results[2].python_grader_details.network, "blocked_by_local_runner");
     assert.equal(requests.length, 0);
   });
 });

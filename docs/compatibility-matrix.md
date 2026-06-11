@@ -434,8 +434,8 @@ transition tooling, not a dependency on the hosted Evals dashboard.
 | `GET /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}` | Implemented locally | Returns one stored output item with datasource row, sample, criterion results, and error details when present |
 
 Local run execution supports deterministic `string_check`,
-`text_similarity`, provider-backed `score_model`, and one-level `multi`
-graders. String checks support the
+`text_similarity`, local sandboxed-subprocess `python`, provider-backed
+`score_model`, and one-level `multi` graders. String checks support the
 documented `eq`, `neq`, `like`, and `ilike` operations plus compatibility
 aliases such as `ne`, `contains`, `not_contains`, `starts_with`, `ends_with`,
 and `regex`. Text similarity supports local deterministic approximations for
@@ -443,16 +443,22 @@ and `regex`. Text similarity supports local deterministic approximations for
 `rouge_5`, and `rouge_l`. Multigraders can combine non-nested subgraders using
 the documented arithmetic operators and functions (`min`, `max`, `abs`,
 `floor`, `ceil`, `exp`, `sqrt`, and `log`) without executing arbitrary
-JavaScript. `score_model` graders render Chat messages from official
+JavaScript. `python` graders validate the documented `source`/`image_tag`
+shape, execute `grade(sample, item)` in a short-lived local Python subprocess
+with a sanitized environment, official 256 KiB source cap, timeout, disk/file
+size and memory limits where the host Python runtime supports them, and network
+module/audit guards. Non-float returns, exceptions, and timeouts return reward
+`0` with `python_grader_runtime_error` metadata. `score_model` graders render
+Chat messages from official
 `item`/`sample` templates, call the configured Chat provider as a judge,
 request a JSON `result`, default non-numeric judge output to `0`, and report
 judge token usage in both `metadata.token_usage` and
 `model_grader_token_usage_per_model`. Template values such as
 `{{ item.correct_label }}` and `{{ sample.output_text }}` are resolved locally.
 When a JSONL row already includes `sample.output_text` (or compatible sample
-fields), deterministic graders run without calling the upstream provider;
-`score_model` still calls the configured judge model. When no sample is
-supplied and
+fields), deterministic and Python graders run without calling the upstream
+provider; `score_model` still calls the configured judge model. When no sample
+is supplied and
 `data_source.type:"responses"` is used, the bridge materializes
 `input_messages:{type:"template"}` and calls the local `/v1/responses` executor
 with `store:false` to produce the sample output before grading.
@@ -473,8 +479,8 @@ Chat-only providers.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/fine_tuning/alpha/graders/validate` | Implemented for supported graders | Accepts `grader` and returns the normalized grader object for `string_check`, `text_similarity`, provider-backed `score_model`, and non-nested `multi`; returns a clear `unsupported_grader_type` error for `python` graders |
-| `POST /v1/fine_tuning/alpha/graders/run` | Implemented locally plus provider-backed judge calls | Accepts `grader`, optional `item`, and `model_sample`/`sample`; returns OpenAI-style `reward`, `metadata`, `sub_rewards`, and model-grader token usage. Deterministic graders return empty model-token usage, while `score_model` calls the configured Chat provider and records judge usage |
+| `POST /v1/fine_tuning/alpha/graders/validate` | Implemented for supported graders | Accepts `grader` and returns the normalized grader object for `string_check`, `text_similarity`, local `python`, provider-backed `score_model`, and non-nested `multi`; returns a clear `unsupported_grader_type` error for unknown grader types |
+| `POST /v1/fine_tuning/alpha/graders/run` | Implemented locally plus provider-backed judge calls | Accepts `grader`, optional `item`, and `model_sample`/`sample`; returns OpenAI-style `reward`, `metadata`, `sub_rewards`, and model-grader token usage. Deterministic and Python graders return empty model-token usage, while `score_model` calls the configured Chat provider and records judge usage |
 
 This is not OpenAI's hosted Graders service. Local `text_similarity` metrics are
 dependency-free approximations so they can run inside the bridge without
@@ -482,8 +488,24 @@ pulling large NLP packages into `/srv/aialra/apps`. They are deterministic and
 useful for regression/eval workflows, but they are not exact `rapidfuzz`,
 ROUGE, BLEU, METEOR, or embedding-cosine parity. `score_model` is
 provider-backed Chat Completions compatibility rather than OpenAI's hosted
-grader-model runtime. Python graders remain unsupported until a hardened
-sandbox with CPU, memory, disk, network, and dependency controls is available.
+grader-model runtime. Python graders run in a local subprocess compatibility
+runtime, not OpenAI's hosted execution image; the bridge scrubs environment
+variables, creates a temporary work directory, applies local limits, blocks
+common network/process operations, and deletes the work directory after the
+run, but full hardened isolation still requires a dedicated sandbox such as a
+container or microVM profile.
+
+Python grader configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_PYTHON_GRADER_PROVIDER` | `local` | Use `disabled` to reject local Python grader execution while still validating other grader types |
+| `CODEXCOMPAT_PYTHON_GRADER_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-python-graders` | Temporary local Python grader work directory root; keep outside Git |
+| `CODEXCOMPAT_PYTHON_GRADER_TIMEOUT_MS` | `120000` | Per-grader subprocess timeout, capped at the documented 2 minute limit |
+| `CODEXCOMPAT_PYTHON_GRADER_MAX_SOURCE_BYTES` | `262144` | Maximum grader source size, matching the documented 256 KiB cap |
+| `CODEXCOMPAT_PYTHON_GRADER_DISK_BYTES` | `1073741824` | File-size limit applied through Python `resource` when available |
+| `CODEXCOMPAT_PYTHON_GRADER_MEMORY_BYTES` | `2147483648` | Address-space limit applied through Python `resource` when available |
+| `CODEXCOMPAT_PYTHON_GRADER_BIN` | `python3` | Python interpreter used for the local subprocess runner |
 
 ## Uploads, Files and Vector Stores Endpoint Coverage
 
@@ -1119,7 +1141,7 @@ Configuration:
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
-| OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, Python grader sandbox, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, Python sandboxing with CPU/memory/disk controls, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
+| OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |

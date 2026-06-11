@@ -236,6 +236,13 @@ function loadConfig(overrides = {}) {
     batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
     evalStateDir: process.env.CODEXCOMPAT_EVAL_STATE_DIR || path.join(stateDir, "local-evals"),
     evalMaxRows: numberFromEnv("CODEXCOMPAT_EVAL_MAX_ROWS", 100, 1, 5000),
+    pythonGraderProvider: process.env.CODEXCOMPAT_PYTHON_GRADER_PROVIDER || "local",
+    pythonGraderStateDir: process.env.CODEXCOMPAT_PYTHON_GRADER_STATE_DIR || path.join(stateDir, "local-python-graders"),
+    pythonGraderTimeoutMs: numberFromEnv("CODEXCOMPAT_PYTHON_GRADER_TIMEOUT_MS", 120 * 1000, 1000, 120 * 1000),
+    pythonGraderMaxSourceBytes: numberFromEnv("CODEXCOMPAT_PYTHON_GRADER_MAX_SOURCE_BYTES", 256 * 1024, 1, 256 * 1024),
+    pythonGraderDiskBytes: numberFromEnv("CODEXCOMPAT_PYTHON_GRADER_DISK_BYTES", 1024 * 1024 * 1024, 1024 * 1024, 1024 * 1024 * 1024),
+    pythonGraderMemoryBytes: numberFromEnv("CODEXCOMPAT_PYTHON_GRADER_MEMORY_BYTES", 2 * 1024 * 1024 * 1024, 64 * 1024 * 1024, 2 * 1024 * 1024 * 1024),
+    pythonGraderBin: process.env.CODEXCOMPAT_PYTHON_GRADER_BIN || "python3",
     maxTokensField: process.env.CODEXCOMPAT_MAX_TOKENS_FIELD || "max_tokens",
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     localPromptTemplates: loadLocalPromptTemplates(),
@@ -7255,6 +7262,7 @@ async function executeEvalRow(options) {
     item: row.item,
     sample,
     scoreModelRunner: (request) => runScoreModelGraderWithProvider(request, config, incomingHeaders),
+    pythonGraderOptions: pythonGraderOptions(config),
   };
   let results;
   if (sampleError) {
@@ -7441,7 +7449,7 @@ function addCriterionAggregate(criteriaAggregates, result) {
   criteriaAggregates.set(result.id, existing);
 }
 
-async function handleGraderValidate(req, res) {
+async function handleGraderValidate(req, res, config) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("grader validate request body must be a JSON object", {
@@ -7454,7 +7462,7 @@ async function handleGraderValidate(req, res) {
       param: "grader",
     });
   }
-  const grader = validateGrader(body.grader);
+  const grader = validateGrader(body.grader, { pythonGraderOptions: pythonGraderOptions(config) });
   sendJson(res, 200, { grader });
 }
 
@@ -7477,14 +7485,27 @@ async function handleGraderRun(req, res, config) {
       param: "item",
     });
   }
-  const grader = validateGrader(body.grader);
+  const grader = validateGrader(body.grader, { pythonGraderOptions: pythonGraderOptions(config) });
   const sample = normalizeRunSample(body.model_sample, body.sample);
   const response = await runGraderAsync(grader, {
     item: isPlainObject(body.item) ? clone(body.item) : {},
     sample,
     scoreModelRunner: (request) => runScoreModelGraderWithProvider(request, config, req.headers),
+    pythonGraderOptions: pythonGraderOptions(config),
   });
   sendJson(res, 200, response);
+}
+
+function pythonGraderOptions(config) {
+  return {
+    provider: config.pythonGraderProvider,
+    stateDir: config.pythonGraderStateDir,
+    timeoutMs: config.pythonGraderTimeoutMs,
+    maxSourceBytes: config.pythonGraderMaxSourceBytes,
+    diskBytes: config.pythonGraderDiskBytes,
+    memoryBytes: config.pythonGraderMemoryBytes,
+    pythonBin: config.pythonGraderBin,
+  };
 }
 
 async function runScoreModelGraderWithProvider(request, config, incomingHeaders = {}) {
@@ -8273,7 +8294,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/validate") {
-        await handleGraderValidate(req, res);
+        await handleGraderValidate(req, res, config);
         return;
       }
 
