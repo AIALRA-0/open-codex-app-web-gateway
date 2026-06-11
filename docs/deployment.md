@@ -173,6 +173,9 @@ Useful bridge flags:
 | `CODEXCOMPAT_SHELL_MEMORY_LIMIT` | `1g` | Metadata value returned on local container objects |
 | `CODEXCOMPAT_MCP_PROVIDER` | `local` | Local Responses `mcp` protocol-context adapter provider. Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS` | `true` | Enables bounded remote MCP `initialize` / `tools/list` imports for `server_url` tools without explicit local definitions |
+| `CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS` | `true` | Enables non-streaming auto-approved remote MCP `tools/call` execution through Chat function-tool proxy calls |
+| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per non-streaming Responses request |
+| `CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS` | `20000` | Maximum remote MCP tool output characters injected into the follow-up Chat tool message and returned `mcp_call.output` |
 | `CODEXCOMPAT_MCP_TIMEOUT_MS` | `5000` | Timeout for each remote MCP HTTP request |
 | `CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES` | `1048576` | Maximum bytes read from one remote MCP HTTP/SSE response |
 | `CODEXCOMPAT_MCP_MAX_TOOLS` | `128` | Maximum remote tools imported per MCP server |
@@ -240,6 +243,7 @@ npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-mcp-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-mcp-remote-list --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case responses-mcp-remote-call --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

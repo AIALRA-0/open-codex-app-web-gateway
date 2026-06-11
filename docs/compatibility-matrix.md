@@ -90,10 +90,10 @@ implementations for those tools.
 | `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
-| `tools[type=mcp]` | local MCP protocol-context adapter plus injected Chat context | Emulated locally for Chat-only providers; emits `mcp_list_tools`, imports explicit/allowed tool definitions, can fetch remote server `tools/list` over Streamable HTTP-style JSON-RPC with JSON or SSE responses, preserves caller-supplied MCP input context items, redacts `authorization` from responses and background snapshots, and records `metadata.compatibility.local_mcp`. It does not yet execute remote MCP calls |
+| `tools[type=mcp]` | local MCP protocol-context adapter plus injected Chat context and non-streaming remote call proxy | Emulated locally for Chat-only providers; emits `mcp_list_tools`, imports explicit/allowed tool definitions, can fetch remote server `tools/list` over Streamable HTTP-style JSON-RPC with JSON or SSE responses, exposes auto-approved imported remote MCP tools to upstream Chat as function tools on non-streaming requests, maps returned Chat tool calls to remote MCP `tools/call`, emits `mcp_call`, preserves caller-supplied MCP input context items, redacts `authorization` from responses and background snapshots, and records `metadata.compatibility.local_mcp`. Approval-required calls, streaming/background call loops, and hosted connector calls remain future work |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` on Responses translation and direct Chat passthrough when tool choice is present unless overridden |
-| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, `computer`, and `mcp` adapters. The shared budget is consumed before each local built-in tool call/action or local MCP list-tools item; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
+| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, `computer`, and `mcp` adapters. The shared budget is consumed before each local built-in tool call/action, local MCP list-tools item, or executed remote MCP `mcp_call`; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
@@ -965,8 +965,8 @@ optional per-request `authorization`, `require_approval`, `allowed_tools`, and
 `mcp_approval_response` items as input context.
 
 For Chat-only providers, the bridge currently implements a local MCP adapter
-that can import remote tool definitions while still keeping execution local to
-the Chat prompt context:
+that can import remote tool definitions and execute non-streaming,
+auto-approved remote MCP calls through Chat function-tool proxy calls:
 
 - reserves `mcp` tools so they are not forwarded as unsupported Chat tool
   definitions;
@@ -982,19 +982,29 @@ the Chat prompt context:
   `tools/list` pagination cursors up to local caps, preserves returned
   `annotations`, `description`, `name`, and `input_schema`, and filters the
   imported list by `allowed_tools`;
+- when a non-streaming request has imported remote tools and
+  `require_approval:"never"` or matching `require_approval.never.tool_names`,
+  exposes those remote tools to the upstream Chat provider as generated
+  function tools, maps matching Chat `tool_calls` to remote MCP `tools/call`,
+  emits Responses `mcp_call` items with `arguments`, `output`, and `error`,
+  then appends Chat `tool` messages and performs one bounded follow-up Chat
+  completion for final visible text;
 - forwards caller-provided MCP headers except hop-by-hop headers, maps
   `authorization` to an HTTP `Authorization: Bearer ...` header for that
   request only, carries returned `mcp-session-id` values on later remote list
-  requests, and enforces timeout, response-byte, and maximum-tool caps;
+  and call requests, and enforces timeout, response-byte, maximum-tool, call
+  round, and tool-output caps;
 - preserves caller-supplied MCP input items as Chat-visible context so a model
   can reason over previous MCP list/call/approval state;
 - consumes one shared `max_tool_calls` budget slot per emitted local
-  `mcp_list_tools` item and records skipped local MCP work in
+  `mcp_list_tools` item and per executed remote `mcp_call`, and records
+  skipped local MCP work in
   `metadata.compatibility.local_tool_budget`;
 - records `metadata.compatibility.local_mcp` counts for remote servers,
   connectors, imported tools, remote import attempts/successes/failures,
-  deferred servers, redacted authorization, input MCP context items, skipped
-  calls, and the current boundary;
+  remote call attempts/successes/failures, deferred servers, redacted
+  authorization, input MCP context items, skipped calls, and the current
+  boundary;
 - deletes MCP `authorization` and `headers.Authorization` from response
   objects and background job snapshots. The adapter only records that
   authorization was present.
@@ -1005,6 +1015,9 @@ Configuration:
 | --- | --- | --- |
 | `CODEXCOMPAT_MCP_PROVIDER` | `local` | Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS` | `true` | Enables bounded remote MCP `initialize` / `tools/list` imports for `server_url` tools without explicit local definitions |
+| `CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS` | `true` | Enables non-streaming auto-approved remote MCP `tools/call` execution through Chat function-tool proxy calls |
+| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per non-streaming Responses request |
+| `CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS` | `20000` | Maximum remote MCP tool output characters injected into follow-up Chat tool messages and returned `mcp_call.output` |
 | `CODEXCOMPAT_MCP_TIMEOUT_MS` | `5000` | Timeout for each remote MCP HTTP request |
 | `CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES` | `1048576` | Maximum bytes read from one remote MCP HTTP/SSE response |
 | `CODEXCOMPAT_MCP_MAX_TOOLS` | `128` | Maximum remote tools imported per MCP server |
@@ -1012,12 +1025,13 @@ Configuration:
 | `CODEXCOMPAT_MCP_CLIENT_NAME` | `open-codex-responses-bridge` | Client name sent in the remote MCP `initialize` request |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_MCP` | `true` | Disables DeepSeek thinking mode for local MCP-context requests so final text is visible under small output budgets |
 
-This is not yet a full remote MCP executor and not OpenAI hosted Connectors. It
-can import remote tool lists, but it does not execute `mcp_call` against
-external MCP servers, manage connector OAuth consent flows, or run approval
-loops. Full parity requires remote call execution, connector credential
-sidecars, approval response state machines, egress/secret policies, and audit
-review for tool outputs.
+This is not yet a full OpenAI hosted Connectors implementation. It executes
+non-streaming auto-approved `tools/call` requests for remote `server_url`
+servers, but it does not execute approval-required calls, run remote call loops
+for streaming/background Responses requests, manage connector OAuth consent
+flows, or persist hosted connector approval state. Full parity requires
+connector credential sidecars, approval response state machines, egress/secret
+policies, tool-output review, and multi-turn call replay tests.
 
 ## Image Generation
 
@@ -1216,7 +1230,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
-| OpenAI hosted MCP / Connectors full parity | The local MCP adapter covers MCP tool reservation, remote `initialize` / `tools/list` import over Streamable HTTP-style JSON-RPC with JSON/SSE responses, `mcp_list_tools` output, caller-supplied MCP input context, authorization redaction, background snapshots, streaming output items, and shared `max_tool_calls`, but it does not execute real remote `mcp_call` items or hosted connector flows | Add remote `mcp_call` execution, hosted connector OAuth/token sidecars, approval-loop state, allowlists, tool-output review, and multi-turn call replay tests |
+| OpenAI hosted MCP / Connectors full parity | The local MCP adapter covers MCP tool reservation, remote `initialize` / `tools/list` import over Streamable HTTP-style JSON-RPC with JSON/SSE responses, non-streaming auto-approved remote `tools/call` execution through Chat function-tool proxies, `mcp_list_tools` and `mcp_call` output items, caller-supplied MCP input context, authorization redaction, background snapshots, streaming list output items, and shared `max_tool_calls`, but it does not execute approval-required calls, streaming/background remote call loops, or hosted connector flows | Add hosted connector OAuth/token sidecars, approval-loop state, allowlists, tool-output review, streaming/background call loops, and multi-turn call replay tests |
 | OpenAI hosted `image_generation` / Videos full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, direct `/v1/images/variations` multipart/JSON compatibility, provider-backed Images API generations, multipart edits, and multipart variations, upstream provider SSE relay for direct Images generation/edit requests, input image and mask upload mapping, placeholder fallback, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, JSON-form `/v1/images/edits`, JSON-form `/v1/images/variations`, direct `/v1/videos`, and local Videos create/list/retrieve/delete/content protocol compatibility. It does not yet perform hosted Sora-quality video rendering, OpenAI hosted model-side prompt rewriting, or image/video-quality evals beyond protocol shape checks | Add moderation/error-detail parity, provider-backed video rendering, hosted-style prompt rewrite metadata, and image/video-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |

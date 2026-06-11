@@ -4369,6 +4369,97 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Remote MCP tools/call execution compatibility
+
+- Used current official OpenAI MCP/Connectors Responses docs through the
+  OpenAI developer-docs MCP to confirm the next request/output boundary:
+  Responses MCP tools use `tools:[{type:"mcp"}]`, `server_label`, remote
+  `server_url` or hosted `connector_id`, optional per-request
+  `authorization`, `require_approval`, `allowed_tools`, and `defer_loading`;
+  `mcp_list_tools` output carries imported tools, and `mcp_call` output carries
+  `server_label`, `name`, `arguments`, `output`, and `error`.
+- Extended the local MCP adapter from remote list-tools import to a first
+  non-streaming remote call loop for Chat-only providers:
+  - imported remote MCP tools with `require_approval:"never"` or matching
+    `require_approval.never.tool_names` are exposed to the upstream Chat
+    provider as generated function tools;
+  - matching upstream Chat `tool_calls` are translated into remote JSON-RPC
+    `tools/call` requests with the model-provided arguments;
+  - successful and failed remote tool calls are mapped back into Responses
+    `mcp_call` output items and Chat `tool` messages for one bounded follow-up
+    completion;
+  - `mcp-session-id` values from remote initialize/list calls are carried into
+    later remote call requests;
+  - `max_tool_calls` now accounts for both `mcp_list_tools` and executed
+    remote `mcp_call` items.
+- Added configuration knobs:
+  - `CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS`;
+  - `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS`;
+  - `CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS`.
+- Tightened MCP secret handling:
+  - `authorization` remains non-enumerable runtime-only state for remote call
+    execution and is not written to Responses output or background snapshots;
+  - remote MCP `tools/call` output and JSON-RPC error data are redacted if a
+    remote server echoes the current request authorization value or a Bearer
+    token-like value.
+- Added coverage:
+  - unit/mock-provider coverage for remote MCP `tools/call`, Chat function-tool
+    proxy injection, second provider call with `tool_choice:"none"`, usage
+    aggregation, budget exhaustion, session forwarding, and output redaction;
+  - a live bridge regression case, `responses-mcp-remote-call`, that starts a
+    local mock MCP server and verifies a deployed bridge performs
+    `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`
+    while DeepSeek drives the function-tool call and final response.
+- Updated `.env.example`, compatibility matrix, deployment docs, evaluation
+  plan, unit tests, and the bridge regression harness.
+- Compatibility boundary: this is now a real non-streaming, auto-approved
+  remote MCP `tools/call` executor for `server_url` tools. It still does not
+  execute approval-required remote calls, run streaming/background remote call
+  loops, manage hosted connector OAuth/token sidecars, or persist connector
+  approval state.
+- Verification:
+  - `node --check src/bridge/local_mcp.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `npm test`: passed 169/169.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; `systemctl show` reported
+    `ActiveState=active`, `SubState=running`, `MainPID=3926150`, and start
+    timestamp `Thu 2026-06-11 08:28:55 CEST`.
+  - Bridge healthz returned `ok:true`, provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Live `responses-mcp-remote-list` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 1513 ms, output `mcp-remote-ok`, total usage
+    300 tokens, and confirmed remote `initialize`,
+    `notifications/initialized`, `tools/list`, authorization forwarding, and
+    session forwarding.
+  - Live `responses-mcp-remote-call` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 2802 ms, output `mcp-remote-call-ok`, total
+    usage 1097 tokens, `remote_call_success_count:1`, and confirmed remote
+    `initialize`, `notifications/initialized`, `tools/list`, and `tools/call`.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` after bridge
+    restart: 75/75 passing cases, pass rate 1.0, average latency 1308 ms, P95
+    latency 3792 ms, and total usage 12738 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run eval:protocol`: passed 2/2, average latency 1374 ms, P95 latency
+    1407 ms, and total usage 99 tokens.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 878 runtime
+    candidates, selected 0 files, deleted 0 files, selected 0 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 878 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Recent bridge journal only showed the intentional restart sequence.
+  - Disk/storage check after cleanup: the filesystem has 42 GB available;
+    `state/` is 12 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Local Graders API and Evals grader expansion
 
 - Used current official OpenAI Graders docs/OpenAPI metadata to confirm the

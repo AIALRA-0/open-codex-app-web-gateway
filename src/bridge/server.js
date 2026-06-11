@@ -63,6 +63,8 @@ const {
 } = require("./local_computer");
 const {
   attachMcpOutput,
+  executeMcpChatToolCalls,
+  injectMcpChatTools,
   injectMcpMessages,
   localMcpToolTypes,
   mcpCompatibility,
@@ -308,6 +310,9 @@ function loadConfig(overrides = {}) {
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
     mcpProvider: process.env.CODEXCOMPAT_MCP_PROVIDER || "local",
     mcpRemoteListTools: parseBoolean(process.env.CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS, true),
+    mcpRemoteToolCalls: parseBoolean(process.env.CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS, true),
+    mcpMaxCallRounds: numberFromEnv("CODEXCOMPAT_MCP_MAX_CALL_ROUNDS", 1, 1, 5),
+    mcpMaxToolOutputChars: numberFromEnv("CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS", 20000, 1024, 1000000),
     mcpTimeoutMs: numberFromEnv("CODEXCOMPAT_MCP_TIMEOUT_MS", 5000, 500, 60000),
     mcpMaxResponseBytes: numberFromEnv("CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES", 1048576, 4096, 8388608),
     mcpMaxTools: numberFromEnv("CODEXCOMPAT_MCP_MAX_TOOLS", 128, 1, 1000),
@@ -540,6 +545,69 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
+async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, localMcp, toolBudget) {
+  const usageParts = [];
+  let current = await fetchProviderJson(config, chat, incomingHeaders);
+  if (!current.ok) return current;
+  if (current.json?.usage) usageParts.push(current.json.usage);
+
+  const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
+  for (let round = 0; round < maxRounds; round += 1) {
+    const execution = await executeMcpChatToolCalls(localMcp, current.json, config, { toolBudget });
+    if (!execution.executed) break;
+    chat.messages.push(...execution.messages);
+    if (round + 1 >= maxRounds) chat.tool_choice = "none";
+    current = await fetchProviderJson(config, chat, incomingHeaders);
+    if (!current.ok) return current;
+    if (current.json?.usage) usageParts.push(current.json.usage);
+  }
+
+  if (usageParts.length > 1 && current.json) {
+    current.json.usage = combineChatUsage(usageParts);
+  }
+  return current;
+}
+
+async function fetchProviderJson(config, chat, incomingHeaders) {
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, incomingHeaders);
+  const text = await upstream.text();
+  const json = parseJsonOrNull(text);
+  return {
+    ok: upstream.ok,
+    status: upstream.status,
+    text,
+    json,
+  };
+}
+
+function combineChatUsage(usages = []) {
+  const totals = {
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+  };
+  let sawTotal = false;
+  let reasoningTokens = 0;
+  let cachedTokens = 0;
+  for (const usage of usages) {
+    if (!isPlainObject(usage)) continue;
+    const prompt = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0) || 0;
+    const completion = Number(usage.completion_tokens ?? usage.output_tokens ?? 0) || 0;
+    totals.prompt_tokens += prompt;
+    totals.completion_tokens += completion;
+    if (usage.total_tokens != null) {
+      sawTotal = true;
+      totals.total_tokens += Number(usage.total_tokens) || 0;
+    }
+    reasoningTokens += Number(usage.completion_tokens_details?.reasoning_tokens ?? usage.output_tokens_details?.reasoning_tokens ?? 0) || 0;
+    cachedTokens += Number(usage.prompt_tokens_details?.cached_tokens ?? usage.input_tokens_details?.cached_tokens ?? usage.prompt_cache_hit_tokens ?? 0) || 0;
+  }
+  if (!sawTotal) totals.total_tokens = totals.prompt_tokens + totals.completion_tokens;
+  if (reasoningTokens) totals.completion_tokens_details = { reasoning_tokens: reasoningTokens };
+  if (cachedTokens) totals.prompt_tokens_details = { cached_tokens: cachedTokens };
+  return totals;
+}
+
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
@@ -598,6 +666,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const localMcp = await prepareMcpContext(request, config, { toolBudget });
   if (localMcp) {
     applyLocalMcpToChat(chat, compatibility, localMcp, config);
+    if (!chat.stream) injectMcpChatTools(chat, localMcp, config, { toolBudget });
   }
   const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {
@@ -626,19 +695,14 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     return;
   }
 
-  const upstream = await fetchProvider(config, config.chatCompletionsPath, chat, req.headers);
-  const upstreamText = await upstream.text();
-  let upstreamJson = null;
-  try {
-    upstreamJson = JSON.parse(upstreamText);
-  } catch {
-    // Leave null and surface the provider payload below.
-  }
-
-  if (!upstream.ok) {
-    sendJson(res, upstream.status, upstreamJson || { error: { message: upstreamText } });
+  const providerResult = await fetchProviderWithMcpToolLoop(config, chat, request, req.headers, localMcp, toolBudget);
+  if (!providerResult.ok) {
+    sendJson(res, providerResult.status, providerResult.json || { error: { message: providerResult.text } });
     return;
   }
+  const upstreamJson = providerResult.json;
+  mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
+  Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
   attachConversationToResponse(response, conversation);
@@ -677,6 +741,21 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   appendResponseToConversation(conversationStore, conversation, request, publicResponse);
 
   sendJson(res, 200, publicResponse);
+}
+
+function mergeLocalMcpCompatibility(target, source) {
+  if (!isPlainObject(source?.local_mcp)) {
+    Object.assign(target, source || {});
+    return target;
+  }
+  target.local_mcp = {
+    ...(isPlainObject(target.local_mcp) ? target.local_mcp : {}),
+    ...source.local_mcp,
+  };
+  for (const [key, value] of Object.entries(source)) {
+    if (key !== "local_mcp") target[key] = value;
+  }
+  return target;
 }
 
 function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, previousMessages, fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {

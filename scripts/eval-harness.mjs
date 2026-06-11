@@ -543,6 +543,20 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-call",
+        mode: "responses-mcp-remote",
+        remoteCall: true,
+        request: {
+          model: defaultModel,
+          instructions: "You have an MCP dice tool exposed as a function tool. First call the available tool with expression 2d4+1. After the tool result is returned, answer exactly this text and nothing else: mcp-remote-call-ok.",
+          input: "Call the remote MCP roll tool with expression 2d4+1, then return mcp-remote-call-ok.",
+          reasoning: { effort: "none" },
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          store: false,
+        },
+      },
+      {
         id: "responses-reasoning-none",
         mode: "responses",
         request: {
@@ -3207,6 +3221,7 @@ async function runChatStreamLifecycleCase(testCase, context, started) {
 
 async function runMcpRemoteCase(testCase, context, started) {
   const authValue = "eval-remote-mcp-token";
+  const wantsCall = !!testCase.remoteCall;
   const records = [];
   const mcpServer = http.createServer((req, res) => {
     const chunks = [];
@@ -3217,6 +3232,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       records.push({
         method: rpc.method || null,
         id: rpc.id,
+        params: rpc.params || null,
         headers: req.headers,
       });
       if (rpc.method === "initialize") {
@@ -3271,6 +3287,20 @@ async function runMcpRemoteCase(testCase, context, started) {
         res.end(`event: message\ndata: ${JSON.stringify(payload)}\n\n`);
         return;
       }
+      if (rpc.method === "tools/call") {
+        res.writeHead(200, {
+          "content-type": "application/json",
+          "mcp-session-id": "sess_eval_remote_mcp",
+        });
+        res.end(JSON.stringify({
+          jsonrpc: "2.0",
+          id: rpc.id,
+          result: {
+            content: [{ type: "text", text: "7" }],
+          },
+        }));
+        return;
+      }
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ error: "unknown_method", method: rpc.method }));
     });
@@ -3285,7 +3315,7 @@ async function runMcpRemoteCase(testCase, context, started) {
         server_label: "remote_eval",
         server_url: `http://127.0.0.1:${address.port}/mcp`,
         authorization: authValue,
-        headers: { "x-eval-mcp": "remote-list" },
+        headers: { "x-eval-mcp": wantsCall ? "remote-call" : "remote-list" },
         require_approval: "never",
         allowed_tools: ["roll"],
       }],
@@ -3304,12 +3334,14 @@ async function runMcpRemoteCase(testCase, context, started) {
     const text = responseOutputText(json);
     const serialized = JSON.stringify(json);
     const mcpList = (json.output || []).find((item) => item.type === "mcp_list_tools");
+    const mcpCall = (json.output || []).find((item) => item.type === "mcp_call");
     const localMcp = json.metadata?.compatibility?.local_mcp || {};
     const methods = records.map((record) => record.method);
     const initializeRecord = records.find((record) => record.method === "initialize") || {};
     const toolsListRecord = records.find((record) => record.method === "tools/list") || {};
-    const ok = /mcp-remote-ok/i.test(text)
-      && mcpList?.server_label === "remote_eval"
+    const toolsCallRecord = records.find((record) => record.method === "tools/call") || {};
+    const mcpCallArguments = parseJsonish(mcpCall?.arguments);
+    const commonOk = mcpList?.server_label === "remote_eval"
       && mcpList.tools?.length === 1
       && mcpList.tools?.[0]?.name === "roll"
       && mcpList.tools?.[0]?.description === "Roll dice remotely"
@@ -3322,18 +3354,40 @@ async function runMcpRemoteCase(testCase, context, started) {
       && localMcp.remote_import_failed_count === 0
       && localMcp.imported_tool_count === 1
       && localMcp.authorization_redacted_count === 1
-      && localMcp.boundary === "remote_list_tools_without_call_execution"
-      && json.metadata?.compatibility?.local_tool_budget?.used === 1
       && methods.includes("initialize")
       && methods.includes("notifications/initialized")
       && methods.includes("tools/list")
       && initializeRecord.headers?.authorization === `Bearer ${authValue}`
-      && initializeRecord.headers?.["x-eval-mcp"] === "remote-list"
+      && initializeRecord.headers?.["x-eval-mcp"] === (wantsCall ? "remote-call" : "remote-list")
       && /application\/json/.test(String(initializeRecord.headers?.accept || ""))
       && /text\/event-stream/.test(String(initializeRecord.headers?.accept || ""))
       && toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
       && !serialized.includes(authValue)
       && !serialized.includes("hidden_tool");
+    const ok = commonOk && (
+      wantsCall
+        ? /mcp-remote-call-ok/i.test(text)
+          && mcpCall?.server_label === "remote_eval"
+          && mcpCall?.name === "roll"
+          && mcpCall?.output === "7"
+          && !mcpCall?.error
+          && mcpCallArguments?.expression === "2d4+1"
+          && methods.includes("tools/call")
+          && toolsCallRecord.headers?.authorization === `Bearer ${authValue}`
+          && toolsCallRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
+          && toolsCallRecord.params?.name === "roll"
+          && toolsCallRecord.params?.arguments?.expression === "2d4+1"
+          && localMcp.remote_call_tool_count === 1
+          && localMcp.remote_call_attempt_count === 1
+          && localMcp.remote_call_success_count === 1
+          && localMcp.remote_call_failed_count === 0
+          && localMcp.boundary === "remote_list_tools_and_call_execution"
+          && json.metadata?.compatibility?.local_tool_budget?.used === 2
+          && json.metadata?.compatibility?.local_tool_budget?.exhausted === true
+        : /mcp-remote-ok/i.test(text)
+          && localMcp.boundary === "remote_list_tools_without_call_execution"
+          && json.metadata?.compatibility?.local_tool_budget?.used === 1
+    );
     return finishResult(testCase, context, started, {
       ok,
       status: response.status,
@@ -3341,6 +3395,7 @@ async function runMcpRemoteCase(testCase, context, started) {
       output_text: text,
       remote_import_success_count: localMcp.remote_import_success_count || 0,
       imported_tool_count: localMcp.imported_tool_count || 0,
+      remote_call_success_count: localMcp.remote_call_success_count || 0,
       mcp_methods: methods,
       mcp_auth_forwarded: initializeRecord.headers?.authorization === `Bearer ${authValue}`,
       session_forwarded: toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp",
