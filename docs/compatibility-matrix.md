@@ -90,9 +90,10 @@ implementations for those tools.
 | `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
+| `tools[type=mcp]` | local MCP protocol-context adapter plus injected Chat context | Emulated locally as protocol context for Chat-only providers; emits `mcp_list_tools`, imports explicit/allowed tool definitions, preserves caller-supplied MCP input context items, redacts `authorization` from responses and background snapshots, and records `metadata.compatibility.local_mcp`. It does not yet execute remote MCP calls |
 | other hosted tools | compatibility system notice | Requires local hosted-tool executors |
 | `tool_choice` | `tool_choice` | Direct for `auto`, `none`, `required`, function name; DeepSeek defaults to `thinking:{type:"disabled"}` on Responses translation and direct Chat passthrough when tool choice is present unless overridden |
-| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, and `computer` adapters. The shared budget is consumed before each local built-in tool call/action; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
+| `max_tool_calls` | local hosted-tool call budget | Emulated for local `web_search`, `file_search`, `shell`, `code_interpreter`, `computer`, and `mcp` adapters. The shared budget is consumed before each local built-in tool call/action or local MCP list-tools item; skipped calls are recorded in `metadata.compatibility.local_tool_budget` and the tool-specific compatibility block |
 | `text.format.type=text` | omitted/default | Direct |
 | `text.format.type=json_object` | `response_format: {type:"json_object"}` | Provider-dependent |
 | `text.format.type=json_schema` | `response_format.json_schema`, or DeepSeek default `json_object` plus schema instruction | Provider-dependent |
@@ -649,17 +650,18 @@ bridge emits a screenshot-first `computer_call` item before Chat text deltas.
 Responses `max_tool_calls` limits the total number of built-in tool calls a
 response may process. Chat-only providers do not enforce this for hosted tools,
 so the bridge applies a shared local budget before executing emulated
-`web_search`, `file_search`, `shell`, `code_interpreter`, and `computer`
+`web_search`, `file_search`, `shell`, `code_interpreter`, `computer`, and `mcp`
 actions. The current deterministic adapter order is shell/code-interpreter,
-then computer, then web search, then file search, matching the bridge's local
-execution pipeline.
+then computer, then MCP, then web search, then file search, matching the
+bridge's local execution pipeline.
 
 When the budget is exhausted, the bridge does not run the extra local action,
 does not fabricate tool output, and records the skipped action under
 `metadata.compatibility.local_tool_budget.skipped_calls`. Tool-specific
 compatibility metadata also exposes skipped counters such as
 `local_web_search.open_skipped_count`, `local_file_search.skipped_count`, and
-`local_shell.skipped_count`, and `local_computer.skipped_count`. Invalid
+`local_shell.skipped_count`, `local_computer.skipped_count`, and
+`local_mcp.skipped_count`. Invalid
 non-integer or negative `max_tool_calls` values are rejected with
 `400 invalid_max_tool_calls`.
 
@@ -952,6 +954,51 @@ server-side executor must run returned actions and send
 VNC-backed execution harness, safety-check acknowledgement flow, DOM/screenshot
 capture, secrets isolation, per-session cleanup, and multi-action loop control.
 
+## Local MCP Tool Adapter
+
+OpenAI Responses supports MCP tools through `tools:[{type:"mcp"}]` with a
+`server_label`, a remote `server_url` or hosted connector `connector_id`,
+optional per-request `authorization`, `require_approval`, `allowed_tools`, and
+`defer_loading`. The Responses output stream can include `mcp_list_tools`,
+`mcp_call`, and `mcp_approval_request` items, and callers can send prior
+`mcp_list_tools`, `mcp_call`, `mcp_approval_request`, and
+`mcp_approval_response` items as input context.
+
+For Chat-only providers, the bridge currently implements a local protocol
+context adapter:
+
+- reserves `mcp` tools so they are not forwarded as unsupported Chat tool
+  definitions;
+- emits local `mcp_list_tools` output items for non-streaming, streaming, and
+  background Responses requests;
+- imports explicit `tools` / `tool_definitions` from the MCP tool object when
+  present, or synthesizes generic definitions from `allowed_tools` when the
+  request supplies only names;
+- preserves caller-supplied MCP input items as Chat-visible context so a model
+  can reason over previous MCP list/call/approval state;
+- consumes one shared `max_tool_calls` budget slot per emitted local
+  `mcp_list_tools` item and records skipped local MCP work in
+  `metadata.compatibility.local_tool_budget`;
+- records `metadata.compatibility.local_mcp` counts for remote servers,
+  connectors, imported tools, deferred servers, redacted authorization, input
+  MCP context items, skipped calls, and the current boundary;
+- deletes MCP `authorization` and `headers.Authorization` from response
+  objects and background job snapshots. The adapter only records that
+  authorization was present.
+
+Configuration:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `CODEXCOMPAT_MCP_PROVIDER` | `local` | Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_MCP` | `true` | Disables DeepSeek thinking mode for local MCP-context requests so final text is visible under small output budgets |
+
+This is not yet a remote MCP executor and not OpenAI hosted Connectors. It does
+not open Streamable HTTP/SSE sessions, execute `mcp_call` against external MCP
+servers, manage OAuth consent flows, or run approval loops. Full parity requires
+remote MCP transport clients, connector credential sidecars, approval response
+state machines, egress/secret policies, and audit review for tool outputs.
+
 ## Image Generation
 
 Responses `tools:[{type:"image_generation"}]` requests are reserved for local
@@ -1149,6 +1196,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet perform click/type/scroll/drag loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement, multi-action loops, per-session isolation, and cleanup policies |
+| OpenAI hosted MCP / Connectors full parity | The local MCP adapter covers MCP tool reservation, `mcp_list_tools` output, caller-supplied MCP input context, authorization redaction, background snapshots, streaming output items, and shared `max_tool_calls`, but it is not a remote MCP transport client and does not execute real `mcp_call` items | Add Streamable HTTP/SSE transport execution, hosted connector OAuth/token sidecars, approval-loop state, allowlists, tool-output review, and multi-turn call replay tests |
 | OpenAI hosted `image_generation` / Videos full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, direct `/v1/images/variations` multipart/JSON compatibility, provider-backed Images API generations, multipart edits, and multipart variations, upstream provider SSE relay for direct Images generation/edit requests, input image and mask upload mapping, placeholder fallback, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, JSON-form `/v1/images/edits`, JSON-form `/v1/images/variations`, direct `/v1/videos`, and local Videos create/list/retrieve/delete/content protocol compatibility. It does not yet perform hosted Sora-quality video rendering, OpenAI hosted model-side prompt rewriting, or image/video-quality evals beyond protocol shape checks | Add moderation/error-detail parity, provider-backed video rendering, hosted-style prompt rewrite metadata, and image/video-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |

@@ -488,6 +488,48 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.prompt_template?.source === "inline_template",
       },
       {
+        id: "responses-mcp-local",
+        mode: "responses",
+        request: {
+          model: defaultModel,
+          instructions: "The local bridge handles MCP compatibility context. Return exactly this text and nothing else: mcp-local-ok.",
+          input: [
+            { role: "user", content: "Use the docs MCP context shape and return mcp-local-ok." },
+            {
+              type: "mcp_call",
+              server_label: "docs",
+              name: "search",
+              arguments: "{\"query\":\"bridge compatibility\"}",
+              output: "{\"matches\":1}",
+            },
+          ],
+          tools: [{
+            type: "mcp",
+            server_label: "docs",
+            server_description: "Documentation search connector",
+            connector_id: "connector_dropbox",
+            require_approval: "never",
+            allowed_tools: ["search"],
+          }],
+          max_tool_calls: 1,
+          max_output_tokens: 64,
+          store: false,
+        },
+        check: ({ json, text }) => {
+          const mcpList = (json.output || []).find((item) => item.type === "mcp_list_tools");
+          const localMcp = json.metadata?.compatibility?.local_mcp || {};
+          return /mcp-local-ok/i.test(text)
+            && mcpList?.server_label === "docs"
+            && mcpList.tools?.[0]?.name === "search"
+            && localMcp.provider === "local"
+            && localMcp.connector_count === 1
+            && localMcp.imported_tool_count === 1
+            && localMcp.input_item_count === 1
+            && localMcp.deepseek_thinking === "disabled_for_local_mcp"
+            && json.metadata?.compatibility?.local_tool_budget?.used === 1;
+        },
+      },
+      {
         id: "responses-reasoning-none",
         mode: "responses",
         request: {

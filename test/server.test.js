@@ -2712,6 +2712,235 @@ test("POST /v1/responses emits local computer_call for computer tools", async ()
   });
 });
 
+test("POST /v1/responses emits local mcp_list_tools context without leaking authorization", async () => {
+  const authValue = "redaction-fixture-value-for-mcp-list-tools";
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.equal(call.body.tool_choice, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses MCP compatibility is active/);
+    assert.match(prompt, /server_label: dmcp/);
+    assert.match(prompt, /imported_tools: roll/);
+    assert.match(prompt, /authorization: provided but redacted by bridge/);
+    assert.match(prompt, /mcp_call server_label=dmcp name=roll/);
+    assert.doesNotMatch(prompt, new RegExp(authValue));
+    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_mcp",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "mcp-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          { role: "user", content: "Use the dmcp MCP context and return mcp-ok." },
+          {
+            type: "mcp_call",
+            server_label: "dmcp",
+            name: "roll",
+            arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+            output: "4",
+          },
+        ],
+        tools: [{
+          type: "mcp",
+          server_label: "dmcp",
+          server_description: "Dice roller server",
+          server_url: "https://dmcp.example.test/sse",
+          authorization: authValue,
+          require_approval: "never",
+          allowed_tools: ["roll"],
+        }],
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "mcp_list_tools");
+    assert.equal(json.output[0].server_label, "dmcp");
+    assert.equal(json.output[0].tools[0].name, "roll");
+    assert.equal(json.output[1].type, "message");
+    assert.equal(json.output[1].content[0].text, "mcp-ok");
+    assert.equal(json.metadata.compatibility.local_mcp.provider, "local");
+    assert.equal(json.metadata.compatibility.local_mcp.server_count, 1);
+    assert.equal(json.metadata.compatibility.local_mcp.remote_server_count, 1);
+    assert.equal(json.metadata.compatibility.local_mcp.imported_tool_count, 1);
+    assert.equal(json.metadata.compatibility.local_mcp.authorization_redacted_count, 1);
+    assert.equal(json.metadata.compatibility.local_mcp.input_item_count, 1);
+    assert.equal(json.metadata.compatibility.local_mcp.deepseek_thinking, "disabled_for_local_mcp");
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 0,
+      exhausted: true,
+    });
+    assert.doesNotMatch(JSON.stringify(json), new RegExp(authValue));
+  });
+});
+
+test("POST /v1/responses background redacts mcp authorization from persisted job", async () => {
+  const authValue = "redaction-fixture-value-for-background-mcp";
+  let releaseProvider;
+  const providerRelease = new Promise((resolve) => {
+    releaseProvider = resolve;
+  });
+
+  await withMockProvider(async (_req, res) => {
+    await providerRelease;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_background_mcp",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "background-mcp-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use docs MCP context in the background.",
+        background: true,
+        tools: [{
+          type: "mcp",
+          server_label: "docs",
+          server_url: "https://docs.example.test/sse",
+          authorization: authValue,
+          headers: {
+            Authorization: authValue,
+            "x-safe-header": "kept",
+          },
+          allowed_tools: ["search"],
+        }],
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.status, "in_progress");
+    assert.doesNotMatch(JSON.stringify(createdJson), new RegExp(authValue));
+
+    const store = new FileResponseStore({ dir: stateDir });
+    let record = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      record = store.get(createdJson.id);
+      if (record?.background_job?.request) break;
+      await sleep(20);
+    }
+
+    assert.ok(record?.background_job?.request);
+    assert.equal(record.response.tools[0].authorization, undefined);
+    assert.equal(record.response.tools[0].headers.Authorization, undefined);
+    assert.equal(record.response.tools[0].headers["x-safe-header"], "kept");
+    assert.equal(record.background_job.request.tools[0].authorization, undefined);
+    assert.equal(record.background_job.request.tools[0].headers.Authorization, undefined);
+    assert.equal(record.background_job.request.tools[0].headers["x-safe-header"], "kept");
+    assert.doesNotMatch(JSON.stringify(record), new RegExp(authValue));
+
+    releaseProvider();
+    let finalJson = null;
+    for (let attempt = 0; attempt < 20; attempt += 1) {
+      await sleep(20);
+      const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
+      finalJson = await fetched.json();
+      if (finalJson.status === "completed") break;
+    }
+
+    assert.equal(finalJson.status, "completed");
+    assert.equal(finalJson.output[0].type, "mcp_list_tools");
+    assert.equal(finalJson.output[1].content[0].text, "background-mcp-ok");
+    assert.doesNotMatch(JSON.stringify(finalJson), new RegExp(authValue));
+  });
+});
+
+test("POST /v1/responses streams local mcp_list_tools output items", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses MCP compatibility is active/);
+    assert.match(prompt, /server_label: docs/);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_mcp",
+      object: "chat.completion.chunk",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: "stream-mcp-ok" },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_mcp",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    })}\n\n`);
+    res.end("data: [DONE]\n\n");
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use docs MCP context and return stream-mcp-ok.",
+        stream: true,
+        tools: [{
+          type: "mcp",
+          server_label: "docs",
+          connector_id: "connector_dropbox",
+          require_approval: { never: { tool_names: ["search"] } },
+          allowed_tools: { tool_names: ["search"] },
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const mcpEvent = events.find((event) => (
+      event.event === "response.output_item.added"
+      && event.data.item?.type === "mcp_list_tools"
+    ));
+    assert.ok(mcpEvent);
+    assert.equal(mcpEvent.data.item.server_label, "docs");
+    assert.equal(mcpEvent.data.item.tools[0].name, "search");
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output[0].type, "mcp_list_tools");
+    assert.equal(completed.metadata.compatibility.local_mcp.connector_count, 1);
+    assert.equal(completed.metadata.compatibility.local_mcp.imported_tool_count, 1);
+    assert.equal(completed.metadata.compatibility.local_mcp.deepseek_thinking, "disabled_for_local_mcp");
+    assert.match(events.map((event) => event.data?.delta || "").join(""), /stream-mcp-ok/);
+  });
+});
+
 test("POST /v1/responses emits local image_generation_call for image_generation tools", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

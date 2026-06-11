@@ -62,6 +62,14 @@ const {
   prepareComputerContext,
 } = require("./local_computer");
 const {
+  attachMcpOutput,
+  injectMcpMessages,
+  localMcpToolTypes,
+  mcpCompatibility,
+  mcpOutputItems,
+  prepareMcpContext,
+} = require("./local_mcp");
+const {
   attachImageGenerationOutput,
   createImagesEditEventStream,
   createImagesEditResponse,
@@ -298,6 +306,7 @@ function loadConfig(overrides = {}) {
     shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
+    mcpProvider: process.env.CODEXCOMPAT_MCP_PROVIDER || "local",
     audioProvider: process.env.CODEXCOMPAT_AUDIO_PROVIDER || "placeholder",
     audioSpeechModel: process.env.CODEXCOMPAT_AUDIO_SPEECH_MODEL || "gpt-4o-mini-tts",
     audioTranscriptionModel: process.env.CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL || "gpt-4o-transcribe",
@@ -343,6 +352,7 @@ function loadConfig(overrides = {}) {
     deepseekDisableThinkingForLocalFileSearch: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_FILE_SEARCH, true),
     deepseekDisableThinkingForLocalShell: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_SHELL, true),
     deepseekDisableThinkingForLocalComputer: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_COMPUTER, true),
+    deepseekDisableThinkingForLocalMcp: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_MCP, true),
     deepseekDisableThinkingForLocalImageGeneration: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_IMAGE_GENERATION, true),
     deepseekDisableThinkingForInputFiles: parseBoolean(process.env.CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_INPUT_FILES, true),
     chatDeveloperRoleCompat: parseBoolean(process.env.CODEXCOMPAT_CHAT_DEVELOPER_ROLE_COMPAT, deepseekProvider),
@@ -544,6 +554,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     ...localFileSearchToolTypes(request.tools || [], config),
     ...localShellToolTypes(request.tools || [], config),
     ...localComputerToolTypes(request.tools || [], config),
+    ...localMcpToolTypes(request.tools || [], config),
     ...localImageGenerationToolTypes(request.tools || [], config),
   ];
   const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
@@ -578,6 +589,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localComputer) {
     applyLocalComputerToChat(chat, compatibility, localComputer, config);
   }
+  const localMcp = await prepareMcpContext(request, config, { toolBudget });
+  if (localMcp) {
+    applyLocalMcpToChat(chat, compatibility, localMcp, config);
+  }
   const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {
     applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config);
@@ -601,7 +616,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
-    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, conversationStore, conversation);
+    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, localMcp, conversationStore, conversation);
     return;
   }
 
@@ -623,6 +638,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
+  attachMcpOutput(response, localMcp);
   attachImageGenerationOutput(response, localImageGeneration);
   attachWebSearchOutput(response, localWebSearch, { includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
@@ -743,7 +759,7 @@ function startBackgroundJob(params) {
   return job;
 }
 
-const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "image_generation", "web_search", "file_search", "truncation"];
+const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "mcp", "image_generation", "web_search", "file_search", "truncation"];
 
 async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
   try {
@@ -907,6 +923,15 @@ async function runBackgroundPrepareStep(step, { config, store, job, request, pre
     return {};
   }
 
+  if (step === "mcp") {
+    const localMcp = await prepareMcpContext(request, config, { toolBudget: runtime.toolBudget });
+    runtime.contexts.mcp = localMcp;
+    if (localMcp) {
+      runtime.compatibility = applyLocalMcpToChat(runtime.chat, { ...runtime.compatibility }, localMcp, config);
+    }
+    return {};
+  }
+
   if (step === "image_generation") {
     const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
     const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget: runtime.toolBudget });
@@ -981,6 +1006,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
   return [
     ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
+    ...mcpOutputItems(contexts.mcp),
     ...imageGenerationOutputItems(contexts.image_generation),
     ...webSearchOutputItems(contexts.web_search, { includeSources: true }),
     ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
@@ -1133,7 +1159,7 @@ function backgroundJobState({
     stage,
     created_at: Date.now(),
     updated_at: Date.now(),
-    request: clone(request || {}),
+    request: redactStoredRequestSecrets(request || {}),
     chat: clone(chat || {}),
     compatibility: clone(compatibility || {}),
     previous_messages: clone(previousMessages || []),
@@ -1141,6 +1167,29 @@ function backgroundJobState({
     local_output_items: clone(local_output_items || []),
     ...(isPlainObject(lease) ? { lease: clone(lease) } : {}),
   };
+}
+
+function redactStoredRequestSecrets(request = {}) {
+  const sanitized = clone(request || {});
+  if (Array.isArray(sanitized.tools)) {
+    sanitized.tools = sanitized.tools.map((tool) => redactStoredToolSecrets(tool));
+  }
+  return sanitized;
+}
+
+function redactStoredToolSecrets(tool) {
+  if (!isPlainObject(tool)) return tool;
+  const sanitized = clone(tool);
+  if (sanitized.type === "mcp") {
+    delete sanitized.authorization;
+    if (isPlainObject(sanitized.headers)) {
+      for (const key of Object.keys(sanitized.headers)) {
+        if (key.toLowerCase() === "authorization") delete sanitized.headers[key];
+      }
+      if (!Object.keys(sanitized.headers).length) delete sanitized.headers;
+    }
+  }
+  return sanitized;
 }
 
 function persistBackgroundJobState(store, responseId, patch = {}, job = null) {
@@ -1153,6 +1202,9 @@ function persistBackgroundJobState(store, responseId, patch = {}, job = null) {
     version: existing.version || 1,
     updated_at: Date.now(),
   };
+  if (isPlainObject(next.request)) {
+    next.request = redactStoredRequestSecrets(next.request);
+  }
   if (job?.lease_owner) {
     next.lease = createBackgroundJobLease(job.lease_owner, job.lease_ttl_ms, existing.lease);
   }
@@ -1634,6 +1686,19 @@ function applyLocalComputerToChat(chat, compatibility, localComputer, config) {
     compatibility.local_computer = {
       ...(compatibility.local_computer || {}),
       deepseek_thinking: "disabled_for_local_computer",
+    };
+  }
+  return compatibility;
+}
+
+function applyLocalMcpToChat(chat, compatibility, localMcp, config) {
+  injectMcpMessages(chat, localMcp);
+  Object.assign(compatibility, mcpCompatibility(localMcp));
+  if (config.deepseekDisableThinkingForLocalMcp && !config.deepseekThinkingMode) {
+    chat.thinking = { type: "disabled" };
+    compatibility.local_mcp = {
+      ...(compatibility.local_mcp || {}),
+      deepseek_thinking: "disabled_for_local_mcp",
     };
   }
   return compatibility;
@@ -2774,7 +2839,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, conversationStore = null, conversation = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, conversationStore = null, conversation = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
@@ -2790,6 +2855,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   writeSse(res, "response.in_progress", sequence(state, { type: "response.in_progress", response: clone(response) }));
   emitShellStreamItems(res, state, localShell);
   emitComputerStreamItems(res, state, localComputer);
+  emitMcpStreamItems(res, state, localMcp);
   emitImageGenerationStreamItems(res, state, localImageGeneration);
   emitWebSearchStreamItems(res, state, localWebSearch);
   emitFileSearchStreamItems(res, state, localFileSearch);
@@ -2970,6 +3036,18 @@ function emitShellStreamItems(res, state, context) {
 
 function emitComputerStreamItems(res, state, context) {
   for (const item of computerOutputItems(context)) {
+    state.response.output.push(item);
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: state.response.output.length - 1,
+      item: clone(item),
+    }));
+  }
+}
+
+function emitMcpStreamItems(res, state, context) {
+  for (const item of mcpOutputItems(context)) {
     state.response.output.push(item);
     writeSse(res, "response.output_item.added", sequence(state, {
       type: "response.output_item.added",

@@ -6635,3 +6635,80 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 23 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Local MCP protocol-context compatibility
+
+- Used current official OpenAI MCP/Connectors Responses docs through the
+  OpenAI developer-docs MCP to confirm the request and output protocol shape:
+  `tools:[{type:"mcp"}]`, `server_label`, remote `server_url` or connector
+  `connector_id`, optional per-request `authorization`, `require_approval`,
+  `allowed_tools`, `defer_loading`, plus `mcp_list_tools`, `mcp_call`,
+  `mcp_approval_request`, and `mcp_approval_response` item flow.
+- Added a local MCP compatibility adapter for Chat-only providers:
+  - reserves MCP tools so they are not forwarded upstream as unsupported Chat
+    tools;
+  - emits `mcp_list_tools` output items for non-streaming, streaming, and
+    background Responses requests;
+  - injects MCP server/tool/context summaries into Chat messages so the model
+    can reason over prior MCP state;
+  - imports explicit/allowed tool definitions, handles remote-server and
+    connector metadata, supports `defer_loading`, and records local MCP counts
+    under `metadata.compatibility.local_mcp`;
+  - consumes the shared local `max_tool_calls` budget for emitted list-tools
+    items and records skipped local MCP work in local budget metadata.
+- Tightened MCP secret handling:
+  - `authorization` and `headers.Authorization` are removed from public
+    Responses `tools` snapshots, matching the OpenAI docs boundary that MCP
+    authorization is not stored or visible on the Response object;
+  - background job request snapshots are also redacted during initial queueing
+    and later `provider_pending` persistence.
+- Added live and mock-provider coverage:
+  - `responses-mcp-local` in the bridge regression harness;
+  - non-streaming unit coverage for `mcp_list_tools`, Chat prompt injection,
+    DeepSeek thinking disablement, local budget consumption, prior `mcp_call`
+    context, and no authorization leakage;
+  - streaming unit coverage for `response.output_item.added` MCP output;
+  - background unit coverage that inspects persisted `background_job.request`
+    and confirms MCP authorization is not written to disk.
+- Kept the compatibility boundary explicit: this is a local protocol-context
+  adapter, not a remote MCP transport executor, not hosted OpenAI Connectors,
+  and not an OAuth/approval-loop runtime. Full parity still requires
+  Streamable HTTP/SSE execution, connector token sidecars, approval state,
+  allowlists, and tool-output audit review.
+- Updated `.env.example`, compatibility matrix, deployment docs, evaluation
+  plan, unit tests, and the bridge regression harness.
+- Verification:
+  - `node --check src/bridge/local_mcp.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused MCP/background server tests passed through `test/server.test.js`,
+    including authorization redaction for public responses and persisted
+    background jobs.
+  - `npm test`: passed 167/167.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `responses-mcp-local` bridge-regression case passed 1/1 against
+    `deepseek-v4-pro`, latency 1356 ms, output `mcp-local-ok`, and total usage
+    289 tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` after bridge
+    restart: 73/73 passing cases, pass rate 1.0, average latency 1139 ms, P95
+    latency 2794 ms, and total usage 11191 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 838 runtime
+    candidates, selected 0 files, deleted 0 files, selected 0 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 838 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem has 40 GB available;
+    `state/` is 11 MB, `output/` is 4.7 MB,
+    `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

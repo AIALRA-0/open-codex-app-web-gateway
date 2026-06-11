@@ -1012,7 +1012,7 @@ function createResponseSkeleton(request = {}, overrides = {}) {
     temperature: request.temperature ?? 1,
     text: request.text || clone(DEFAULT_TEXT),
     tool_choice: request.tool_choice ?? "auto",
-    tools: request.tools || [],
+    tools: sanitizeResponseTools(request.tools || []),
     top_logprobs: request.top_logprobs ?? 0,
     top_p: request.top_p ?? 1,
     truncation: request.truncation ?? "disabled",
@@ -1020,6 +1020,24 @@ function createResponseSkeleton(request = {}, overrides = {}) {
     user: request.user ?? null,
     metadata: request.metadata || {},
   };
+}
+
+function sanitizeResponseTools(tools = []) {
+  if (!Array.isArray(tools)) return [];
+  return tools.map((tool) => {
+    if (!isPlainObject(tool)) return tool;
+    const sanitized = clone(tool);
+    if (sanitized.type === "mcp") {
+      delete sanitized.authorization;
+      if (isPlainObject(sanitized.headers)) {
+        for (const key of Object.keys(sanitized.headers)) {
+          if (key.toLowerCase() === "authorization") delete sanitized.headers[key];
+        }
+        if (!Object.keys(sanitized.headers).length) delete sanitized.headers;
+      }
+    }
+    return sanitized;
+  });
 }
 
 function chatCompletionToResponse(chat, request = {}, options = {}) {
