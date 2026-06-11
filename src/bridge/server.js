@@ -10251,10 +10251,11 @@ async function prepareAssistantChatRequest({
   containerStore,
   skillStore,
 }) {
-  const chat = assistantRunToChatRequest(run, messages, config, chatOptions);
+  const messageTruncation = assistantRunThreadMessagesForChat(run, messages);
+  const chat = assistantRunToChatRequest(run, messageTruncation.messages, config, chatOptions);
   const contexts = {};
   const compatibility = {};
-  const input = assistantLocalToolInput(messages, chatOptions);
+  const input = assistantLocalToolInput(messageTruncation.messages, chatOptions);
   const localHostedToolTypes = assistantLocalHostedToolTypes(run);
 
   const fileSearchTools = assistantFileSearchTools(run);
@@ -10296,10 +10297,87 @@ async function prepareAssistantChatRequest({
       hosted_tools_supported: true,
       local_hosted_tool_types: localHostedToolTypes,
       local_hosted_tool_call_count: hostedToolCalls.length,
+      ...(messageTruncation.compatibility ? { truncation: messageTruncation.compatibility } : {}),
       ...(contexts.file_search ? { local_file_search_status: fileSearchCompatibility(contexts.file_search).local_file_search?.status } : {}),
       ...(contexts.shell ? { local_code_interpreter_status: shellCompatibility(contexts.shell).local_shell?.status } : {}),
     },
   };
+}
+
+function assistantRunThreadMessagesForChat(run, threadMessages = []) {
+  const originalMessages = Array.isArray(threadMessages) ? threadMessages : [];
+  let selected = originalMessages.slice();
+  const strategy = isPlainObject(run?.truncation_strategy)
+    ? run.truncation_strategy
+    : { type: "auto", last_messages: null };
+  const compatibility = {
+    original_message_count: originalMessages.length,
+    included_message_count: selected.length,
+  };
+
+  const lastMessages = Number(strategy.last_messages);
+  if (strategy.type === "last_messages" && Number.isInteger(lastMessages) && lastMessages >= 0) {
+    selected = lastMessages === 0 ? [] : selected.slice(-lastMessages);
+    Object.assign(compatibility, {
+      strategy: "last_messages",
+      last_messages: lastMessages,
+      dropped_message_count: originalMessages.length - selected.length,
+      included_message_count: selected.length,
+    });
+  } else if (strategy.type && strategy.type !== "auto") {
+    Object.assign(compatibility, {
+      strategy: stringifyContent(strategy.type),
+      unsupported_strategy: true,
+      reason: "unknown_truncation_strategy_preserved",
+    });
+  }
+
+  const maxPromptTokens = Number(run?.max_prompt_tokens);
+  if (Number.isFinite(maxPromptTokens) && maxPromptTokens > 0) {
+    const estimatedBefore = assistantRunPromptTokenEstimate(run, selected);
+    let estimatedAfter = estimatedBefore;
+    let budgetDropped = 0;
+    const budgetDroppedRoles = {};
+    while (selected.length && estimatedAfter > maxPromptTokens) {
+      const [dropped] = selected.splice(0, 1);
+      budgetDropped += 1;
+      const role = dropped?.role === "assistant" ? "assistant" : "user";
+      budgetDroppedRoles[role] = (budgetDroppedRoles[role] || 0) + 1;
+      estimatedAfter = assistantRunPromptTokenEstimate(run, selected);
+    }
+    Object.assign(compatibility, {
+      max_prompt_tokens: maxPromptTokens,
+      prompt_token_estimate_source: "json_chars_div4",
+      estimated_prompt_tokens_before_budget: estimatedBefore,
+      estimated_prompt_tokens_after_budget: estimatedAfter,
+      max_prompt_tokens_budget_status: estimatedAfter <= maxPromptTokens ? "applied" : "exceeded",
+      budget_dropped_message_count: budgetDropped,
+      budget_dropped_roles: budgetDroppedRoles,
+      included_message_count: selected.length,
+    });
+  }
+
+  const changed = compatibility.strategy === "last_messages"
+    || compatibility.dropped_message_count
+    || compatibility.budget_dropped_message_count
+    || compatibility.unsupported_strategy
+    || compatibility.max_prompt_tokens;
+  return {
+    messages: selected,
+    compatibility: changed ? compatibility : null,
+  };
+}
+
+function assistantRunPromptTokenEstimate(run, threadMessages = []) {
+  const chatMessages = [];
+  const instructions = stringifyContent(run?.instructions).trim();
+  if (instructions) chatMessages.push({ role: "system", content: instructions });
+  for (const message of threadMessages) {
+    const role = message?.role === "assistant" ? "assistant" : "user";
+    const content = assistantMessageContentText(message?.content);
+    if (content) chatMessages.push({ role, content });
+  }
+  return Math.ceil(estimateChatMessagesChars(chatMessages) / 4);
 }
 
 function assistantLocalToolInput(messages = [], chatOptions = {}) {

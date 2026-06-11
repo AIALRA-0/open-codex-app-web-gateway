@@ -8048,3 +8048,78 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` was 24 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Assistants run truncation and prompt budget
+
+- Used the official OpenAI Assistants create-run/create-thread-and-run
+  reference to confirm the next local compatibility target:
+  - `truncation_strategy` controls how a thread is truncated before a Run;
+  - `max_prompt_tokens` is a best-effort prompt-token budget over the Run and
+    can lead to hosted `incomplete` status when exceeded;
+  - `max_completion_tokens` remains the completion-token budget and is already
+    forwarded through the existing Chat compatibility path.
+- Closed the first Chat-only compatibility gap for Assistants Run context
+  shaping:
+  - local Run creation now applies
+    `truncation_strategy:{type:"last_messages",last_messages:n}` before
+    building the upstream Chat request;
+  - local Assistants hosted-tool adapters (`file_search` and
+    `code_interpreter`) receive the same selected thread message set as the
+    model request;
+  - local Run creation applies `max_prompt_tokens` as a best-effort prompt
+    budget using serialized Chat-message characters divided by four, dropping
+    oldest selected thread messages until the estimate fits;
+  - compatibility metadata now records
+    `metadata.compatibility.local_assistants.truncation` with original,
+    included, and dropped message counts, estimated prompt-token counts,
+    budget status, and the estimate source.
+- Extended regression coverage:
+  - added a unit/mock-provider Assistants test proving old thread messages are
+    removed from the upstream Chat request while the persisted Run keeps
+    `truncation_strategy` and `max_prompt_tokens`;
+  - added live bridge-regression case `assistants-truncation` that creates a
+    two-message thread, runs with `last_messages:1`, and validates the output
+    marker plus persisted compatibility metadata.
+- Updated docs:
+  - compatibility matrix now documents Assistants Run truncation and
+    prompt-budget behavior, including the local estimation boundary;
+  - evaluation plan now lists the mock-provider and live regression coverage
+    plus the focused `assistants-truncation` harness command.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 15/15.
+  - `npm test`: passed 192/192.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `assistants-truncation` passed 1/1 against `deepseek-v4-pro`, latency
+    3857 ms, output `assistants-truncation-live-ok`, 3 messages, 1 run,
+    1 dropped message, 1 included message, `max_prompt_tokens:96`, and
+    94 total tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 90/90,
+    pass rate 1.0, average latency 1499 ms, P95 latency 4076 ms, and total
+    usage 22241 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    2256 ms, P95 latency 2717 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising sidebar navigation,
+    core pages, project dialog/upload, prompt submission, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks; screenshot
+    written to `output/playwright/ui-smoke-2026-06-11T12-03-53-965Z.png`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1522 runtime
+    candidates, selected 1 old UI smoke screenshot, selected 83135 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    83135 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 38 GB available; `state/` was 21 MB,
+    `output/` was 4.7 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 25 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.

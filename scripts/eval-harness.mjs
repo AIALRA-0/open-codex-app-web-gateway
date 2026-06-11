@@ -437,6 +437,34 @@ function buildSuites(defaultModel) {
             && /assistants-reasoning-effort-live-ok/i.test(message.content?.[0]?.text?.value || "")),
       },
       {
+        id: "assistants-truncation",
+        mode: "assistants-truncation",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run, fetchedRun, runs, messages }) => {
+          const truncation = run?.metadata?.compatibility?.local_assistants?.truncation || {};
+          const fetchedTruncation = fetchedRun?.metadata?.compatibility?.local_assistants?.truncation || {};
+          return run?.status === "completed"
+            && run?.max_prompt_tokens === 96
+            && run?.truncation_strategy?.type === "last_messages"
+            && run?.truncation_strategy?.last_messages === 1
+            && fetchedRun?.truncation_strategy?.type === "last_messages"
+            && runs?.data?.some((item) => item.id === run.id
+              && item.truncation_strategy?.type === "last_messages")
+            && truncation.strategy === "last_messages"
+            && truncation.last_messages === 1
+            && truncation.original_message_count >= 2
+            && truncation.included_message_count === 1
+            && truncation.dropped_message_count >= 1
+            && truncation.max_prompt_tokens === 96
+            && truncation.max_prompt_tokens_budget_status === "applied"
+            && fetchedTruncation.strategy === "last_messages"
+            && messages?.data?.some((message) => message.role === "assistant"
+              && /assistants-truncation-live-ok/i.test(message.content?.[0]?.text?.value || ""));
+        },
+      },
+      {
         id: "assistants-additional-messages",
         mode: "assistants-additional-messages",
         request: {
@@ -2723,6 +2751,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-reasoning-effort") {
       return await runAssistantsReasoningEffortCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-truncation") {
+      return await runAssistantsTruncationCase(testCase, context, started);
+    }
     if (testCase.mode === "assistants-additional-messages") {
       return await runAssistantsAdditionalMessagesCase(testCase, context, started);
     }
@@ -3184,6 +3215,122 @@ async function runAssistantsReasoningEffortCase(testCase, context, started) {
       run_id: run.json?.id,
       run_count: runs.json?.data?.length || 0,
       message_count: messages.json?.data?.length || 0,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        fetchedRun: fetchedRun.json,
+        runs: runs.json,
+        messages: messages.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsTruncationCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  try {
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Return the requested marker exactly and with no extra words.",
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        assistant_id: assistantId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const oldMessage = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/messages`, {
+      role: "user",
+      content: "If this old thread item is visible, answer assistants-truncation-old-bad.",
+    });
+    if (!oldMessage.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: oldMessage.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(oldMessage.body),
+      });
+    }
+    await sleep(1100);
+
+    const recentMessage = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/messages`, {
+      role: "user",
+      content: "Return exactly assistants-truncation-live-ok.",
+    });
+    if (!recentMessage.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: recentMessage.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(recentMessage.body),
+      });
+    }
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      truncation_strategy: { type: "last_messages", last_messages: 1 },
+      max_prompt_tokens: 96,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(run.body),
+      });
+    }
+
+    const fetchedRun = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}`);
+    const runs = await getJson(`${baseUrl}/v1/threads/${threadId}/runs?limit=20`);
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      fetchedRun: fetchedRun.json,
+      runs: runs.json,
+      messages: messages.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.json?.status || run.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      run_id: run.json?.id,
+      run_count: runs.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
+      dropped_message_count: run.json?.metadata?.compatibility?.local_assistants?.truncation?.dropped_message_count,
+      included_message_count: run.json?.metadata?.compatibility?.local_assistants?.truncation?.included_message_count,
+      max_prompt_tokens: run.json?.max_prompt_tokens,
       usage: assistantsUsage(run.json),
       output_text: assistantMessageTextFromList(messages.json?.data || []),
       error: ok ? undefined : truncate(JSON.stringify({

@@ -59,6 +59,14 @@ function updateAssistantRunForTest(stateDir, threadId, runId, updater) {
   return record.run;
 }
 
+function updateAssistantMessageForTest(stateDir, threadId, messageId, updater) {
+  const messagePath = path.join(stateDir, "local-assistants", "threads", threadId, "messages", `${messageId}.json`);
+  const record = JSON.parse(fs.readFileSync(messagePath, "utf8"));
+  record.message = typeof updater === "function" ? updater(record.message) : { ...record.message, ...updater };
+  fs.writeFileSync(messagePath, `${JSON.stringify(record, null, 2)}\n`);
+  return record.message;
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -1787,6 +1795,93 @@ test("Assistants API create run maps reasoning_effort through Chat compatibility
     );
   }, {
     deepseekReasoningEffortCompat: true,
+  });
+});
+
+test("Assistants API create run applies truncation_strategy and max_prompt_tokens before upstream Chat", async () => {
+  await withMockProvider((_req, res, request) => {
+    const prompt = request.body.messages.map((message) => message.content || "").join("\n");
+    assert.deepEqual(request.body.messages.map((message) => message.role), ["system", "assistant", "user"]);
+    assert.doesNotMatch(prompt, /drop-old-user/);
+    assert.doesNotMatch(prompt, /drop-old-assistant/);
+    assert.match(prompt, /keep-recent-assistant/);
+    assert.match(prompt, /keep-recent-user/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_truncation",
+      object: "chat.completion",
+      created: 1700000003,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-truncation-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 19, completion_tokens: 4, total_tokens: 23 },
+    }));
+  }, async ({ bridgeAddress, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Use the recent thread context only.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "assistants-truncation" } }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const messageBodies = [
+      { role: "user", content: `drop-old-user ${"x".repeat(160)}` },
+      { role: "assistant", content: `drop-old-assistant ${"y".repeat(160)}` },
+      { role: "assistant", content: "keep-recent-assistant" },
+      { role: "user", content: "keep-recent-user" },
+    ];
+    for (const [index, body] of messageBodies.entries()) {
+      const response = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 200);
+      const message = await response.json();
+      updateAssistantMessageForTest(stateDir, thread.id, message.id, {
+        created_at: 1700000100 + index,
+      });
+    }
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        truncation_strategy: { type: "last_messages", last_messages: 2 },
+        max_prompt_tokens: 64,
+        metadata: { suite: "assistants-truncation" },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.max_prompt_tokens, 64);
+    assert.deepEqual(run.truncation_strategy, { type: "last_messages", last_messages: 2 });
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.strategy, "last_messages");
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.last_messages, 2);
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.original_message_count, 4);
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.included_message_count, 2);
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.dropped_message_count, 2);
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.max_prompt_tokens, 64);
+    assert.equal(run.metadata.compatibility.local_assistants.truncation.max_prompt_tokens_budget_status, "applied");
   });
 });
 
