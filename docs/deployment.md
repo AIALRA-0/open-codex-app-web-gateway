@@ -222,6 +222,7 @@ npm run eval:bridge -- --case responses-input-file-url --timeout-ms 90000 --verb
 npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

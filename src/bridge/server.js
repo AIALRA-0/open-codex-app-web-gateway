@@ -33,10 +33,10 @@ const {
 const { LocalEvalStore } = require("./local_evals");
 const {
   SUPPORTED_GRADER_TYPES,
-  evaluateGrader,
+  evaluateGraderAsync,
   normalizeRunSample,
   renderTemplateValue,
-  runGrader,
+  runGraderAsync,
   validateGrader,
 } = require("./local_graders");
 const {
@@ -7251,9 +7251,14 @@ async function executeEvalRow(options) {
     };
   }
 
-  const context = { item: row.item, sample };
-  const results = sampleError
-    ? (evalObject.testing_criteria || []).map((criterion) => ({
+  const context = {
+    item: row.item,
+    sample,
+    scoreModelRunner: (request) => runScoreModelGraderWithProvider(request, config, incomingHeaders),
+  };
+  let results;
+  if (sampleError) {
+    results = (evalObject.testing_criteria || []).map((criterion) => ({
         id: criterion.id || prefixedId("criterion"),
         name: criterion.name || criterion.type || "criterion",
         type: criterion.type || "string_check",
@@ -7261,8 +7266,17 @@ async function executeEvalRow(options) {
         passed: false,
         score: 0,
         error: clone(sampleError),
-      }))
-    : (evalObject.testing_criteria || []).map((criterion) => evaluateGrader(criterion, context));
+      }));
+  } else {
+    results = [];
+    for (const criterion of evalObject.testing_criteria || []) {
+      const result = await evaluateGraderAsync(criterion, context);
+      if (result.token_usage) {
+        addEvalUsage(usageAggregates, result.sampled_model_name || result.model || run.model, result.token_usage);
+      }
+      results.push(result);
+    }
+  }
   for (const result of results) addCriterionAggregate(criteriaAggregates, result);
   const status = sampleError
     ? "errored"
@@ -7444,7 +7458,7 @@ async function handleGraderValidate(req, res) {
   sendJson(res, 200, { grader });
 }
 
-async function handleGraderRun(req, res) {
+async function handleGraderRun(req, res, config) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("grader run request body must be a JSON object", {
@@ -7465,11 +7479,118 @@ async function handleGraderRun(req, res) {
   }
   const grader = validateGrader(body.grader);
   const sample = normalizeRunSample(body.model_sample, body.sample);
-  const response = runGrader(grader, {
+  const response = await runGraderAsync(grader, {
     item: isPlainObject(body.item) ? clone(body.item) : {},
     sample,
+    scoreModelRunner: (request) => runScoreModelGraderWithProvider(request, config, req.headers),
   });
   sendJson(res, 200, response);
+}
+
+async function runScoreModelGraderWithProvider(request, config, incomingHeaders = {}) {
+  const model = request.model || config.defaultModel;
+  const sampling = isPlainObject(request.sampling_params) ? request.sampling_params : {};
+  const chatRequest = {
+    model,
+    messages: [
+      scoreModelCompatibilitySystemMessage(request.range),
+      ...(Array.isArray(request.messages) ? request.messages : []),
+    ],
+    response_format: { type: "json_object" },
+    store: false,
+  };
+  copyScoreModelSamplingParam(chatRequest, sampling, "temperature");
+  copyScoreModelSamplingParam(chatRequest, sampling, "top_p");
+  copyScoreModelSamplingParam(chatRequest, sampling, "seed");
+  copyScoreModelSamplingParam(chatRequest, sampling, "reasoning_effort");
+  const maxTokens = sampling.max_completion_tokens ?? sampling.max_completions_tokens;
+  if (maxTokens != null) chatRequest.max_completion_tokens = maxTokens;
+
+  const { upstreamBody } = chatPassthroughUpstreamBody(chatRequest, config);
+  const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, incomingHeaders);
+  const text = await upstream.text();
+  const json = parseJsonOrNull(text);
+  const usage = scoreModelTokenUsage(json?.usage);
+  const sampledModelName = json?.model || model;
+
+  if (!upstream.ok) {
+    const error = new Error(json?.error?.message || text || "score_model provider call failed");
+    error.status = upstream.status;
+    error.code = "model_grader_server_error";
+    error.token_usage = usage;
+    error.sampled_model_name = sampledModelName;
+    error.model_grader_token_usage_per_model = usage.total_tokens > 0 ? { [sampledModelName]: usage } : {};
+    throw error;
+  }
+
+  const outputText = extractChatCompletionText(json);
+  const parsed = parseScoreModelResult(outputText);
+  return {
+    score: parsed.score,
+    output_text: outputText,
+    token_usage: usage,
+    sampled_model_name: sampledModelName,
+  };
+}
+
+function scoreModelCompatibilitySystemMessage(range = [0, 1]) {
+  const [min, max] = Array.isArray(range) && range.length === 2 ? range : [0, 1];
+  return {
+    role: "system",
+    content: [
+      "You are executing a score_model grader.",
+      `Return a JSON object with a numeric result field between ${min} and ${max}.`,
+      "Use the compact shape {\"result\": number, \"steps\": []}.",
+      "Do not include markdown, prose outside JSON, hidden analysis text, or extra top-level fields.",
+    ].join(" "),
+  };
+}
+
+function copyScoreModelSamplingParam(target, source, field) {
+  if (source[field] !== undefined && source[field] !== null) target[field] = source[field];
+}
+
+function parseScoreModelResult(text) {
+  const raw = stringifyContent(text).trim();
+  const parsed = parseJsonOrNull(raw) || parseJsonOrNull(extractJsonObject(raw));
+  if (isPlainObject(parsed)) {
+    const result = Number(parsed.result ?? parsed.score ?? parsed.reward);
+    return { score: Number.isFinite(result) ? result : NaN, parsed };
+  }
+  const number = raw.match(/[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[-+]?\d+)?/i);
+  return { score: number ? Number(number[0]) : NaN, parsed: null };
+}
+
+function extractJsonObject(text) {
+  const start = String(text || "").indexOf("{");
+  const end = String(text || "").lastIndexOf("}");
+  if (start < 0 || end <= start) return "";
+  return String(text).slice(start, end + 1);
+}
+
+function scoreModelTokenUsage(usage) {
+  if (!isPlainObject(usage)) {
+    return {
+      prompt_tokens: 0,
+      total_tokens: 0,
+      completion_tokens: 0,
+      cached_tokens: 0,
+    };
+  }
+  const promptTokens = Number(usage.prompt_tokens ?? usage.input_tokens ?? 0);
+  const completionTokens = Number(usage.completion_tokens ?? usage.output_tokens ?? 0);
+  return {
+    prompt_tokens: promptTokens,
+    total_tokens: Number(usage.total_tokens ?? promptTokens + completionTokens),
+    completion_tokens: completionTokens,
+    cached_tokens: Number(
+      usage.cached_tokens
+      ?? usage.prompt_tokens_details?.cached_tokens
+      ?? usage.input_tokens_details?.cached_tokens
+      ?? usage.prompt_cache_hit_tokens
+      ?? 0,
+    ),
+  };
 }
 
 function handleBatchesList(res, store, url) {
@@ -8157,7 +8278,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/run") {
-        await handleGraderRun(req, res);
+        await handleGraderRun(req, res, config);
         return;
       }
 

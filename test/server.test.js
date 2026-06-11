@@ -9256,16 +9256,92 @@ test("Graders API validates and runs local text similarity and multi graders", a
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         grader: {
-          type: "score_model",
-          name: "judge",
-          input: [{ role: "user", content: "score {{ sample.output_text }}" }],
-          model: "gpt-5-mini",
+          type: "python",
+          source: "def grade(sample, item):\n    return 1.0",
         },
       }),
     });
     assert.equal(unsupportedResponse.status, 400);
     assert.equal((await unsupportedResponse.json()).error.code, "unsupported_grader_type");
     assert.equal(requests.length, 0);
+  });
+});
+
+test("Graders API runs provider-backed score_model graders", async () => {
+  await withMockProvider(async (_req, res, captured) => {
+    assert.equal(captured.body.response_format.type, "json_object");
+    assert.equal(captured.body.model, "judge-model");
+    assert.equal(captured.body.temperature, 0);
+    const rendered = JSON.stringify(captured.body.messages);
+    assert.match(rendered, /Reference: green/);
+    assert.match(rendered, /Model: greenish/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_judge",
+      object: "chat.completion",
+      created: 100,
+      model: "judge-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "{\"result\":0.75,\"steps\":[]}" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const validateResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "score_model",
+          name: "semantic_judge",
+          input: [{ role: "user", content: "Reference: {{ item.reference }}\nModel: {{ sample.output_text }}" }],
+          model: "judge-model",
+          range: [0, 1],
+          pass_threshold: 0.7,
+          sampling_params: { temperature: 0, max_completion_tokens: 32 },
+        },
+      }),
+    });
+    assert.equal(validateResponse.status, 200);
+    assert.equal((await validateResponse.json()).grader.type, "score_model");
+    assert.equal(requests.length, 0);
+
+    const runResponse = await fetch(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        grader: {
+          type: "score_model",
+          name: "semantic_judge",
+          input: [{ role: "user", content: "Reference: {{ item.reference }}\nModel: {{ sample.output_text }}" }],
+          model: "judge-model",
+          range: [0, 1],
+          pass_threshold: 0.7,
+          sampling_params: { temperature: 0, max_completion_tokens: 32 },
+        },
+        item: { reference: "green" },
+        model_sample: "greenish",
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.reward, 0.75);
+    assert.equal(run.metadata.type, "score_model");
+    assert.equal(run.metadata.sampled_model_name, "judge-model");
+    assert.equal(run.metadata.errors.model_grader_parse_error, false);
+    assert.equal(run.metadata.errors.model_grader_server_error, false);
+    assert.deepEqual(run.metadata.token_usage, {
+      prompt_tokens: 12,
+      total_tokens: 15,
+      completion_tokens: 3,
+      cached_tokens: 0,
+    });
+    assert.deepEqual(run.model_grader_token_usage_per_model["judge-model"], run.metadata.token_usage);
+    assert.equal(requests.length, 1);
   });
 });
 
@@ -9373,7 +9449,7 @@ test("Evals API runs local text similarity and multi graders", async () => {
     assert.equal(run.status, "completed");
     assert.equal(run.result_counts.total, 1);
     assert.equal(run.result_counts.passed, 1);
-    assert.deepEqual(run.metadata.compatibility.supported_graders, ["string_check", "text_similarity", "multi"]);
+    assert.deepEqual(run.metadata.compatibility.supported_graders, ["string_check", "text_similarity", "score_model", "multi"]);
     assert.equal(run.per_testing_criteria_results.length, 2);
     assert.equal(run.per_testing_criteria_results.every((result) => result.passed === 1), true);
 
@@ -9386,6 +9462,88 @@ test("Evals API runs local text similarity and multi graders", async () => {
     assert.equal(outputItems.data[0].results[1].type, "multi");
     assert.ok(outputItems.data[0].results[1].sub_rewards.email === 1);
     assert.equal(requests.length, 0);
+  });
+});
+
+test("Evals API runs provider-backed score_model criteria", async () => {
+  await withMockProvider(async (_req, res, captured) => {
+    const prompt = JSON.stringify(captured.body.messages);
+    assert.match(prompt, /Expected: deploy succeeded/);
+    assert.match(prompt, /Actual: deploy succeeded with warning/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_eval_judge",
+      object: "chat.completion",
+      created: 100,
+      model: "judge-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "{\"result\":0.8,\"steps\":[{\"description\":\"semantic match\",\"conclusion\":\"close\"}]}" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 20, completion_tokens: 5, total_tokens: 25 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdEvalResponse = await fetch(`${baseUrl}/v1/evals`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Judge eval",
+        data_source_config: { type: "custom", include_sample_schema: true },
+        testing_criteria: [{
+          type: "score_model",
+          name: "judge",
+          input: [{ role: "user", content: "Expected: {{ item.expected }}\nActual: {{ sample.output_text }}" }],
+          model: "judge-model",
+          range: [0, 1],
+          pass_threshold: 0.7,
+          sampling_params: { temperature: 0, max_completion_tokens: 32 },
+        }],
+      }),
+    });
+    assert.equal(createdEvalResponse.status, 201);
+    const evalObject = await createdEvalResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        data_source: {
+          type: "responses",
+          model: "mock-model",
+          source: {
+            type: "custom",
+            data: [{
+              item: { expected: "deploy succeeded" },
+              sample: { output_text: "deploy succeeded with warning" },
+            }],
+          },
+          input_messages: [{ role: "user", content: "{{ item.expected }}" }],
+        },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.result_counts.passed, 1);
+    assert.deepEqual(run.per_model_usage, [{
+      model_name: "judge-model",
+      invocation_count: 1,
+      prompt_tokens: 20,
+      completion_tokens: 5,
+      total_tokens: 25,
+      cached_tokens: 0,
+    }]);
+
+    const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items`);
+    assert.equal(outputItemsResponse.status, 200);
+    const outputItems = await outputItemsResponse.json();
+    assert.equal(outputItems.data[0].status, "passed");
+    assert.equal(outputItems.data[0].results[0].type, "score_model");
+    assert.equal(outputItems.data[0].results[0].score, 0.8);
+    assert.equal(outputItems.data[0].results[0].sampled_model_name, "judge-model");
+    assert.equal(requests.length, 1);
   });
 });
 

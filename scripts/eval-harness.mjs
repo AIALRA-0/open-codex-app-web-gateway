@@ -424,6 +424,20 @@ function buildSuites(defaultModel) {
           && unsupported?.json?.error?.code === "unsupported_grader_type",
       },
       {
+        id: "graders-api-score-model",
+        mode: "graders-api-score-model",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run }) => run?.metadata?.type === "score_model"
+          && run.reward >= 0.5
+          && run.metadata?.sampled_model_name
+          && run.metadata?.errors?.model_grader_parse_error === false
+          && run.metadata?.errors?.model_grader_server_error === false
+          && (run.metadata?.token_usage?.total_tokens || 0) > 0
+          && Object.keys(run.model_grader_token_usage_per_model || {}).length >= 1,
+      },
+      {
         id: "responses-inline-moderation",
         mode: "responses",
         request: {
@@ -2332,6 +2346,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "graders-api-local") {
       return await runGradersApiLocalCase(testCase, context, started);
     }
+    if (testCase.mode === "graders-api-score-model") {
+      return await runGradersApiScoreModelCase(testCase, context, started);
+    }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
@@ -2782,10 +2799,8 @@ async function runGradersApiLocalCase(testCase, context, started) {
   });
   const unsupported = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/validate`, {
     grader: {
-      type: "score_model",
-      name: "judge",
-      input: [{ role: "user", content: "Score {{ sample.output_text }}" }],
-      model: "gpt-5-mini",
+      type: "python",
+      source: "def grade(sample, item):\n    return 1.0",
     },
   });
 
@@ -2805,6 +2820,51 @@ async function runGradersApiLocalCase(testCase, context, started) {
     multi_reward: multi.json?.reward || 0,
     usage: moderationUsage(),
     output_text: `graders:${similarity.json?.reward || 0}:${multi.json?.reward || 0}`,
+  });
+}
+
+async function runGradersApiScoreModelCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const run = await postJsonCapture(`${baseUrl}/v1/fine_tuning/alpha/graders/run`, {
+    grader: {
+      type: "score_model",
+      name: "live_score_model_judge",
+      input: [{
+        role: "user",
+        content: [
+          "Grade whether the model answer is semantically equivalent to the reference answer.",
+          "Return JSON with result 1 for equivalent and 0 for not equivalent.",
+          "Reference: {{ item.reference }}",
+          "Model answer: {{ sample.output_text }}",
+        ].join("\n"),
+      }],
+      model: request.model || model,
+      range: [0, 1],
+      pass_threshold: 0.5,
+      sampling_params: {
+        temperature: 0,
+        max_completion_tokens: 256,
+      },
+    },
+    item: { reference: "exact-pass" },
+    model_sample: "exact-pass",
+  });
+
+  const ok = !!testCase.check({
+    run: run.json,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: run.status,
+    reward: run.json?.reward || 0,
+    sampled_model_name: run.json?.metadata?.sampled_model_name || null,
+    model_grader_output_text: truncate(run.json?.metadata?.compatibility?.model_grader_output_text || ""),
+    usage: {
+      input_tokens: run.json?.metadata?.token_usage?.prompt_tokens || 0,
+      output_tokens: run.json?.metadata?.token_usage?.completion_tokens || 0,
+      total_tokens: run.json?.metadata?.token_usage?.total_tokens || 0,
+    },
+    output_text: `score_model:${run.json?.reward || 0}`,
   });
 }
 

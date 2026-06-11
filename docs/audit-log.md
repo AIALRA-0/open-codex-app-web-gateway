@@ -6497,3 +6497,67 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
+
+## 2026-06-11 - Provider-backed score_model graders
+
+- Used current official OpenAI Graders docs and OpenAPI metadata for
+  `/v1/fine_tuning/alpha/graders/run` and
+  `/v1/fine_tuning/alpha/graders/validate` to confirm the `score_model`
+  compatibility shape: message-array `input`, required judge `model`, numeric
+  `pass_threshold`, numeric `range`, optional `sampling_params`, JSON-like
+  grader output with a numeric `result`, and
+  `model_grader_token_usage_per_model` metadata.
+- Added provider-backed `score_model` support to the local Graders layer:
+  - `/v1/fine_tuning/alpha/graders/validate` validates `score_model`
+    structure without calling the provider;
+  - `/v1/fine_tuning/alpha/graders/run` renders grader messages with
+    item/sample template variables, calls the configured Chat provider as a
+    judge, requests JSON output, parses and clamps the numeric score to the
+    configured range, applies `pass_threshold`, and records judge token usage;
+  - `multi` graders can now include async `score_model` subgraders and
+    aggregate token usage and model usage metadata.
+- Added provider-backed `score_model` criteria support to local Evals runs, so
+  inline rows or `purpose:"evals"` JSONL rows can grade sample output with the
+  configured Chat provider while preserving Evals output-item accounting.
+- Kept the compatibility boundary explicit:
+  - this is a Chat-provider judge compatibility runtime, not OpenAI hosted
+    grader execution;
+  - `python` graders remain unsupported because there is no sandboxed Python
+    grading runtime in this deployment profile.
+- Updated compatibility matrix, evaluation plan, deployment verification
+  commands, unit tests, and the bridge regression harness with the
+  `graders-api-score-model` live case.
+- Verification:
+  - `node --check src/bridge/local_graders.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Graders/Evals server tests passed through `test/server.test.js`,
+    including provider-backed `score_model` validation, direct grader runs, and
+    Evals criteria runs.
+  - `npm test`: passed 164/164.
+  - Targeted live `graders-api-score-model` repeated 3/3 against
+    `deepseek-v4-pro`; all three scored `reward:1` and recorded judge token
+    usage.
+  - Full live `npm run eval:bridge`: 72/72 passing cases, pass rate 1.0,
+    average latency 952 ms, P95 latency 2694 ms, and total usage 10824 tokens.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, saved-project
+    cleanup, and no console errors or warnings.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 778 runtime
+    candidates, selected 0 files, deleted 0 files, and reported 0 errors.
+  - Disk/storage check: the filesystem has 38 GB available; `state/` is
+    9.6 MB, `output/` is 4.8 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
