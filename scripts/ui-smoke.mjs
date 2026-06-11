@@ -438,6 +438,13 @@ async function runWorkflow(page, config) {
     } while (true);
   }
 
+  async function waitForCurrentTurnSettled(timeout = 30000) {
+    const stopPattern = /^(停止|停止生成|取消|中断|Stop|Stop generating|Stop response|Cancel|Abort)$/i;
+    const stopCleared = await waitUntilNoVisibleButton(stopPattern, timeout, { maxNameLength: 80, viewportOnly: true });
+    await page.waitForTimeout(1200);
+    return stopCleared;
+  }
+
   async function clickComposerActionButton({ timeout = 5000, settleMs = 800 } = {}) {
     const deadline = Date.now() + timeout;
     do {
@@ -481,9 +488,231 @@ async function runWorkflow(page, config) {
     return { clicked: false, name: null };
   }
 
+  async function hoverCompletedTurnTargets(markerValue) {
+    const targets = await page.evaluate((marker) => {
+      const main = document.querySelector("main") || document.body;
+      const seen = new Set();
+      const targetFor = (element, kind) => {
+        if (!element) return null;
+        const rect = element.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        const key = `${Math.round(rect.left)}:${Math.round(rect.top)}:${Math.round(rect.width)}:${Math.round(rect.height)}:${kind}`;
+        if (seen.has(key)) return null;
+        seen.add(key);
+        return {
+          kind,
+          tag: element.tagName.toLowerCase(),
+          role: element.getAttribute("role") || "",
+          label: (
+            element.getAttribute("aria-label")
+            || element.getAttribute("title")
+            || element.innerText
+            || element.textContent
+            || ""
+          ).replace(/\s+/g, " ").trim().slice(0, 160),
+          x: rect.left + Math.min(Math.max(rect.width / 2, 2), Math.max(rect.width - 2, 2)),
+          y: rect.top + Math.min(Math.max(rect.height / 2, 2), Math.max(rect.height - 2, 2)),
+          rect: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          },
+        };
+      };
+      const candidates = Array.from(main.querySelectorAll("*")).filter((element) => {
+        const text = (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim();
+        if (!text.includes(marker)) return false;
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+      const userBubble = candidates.find((element) => element.getAttribute("role") === "button" && /编辑用户消息|Edit user message/i.test(
+        element.getAttribute("aria-label")
+          || element.getAttribute("title")
+          || element.innerText
+          || element.textContent
+          || "",
+      ));
+      const exactAssistant = candidates
+        .filter((element) => (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim() === marker)
+        .sort((left, right) => {
+          const leftRect = left.getBoundingClientRect();
+          const rightRect = right.getBoundingClientRect();
+          return (leftRect.width * leftRect.height) - (rightRect.width * rightRect.height);
+        })[0];
+      const broadTurn = candidates
+        .slice()
+        .sort((left, right) => {
+          const leftRect = left.getBoundingClientRect();
+          const rightRect = right.getBoundingClientRect();
+          return (rightRect.width * rightRect.height) - (leftRect.width * leftRect.height);
+        })[0];
+      return [
+        targetFor(userBubble, "user_message"),
+        targetFor(exactAssistant, "assistant_output"),
+        targetFor(broadTurn, "completed_turn"),
+      ].filter(Boolean);
+    }, markerValue);
+
+    for (const target of targets) {
+      await page.mouse.move(target.x, target.y);
+      await page.waitForTimeout(400);
+    }
+    return targets.map(({ x, y, ...target }) => target);
+  }
+
+  async function visibleMainControlDetails(pattern, { maxNameLength = 120 } = {}) {
+    return await page.evaluate((params) => {
+      const main = document.querySelector("main") || document.body;
+      const regex = new RegExp(params.source, params.flags);
+      const visible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== "hidden"
+          && style.display !== "none";
+      };
+      const labelFor = (element) => (
+        element.getAttribute("aria-label")
+        || element.getAttribute("title")
+        || element.innerText
+        || element.textContent
+        || ""
+      ).replace(/\s+/g, " ").trim();
+      return Array.from(main.querySelectorAll("button, [role='button'], a"))
+        .filter(visible)
+        .map((element) => {
+          const label = labelFor(element);
+          const rect = element.getBoundingClientRect();
+          return {
+            tag: element.tagName.toLowerCase(),
+            role: element.getAttribute("role") || "",
+            label: label.slice(0, params.maxNameLength),
+            rect: {
+              x: Math.round(rect.left),
+              y: Math.round(rect.top),
+              w: Math.round(rect.width),
+              h: Math.round(rect.height),
+            },
+          };
+        })
+        .filter((control) => control.label && regex.test(control.label))
+        .slice(0, 20);
+    }, {
+      source: pattern.source,
+      flags: pattern.flags.replace("g", ""),
+      maxNameLength,
+    });
+  }
+
+  async function visibleAssistantActionIconDetails(markerValue) {
+    return await page.evaluate((marker) => {
+      const main = document.querySelector("main") || document.body;
+      const visible = (element) => {
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        return rect.width > 0
+          && rect.height > 0
+          && style.visibility !== "hidden"
+          && style.display !== "none";
+      };
+      const labelFor = (element) => (
+        element.getAttribute("aria-label")
+        || element.getAttribute("title")
+        || element.innerText
+        || element.textContent
+        || ""
+      ).replace(/\s+/g, " ").trim();
+      const assistantText = Array.from(main.querySelectorAll("p, div, span"))
+        .filter((element) => (element.innerText || element.textContent || "").replace(/\s+/g, " ").trim() === marker)
+        .map((element) => ({ element, rect: element.getBoundingClientRect() }))
+        .filter(({ rect }) => rect.width > 0 && rect.height > 0)
+        .sort((left, right) => (left.rect.width * left.rect.height) - (right.rect.width * right.rect.height))[0];
+      if (!assistantText) return [];
+      const anchor = assistantText.rect;
+      return Array.from(main.querySelectorAll("button, [role='button'], a"))
+        .filter(visible)
+        .map((element) => {
+          const rect = element.getBoundingClientRect();
+          return { element, rect, label: labelFor(element) };
+        })
+        .filter(({ rect }) => {
+          const compact = rect.width >= 18 && rect.width <= 42 && rect.height >= 18 && rect.height <= 42;
+          const belowAssistant = rect.top >= anchor.bottom - 8 && rect.top <= anchor.bottom + 90;
+          const nearAssistantStart = rect.left >= anchor.left - 24 && rect.left <= anchor.left + 120;
+          return compact && belowAssistant && nearAssistantStart;
+        })
+        .map(({ element, rect, label }) => ({
+          tag: element.tagName.toLowerCase(),
+          role: element.getAttribute("role") || "",
+          label: label.slice(0, 120),
+          rect: {
+            x: Math.round(rect.left),
+            y: Math.round(rect.top),
+            w: Math.round(rect.width),
+            h: Math.round(rect.height),
+          },
+        }))
+        .slice(0, 8);
+    }, markerValue);
+  }
+
+  async function exerciseCompletedTurnActions() {
+    const completedActionPattern = /复制消息|Copy message|编辑消息|Edit message|编辑用户消息|Edit user message|^复制$|^Copy$|从此处开始分叉|Fork from here|Branch from here|Start from here|重试|Retry|重新生成|Regenerate|继续|Continue/i;
+    await closeTransientOverlays();
+    const hoveredTargets = await hoverCompletedTurnTargets(config.marker);
+    const controls = await visibleMainControlDetails(completedActionPattern, { maxNameLength: 120 });
+    const assistantActionIcons = await visibleAssistantActionIconDetails(config.marker);
+    const labels = controls.map((control) => control.label);
+    const hasUserEdit = labels.some((label) => /编辑用户消息|Edit user message|编辑消息|Edit message/i.test(label));
+    const hasUserCopy = labels.some((label) => /复制消息|Copy message/i.test(label));
+    const hasAssistantCopy = labels.some((label) => /^复制$|^Copy$/i.test(label)) || assistantActionIcons.length >= 1;
+    const hasBranch = labels.some((label) => /从此处开始分叉|Fork from here|Branch from here|Start from here/i.test(label));
+    const retryRegenerateControls = labels.filter((label) => /重试|Retry|重新生成|Regenerate|继续|Continue/i.test(label));
+
+    const conversationAction = page.getByRole("button", { name: /对话操作|Conversation actions/i }).first();
+    let conversationMenuItems = [];
+    if (await isVisible(conversationAction, 1000)) {
+      await conversationAction.click({ timeout: 5000 });
+      await page.waitForTimeout(400);
+      conversationMenuItems = await page.getByRole("menuitem").evaluateAll((items) => items
+        .filter((item) => {
+          const rect = item.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        })
+        .map((item) => (item.getAttribute("aria-label") || item.innerText || item.textContent || "").replace(/\s+/g, " ").trim())
+        .filter(Boolean)
+        .slice(0, 12));
+      await page.keyboard.press("Escape");
+      await page.waitForTimeout(300);
+    }
+
+    const hasAssistantContinuation = hasBranch || retryRegenerateControls.length > 0 || assistantActionIcons.length >= 2;
+    if (!hasUserEdit || !hasUserCopy || !hasAssistantCopy || !hasAssistantContinuation) {
+      throw new Error(`completed turn actions missing expected controls: labels=${labels.join(", ")} assistant_icons=${JSON.stringify(assistantActionIcons)}`);
+    }
+    if (conversationMenuItems.length === 0) {
+      throw new Error("conversation action menu did not expose any menu items");
+    }
+
+    return {
+      completed_turn_hover_targets: hoveredTargets,
+      completed_turn_controls: controls,
+      completed_turn_assistant_action_icons: assistantActionIcons,
+      completed_turn_user_edit_visible: hasUserEdit,
+      completed_turn_user_copy_visible: hasUserCopy,
+      completed_turn_assistant_copy_visible: hasAssistantCopy,
+      completed_turn_branch_visible: hasBranch,
+      completed_turn_retry_regenerate_visible: retryRegenerateControls.length > 0,
+      completed_turn_retry_regenerate_controls: retryRegenerateControls,
+      conversation_action_menu_items: conversationMenuItems,
+    };
+  }
+
   async function exerciseActiveInterruptAndRecover() {
     const stopPattern = /^(停止|停止生成|取消|中断|Stop|Stop generating|Stop response|Cancel|Abort)$/i;
-    const retryPattern = /重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i;
+    const retryPattern = /^(重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue)$/i;
     const recoveryMarker = `${config.activeMarker}-recovered`;
 
     await closeTransientOverlays();
@@ -512,12 +741,12 @@ async function runWorkflow(page, config) {
     }
 
     const stopCleared = stop.clicked ? await waitUntilNoVisibleButton(stopPattern, 15000, { maxNameLength: 80, viewportOnly: true }) : true;
-    const controlsAfterInterrupt = await visibleButtonNames(/停止|Stop|取消|Cancel|中断|Abort|重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue/i, {
+    const controlsAfterInterrupt = await visibleButtonNames(/^(停止|Stop|取消|Cancel|中断|Abort|重试|Retry|重新生成|Regenerate|再试|Try again|继续|Continue)$/i, {
       maxNameLength: 80,
       viewportOnly: true,
     });
 
-    const retry = await clickFirstVisibleButton(retryPattern, { timeout: 5000, settleMs: 800, maxNameLength: 80 });
+    const retry = await clickFirstVisibleButton(retryPattern, { timeout: 5000, settleMs: 800, maxNameLength: 80, viewportOnly: true });
     const retryStop = retry.clicked
       ? await clickFirstVisibleButton(stopPattern, { timeout: 15000, settleMs: 1200, maxNameLength: 80, viewportOnly: true })
       : { clicked: false, name: null };
@@ -885,25 +1114,36 @@ async function runWorkflow(page, config) {
       await fillEditor(config.prompt);
       await page.keyboard.press("Enter");
       await page.waitForFunction((value) => {
-        const text = document.body?.innerText || "";
+        const main = document.querySelector("main") || document.body;
+        const text = main?.innerText || "";
         return text.split(value).length - 1 >= 2;
       }, config.marker, { timeout: config.timeoutMs });
-      return { marker_occurrences: await markerCount() };
+      const turnSettled = await waitForCurrentTurnSettled(Math.min(30000, config.timeoutMs));
+      return { marker_occurrences: await markerCount(), turn_settled_before_completed_actions: turnSettled };
     });
 
     await recordStep("discover stop and retry controls", async () => {
-      const controls = await visibleButtonNames(/停止|Stop|取消|Cancel|重试|Retry|重新生成|Regenerate|继续|Continue/i, { maxNameLength: 80 });
+      const controls = await visibleButtonNames(/^(停止|Stop|取消|Cancel|重试|Retry|重新生成|Regenerate|继续|Continue)$/i, { maxNameLength: 80, viewportOnly: true });
       return { controls };
     });
+
+    await recordStep("exercise completed turn actions", exerciseCompletedTurnActions);
 
     await recordStep("reload preserves conversation", async () => {
       await page.reload({ waitUntil: "domcontentloaded", timeout: config.timeoutMs });
       await waitForAppShell();
-      await page.waitForFunction((value) => {
-        const text = document.body?.innerText || "";
+      let reopenedFromSidebar = false;
+      const mainHasMarker = await page.waitForFunction((value) => {
+        const main = document.querySelector("main") || document.body;
+        const text = main?.innerText || "";
         return text.includes(value);
-      }, config.marker, { timeout: config.timeoutMs });
-      return { marker_occurrences_after_reload: await markerCount() };
+      }, config.marker, { timeout: 3000 }).then(() => true).catch(() => false);
+      if (!mainHasMarker) {
+        await openSidebarThreadByMarker(config.marker);
+        reopenedFromSidebar = true;
+      }
+      await waitForMainText(new RegExp(escapeRegExp(config.marker)), config.timeoutMs);
+      return { marker_occurrences_after_reload: await markerCount(), reopened_from_sidebar_after_reload: reopenedFromSidebar };
     });
 
     await recordStep("inject and display generated image artifact", exerciseGeneratedImageArtifactDisplay);

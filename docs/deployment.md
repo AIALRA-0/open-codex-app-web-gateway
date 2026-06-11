@@ -214,18 +214,21 @@ verifies the host browser-upload bridge by writing a small fixture under
 `state/browser-uploads/`, adds and clears a project writable root, switches
 through the plugins, automation, and mobile views before returning to new chat,
 creates a saved project, reopens it from the sidebar, cleans the generated UI
-smoke workspace root through the browser bridge, and records visible stop/retry
-controls after a model turn. It also temporarily appends a generated-image
-rollout event for that smoke thread, reopens the thread, verifies the rendered
-`data:image/*` artifact, and truncates the rollout back to its original size.
+smoke workspace root through the browser bridge, and records visible short-label
+stop/retry controls after a model turn. It also hovers completed user/assistant
+turns, verifies copy/edit/branch-from-here controls and the conversation action
+menu, temporarily appends a generated-image rollout event for that smoke thread,
+reopens the thread, verifies the rendered `data:image/*` artifact, and
+truncates the rollout back to its original size.
 The current `--exercise-active-controls` option runs a longer browser path that
 actively clicks the visible stop control during generation when exposed, records
 whether a composer-action fallback was used, records whether the interrupted
 turn exposes retry/regenerate/continue, and sends a recovery prompt.
 The `opencodexapp.aialra.online` nginx template proxies directly to the web service;
 the optional login proxy service is not in the public request path unless nginx
-is changed to target port `12923`. Broader automated UI coverage still needs a
-dedicated completed-turn retry/regenerate path when that UI action is visible.
+is changed to target port `12923`. The current completed-turn UI exposes
+branch-from-here rather than retry/regenerate; the smoke records
+`completed_turn_retry_regenerate_visible:false` until that action appears.
 
 ## Runtime Retention
 

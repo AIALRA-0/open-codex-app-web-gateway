@@ -21,10 +21,13 @@ Codex/OpenAI Responses behavior.
   dialog open/cancel, host browser-upload fixture writes with filesystem
   verification, project writable-root add/clear, core page switching through
   plugins/automation/mobile views and back to new chat, prompt send, model
-  response visibility, stop/retry control discovery, saved project create,
-  reopen-from-sidebar, cleanup through the browser bridge, generated image
-  artifact display via a temporary rollout event that is truncated after the
-  assertion, console errors, screenshot capture, and reload persistence.
+  response visibility, short-label stop/retry control discovery, completed-turn
+  user/assistant action controls including copy, edit, conversation actions,
+  and the current branch-from-here action when retry/regenerate is not exposed,
+  saved project create, reopen-from-sidebar, cleanup through the browser
+  bridge, generated image artifact display via a temporary rollout event that
+  is truncated after the assertion, console errors, screenshot capture, and
+  reload persistence.
 - `npm run smoke:ui -- --timeout-ms 260000 --exercise-active-controls` extends
   that browser path with an active long-running model turn, clicks the visible
   stop/interrupt control when exposed, records a composer-action fallback if
@@ -32,8 +35,9 @@ Codex/OpenAI Responses behavior.
   clears, records whether retry/regenerate/continue is exposed after
   interruption, and submits a recovery prompt to prove the conversation remains
   usable.
-- Expand coverage for a dedicated retry/regenerate path when the UI exposes
-  that action for completed turns.
+- Completed-turn retry/regenerate is recorded as not exposed in the current UI;
+  if a future UI exposes that short-label action, the completed-turn smoke path
+  will report it through `completed_turn_retry_regenerate_controls`.
 - Treat audio-capable Chat providers as provider-specific protocol coverage:
   unit and mock-provider tests must map Responses `input_audio` into Chat
   `input_audio` content parts, preserve `message.audio` and streaming

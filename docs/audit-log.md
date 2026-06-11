@@ -5491,3 +5491,71 @@ Open follow-ups:
     5.4 MB, `output/` is 11 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
     `/srv/aialra/logs/opencodexapp` is 20 MB.
   - No API keys, account credentials, or local secret files were committed.
+
+## 2026-06-11 - Completed turn action UI smoke coverage
+
+- Extended the default `scripts/ui-smoke.mjs` browser workflow with completed
+  turn action coverage:
+  - waits for the model turn to settle after the main chat content contains
+    both the user prompt marker and assistant response marker, preventing
+    sidebar titles from prematurely satisfying the completion check;
+  - hovers the completed user message, assistant output, and broad completed
+    turn container;
+  - records and asserts main-content action controls for `编辑用户消息`,
+    `复制消息`, `编辑消息`, assistant `复制`, and `从此处开始分叉`;
+  - opens the top `对话操作` menu and records the visible menu items;
+  - detects compact assistant action icons by geometry as a fallback for
+    transiently unlabeled icon buttons.
+- Tightened retry/continue control discovery:
+  - default stop/retry discovery now requires exact short accessible labels and
+    viewport visibility, so old conversation titles containing words such as
+    `retry` cannot pollute results;
+  - active interrupt recovery now uses the same exact short-label matching,
+    preventing the smoke from clicking sidebar history items as retry buttons.
+- Hardened reload persistence:
+  - after reload, the smoke first checks whether the current main view still
+    contains the marker;
+  - if the app returns to the new-chat screen, it reopens the matching sidebar
+    thread and then verifies the marker in main content.
+- Updated deployment and evaluation docs:
+  - default UI smoke now documents completed-turn copy/edit/branch and
+    conversation menu coverage;
+  - the current UI is recorded as exposing branch-from-here rather than
+    retry/regenerate, with `completed_turn_retry_regenerate_visible:false`.
+- Verification:
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - `git diff --check`: passed.
+  - Default UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8sisdo`: `turn_settled_before_completed_actions:true`;
+    completed turn controls included `编辑用户消息`, `复制消息`, `编辑消息`,
+    `复制`, and `从此处开始分叉`; conversation action menu items included
+    `置顶对话`, `重命名对话`, `归档对话`, `打开侧边聊天`, `复制`, and
+    `添加自动化…`; `completed_turn_retry_regenerate_visible:false`;
+    reload recovered through sidebar with `reopened_from_sidebar_after_reload:true`;
+    generated image artifact rendering and saved project cleanup also passed;
+    console errors 0, warnings 0; screenshot
+    `output/playwright/ui-smoke-2026-06-11T00-59-46-092Z.png`.
+  - Active UI smoke passed at `https://opencodexapp.aialra.online` with marker
+    `ui-smoke-mq8soxvq`: completed-turn controls and conversation menu passed;
+    generated image artifact rendering passed; active stop clicked with control
+    name `停止`; `stop_cleared:true`; `controls_after_interrupt:[]`;
+    `retry_control_status:"not_visible_after_interrupt"`; recovery marker
+    occurrences 2; saved project cleanup `bridge_updated:true`; console errors
+    0, warnings 0; screenshot
+    `output/playwright/ui-smoke-2026-06-11T01-04-33-158Z.png`.
+  - `npm test`: 130/130 passing tests.
+  - `protocol-smoke` passed 2/2 against `deepseek-v4-pro`, pass rate 1.0,
+    average latency 1070 ms, P95 latency 1075 ms, and total usage 99 tokens.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run` scanned 637 runtime candidates,
+    selected 89 old UI screenshots by retention policy, deleted 0, selected
+    7324221 bytes, and reported 0 errors.
+  - Service state: bridge, web, and app-server services were all `active`;
+    bridge healthz returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`; public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Disk/storage check: the filesystem has 42 GB available; `state/` is
+    5.5 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+  - No API keys, account credentials, or local secret files were committed.
