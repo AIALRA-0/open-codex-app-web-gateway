@@ -847,8 +847,8 @@ tool:
   tool requests `partial_images`;
 - `metadata.compatibility.local_image_generation` with provider, action,
   requested image options, input-image counts, prior image-call references,
-  partial-image count, shared `max_tool_calls` status, and DeepSeek thinking
-  compatibility notes.
+  stored prior image-call counts, partial-image count, shared
+  `max_tool_calls` status, and DeepSeek thinking compatibility notes.
 
 The default provider is `placeholder`. It generates a deterministic, non-empty
 PNG from the prompt and requested options so CodexApp UI rendering, SDK
@@ -869,6 +869,14 @@ failed `image_generation_call`, matching the hosted Responses requirement that
 edit mode needs an image in context. If `input_image_mask` is supplied but
 cannot be resolved, the call fails instead of silently editing without the
 requested mask.
+Generated `image_generation_call.result` bytes are also persisted in a local
+image-generation state directory with a bounded TTL, record count, and per-image
+byte limit. Follow-up Responses requests can therefore reference a prior image
+with only `{type:"image_generation_call",id:"ig_..."}` and the bridge resolves
+that id into an edit input before calling provider-backed `/images/edits`.
+The adapter also reads prior image-generation output from `previous_response_id`
+so the documented multi-turn image workflow can enter edit mode without
+duplicating base64 data in the new request.
 After the local edit adapter consumes those image inputs, the bridge replaces
 the corresponding upstream Chat `image_url` content parts with a text marker so
 text-only providers such as DeepSeek do not reject the request.
@@ -881,6 +889,10 @@ Configuration:
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path |
 | `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for `action:"edit"` and image-reference workflows |
+| `CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-image-generations` | Local JSON state directory for generated image-call bytes used by id-only follow-up edits |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES` | `5000` | Maximum generated image-call records retained locally before cleanup prunes older files |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGE_BYTES` | `52428800` | Maximum generated image bytes persisted for later id-only edit references |
+| `CODEXCOMPAT_IMAGE_GENERATION_STORE_TTL_MS` | `1209600000` | TTL for locally persisted generated image-call records; default is 14 days |
 | `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
 | `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override, for example `b64_json` for providers/models that require it |

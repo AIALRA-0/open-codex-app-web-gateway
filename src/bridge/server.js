@@ -4,7 +4,7 @@ const crypto = require("node:crypto");
 const fs = require("node:fs");
 const http = require("node:http");
 const path = require("node:path");
-const { FileConversationStore, FileResponseStore } = require("./store");
+const { FileConversationStore, FileImageGenerationStore, FileResponseStore } = require("./store");
 const {
   createToolCallBudget,
   toolBudgetCompatibility,
@@ -242,6 +242,10 @@ function loadConfig(overrides = {}) {
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
     imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
+    imageGenerationStateDir: process.env.CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR || path.join(stateDir, "local-image-generations"),
+    imageGenerationMaxStoredImages: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES", 5000, 1, 100000),
+    imageGenerationMaxStoredImageBytes: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGE_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    imageGenerationStoreTtlMs: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_STORE_TTL_MS", 14 * 24 * 60 * 60 * 1000, 60 * 60 * 1000, 90 * 24 * 60 * 60 * 1000),
     imageGenerationBaseUrl: trimTrailingSlash(process.env.CODEXCOMPAT_IMAGE_GENERATION_BASE_URL || "https://api.openai.com/v1"),
     imageGenerationPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_PATH || "/images/generations"),
     imageGenerationEditPath: normalizeRoute(process.env.CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH || "/images/edits"),
@@ -446,7 +450,7 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
-async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore) {
+async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
   const request = await readJson(req);
   const responseId = prefixedId("resp");
   const toolBudget = createToolCallBudget(request.max_tool_calls);
@@ -455,10 +459,12 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
     return;
   }
+  const previousResponseRecord = request.previous_response_id ? store.get(request.previous_response_id) : null;
   const previousMessages = [
     ...(conversation?.messages || []),
-    ...(request.previous_response_id ? store.getMessages(request.previous_response_id) : []),
+    ...(Array.isArray(previousResponseRecord?.messages) ? previousResponseRecord.messages : []),
   ];
+  const previousResponse = previousResponseRecord?.response || null;
   const localHostedTools = [
     ...localWebSearchToolTypes(request.tools || [], config),
     ...localFileSearchToolTypes(request.tools || [], config),
@@ -482,7 +488,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
       ...(localHostedTools.length ? { local_hosted_tools: { status: "pending", tool_types: localHostedTools } } : {}),
-    }, previousMessages, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore);
+    }, previousMessages, fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore);
     return;
   }
 
@@ -498,7 +504,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localComputer) {
     applyLocalComputerToChat(chat, compatibility, localComputer, config);
   }
-  const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, toolBudget });
+  const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {
     applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config);
   }
@@ -577,7 +583,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   sendJson(res, 200, publicResponse);
 }
 
-function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, previousMessages, fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
+function handleBackgroundResponse(req, res, config, store, backgroundJobs, request, chat, responseId, compatibility, previousMessages, fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore) {
   const backgroundRequest = {
     ...request,
     background: true,
@@ -634,6 +640,7 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     incomingHeaders: req.headers,
     previousMessages,
     fileSearchStore,
+    imageGenerationStore,
     containerStore,
     conversationStore,
     conversation,
@@ -664,7 +671,7 @@ function startBackgroundJob(params) {
 
 const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "image_generation", "web_search", "file_search", "truncation"];
 
-async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
+async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
   try {
     if (prepared) {
       await runPreparedBackgroundProviderResponse({
@@ -693,6 +700,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
       compatibility,
       previousMessages,
       fileSearchStore,
+      imageGenerationStore,
       containerStore,
       toolBudget,
       skillStore,
@@ -744,7 +752,7 @@ async function runBackgroundResponse({ config, store, backgroundJobs, job, reque
   }
 }
 
-async function prepareBackgroundProviderRequest({ config, store, job, request, chat, responseId, compatibility, previousMessages = [], fileSearchStore, containerStore, toolBudget, skillStore, preparationState = null }) {
+async function prepareBackgroundProviderRequest({ config, store, job, request, chat, responseId, compatibility, previousMessages = [], fileSearchStore, imageGenerationStore, containerStore, toolBudget, skillStore, preparationState = null }) {
   const runtime = backgroundPreparationRuntime({
     preparationState,
     chat,
@@ -766,10 +774,12 @@ async function prepareBackgroundProviderRequest({ config, store, job, request, c
 
     const result = await runBackgroundPrepareStep(step, {
       config,
+      store,
       job,
       request,
       previousMessages,
       fileSearchStore,
+      imageGenerationStore,
       containerStore,
       skillStore,
       runtime,
@@ -795,7 +805,7 @@ async function prepareBackgroundProviderRequest({ config, store, job, request, c
   };
 }
 
-async function runBackgroundPrepareStep(step, { config, job, request, previousMessages, fileSearchStore, containerStore, skillStore, runtime }) {
+async function runBackgroundPrepareStep(step, { config, store, job, request, previousMessages, fileSearchStore, imageGenerationStore, containerStore, skillStore, runtime }) {
   if (step === "input_files") {
     const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore, { signal: job.controller.signal });
     runtime.contexts.input_files = localInputFiles;
@@ -824,7 +834,8 @@ async function runBackgroundPrepareStep(step, { config, job, request, previousMe
   }
 
   if (step === "image_generation") {
-    const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, toolBudget: runtime.toolBudget });
+    const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
+    const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget: runtime.toolBudget });
     runtime.contexts.image_generation = localImageGeneration;
     if (localImageGeneration) {
       runtime.compatibility = applyLocalImageGenerationToChat(runtime.chat, { ...runtime.compatibility }, localImageGeneration, config);
@@ -1105,7 +1116,7 @@ function storeCancelledBackgroundResponse(store, responseId, reason) {
   }));
 }
 
-function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore }) {
+function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore }) {
   if (typeof store?.list !== "function" || typeof store?.put !== "function") {
     return { resumed: 0, reconciled: 0, skipped: 0 };
   }
@@ -1147,6 +1158,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
+        imageGenerationStore,
         containerStore,
         conversationStore,
         conversation: jobState.conversation || null,
@@ -1179,6 +1191,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
+        imageGenerationStore,
         containerStore,
         conversationStore,
         conversation: jobState.conversation || null,
@@ -1210,6 +1223,7 @@ function resumeStaleBackgroundResponses({ config, store, backgroundJobs, fileSea
         incomingHeaders: {},
         previousMessages: jobState.previous_messages || [],
         fileSearchStore,
+        imageGenerationStore,
         containerStore,
         conversationStore,
         conversation: jobState.conversation || null,
@@ -5137,7 +5151,7 @@ function embeddingVectorToBase64(vector) {
   return buffer.toString("base64");
 }
 
-async function handleBatchCreate(req, res, config, store, fileSearchStore, backgroundJobs, containerStore, conversationStore, skillStore) {
+async function handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore) {
   const body = await readJson(req);
   const validation = validateBatchCreateRequest(body);
   if (!validation.ok) {
@@ -5230,6 +5244,7 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, backg
       store,
       backgroundJobs,
       fileSearchStore,
+      imageGenerationStore,
       containerStore,
       conversationStore,
       skillStore,
@@ -5443,12 +5458,12 @@ function normalizeBatchLineUrl(value) {
   }
 }
 
-async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore }) {
+async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore }) {
   const req = makeInternalJsonRequest(requestBody, incomingHeaders);
   const res = makeCaptureResponse();
   try {
     if (endpoint === "/v1/responses") {
-      await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore);
+      await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore);
     } else if (endpoint === "/v1/chat/completions") {
       await handleChatPassthrough(req, res, config, store);
     } else if (endpoint === "/v1/completions") {
@@ -6190,6 +6205,11 @@ function createServer(config = loadConfig()) {
   const store = config.store || new FileResponseStore({ dir: config.stateDir });
   const conversationStore = config.conversationStore || new FileConversationStore({ dir: config.conversationStateDir });
   const fileSearchStore = config.fileSearchStore || new LocalFileSearchStore(config);
+  const imageGenerationStore = config.imageGenerationStore || new FileImageGenerationStore({
+    dir: config.imageGenerationStateDir,
+    maxRecords: config.imageGenerationMaxStoredImages,
+    ttlMs: config.imageGenerationStoreTtlMs,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -6199,6 +6219,7 @@ function createServer(config = loadConfig()) {
     store,
     backgroundJobs,
     fileSearchStore,
+    imageGenerationStore,
     containerStore,
     conversationStore,
     skillStore,
@@ -6242,7 +6263,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleBatchCreate(req, res, config, store, fileSearchStore, backgroundJobs, containerStore, conversationStore, skillStore);
+          await handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore);
           return;
         }
       }
@@ -6565,7 +6586,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/responses") {
-        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, containerStore, conversationStore, skillStore);
+        await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore);
         return;
       }
 

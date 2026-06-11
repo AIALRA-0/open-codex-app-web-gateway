@@ -5688,6 +5688,72 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Image generation multi-turn call-id persistence
+
+- Extended the local Responses `image_generation` adapter with generated image
+  call persistence for multi-turn edit workflows:
+  - successful `image_generation_call.result` bytes are stored under a local
+    `local-image-generations` state directory with `0600` JSON files and a
+    `0700` directory;
+  - generated image state is bounded by
+    `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES`,
+    `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGE_BYTES`, and
+    `CODEXCOMPAT_IMAGE_GENERATION_STORE_TTL_MS`;
+  - id-only follow-up inputs such as
+    `{type:"image_generation_call",id:"ig_..."}` are resolved into edit images
+    before provider-backed `/images/edits` calls;
+  - `previous_response_id` now contributes prior image-generation output to
+    local image context so official multi-turn image workflows can enter edit
+    mode without resending base64 image data;
+  - background and local Batch `/v1/responses` execution paths receive the same
+    image-generation state store dependency as foreground requests.
+- Added compatibility metadata for generated/stored image-call counts and
+  updated `.env.example`, deployment docs, and the compatibility matrix for the
+  new state controls.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/local_image_generation.js`: passed.
+  - `node --check src/bridge/store.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test --test-name-pattern "image_generation" test/server.test.js`:
+    10/10 passing, including provider-backed id-only edit and
+    `previous_response_id` edit context regressions.
+  - `npm test`: 141/141 passing tests.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1122 ms, P95 latency 1161 ms, and total usage
+    99 tokens.
+  - `npm run eval:bridge -- --case responses-image-id-edit`: passed 1/1
+    against `deepseek-v4-pro`, proving the new id-only image edit eval case.
+  - `npm run eval:bridge`: passed 52/52 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1320 ms, P95 latency 2844 ms, and total usage
+    10501 tokens. The suite included `responses-image-generation`,
+    `responses-image-edit`, and `responses-image-id-edit`.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online/`, covering page navigation, project
+    dialog/upload services, conversation submission, completed-turn actions,
+    reload persistence, generated image artifact display, and saved-project
+    cleanup with no console errors or warnings.
+  - `npm run prune:runtime -- --dry-run`: passed with exit code 0; scanned
+    637 candidates, selected 89 old UI screenshots by retention policy, deleted
+    0 files, selected 7324221 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`; bridge healthz returned `ok:true`, DeepSeek
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Post-restart live two-step id-only image edit smoke passed locally:
+    first request produced a completed `ig_...` call; second request supplied
+    only `{type:"image_generation_call",id:"ig_..."}` and returned
+    `mode:"edit"`, `prior_stored_image_call_count:1`,
+    `resolved_stored_image_call_count:1`, and `resolved_image_count:1`.
+  - Disk/storage check: the filesystem has 39 GB available; `state/` is
+    5.6 MB, `output/` is 12 MB, `/srv/aialra/data/opencodexapp` is 84 KB, and
+    `/srv/aialra/logs/opencodexapp` is 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Provider-backed image_generation adapter
 
 - Extended the local Responses `image_generation` hosted-tool adapter from

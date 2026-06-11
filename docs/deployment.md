@@ -110,6 +110,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_IMAGE_GENERATION_BASE_URL` | `https://api.openai.com/v1` | Base URL for provider-backed image generation; keep provider-specific endpoints and secrets outside Git |
 | `CODEXCOMPAT_IMAGE_GENERATION_PATH` | `/images/generations` | JSON image-generation endpoint path for provider-backed calls |
 | `CODEXCOMPAT_IMAGE_GENERATION_EDIT_PATH` | `/images/edits` | Multipart image-edit endpoint path for provider-backed `action:"edit"`, input-image reference, and mask workflows |
+| `CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-image-generations` | Local JSON state directory for generated image-call bytes used by `image_generation_call.id` and `previous_response_id` follow-up edits |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES` | `5000` | Maximum locally persisted generated image-call records retained before cleanup |
+| `CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGE_BYTES` | `52428800` | Maximum generated image bytes persisted per call for later edit references |
+| `CODEXCOMPAT_IMAGE_GENERATION_STORE_TTL_MS` | `1209600000` | TTL for locally persisted generated image-call records; default is 14 days |
 | `CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV` | `OPENAI_API_KEY` | Environment variable name used for provider-backed image generation keys |
 | `CODEXCOMPAT_IMAGE_GENERATION_MODEL` | `gpt-image-2` | Image model sent to provider-backed image generation |
 | `CODEXCOMPAT_IMAGE_GENERATION_RESPONSE_FORMAT` | empty | Optional `response_format` override such as `b64_json` for providers/models that require it |

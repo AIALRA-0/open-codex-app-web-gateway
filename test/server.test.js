@@ -2772,6 +2772,196 @@ test("POST /v1/responses can edit image_generation inputs with an OpenAI-compati
   }));
 });
 
+test("POST /v1/responses can edit a stored image_generation_call by id", async () => {
+  const generatedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const editedPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8DwQACfsD/QVQH6UAAAAASUVORK5CYII=";
+  let chatCalls = 0;
+  await withMockProvider(async (req, res, call) => {
+    if (req.url === "/images/generations") {
+      assert.equal(req.headers.authorization, "Bearer image-test-key");
+      assert.match(call.body.prompt, /quiet terminal dashboard/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        created: 100,
+        model: "gpt-image-test",
+        data: [{
+          b64_json: generatedPng,
+          revised_prompt: "Provider revised generated dashboard.",
+        }],
+      }));
+      return;
+    }
+
+    if (req.url === "/images/edits") {
+      assert.equal(req.headers.authorization, "Bearer image-test-key");
+      assert.match(req.headers["content-type"], /^multipart\/form-data; boundary=/);
+      assert.equal(call.body, null);
+      assert.match(call.rawBody, /name="model"/);
+      assert.match(call.rawBody, /gpt-image-test/);
+      assert.match(call.rawBody, /name="prompt"/);
+      assert.match(call.rawBody, /make the terminal dashboard brighter/);
+      assert.match(call.rawBody, /name="image\[\]"; filename="ig_[^"]+\.png"/);
+      assert.match(call.rawBody, /Content-Type: image\/png/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        created: 101,
+        model: "gpt-image-test",
+        data: [{
+          b64_json: editedPng,
+          revised_prompt: "Provider revised stored-call edit.",
+        }],
+      }));
+      return;
+    }
+
+    chatCalls += 1;
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, chatCalls === 1 ? /Resolved mode: generate/ : /Resolved mode: edit/);
+    if (chatCalls === 2) {
+      assert.match(prompt, /Prior image_generation_call references: 1/);
+      assert.match(prompt, /Resolved edit images: 1/);
+      assert.match(prompt, /Provider revised stored-call edit/);
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_image_generation_stored_${chatCalls}`,
+      object: "chat.completion",
+      created: 100 + chatCalls,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: chatCalls === 1 ? "stored-generate-ok" : "stored-edit-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 3, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const first = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate an image of a quiet terminal dashboard.",
+        tools: [{ type: "image_generation", action: "generate" }],
+        store: false,
+      }),
+    });
+    assert.equal(first.status, 200);
+    const firstJson = await first.json();
+    const imageCall = firstJson.output[0];
+    assert.equal(imageCall.type, "image_generation_call");
+    assert.equal(imageCall.status, "completed");
+    assert.equal(firstJson.metadata.compatibility.local_image_generation.stored_image_call_count, 1);
+    assert.equal(fs.existsSync(path.join(stateDir, "local-image-generations", `${imageCall.id}.json`)), true);
+
+    const second = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          {
+            role: "user",
+            content: [{ type: "input_text", text: "make the terminal dashboard brighter" }],
+          },
+          { type: "image_generation_call", id: imageCall.id },
+        ],
+        tools: [{ type: "image_generation", action: "edit" }],
+        store: false,
+      }),
+    });
+    assert.equal(second.status, 200);
+    const secondJson = await second.json();
+    assert.equal(secondJson.output[0].type, "image_generation_call");
+    assert.equal(secondJson.output[0].status, "completed");
+    assert.equal(secondJson.output[0].result, editedPng);
+    assert.equal(secondJson.output[1].content[0].text, "stored-edit-ok");
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.mode, "edit");
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.prior_image_call_count, 1);
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.prior_stored_image_call_count, 1);
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.resolved_stored_image_call_count, 1);
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.resolved_image_count, 1);
+    assert.ok(requests.some((request) => request.req.url === "/images/generations"));
+    assert.ok(requests.some((request) => request.req.url === "/images/edits"));
+  }, ({ providerAddress }) => ({
+    imageGenerationProvider: "openai-compatible",
+    imageGenerationBaseUrl: `http://127.0.0.1:${providerAddress.port}`,
+    imageGenerationApiKey: "image-test-key",
+    imageGenerationApiKeyEnv: "IMAGE_TEST_KEY",
+    imageGenerationModel: "gpt-image-test",
+    imageGenerationResponseFormat: "b64_json",
+  }));
+});
+
+test("POST /v1/responses can use previous_response_id as image_generation edit context", async () => {
+  let chatCalls = 0;
+  await withMockProvider(async (req, res, call) => {
+    assert.equal(req.url, "/chat/completions");
+    chatCalls += 1;
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    if (chatCalls === 1) {
+      assert.match(prompt, /Resolved mode: generate/);
+    } else {
+      assert.match(prompt, /Resolved mode: edit/);
+      assert.match(prompt, /Prior image_generation_call references: 1/);
+      assert.match(prompt, /Resolved edit images: 1/);
+    }
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_previous_image_${chatCalls}`,
+      object: "chat.completion",
+      created: 100 + chatCalls,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: chatCalls === 1 ? "previous-image-generate-ok" : "previous-image-edit-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 3, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const first = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Generate a compact terminal dashboard concept.",
+        tools: [{ type: "image_generation" }],
+      }),
+    });
+    assert.equal(first.status, 200);
+    const firstJson = await first.json();
+    assert.equal(firstJson.output[0].type, "image_generation_call");
+    assert.equal(firstJson.metadata.compatibility.local_image_generation.mode, "generate");
+    assert.equal(firstJson.metadata.compatibility.local_image_generation.stored_image_call_count, 1);
+
+    const second = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        previous_response_id: firstJson.id,
+        input: "Make the previous generated image brighter and cleaner.",
+        tools: [{ type: "image_generation" }],
+        store: false,
+      }),
+    });
+    assert.equal(second.status, 200);
+    const secondJson = await second.json();
+    assert.equal(secondJson.output[0].type, "image_generation_call");
+    assert.equal(secondJson.output[0].status, "completed");
+    assert.equal(secondJson.output[1].content[0].text, "previous-image-edit-ok");
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.mode, "edit");
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.prior_image_call_count, 1);
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.prior_stored_image_call_count, 1);
+    assert.equal(secondJson.metadata.compatibility.local_image_generation.resolved_image_count, 1);
+  }, {
+    imageGenerationPlaceholderSize: 16,
+  });
+});
+
 test("POST /v1/responses fails image_generation edits when requested masks are unresolved", async () => {
   const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

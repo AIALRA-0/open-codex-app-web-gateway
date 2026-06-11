@@ -275,6 +275,94 @@ class FileConversationStore {
   }
 }
 
+class FileImageGenerationStore {
+  constructor(options = {}) {
+    this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-image-generations"));
+    this.maxRecords = options.maxRecords || 5000;
+    this.ttlMs = options.ttlMs || 14 * 24 * 60 * 60 * 1000;
+  }
+
+  ensureDir() {
+    fs.mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+  }
+
+  filePath(id) {
+    const clean = safeId(id);
+    if (!clean) return null;
+    return path.join(this.dir, `${clean}.json`);
+  }
+
+  get(id) {
+    const filePath = this.filePath(id);
+    if (!filePath) return null;
+    try {
+      const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return isPlainObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  put(id, record = {}) {
+    const filePath = this.filePath(id);
+    if (!filePath) return;
+    this.ensureDir();
+    const now = Date.now();
+    const body = {
+      id,
+      object: "image_generation.call",
+      created_at: now,
+      updated_at: now,
+      ...record,
+    };
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(body, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+    this.cleanupSoon();
+  }
+
+  cleanupSoon() {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setTimeout(() => {
+      this.cleanupTimer = null;
+      try {
+        this.cleanup();
+      } catch {
+        // Cleanup is opportunistic.
+      }
+    }, 100).unref?.();
+  }
+
+  cleanup() {
+    this.ensureDir();
+    const now = Date.now();
+    const entries = fs.readdirSync(this.dir)
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => {
+        const filePath = path.join(this.dir, name);
+        const stat = fs.statSync(filePath);
+        return { filePath, mtimeMs: stat.mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+
+    for (const entry of entries) {
+      if (now - entry.mtimeMs > this.ttlMs) {
+        try { fs.unlinkSync(entry.filePath); } catch {}
+      }
+    }
+
+    for (const entry of entries.slice(this.maxRecords)) {
+      try { fs.unlinkSync(entry.filePath); } catch {}
+    }
+  }
+}
+
 function conversationResource(record) {
   return {
     id: record.id,
@@ -303,4 +391,4 @@ function randomToken(bytes = 16) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
-module.exports = { FileResponseStore, FileConversationStore };
+module.exports = { FileResponseStore, FileConversationStore, FileImageGenerationStore };

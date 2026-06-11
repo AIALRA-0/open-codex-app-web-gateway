@@ -13,6 +13,7 @@ const DEFAULT_IMAGE_GENERATION_BASE_URL = "https://api.openai.com/v1";
 const DEFAULT_IMAGE_GENERATION_PATH = "/images/generations";
 const DEFAULT_IMAGE_GENERATION_EDIT_PATH = "/images/edits";
 const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
+const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
 
 function isImageGenerationTool(tool) {
@@ -39,12 +40,17 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
   const action = normalizeAction(tool.action);
   const prompt = extractImagePrompt(request) || "Generate an image.";
   const inputImages = extractInputImages(request.input);
-  const priorImageCalls = extractPriorImageGenerationCalls(request.input);
-  const mode = imageGenerationModeFor(action, inputImages, priorImageCalls, tool);
+  const priorImageCalls = mergeImageGenerationCalls(
+    extractPriorImageGenerationCalls(request.input),
+    extractPriorImageGenerationCalls(options.previousResponse?.output),
+  );
+  const priorStoredImageCalls = countStoredImageGenerationCalls(priorImageCalls, options.imageGenerationStore);
+  const mode = imageGenerationModeFor(action, inputImages, priorImageCalls, tool, { imageStore: options.imageGenerationStore });
   const editInput = mode === "edit"
     ? await resolveImageEditInput({
       config,
       fileStore: options.fileSearchStore,
+      imageStore: options.imageGenerationStore,
       inputImages,
       priorImageCalls,
       signal: options.signal,
@@ -66,11 +72,14 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
     requested: requestedImageOptions(tool),
     input_image_count: inputImages.length,
     prior_image_call_count: priorImageCalls.length,
+    prior_stored_image_call_count: priorStoredImageCalls,
     input_image_mask: !!tool.input_image_mask,
     resolved_image_count: editInput.images.length,
+    resolved_stored_image_call_count: editInput.images.filter((image) => image.source === "image_generation_call.id").length,
     input_image_mask_resolved: !!editInput.mask,
     image_resolution_error_count: editInput.errors.length,
     image_resolution_errors: editInput.errors.map((error) => imageResolutionErrorSummary(error)),
+    stored_image_call_count: 0,
   };
 
   if (!reserveToolCall(options.toolBudget, {
@@ -103,6 +112,9 @@ async function prepareImageGenerationContext(request = {}, config = {}, options 
   context.calls.push(call);
   context.status = call.status || "completed";
   if (call.status === "failed") context.error = call.error || "local image generation failed";
+  const stored = persistImageGenerationCall(call, context, tool, config, options.imageGenerationStore);
+  if (stored.stored) context.stored_image_call_count += 1;
+  if (stored.error) context.image_store_warning = stored.error;
   return context;
 }
 
@@ -167,6 +179,9 @@ function imageGenerationCompatibility(context) {
       partial_image_count: context.partial_image_count || 0,
       input_image_count: context.input_image_count || 0,
       prior_image_call_count: context.prior_image_call_count || 0,
+      prior_stored_image_call_count: context.prior_stored_image_call_count || 0,
+      resolved_stored_image_call_count: context.resolved_stored_image_call_count || 0,
+      stored_image_call_count: context.stored_image_call_count || 0,
       input_image_mask: !!context.input_image_mask,
       resolved_image_count: context.resolved_image_count || 0,
       input_image_mask_resolved: !!context.input_image_mask_resolved,
@@ -174,6 +189,7 @@ function imageGenerationCompatibility(context) {
       requested: context.requested || {},
       ...(context.model ? { model: context.model } : {}),
       ...(context.warning ? { warning: context.warning } : {}),
+      ...(context.image_store_warning ? { image_store_warning: context.image_store_warning } : {}),
       ...(context.error ? { error: context.error } : {}),
       ...(context.image_resolution_errors?.length
         ? { image_resolution_errors: context.image_resolution_errors }
@@ -232,12 +248,12 @@ function normalizeAction(value) {
   return "auto";
 }
 
-function imageGenerationModeFor(action, inputImages = [], priorImageCalls = [], tool = {}) {
+function imageGenerationModeFor(action, inputImages = [], priorImageCalls = [], tool = {}, options = {}) {
   if (action === "generate") return "generate";
   if (action === "edit") return "edit";
   if (tool.input_image_mask) return "edit";
   if (inputImages.length) return "edit";
-  if (priorImageCalls.some((call) => call.file_id || imageDataCandidate(call))) return "edit";
+  if (priorImageCalls.some((call) => call.file_id || imageDataCandidate(call) || storedImageGenerationRecord(call.id, options.imageStore))) return "edit";
   return "generate";
 }
 
@@ -501,6 +517,7 @@ async function resolveImageEditInput({
   config = {},
   fetch,
   fileStore,
+  imageStore,
   inputImages = [],
   priorImageCalls = [],
   signal,
@@ -510,6 +527,7 @@ async function resolveImageEditInput({
     config,
     fetch,
     fileStore,
+    imageStore,
     maxBytes: Number(config.imageGenerationMaxInputImageBytes || DEFAULT_MAX_EDIT_IMAGE_BYTES),
     signal,
   };
@@ -545,6 +563,9 @@ async function resolveEditableImagePart(part, options = {}, role = "image") {
 
   const candidate = imageDataCandidate(part);
   if (!candidate) {
+    if (part.type === "image_generation_call" && part.id) {
+      return resolveEditableStoredImageGenerationCall(part, options, role);
+    }
     return failedEditableImage({
       source: role,
       filename: filenameForImagePart(part, role),
@@ -600,6 +621,39 @@ function resolveEditableImageFileId(part, options = {}, role = "image") {
     filename,
     media_type: mediaType,
     buffer,
+    maxBytes: options.maxBytes,
+  });
+}
+
+function resolveEditableStoredImageGenerationCall(part, options = {}, role = "image") {
+  const record = storedImageGenerationRecord(part.id, options.imageStore);
+  if (!record) {
+    return failedEditableImage({
+      source: "image_generation_call.id",
+      call_id: part.id,
+      filename: filenameForImagePart(part, role),
+      error: `image_generation_call not found: ${part.id}`,
+    });
+  }
+
+  const content = record.content_base64 || record.result_b64 || record.b64_json || record.result;
+  const parsed = parseInlineImageData(content, imageMediaTypeHint(part) || record.media_type);
+  if (!parsed) {
+    return failedEditableImage({
+      source: "image_generation_call.id",
+      call_id: part.id,
+      filename: storedImageGenerationFilename(part, record, role),
+      media_type: imageMediaTypeHint(part) || record.media_type,
+      error: `stored image_generation_call has invalid image data: ${part.id}`,
+    });
+  }
+
+  return completedEditableImage({
+    source: "image_generation_call.id",
+    call_id: part.id,
+    filename: storedImageGenerationFilename(part, record, role),
+    media_type: parsed.media_type || imageMediaTypeHint(part) || record.media_type,
+    buffer: parsed.buffer,
     maxBytes: options.maxBytes,
   });
 }
@@ -662,15 +716,16 @@ async function resolveEditableImageUrl(part, candidate, options = {}, role = "im
   }
 }
 
-function completedEditableImage({ source, file_id, filename, media_type, buffer, maxBytes }) {
+function completedEditableImage({ source, file_id, call_id, filename, media_type, buffer, maxBytes }) {
   const mediaType = normalizeImageMediaType(media_type) || sniffImageMediaType(buffer);
   if (!Buffer.isBuffer(buffer) || !buffer.length) {
-    return failedEditableImage({ source, file_id, filename, media_type: mediaType, error: "image input is empty" });
+    return failedEditableImage({ source, file_id, call_id, filename, media_type: mediaType, error: "image input is empty" });
   }
   if (buffer.length > maxBytes) {
     return failedEditableImage({
       source,
       file_id,
+      call_id,
       filename,
       media_type: mediaType,
       bytes: buffer.length,
@@ -681,6 +736,7 @@ function completedEditableImage({ source, file_id, filename, media_type, buffer,
     return failedEditableImage({
       source,
       file_id,
+      call_id,
       filename,
       bytes: buffer.length,
       error: "image input requires an image media type",
@@ -689,6 +745,7 @@ function completedEditableImage({ source, file_id, filename, media_type, buffer,
   return {
     source,
     file_id,
+    ...(call_id ? { call_id } : {}),
     filename: safeImageFilename(filename, mediaType, "image"),
     media_type: mediaType,
     bytes: buffer.length,
@@ -697,10 +754,11 @@ function completedEditableImage({ source, file_id, filename, media_type, buffer,
   };
 }
 
-function failedEditableImage({ source, file_id, filename, media_type, bytes, error }) {
+function failedEditableImage({ source, file_id, call_id, filename, media_type, bytes, error }) {
   return {
     source,
     ...(file_id ? { file_id } : {}),
+    ...(call_id ? { call_id } : {}),
     filename,
     ...(media_type ? { media_type: normalizeImageMediaType(media_type) || stringifyContent(media_type) } : {}),
     ...(bytes ? { bytes } : {}),
@@ -878,6 +936,7 @@ function imageResolutionErrorSummary(error) {
   return {
     source: error.source || "input",
     ...(error.file_id ? { file_id: error.file_id } : {}),
+    ...(error.call_id ? { call_id: error.call_id } : {}),
     ...(error.filename ? { filename: error.filename } : {}),
     ...(error.media_type ? { media_type: error.media_type } : {}),
     ...(error.bytes ? { bytes: error.bytes } : {}),
@@ -972,6 +1031,87 @@ function extractPriorImageGenerationCalls(input) {
   };
   visit(input);
   return calls;
+}
+
+function mergeImageGenerationCalls(...lists) {
+  const merged = [];
+  const seen = new Set();
+  for (const list of lists) {
+    for (const item of Array.isArray(list) ? list : []) {
+      if (!isPlainObject(item)) continue;
+      const id = item.id ? stringifyContent(item.id) : "";
+      if (id) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+      }
+      merged.push(item);
+    }
+  }
+  return merged;
+}
+
+function storedImageGenerationRecord(id, imageStore) {
+  if (!id || typeof imageStore?.get !== "function") return null;
+  const record = imageStore.get(id);
+  if (!isPlainObject(record)) return null;
+  const content = record.content_base64 || record.result_b64 || record.b64_json || record.result;
+  if (record.status && record.status !== "completed") return null;
+  if (typeof content !== "string" || !content.trim()) return null;
+  return record;
+}
+
+function countStoredImageGenerationCalls(calls = [], imageStore) {
+  return calls.filter((call) => call?.id && storedImageGenerationRecord(call.id, imageStore)).length;
+}
+
+function persistImageGenerationCall(call, context, tool = {}, config = {}, imageStore) {
+  if (!call?.id || call.status !== "completed" || !call.result || typeof imageStore?.put !== "function") {
+    return { stored: false };
+  }
+  const parsed = parseInlineImageData(call.result, imageOutputMediaType(tool) || "image/png");
+  if (!parsed) return { stored: false, error: "completed image_generation_call result is not valid base64" };
+  const maxBytes = Number(config.imageGenerationMaxStoredImageBytes || DEFAULT_MAX_STORED_IMAGE_BYTES);
+  if (Number.isFinite(maxBytes) && parsed.buffer.length > maxBytes) {
+    return { stored: false, error: `completed image_generation_call result exceeds local store limit of ${maxBytes} bytes` };
+  }
+
+  const mediaType = parsed.media_type || imageOutputMediaType(tool) || sniffImageMediaType(parsed.buffer) || "image/png";
+  const filename = safeImageFilename(`${call.id}${imageExtension(mediaType) || ".png"}`, mediaType, call.id);
+  try {
+    imageStore.put(call.id, {
+      status: call.status,
+      provider: context.provider || "placeholder",
+      action: context.action || "auto",
+      mode: context.mode || "generate",
+      model: context.model || config.imageGenerationModel || "",
+      revised_prompt: call.revised_prompt || "",
+      media_type: mediaType,
+      filename,
+      bytes: parsed.buffer.length,
+      content_base64: parsed.buffer.toString("base64"),
+      created_at_unix: Math.floor(Date.now() / 1000),
+    });
+    return { stored: true, bytes: parsed.buffer.length, media_type: mediaType };
+  } catch (error) {
+    return { stored: false, error: error.message || "failed to store image_generation_call result" };
+  }
+}
+
+function imageOutputMediaType(tool = {}) {
+  const format = String(tool.output_format || "").trim().toLowerCase();
+  if (format === "jpeg" || format === "jpg") return "image/jpeg";
+  if (format === "webp") return "image/webp";
+  if (format === "png") return "image/png";
+  return "";
+}
+
+function storedImageGenerationFilename(part, record, role) {
+  const mediaType = imageMediaTypeHint(part) || record?.media_type || "";
+  return safeImageFilename(
+    part?.filename || part?.name || record?.filename || `${part?.id || role}${imageExtension(mediaType) || ".png"}`,
+    mediaType,
+    role,
+  );
 }
 
 function revisedPromptFor(prompt, action) {

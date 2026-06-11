@@ -1333,6 +1333,69 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-image-id-edit",
+        mode: "responses-sequence",
+        steps: [
+          {
+            request: {
+              model: defaultModel,
+              instructions: "The local bridge handles image_generation. Return exactly this text and nothing else: image-id-generate-ok.",
+              input: "Generate a tiny image for an id-only follow-up edit.",
+              tools: [{ type: "image_generation", action: "generate" }],
+              tool_choice: { type: "image_generation" },
+              max_tool_calls: 1,
+              max_output_tokens: 128,
+              store: false,
+            },
+            check: ({ json, text }) => {
+              const call = (json.output || []).find((item) => item.type === "image_generation_call");
+              const localImage = json.metadata?.compatibility?.local_image_generation || {};
+              return call?.status === "completed"
+                && /^ig_/.test(call?.id || "")
+                && /^iVBORw0KGgo/.test(call?.result || "")
+                && text.trim().length > 0
+                && localImage.mode === "generate"
+                && localImage.stored_image_call_count === 1;
+            },
+          },
+          {
+            request: ({ previousJson }) => {
+              const call = (previousJson?.output || []).find((item) => item.type === "image_generation_call");
+              return {
+                model: defaultModel,
+                instructions: "The local bridge handles id-only image_generation edits. Return exactly this text and nothing else: image-id-edit-ok.",
+                input: [
+                  {
+                    role: "user",
+                    content: [{ type: "input_text", text: "Edit the prior generated image using only its image_generation_call id." }],
+                  },
+                  { type: "image_generation_call", id: call?.id || "ig_missing" },
+                ],
+                tools: [{ type: "image_generation", action: "edit" }],
+                tool_choice: { type: "image_generation" },
+                max_tool_calls: 1,
+                max_output_tokens: 128,
+                store: false,
+              };
+            },
+            check: ({ json, text }) => {
+              const call = (json.output || []).find((item) => item.type === "image_generation_call");
+              const localImage = json.metadata?.compatibility?.local_image_generation || {};
+              return call?.status === "completed"
+                && /^ig_/.test(call?.id || "")
+                && /^iVBORw0KGgo/.test(call?.result || "")
+                && text.trim().length > 0
+                && localImage.mode === "edit"
+                && localImage.prior_image_call_count === 1
+                && localImage.prior_stored_image_call_count === 1
+                && localImage.resolved_stored_image_call_count === 1
+                && localImage.resolved_image_count === 1
+                && localImage.deepseek_thinking === "disabled_for_local_image_generation";
+            },
+          },
+        ],
+      },
+      {
         id: "responses-shell",
         mode: "responses-shell",
         container: { name: "bridge-shell-eval" },
@@ -3067,8 +3130,9 @@ async function runInputTokensCase(testCase, context, started) {
 async function runSequenceCase(testCase, context, started) {
   const stepResults = [];
   let previousResponseId = null;
+  let previousJson = null;
   for (const [index, step] of testCase.steps.entries()) {
-    const response = await postJson(`${baseUrl}/v1/responses`, resolveRequest(step.request, { previousResponseId }));
+    const response = await postJson(`${baseUrl}/v1/responses`, resolveRequest(step.request, { previousResponseId, previousJson, stepResults }));
     const body = await response.text();
     if (!response.ok) {
       return finishResult(testCase, context, started, {
@@ -3081,7 +3145,7 @@ async function runSequenceCase(testCase, context, started) {
 
     const json = JSON.parse(body);
     const text = responseOutputText(json);
-    const ok = !!step.check({ json, text, ok: response.ok });
+    const ok = !!step.check({ json, text, ok: response.ok, previousJson, stepResults });
     stepResults.push({
       step: index + 1,
       ok,
@@ -3097,6 +3161,7 @@ async function runSequenceCase(testCase, context, started) {
       });
     }
     previousResponseId = json.id;
+    previousJson = json;
   }
 
   return finishResult(testCase, context, started, {
