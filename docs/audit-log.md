@@ -4369,6 +4369,71 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Videos edit and extension source compatibility
+
+- Re-checked current official OpenAI video and Batch surfaces through the
+  OpenAI developer-docs MCP before changing behavior. The API endpoint list
+  includes `/videos`, `/videos/characters`, `/videos/edits`,
+  `/videos/extensions`, and `/videos/{video_id}/remix`; OpenAPI specs confirm
+  `POST /videos/edits` as `CreateVideoEdit` and `POST /videos/extensions` as
+  `CreateVideoExtend`, both accepting JSON and multipart request bodies and
+  returning a `VideoResource`.
+- Confirmed the documented Batch video boundary remains `POST /v1/videos`
+  only for video generation jobs, JSONL only, with video/image inputs supplied
+  by pre-uploaded files or URLs. Direct video edit, extension, and remix
+  compatibility were therefore kept out of Batch execution.
+- Extended local Videos API compatibility for iterative video workflows:
+  - multipart `video` uploads are preserved as source video descriptors with
+    filename, content type, and byte count;
+  - JSON source values are normalized from `video`, `source_video`, or
+    `input_video` fields into `video_id`, `file_id`, `video_url`, or
+    `uploaded_video` descriptors;
+  - `/v1/videos/edits` and `/v1/videos/extensions` now require both `prompt`
+    and a source `video`, returning OpenAI-style
+    `missing_required_parameter` errors when the source is absent;
+  - created local video resources now expose `source_video` and mirror it in
+    `metadata.compatibility.source_video`;
+  - added a local compatibility alias
+    `POST /v1/videos/{video_id}/edits` for clients that follow cookbook-style
+    path editing examples.
+- Updated the compatibility matrix, deployment docs, evaluation plan, server
+  tests, and live evaluation harness. Added live case
+  `video-iteration-lifecycle` covering create, edit, extension, path edit, and
+  remix source tracking.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused server test
+    `node --test --test-name-pattern "Videos API creates" test/server.test.js`:
+    passed 1/1.
+  - `npm test`: passed 177/177.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `video-iteration-lifecycle` case passed 1/1 against
+    `deepseek-v4-pro`, latency 127 ms, all edit/extension/path-edit/remix
+    statuses 200, and output
+    `video-iteration:completed:completed:completed:completed`.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 82/82,
+    pass rate 1.0, average latency 1557 ms, P95 latency 4504 ms, and total
+    usage 19767 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1657 ms, P95 latency 1748 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - Public HTTPS returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1165 runtime
+    candidates, selected 0 files, selected 0 bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: scanned 1165 runtime candidates,
+    deleted 0 files, freed 0 bytes, and reported 0 errors.
+  - Disk/storage check after cleanup: the filesystem had 38 GB available;
+    `state/` was 16 MB, `output/` was 4.7 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 23 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Local Videos Characters API compatibility
 
 - Used current official OpenAI endpoint/spec documentation through the OpenAI

@@ -31,6 +31,8 @@ Primary sources:
 - OpenAI Audio voice consent OpenAPI operation `createVoiceConsent`: https://api.openai.com/v1/audio/voice_consents
 - OpenAI Audio voice OpenAPI operation `createVoice`: https://api.openai.com/v1/audio/voices
 - OpenAI Images variation OpenAPI operation `createImageVariation`: https://api.openai.com/v1/images/variations
+- OpenAI Videos edit OpenAPI operation `CreateVideoEdit`: https://api.openai.com/v1/videos/edits
+- OpenAI Videos extend OpenAPI operation `CreateVideoExtend`: https://api.openai.com/v1/videos/extensions
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
 - OpenAI shell tool guide: https://developers.openai.com/api/docs/guides/tools-shell
@@ -1220,8 +1222,9 @@ Completions.
 | `POST /v1/videos/characters` | Implemented locally | Accepts multipart `name` plus `video` upload, with JSON/base64 compatibility for tests, stores a local `object:"video.character"` record, and returns a reusable `char_...` id |
 | `GET /v1/videos/characters/{character_id}` | Implemented locally | Retrieves a stored local video character record |
 | `DELETE /v1/videos/characters/{character_id}` | Implemented locally | Deletes a local video character record and returns `object:"video.character.deleted"` |
-| `POST /v1/videos/edits` | Implemented locally | Accepts JSON or multipart edit requests and returns a completed local video job with `metadata.compatibility.operation:"edit"` |
-| `POST /v1/videos/extensions` | Implemented locally | Accepts JSON or multipart extension requests and returns a completed local video job with `metadata.compatibility.operation:"extend"` |
+| `POST /v1/videos/edits` | Implemented locally | Accepts JSON or multipart edit requests with a source `video` reference/upload, returns a completed local video job, and records `source_video` plus `metadata.compatibility.operation:"edit"` |
+| `POST /v1/videos/{video_id}/edits` | Local compatibility alias | Accepts clients following earlier cookbook-style path examples, maps `{video_id}` to the local source video descriptor, and returns the same local edit job shape as `POST /v1/videos/edits` |
+| `POST /v1/videos/extensions` | Implemented locally | Accepts JSON or multipart extension requests with a source `video` reference/upload and returns a completed local video job with `source_video` and `metadata.compatibility.operation:"extend"` |
 | `POST /v1/videos/{video_id}/remix` | Implemented locally | Accepts JSON or multipart remix requests, records `source_video_id`, and returns a completed local video job |
 
 Local Batch JSONL now executes `/v1/videos` requests synchronously. This matches

@@ -9445,6 +9445,46 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     const editJson = await edit.json();
     assert.equal(editJson.metadata.compatibility.operation, "edit");
     assert.equal(editJson.size, "720x1280");
+    assert.equal(editJson.source_video.type, "uploaded_video");
+    assert.equal(editJson.source_video.filename, "source.mp4");
+    assert.equal(editJson.source_video.bytes, "tiny video input".length);
+    assert.deepEqual(editJson.metadata.compatibility.source_video, editJson.source_video);
+
+    const missingEditSource = await fetch(`${baseUrl}/v1/videos/edits`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "This edit is missing a source video." }),
+    });
+    assert.equal(missingEditSource.status, 400);
+    const missingEditSourceJson = await missingEditSource.json();
+    assert.equal(missingEditSourceJson.error.code, "missing_required_parameter");
+    assert.equal(missingEditSourceJson.error.param, "video");
+
+    const extension = await fetch(`${baseUrl}/v1/videos/extensions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        prompt: "Extend this completed clip by a few seconds.",
+        seconds: "8",
+        video: { id: video.id },
+      }),
+    });
+    assert.equal(extension.status, 200);
+    const extensionJson = await extension.json();
+    assert.equal(extensionJson.metadata.compatibility.operation, "extend");
+    assert.equal(extensionJson.seconds, "8");
+    assert.deepEqual(extensionJson.source_video, { type: "video_id", id: video.id });
+
+    const pathEdit = await fetch(`${baseUrl}/v1/videos/${video.id}/edits`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ prompt: "Edit through the path-compatible route." }),
+    });
+    assert.equal(pathEdit.status, 200);
+    const pathEditJson = await pathEdit.json();
+    assert.equal(pathEditJson.source_video_id, video.id);
+    assert.equal(pathEditJson.metadata.compatibility.operation, "edit");
+    assert.deepEqual(pathEditJson.source_video, { type: "video_id", id: video.id });
 
     const remix = await fetch(`${baseUrl}/v1/videos/${video.id}/remix`, {
       method: "POST",

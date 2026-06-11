@@ -6100,11 +6100,13 @@ async function readVideoCreateRequest(req, config) {
       await readRawBody(req, (config.videoGenerationMaxInputBytes || 50 * 1024 * 1024) + 1024 * 1024),
       contentType,
     );
+    const videoFile = form.files.find((file) => file.name === "video") || null;
     return normalizeVideoRequest({
       ...form.fields,
       ...(form.fields.metadata ? { metadata: parseJsonOrNull(form.fields.metadata) || form.fields.metadata } : {}),
       ...(form.fields.input_reference ? { input_reference: parseJsonOrNull(form.fields.input_reference) || form.fields.input_reference } : {}),
       ...(form.fields.characters ? { characters: parseJsonOrNull(form.fields.characters) || form.fields.characters } : {}),
+      ...(videoFile ? { video: multipartFileDescriptor(videoFile) } : {}),
       reference_files: form.files.map((file) => ({
         name: file.name,
         filename: file.filename,
@@ -6205,10 +6207,19 @@ function normalizeVideoCharacterJsonVideo(video) {
   return null;
 }
 
+function multipartFileDescriptor(file) {
+  return {
+    name: file.name,
+    filename: file.filename,
+    content_type: file.content_type || "application/octet-stream",
+    bytes: file.content.length,
+  };
+}
+
 function createLocalVideoResource(request, config, options = {}) {
   const prompt = stringifyContent(request.prompt).trim();
   const operation = options.operation || "create";
-  if (!prompt && operation === "create") {
+  if (!prompt) {
     const error = new Error("prompt is required");
     error.status = 400;
     error.code = "missing_required_parameter";
@@ -6222,6 +6233,14 @@ function createLocalVideoResource(request, config, options = {}) {
   const seconds = stringifyContent(request.seconds ?? request.duration ?? config.videoGenerationDefaultSeconds ?? "4").trim() || "4";
   const quality = stringifyContent(request.quality || config.videoGenerationDefaultQuality || "standard").trim() || "standard";
   const characters = normalizeVideoCharacterReferences(request.characters);
+  const sourceVideo = normalizeVideoSourceDescriptor(request, options);
+  if ((operation === "edit" || operation === "extend") && !sourceVideo) {
+    const error = new Error("video is required");
+    error.status = 400;
+    error.code = "missing_required_parameter";
+    error.param = "video";
+    throw error;
+  }
   const metadata = isPlainObject(request.metadata) ? clone(request.metadata) : {};
   metadata.compatibility = mergeCompatibility(metadata.compatibility, {
     provider: "local",
@@ -6231,6 +6250,7 @@ function createLocalVideoResource(request, config, options = {}) {
     content_variants: Array.from(LOCAL_VIDEO_CONTENT_VARIANTS),
     batch_supported: operation === "create",
     character_count: characters.length,
+    ...(sourceVideo ? { source_video: sourceVideo } : {}),
     upstream_provider: "chat_completion_incompatible",
   });
 
@@ -6246,7 +6266,56 @@ function createLocalVideoResource(request, config, options = {}) {
     quality,
     ...(characters.length ? { characters } : {}),
     ...(options.sourceVideoId ? { source_video_id: options.sourceVideoId } : {}),
+    ...(sourceVideo ? { source_video: sourceVideo } : {}),
     metadata,
+  };
+}
+
+function normalizeVideoSourceDescriptor(request = {}, options = {}) {
+  if (options.sourceVideoId) return { type: "video_id", id: stringifyContent(options.sourceVideoId) };
+  const value = request.video ?? request.source_video ?? request.input_video ?? null;
+  if (value != null) return normalizeVideoSourceValue(value);
+  const referenceFiles = Array.isArray(request.reference_files) ? request.reference_files : [];
+  const videoReference = referenceFiles.find((file) => file?.name === "video")
+    || referenceFiles.find((file) => String(file?.content_type || "").startsWith("video/"));
+  return videoReference ? normalizeVideoSourceValue(videoReference) : null;
+}
+
+function normalizeVideoSourceValue(value) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    if (!text) return null;
+    if (/^https?:\/\//i.test(text)) return { type: "video_url", url: text };
+    if (/^(video|file)_[A-Za-z0-9_-]+$/.test(text)) {
+      return { type: text.startsWith("file_") ? "file_id" : "video_id", id: text };
+    }
+    const data = decodeBase64Payload(text);
+    return {
+      type: "uploaded_video",
+      filename: "source.mp4",
+      content_type: "video/mp4",
+      bytes: data.length,
+    };
+  }
+  if (!isPlainObject(value)) return null;
+
+  const id = stringifyContent(value.id || value.video_id || value.file_id).trim();
+  if (id) return { type: id.startsWith("file_") ? "file_id" : "video_id", id };
+  const url = stringifyContent(value.video_url || value.url).trim();
+  if (/^https?:\/\//i.test(url)) return { type: "video_url", url };
+
+  const data = typeof value.data_base64 === "string"
+    ? decodeBase64Payload(value.data_base64)
+    : typeof value.data === "string"
+      ? decodeBase64Payload(value.data)
+      : null;
+  const bytes = data ? data.length : Number(value.bytes || value.size || 0);
+  if (!Number.isFinite(bytes) || bytes <= 0) return null;
+  return {
+    type: "uploaded_video",
+    filename: stringifyContent(value.filename || value.name || "source.mp4") || "source.mp4",
+    content_type: stringifyContent(value.content_type || value.mime_type || "video/mp4") || "video/mp4",
+    bytes,
   };
 }
 
@@ -8947,6 +9016,15 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/videos/extensions") {
         await handleVideosCreate(req, res, config, store, { operation: "extend" });
+        return;
+      }
+
+      const videoEditRoute = url.pathname.match(/^\/v1\/videos\/([^/]+)\/edits$/);
+      if (videoEditRoute && req.method === "POST") {
+        await handleVideosCreate(req, res, config, store, {
+          operation: "edit",
+          sourceVideoId: decodeURIComponent(videoEditRoute[1]),
+        });
         return;
       }
 

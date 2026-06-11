@@ -251,6 +251,7 @@ npm run eval:bridge -- --case responses-mcp-remote-stream-approval --timeout-ms 
 npm run eval:bridge -- --case responses-mcp-remote-denial --timeout-ms 120000 --verbose
 npm run eval:bridge -- --case video-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case video-character-lifecycle --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case video-iteration-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-shell --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-file-search --timeout-ms 90000 --verbose
 npm run bench:code -- --timeout-ms 180000

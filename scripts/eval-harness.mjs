@@ -1952,6 +1952,31 @@ function buildSuites(defaultModel) {
           && /video-character:completed:completed/.test(text),
       },
       {
+        id: "video-iteration-lifecycle",
+        mode: "video-iteration-lifecycle",
+        request: {
+          model: "sora-2",
+          prompt: "Exercise the direct OpenAI-compatible Videos API iteration endpoints.",
+          size: "1280x720",
+          seconds: "4",
+          quality: "standard",
+          metadata: { suite: "bridge-regression-video-iteration" },
+        },
+        check: ({ created, edit, extension, pathEdit, remix, text }) => /^video_/.test(created?.id || "")
+          && edit?.metadata?.compatibility?.operation === "edit"
+          && edit?.source_video?.type === "video_id"
+          && edit?.source_video?.id === created?.id
+          && extension?.metadata?.compatibility?.operation === "extend"
+          && extension?.source_video?.type === "video_id"
+          && extension?.source_video?.id === created?.id
+          && pathEdit?.metadata?.compatibility?.operation === "edit"
+          && pathEdit?.source_video_id === created?.id
+          && pathEdit?.source_video?.id === created?.id
+          && remix?.metadata?.compatibility?.operation === "remix"
+          && remix?.source_video_id === created?.id
+          && /video-iteration:completed:completed:completed:completed/.test(text),
+      },
+      {
         id: "responses-image-edit",
         mode: "responses",
         request: {
@@ -2545,6 +2570,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "video-character-lifecycle") {
       return await runVideoCharacterLifecycleCase(testCase, context, started);
+    }
+    if (testCase.mode === "video-iteration-lifecycle") {
+      return await runVideoIterationLifecycleCase(testCase, context, started);
     }
     if (testCase.mode === "completions") {
       return await runJsonCase(testCase, context, started, "/v1/completions", completionOutputText, completionUsage);
@@ -3176,6 +3204,81 @@ async function runVideoCharacterLifecycleCase(testCase, context, started) {
   } finally {
     if (videoId) await deleteJson(`${baseUrl}/v1/videos/${videoId}`);
     if (characterId) await deleteJson(`${baseUrl}/v1/videos/characters/${characterId}`);
+  }
+}
+
+async function runVideoIterationLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const videoIds = new Set();
+  try {
+    const createResponse = await postJson(`${baseUrl}/v1/videos`, request);
+    const createBody = await createResponse.text();
+    if (!createResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: createResponse.status,
+        error: truncate(createBody),
+      });
+    }
+
+    const created = JSON.parse(createBody);
+    if (created.id) videoIds.add(created.id);
+
+    const edit = await postJsonCapture(`${baseUrl}/v1/videos/edits`, {
+      model: request.model,
+      prompt: "Edit the base clip by making the camera movement smoother.",
+      video: { id: created.id },
+      size: request.size,
+    });
+    const extension = await postJsonCapture(`${baseUrl}/v1/videos/extensions`, {
+      model: request.model,
+      prompt: "Extend the base clip with the same visual style.",
+      video: { id: created.id },
+      seconds: "8",
+    });
+    const pathEdit = await postJsonCapture(`${baseUrl}/v1/videos/${created.id}/edits`, {
+      model: request.model,
+      prompt: "Edit through the path-compatible route.",
+    });
+    const remix = await postJsonCapture(`${baseUrl}/v1/videos/${created.id}/remix`, {
+      model: request.model,
+      prompt: "Remix the base clip with a wider camera angle.",
+    });
+
+    const bodies = {
+      edit: edit.json,
+      extension: extension.json,
+      pathEdit: pathEdit.json,
+      remix: remix.json,
+    };
+    for (const body of Object.values(bodies)) {
+      if (body?.id) videoIds.add(body.id);
+    }
+
+    const allStatusesOk = [edit, extension, pathEdit, remix].every((response) => response.ok);
+    const text = `video-iteration:${bodies.edit?.status}:${bodies.extension?.status}:${bodies.pathEdit?.status}:${bodies.remix?.status}`;
+    const ok = allStatusesOk && !!testCase.check({
+      created,
+      ...bodies,
+      text,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: createResponse.status,
+      video_id: created.id,
+      edit_status: edit.status,
+      extension_status: extension.status,
+      path_edit_status: pathEdit.status,
+      remix_status: remix.status,
+      usage: videoUsage(created),
+      output_text: text,
+      error: ok ? undefined : truncate(JSON.stringify({ edit: edit.body, extension: extension.body, pathEdit: pathEdit.body, remix: remix.body })),
+    });
+  } finally {
+    for (const id of videoIds) {
+      await deleteJson(`${baseUrl}/v1/videos/${id}`);
+    }
   }
 }
 
