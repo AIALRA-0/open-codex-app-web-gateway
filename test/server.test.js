@@ -1704,6 +1704,92 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
   });
 });
 
+test("Assistants API create run maps reasoning_effort through Chat compatibility", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.reasoning_effort, undefined);
+    assert.deepEqual(request.body.thinking, { type: "disabled" });
+    assert.equal(request.body.stream, false);
+    assert.deepEqual(request.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(request.body.messages[0].content, /honor run reasoning effort/i);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_reasoning_effort",
+      object: "chat.completion",
+      created: 1700000002,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-reasoning-effort-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 17, completion_tokens: 5, total_tokens: 22 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Honor run reasoning effort. Return the requested marker.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Return assistants-reasoning-effort-ok." }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        reasoning_effort: "none",
+        metadata: { suite: "assistants-reasoning-effort" },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.reasoning_effort, "none");
+    assert.equal(run.metadata.suite, "assistants-reasoning-effort");
+    assert.deepEqual(run.metadata.compatibility.local_assistants.chat_passthrough.reasoning_effort, {
+      source: "reasoning_effort",
+      target: "thinking",
+      value: "none",
+      mapped: { type: "disabled" },
+      forwarded: false,
+      reason: "deepseek_thinking_disabled",
+    });
+
+    const listedRuns = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`);
+    assert.equal(listedRuns.status, 200);
+    const listedRunsJson = await listedRuns.json();
+    assert.equal(listedRunsJson.data[0].id, run.id);
+    assert.equal(listedRunsJson.data[0].reasoning_effort, "none");
+
+    const fetchedRun = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}`);
+    assert.equal(fetchedRun.status, 200);
+    const fetchedRunJson = await fetchedRun.json();
+    assert.equal(fetchedRunJson.reasoning_effort, "none");
+    assert.equal(
+      fetchedRunJson.metadata.compatibility.local_assistants.chat_passthrough.reasoning_effort.reason,
+      "deepseek_thinking_disabled",
+    );
+  }, {
+    deepseekReasoningEffortCompat: true,
+  });
+});
+
 test("Assistants API create run appends additional_messages before upstream Chat", async () => {
   await withMockProvider((_req, res, request) => {
     assert.equal(request.body.tools, undefined);

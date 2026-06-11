@@ -584,6 +584,7 @@ class FileAssistantStore {
       top_p: body.top_p ?? assistant.top_p ?? 1,
       max_completion_tokens: body.max_completion_tokens ?? null,
       max_prompt_tokens: body.max_prompt_tokens ?? null,
+      reasoning_effort: body.reasoning_effort ?? null,
       truncation_strategy: isPlainObject(body.truncation_strategy) ? cloneJson(body.truncation_strategy) : { type: "auto", last_messages: null },
       incomplete_details: null,
       usage: null,

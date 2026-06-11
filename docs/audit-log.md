@@ -4369,6 +4369,76 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-11 - Assistants run reasoning effort
+
+- Used official OpenAI docs via the developer-docs MCP:
+  - OpenAPI 2.3 lists the Assistants Run creation endpoints
+    `/v1/threads/{thread_id}/runs` and `/v1/threads/runs`;
+  - the official reasoning guide says supported effort values are
+    model-dependent and can include `none`, `minimal`, `low`, `medium`,
+    `high`, and `xhigh`.
+- Closed the local Assistants Run `reasoning_effort` compatibility gap for
+  Chat-only providers:
+  - local `thread.run` records now persist `reasoning_effort`;
+  - Assistants-to-Chat request generation forwards `run.reasoning_effort` into
+    the shared Chat passthrough compatibility layer;
+  - for DeepSeek-compatible providers, Run `reasoning_effort:"none"` now
+    omits upstream `reasoning_effort`, sends `thinking:{type:"disabled"}`,
+    and records
+    `metadata.compatibility.local_assistants.chat_passthrough.reasoning_effort`;
+  - list/retrieve Run responses preserve the Run field because it is stored on
+    the local run object.
+- Extended regression coverage:
+  - added a unit/mock-provider Assistants test proving Run
+    `reasoning_effort:"none"` maps to DeepSeek non-thinking mode, returns on
+    create/list/retrieve, and records compatibility metadata;
+  - added live bridge-regression case
+    `assistants-reasoning-effort-none`.
+- Updated docs:
+  - compatibility matrix now includes Assistants Run `reasoning_effort` in the
+    shared reasoning-effort mapping and endpoint notes;
+  - evaluation plan now lists the Assistants reasoning-effort live case and
+    parity requirement.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/store.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused `node --test --test-name-pattern "Assistants API" test/server.test.js`:
+    passed 14/14, including the new Run reasoning-effort mock-provider case.
+  - `npm test`: passed 191/191.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Targeted live `assistants-reasoning-effort-none` passed 1/1 against
+    `deepseek-v4-pro`, latency 3248 ms, output
+    `assistants-reasoning-effort-live-ok`, 2 messages, 1 run, and 40 total
+    tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 89/89,
+    pass rate 1.0, average latency 1365 ms, P95 latency 3799 ms, and total
+    usage 22066 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1283 ms, P95 latency 1438 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, exercising load/auth, sidebar and
+    core page navigation, project dialog/upload, prompt submission, completed
+    turn controls, reload persistence, generated image artifact display, saved
+    project reopen/cleanup, and console error/warning checks.
+  - `npm run prune:runtime -- --dry-run`: scanned 1496 candidates, selected
+    1 old UI smoke screenshot, selected 109455 bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    109455 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: `aialra-opencodexapp-app-server`,
+    `aialra-opencodexapp-bridge`, and `aialra-opencodexapp-web` were active;
+    public HTTPS returned HTTP 200; the filesystem had 38 GB available;
+    `state/` was 21 MB, `output/` was 4.8 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 25 MB.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants Run Step include projection
 
 - Used the official OpenAI Assistants Run Step API references to close a

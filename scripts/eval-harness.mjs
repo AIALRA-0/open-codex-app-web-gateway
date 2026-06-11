@@ -422,6 +422,21 @@ function buildSuites(defaultModel) {
           && steps?.data?.some((step) => step.type === "message_creation"),
       },
       {
+        id: "assistants-reasoning-effort-none",
+        mode: "assistants-reasoning-effort",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run, fetchedRun, runs, messages }) => run?.status === "completed"
+          && run.reasoning_effort === "none"
+          && fetchedRun?.reasoning_effort === "none"
+          && runs?.data?.some((item) => item.id === run.id && item.reasoning_effort === "none")
+          && run.metadata?.compatibility?.local_assistants?.chat_passthrough?.reasoning_effort?.reason === "deepseek_thinking_disabled"
+          && run.metadata?.compatibility?.local_assistants?.chat_passthrough?.reasoning_effort?.forwarded === false
+          && messages?.data?.some((message) => message.role === "assistant"
+            && /assistants-reasoning-effort-live-ok/i.test(message.content?.[0]?.text?.value || "")),
+      },
+      {
         id: "assistants-additional-messages",
         mode: "assistants-additional-messages",
         request: {
@@ -2705,6 +2720,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-required-action") {
       return await runAssistantsRequiredActionCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-reasoning-effort") {
+      return await runAssistantsReasoningEffortCase(testCase, context, started);
+    }
     if (testCase.mode === "assistants-additional-messages") {
       return await runAssistantsAdditionalMessagesCase(testCase, context, started);
     }
@@ -3090,6 +3108,93 @@ async function runAssistantsLifecycleCase(testCase, context, started) {
     });
   } finally {
     for (const threadId of threadIds) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsReasoningEffortCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  try {
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Return the requested marker exactly and with no extra words.",
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: "Return exactly assistants-reasoning-effort-live-ok.",
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        assistant_id: assistantId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      reasoning_effort: "none",
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(run.body),
+      });
+    }
+
+    const fetchedRun = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}`);
+    const runs = await getJson(`${baseUrl}/v1/threads/${threadId}/runs?limit=20`);
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      fetchedRun: fetchedRun.json,
+      runs: runs.json,
+      messages: messages.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.json?.status || run.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      run_id: run.json?.id,
+      run_count: runs.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        fetchedRun: fetchedRun.json,
+        runs: runs.json,
+        messages: messages.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
     if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
   }
 }

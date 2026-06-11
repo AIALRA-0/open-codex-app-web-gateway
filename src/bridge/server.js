@@ -10656,6 +10656,7 @@ function assistantRunToChatRequest(run, threadMessages, config, options = {}) {
     stream: false,
   };
   if (run.max_completion_tokens != null) chat.max_completion_tokens = run.max_completion_tokens;
+  if (run.reasoning_effort != null) chat.reasoning_effort = run.reasoning_effort;
   if (run.response_format && run.response_format !== "auto") chat.response_format = run.response_format;
   const toolMapping = assistantFunctionToolMapping(run.tools);
   if (toolMapping.tools.length) {
