@@ -5652,6 +5652,83 @@ Open follow-ups:
     `/srv/aialra/logs/opencodexapp` is 22 MB.
   - No API keys, account credentials, or local secret files were committed.
 
+## 2026-06-11 - Direct request-based Audio API compatibility
+
+- Used official OpenAI developer docs and OpenAPI endpoint specs for
+  request-based Audio APIs:
+  - `POST /v1/audio/speech` (`createSpeech`);
+  - `POST /v1/audio/transcriptions` (`createTranscription`);
+  - `POST /v1/audio/translations` (`createTranslation`);
+  - audio guide boundary between request-based Audio APIs and Realtime voice.
+- Added local direct Audio compatibility for Chat-only provider deployments:
+  - `POST /v1/audio/speech` accepts JSON speech requests and returns
+    deterministic placeholder bytes for `mp3`, `opus`, `aac`, `flac`, `wav`,
+    and `pcm`, plus optional `speech.audio.*` SSE events;
+  - `POST /v1/audio/transcriptions` accepts official multipart `file`
+    requests and JSON/base64 Batch-compatible file shapes; supports `json`,
+    `verbose_json`, `diarized_json`, `text`, `srt`, `vtt`, and transcription
+    SSE events;
+  - `POST /v1/audio/translations` accepts official multipart `file` requests
+    and JSON/base64 Batch-compatible file shapes; supports `json`,
+    `verbose_json`, `text`, `srt`, and `vtt`;
+  - local Batch JSONL now supports `/v1/audio/transcriptions` and
+    `/v1/audio/translations` while leaving `/v1/audio/speech` direct-only
+    because Batch output files are JSONL and speech responses are binary.
+- Added deployment configuration for local Audio defaults:
+  - `CODEXCOMPAT_AUDIO_PROVIDER`;
+  - `CODEXCOMPAT_AUDIO_SPEECH_MODEL`;
+  - `CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL`;
+  - `CODEXCOMPAT_AUDIO_TRANSLATION_MODEL`;
+  - `CODEXCOMPAT_AUDIO_DEFAULT_VOICE`;
+  - `CODEXCOMPAT_AUDIO_MAX_INPUT_BYTES`.
+- Updated compatibility, deployment, and evaluation docs. The known audio gap
+  is now narrowed: request-based protocol coverage exists locally, but
+  text-only providers such as DeepSeek still do not natively understand audio
+  or synthesize semantic audio; Realtime sessions, custom voice governance, and
+  provider-backed audio quality remain future work.
+- Added regression coverage:
+  - unit tests for direct speech bytes, multipart transcription, JSON/base64
+    transcription SSE, multipart translation, JSON/base64 translation, and
+    local Batch Audio transcription/translation JSONL;
+  - eval harness cases `audio-speech`, `audio-transcription`,
+    `audio-translation`, `batch-audio-transcription`, and
+    `batch-audio-translation`.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Focused Audio server tests passed 120/120 under the selected test pattern.
+  - `npm test`: 158/158 passing tests.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+  - `npm run prune:runtime -- --dry-run`: passed with exit code 0; scanned
+    726 candidates, selected 91 old UI screenshots by retention policy,
+    deleted 0 files, selected 7469499 bytes, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; bridge healthz returned `ok:true`,
+    DeepSeek provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`; public HTTPS returned HTTP
+    200 from `https://opencodexapp.aialra.online/`.
+  - Live `bridge-regression` Audio cases passed after restart:
+    `audio-speech` 1/1 at 125 ms with `audio/wav` bytes,
+    `audio-transcription` 1/1 at 68 ms,
+    `audio-translation` 1/1 at 62 ms,
+    `batch-audio-transcription` 1/1 at 224 ms, and
+    `batch-audio-translation` 1/1 at 151 ms.
+  - `npm run smoke:bridge`: returned a completed response with
+    `output_text:"bridge-ok"`.
+  - `npm run smoke:ui`: passed against
+    `https://opencodexapp.aialra.online`; login/public entry, sidebar
+    controls, navigation, project dialog/upload services, conversation submit,
+    reload persistence, generated image artifact display, saved project reopen,
+    and cleanup all passed with no console errors or warnings.
+  - Disk/storage check before restart: filesystem had 42 GB available;
+    `state/` was 7.2 MB, `output/` was 12 MB,
+    `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 22 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Direct Images variations compatibility
 
 - Used the official OpenAI OpenAPI operation `createImageVariation`

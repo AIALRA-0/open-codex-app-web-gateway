@@ -18,6 +18,9 @@ Primary sources:
 - OpenAI Moderations OpenAPI operation `createModeration`: https://api.openai.com/v1/moderations
 - OpenAI Batch OpenAPI operation `createBatch`: https://api.openai.com/v1/batches
 - OpenAI Batch guide: https://developers.openai.com/api/docs/guides/batch
+- OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
+- OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
+- OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
 - OpenAI Images variation OpenAPI operation `createImageVariation`: https://api.openai.com/v1/images/variations
 - OpenAI function calling guide: https://developers.openai.com/api/docs/guides/function-calling
 - OpenAI file inputs guide: https://developers.openai.com/api/docs/guides/file-inputs
@@ -378,6 +381,7 @@ OpenAI-compatible surfaces without adding a separate job runner.
 
 Local Batch execution currently accepts `/v1/responses`,
 `/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
+`/v1/audio/transcriptions`, `/v1/audio/translations`,
 `/v1/images/generations`, `/v1/images/edits`,
 `/v1/images/variations`, `/v1/videos`, and `/v1/moderations`, because those
 surfaces are implemented by the bridge. Batch
@@ -884,6 +888,32 @@ After the local edit adapter consumes those image inputs, the bridge replaces
 the corresponding upstream Chat `image_url` content parts with a text marker so
 text-only providers such as DeepSeek do not reject the request.
 
+## Direct Audio Endpoint Coverage
+
+OpenAI's request-based Audio APIs use direct HTTP requests for bounded speech
+and audio-file workloads, while Realtime voice sessions are a separate surface.
+The bridge implements the request-based protocol locally so SDKs, UI flows, and
+Batch JSONL can exercise Audio routes even when the upstream provider is
+Chat-only.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/audio/speech` | Implemented locally | Accepts JSON `input`, `model`, `voice`, `response_format`, `speed`, `instructions`, and optional `stream`; returns deterministic placeholder audio bytes for `mp3`, `opus`, `aac`, `flac`, `wav`, or `pcm`, or SSE `speech.audio.*` events when streaming is requested |
+| `POST /v1/audio/transcriptions` | Implemented locally | Accepts official multipart `file` requests plus JSON/base64 file shapes for Batch; supports `json`, `verbose_json`, `diarized_json`, `text`, `srt`, `vtt`, and transcription SSE events |
+| `POST /v1/audio/translations` | Implemented locally | Accepts official multipart `file` requests plus JSON/base64 file shapes for Batch; supports `json`, `verbose_json`, `text`, `srt`, and `vtt` response formats |
+
+Local Batch JSONL can execute `/v1/audio/transcriptions` and
+`/v1/audio/translations` when each request carries JSON/base64 audio data.
+`/v1/audio/speech` intentionally remains a direct API path because its primary
+response is binary audio, while Batch output files are JSONL.
+
+This is protocol compatibility, not model-side listening or production-grade
+speech synthesis. Placeholder mode returns deterministic bytes/text and records
+`compatibility.provider:"local"` for transcription and translation responses.
+Text-only Chat providers such as DeepSeek still do not natively process audio
+content, and Realtime sessions plus custom voice-consent governance remain
+future work.
+
 The bridge also exposes a direct OpenAI-compatible
 `POST /v1/images/generations` endpoint for clients that call the Image API
 instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
@@ -991,7 +1021,7 @@ Configuration:
 | Capability | Why it is not fully native yet | Planned path |
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
-| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
+| OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, cancellation, binary-safe File creation, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and checksum/resumability semantics are not yet modeled | Add resumable cleanup metadata, checksum validation, async/parallel stress tests, and larger disk-governed staging profiles |
@@ -1003,7 +1033,7 @@ Configuration:
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |
 | Native OpenAI compaction portability | Local compaction can be decrypted only by this bridge deployment/key; it is not OpenAI ZDR encrypted content | Keep key outside Git, document the boundary, and add optional key rotation/export policy |
 | Native hosted background durability full parity | Local background jobs are file-backed, carry per-process persistent leases, can resume provider calls after `provider_pending`, and can resume local tool/context preparation from persisted `ready` step checkpoints. Startup skips records with an unexpired foreign lease to avoid duplicate multi-process recovery, and jobs interrupted while a local preparation step is actively `running` fail closed to avoid re-running side-effecting local tools. This is still a local retry layer rather than OpenAI's hosted job service | Add a persisted worker queue with retry policies, backoff, heartbeat metrics, idempotency-aware active-step retries, and cross-host lease storage for distributed deployments |
-| Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; text-only providers such as DeepSeek do not natively understand audio input and do not return audio payloads for the bridge to synthesize | Add optional provider/model adapters for audio-capable Chat or Realtime models and audio-quality evals |
+| Native audio input/output parity on text-only providers | Audio-capable Chat providers can accept `input_audio` content parts and return `message.audio`/`delta.audio`, which the bridge preserves as `output_audio`; the bridge also implements direct request-based `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations` protocol compatibility. Text-only providers such as DeepSeek still do not natively understand audio input or synthesize semantic audio | Add optional provider/model adapters for audio-capable Chat or Realtime models, provider-backed speech/transcription, custom voice governance, and audio-quality evals |
 | `n>1` multiple candidates | Responses removed `n`; Codex expects one generation | Non-streaming and streaming upstream Chat choices are preserved as multiple output items and replay messages when returned; request-side `n` forwarding remains provider-dependent |
 | Exact OpenAI annotations | Provider-specific; chat often lacks annotations | Preserve non-streaming and streaming annotations when present, synthesize only from local tools |
 | Direct Chat passthrough full parity across providers | The bridge now normalizes current OpenAI Chat developer-role requests, token aliases, reasoning effort, DeepSeek `user_id`, local stored-chat `store`/`metadata` semantics, direct Chat `tool_choice` thinking compatibility, and filters known unsupported OpenAI-only fields such as `parallel_tool_calls` for DeepSeek, but every provider has its own evolving field matrix | Add provider profiles for additional Chat-compatible APIs and expand live conformance cases as SDKs add fields |

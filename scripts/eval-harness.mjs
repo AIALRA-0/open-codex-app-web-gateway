@@ -264,6 +264,7 @@ function buildSuites(defaultModel) {
   ];
   const tinyPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   const tinyMaskPngBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAFgwJ/lC7V7wAAAABJRU5ErkJggg==";
+  const tinyAudioBase64 = Buffer.from("tiny eval audio", "utf8").toString("base64");
 
   return {
     "protocol-smoke": protocolSmoke,
@@ -311,6 +312,51 @@ function buildSuites(defaultModel) {
           && json.results[1].categories?.["harassment/threatening"] === true
           && json.results[1].category_applied_input_types?.violence?.includes("text")
           && json.compatibility?.provider === "local",
+      },
+      {
+        id: "audio-speech",
+        mode: "audio-speech",
+        request: {
+          model: "gpt-4o-mini-tts",
+          input: "Exercise direct Audio speech compatibility.",
+          voice: "alloy",
+          response_format: "wav",
+        },
+        check: ({ contentType, bytes, buffer }) => contentType === "audio/wav"
+          && bytes > 44
+          && buffer.subarray(0, 4).toString("ascii") === "RIFF"
+          && buffer.subarray(8, 12).toString("ascii") === "WAVE",
+      },
+      {
+        id: "audio-transcription",
+        mode: "audio-transcription",
+        request: {
+          model: "gpt-4o-transcribe",
+          file: {
+            data: `data:audio/wav;base64,${tinyAudioBase64}`,
+            filename: "eval-transcribe.wav",
+          },
+          response_format: "verbose_json",
+        },
+        check: ({ json, text }) => json?.task === "transcribe"
+          && /eval-transcribe\.wav/i.test(text)
+          && json.compatibility?.operation === "audio_transcription"
+          && json.usage?.type === "duration",
+      },
+      {
+        id: "audio-translation",
+        mode: "audio-translation",
+        request: {
+          model: "whisper-1",
+          file: {
+            data: `data:audio/wav;base64,${tinyAudioBase64}`,
+            filename: "eval-translate.wav",
+          },
+          response_format: "json",
+        },
+        check: ({ json, text }) => /translation in English/i.test(text)
+          && json.compatibility?.operation === "audio_translation"
+          && json.usage?.type === "duration",
       },
       {
         id: "responses-inline-moderation",
@@ -449,6 +495,75 @@ function buildSuites(defaultModel) {
           && outputLines[0].response?.body?.results?.[0]?.flagged === false
           && outputLines[1].response?.body?.results?.[0]?.flagged === true
           && outputLines[1].response?.body?.results?.[0]?.categories?.violence === true,
+      },
+      {
+        id: "batch-audio-transcription",
+        mode: "batch-local",
+        endpoint: "/v1/audio/transcriptions",
+        usage: "audio",
+        requests: [
+          {
+            custom_id: "batch-audio-transcription",
+            body: {
+              model: "gpt-4o-transcribe",
+              file: {
+                data: `data:audio/wav;base64,${tinyAudioBase64}`,
+                filename: "batch-eval-transcribe.wav",
+              },
+              response_format: "verbose_json",
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/audio/transcriptions"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].response?.status_code === 200
+            && response?.task === "transcribe"
+            && /batch-eval-transcribe\.wav/i.test(response?.text || "")
+            && response?.compatibility?.operation === "audio_transcription";
+        },
+      },
+      {
+        id: "batch-audio-translation",
+        mode: "batch-local",
+        endpoint: "/v1/audio/translations",
+        usage: "audio",
+        requests: [
+          {
+            custom_id: "batch-audio-translation",
+            body: {
+              model: "whisper-1",
+              file: {
+                data: `data:audio/wav;base64,${tinyAudioBase64}`,
+                filename: "batch-eval-translate.wav",
+              },
+              response_format: "json",
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/audio/translations"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].response?.status_code === 200
+            && /translation in English/i.test(response?.text || "")
+            && response?.compatibility?.operation === "audio_translation";
+        },
       },
       {
         id: "batch-chat-completions",
@@ -2134,6 +2249,15 @@ async function runCase(testCase, context) {
     if (testCase.mode === "moderations") {
       return await runJsonCase(testCase, context, started, "/v1/moderations", moderationOutputText, moderationUsage);
     }
+    if (testCase.mode === "audio-speech") {
+      return await runAudioSpeechCase(testCase, context, started);
+    }
+    if (testCase.mode === "audio-transcription") {
+      return await runJsonCase(testCase, context, started, "/v1/audio/transcriptions", audioOutputText, audioUsage);
+    }
+    if (testCase.mode === "audio-translation") {
+      return await runJsonCase(testCase, context, started, "/v1/audio/translations", audioOutputText, audioUsage);
+    }
     if (testCase.mode === "images-generation") {
       return await runJsonCase(testCase, context, started, "/v1/images/generations", imagesGenerationOutputText, imagesGenerationUsage);
     }
@@ -2254,6 +2378,34 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
   } finally {
     if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
   }
+}
+
+async function runAudioSpeechCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const response = await postJson(`${baseUrl}/v1/audio/speech`, request);
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get("content-type") || "";
+  if (!response.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: response.status,
+      error: truncate(buffer.toString("utf8")),
+    });
+  }
+  const ok = !!testCase.check({
+    status: response.status,
+    contentType,
+    bytes: buffer.length,
+    buffer,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: response.status,
+    content_type: contentType,
+    bytes: buffer.length,
+    usage: audioUsage(null),
+    output_text: `audio_speech:${contentType}:${buffer.length}`,
+  });
 }
 
 async function runVideoLifecycleCase(testCase, context, started) {
@@ -3749,6 +3901,10 @@ function moderationOutputText(response) {
   return `moderations:${results.length}:flagged:${flagged}`;
 }
 
+function audioOutputText(response) {
+  return response?.text || `${response?.task || "audio"}:${response?.segments?.length || 0}`;
+}
+
 function imagesGenerationOutputText(response) {
   return `images:${response?.data?.length || 0}`;
 }
@@ -3797,6 +3953,15 @@ function moderationUsage() {
   };
 }
 
+function audioUsage(response) {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    total_tokens: 0,
+    audio_seconds: response?.usage?.seconds || 0,
+  };
+}
+
 function imagesGenerationUsage(response) {
   const usage = response?.usage || {};
   return {
@@ -3819,6 +3984,7 @@ function batchResponseUsage(testCase, response) {
   if (testCase.usage === "responses") return responseUsage(response);
   if (testCase.usage === "chat") return chatUsage(response);
   if (testCase.usage === "completions") return completionUsage(response);
+  if (testCase.usage === "audio") return audioUsage(response);
   if (testCase.usage === "images") return imagesGenerationUsage(response);
   if (testCase.usage === "videos") return videoUsage(response);
   return moderationUsage(response);

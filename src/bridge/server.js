@@ -99,6 +99,8 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/chat/completions",
   "/v1/completions",
   "/v1/embeddings",
+  "/v1/audio/transcriptions",
+  "/v1/audio/translations",
   "/v1/images/generations",
   "/v1/images/edits",
   "/v1/images/variations",
@@ -106,6 +108,14 @@ const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/moderations",
 ]);
 
+const AUDIO_SPEECH_CONTENT_TYPES = Object.freeze({
+  aac: "audio/aac",
+  flac: "audio/flac",
+  mp3: "audio/mpeg",
+  opus: "audio/opus",
+  pcm: "application/octet-stream",
+  wav: "audio/wav",
+});
 const LOCAL_VIDEO_CONTENT_VARIANTS = new Set(["video", "thumbnail", "spritesheet"]);
 const LOCAL_PLACEHOLDER_MP4 = Buffer.from("AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAGG1kYXQ=", "base64");
 const LOCAL_PLACEHOLDER_WEBP = Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64");
@@ -255,6 +265,12 @@ function loadConfig(overrides = {}) {
     shellMaxCommands: numberFromEnv("CODEXCOMPAT_SHELL_MAX_COMMANDS", 1, 1, 5),
     shellMemoryLimit: process.env.CODEXCOMPAT_SHELL_MEMORY_LIMIT || "1g",
     computerProvider: process.env.CODEXCOMPAT_COMPUTER_PROVIDER || "local",
+    audioProvider: process.env.CODEXCOMPAT_AUDIO_PROVIDER || "placeholder",
+    audioSpeechModel: process.env.CODEXCOMPAT_AUDIO_SPEECH_MODEL || "gpt-4o-mini-tts",
+    audioTranscriptionModel: process.env.CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL || "gpt-4o-transcribe",
+    audioTranslationModel: process.env.CODEXCOMPAT_AUDIO_TRANSLATION_MODEL || "whisper-1",
+    audioDefaultVoice: process.env.CODEXCOMPAT_AUDIO_DEFAULT_VOICE || "alloy",
+    audioMaxInputBytes: numberFromEnv("CODEXCOMPAT_AUDIO_MAX_INPUT_BYTES", 25 * 1024 * 1024, 1024, 100 * 1024 * 1024),
     imageGenerationProvider: process.env.CODEXCOMPAT_IMAGE_GENERATION_PROVIDER || "placeholder",
     imageGenerationStateDir: process.env.CODEXCOMPAT_IMAGE_GENERATION_STATE_DIR || path.join(stateDir, "local-image-generations"),
     imageGenerationMaxStoredImages: numberFromEnv("CODEXCOMPAT_IMAGE_GENERATION_MAX_STORED_IMAGES", 5000, 1, 100000),
@@ -4602,6 +4618,9 @@ function localModelCatalog(config) {
     config.defaultModel,
     config.embeddingsModel,
     config.moderationsModel,
+    config.audioSpeechModel,
+    config.audioTranscriptionModel,
+    config.audioTranslationModel,
   ].filter(Boolean))].map((modelId) => localModelObject(modelId));
 }
 
@@ -4696,6 +4715,544 @@ async function handleModerations(req, res, config) {
       supports_image_inspection: false,
     },
   });
+}
+
+async function handleAudioSpeech(req, res, config) {
+  try {
+    if (!canUseLocalAudio(config)) {
+      sendError(res, 400, "local audio compatibility is disabled", {
+        type: "invalid_request_error",
+        code: "audio_disabled",
+        param: "provider",
+      });
+      return;
+    }
+
+    const request = await readJson(req);
+    const speech = normalizeAudioSpeechRequest(request, config);
+    const content = placeholderSpeechContent(speech);
+    if (speech.stream) {
+      writeAudioSpeechStream(res, speech, content);
+      return;
+    }
+
+    res.writeHead(200, {
+      "content-type": content.contentType,
+      "content-length": content.buffer.length,
+      "cache-control": "no-store",
+      "x-audio-model": speech.model,
+      "x-audio-provider": config.audioProvider || "placeholder",
+      "x-audio-voice": speech.voice,
+      "x-audio-format": speech.response_format,
+    });
+    res.end(content.buffer);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "audio speech request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "audio_speech_error",
+      param: error.param || null,
+    });
+  }
+}
+
+async function handleAudioTranscriptions(req, res, config) {
+  await handleAudioTranscriptLike(req, res, config, "transcribe");
+}
+
+async function handleAudioTranslations(req, res, config) {
+  await handleAudioTranscriptLike(req, res, config, "translate");
+}
+
+async function handleAudioTranscriptLike(req, res, config, task) {
+  try {
+    if (!canUseLocalAudio(config)) {
+      sendError(res, 400, "local audio compatibility is disabled", {
+        type: "invalid_request_error",
+        code: "audio_disabled",
+        param: "provider",
+      });
+      return;
+    }
+
+    const request = await readAudioFileRequest(req, config);
+    const normalized = normalizeAudioTranscriptRequest(request, config, task);
+    const text = placeholderAudioTranscriptText(normalized, task);
+    if (task === "transcribe" && normalized.stream) {
+      writeAudioTranscriptStream(res, normalized, text);
+      return;
+    }
+
+    const response = createAudioTranscriptResponse(normalized, text, task);
+    if (response.kind === "text") {
+      res.writeHead(200, {
+        "content-type": response.contentType,
+        "cache-control": "no-store",
+      });
+      res.end(response.text);
+      return;
+    }
+
+    sendJson(res, 200, response.body);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "audio request failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "audio_error",
+      param: error.param || null,
+    });
+  }
+}
+
+function canUseLocalAudio(config = {}) {
+  return String(config.audioProvider || "placeholder").toLowerCase() !== "disabled";
+}
+
+function normalizeAudioSpeechRequest(request = {}, config = {}) {
+  if (!isPlainObject(request)) {
+    throw requestError("audio speech request body must be a JSON object", {
+      code: "invalid_request_body",
+    });
+  }
+  const input = stringifyContent(request.input).trim();
+  if (!input) {
+    throw requestError("input is required", {
+      code: "missing_required_parameter",
+      param: "input",
+    });
+  }
+  const responseFormat = normalizeAudioSpeechFormat(request.response_format || request.format || "mp3");
+  const speed = normalizeAudioSpeed(request.speed);
+  const voice = normalizeAudioVoice(request.voice || config.audioDefaultVoice || "alloy");
+  return {
+    input,
+    model: stringifyContent(request.model || config.audioSpeechModel || "gpt-4o-mini-tts"),
+    voice,
+    response_format: responseFormat,
+    speed,
+    instructions: stringifyContent(request.instructions || ""),
+    stream: request.stream === true || String(request.stream_format || "").toLowerCase() === "sse",
+  };
+}
+
+function normalizeAudioSpeechFormat(value) {
+  const format = String(value || "mp3").trim().toLowerCase();
+  if (AUDIO_SPEECH_CONTENT_TYPES[format]) return format;
+  throw requestError(`unsupported audio response_format: ${format || "empty"}`, {
+    code: "invalid_request_parameter",
+    param: "response_format",
+  });
+}
+
+function normalizeAudioSpeed(value) {
+  if (value === undefined || value === null || value === "") return 1;
+  const speed = Number(value);
+  if (!Number.isFinite(speed) || speed < 0.25 || speed > 4) {
+    throw requestError("speed must be a number between 0.25 and 4", {
+      code: "invalid_request_parameter",
+      param: "speed",
+    });
+  }
+  return speed;
+}
+
+function normalizeAudioVoice(value) {
+  if (isPlainObject(value) && value.id) return stringifyContent(value.id);
+  const voice = stringifyContent(value || "alloy").trim();
+  if (!voice) {
+    throw requestError("voice is required", {
+      code: "missing_required_parameter",
+      param: "voice",
+    });
+  }
+  return voice;
+}
+
+function placeholderSpeechContent(speech = {}) {
+  const format = speech.response_format || "mp3";
+  if (format === "wav") {
+    return {
+      contentType: AUDIO_SPEECH_CONTENT_TYPES.wav,
+      buffer: placeholderWavBuffer(speech),
+    };
+  }
+  if (format === "pcm") {
+    return {
+      contentType: AUDIO_SPEECH_CONTENT_TYPES.pcm,
+      buffer: placeholderPcmBuffer(speech),
+    };
+  }
+  return {
+    contentType: AUDIO_SPEECH_CONTENT_TYPES[format] || "application/octet-stream",
+    buffer: Buffer.concat([
+      format === "mp3" ? Buffer.from("ID3\u0004\u0000\u0000\u0000\u0000\u0000\u0000", "binary") : Buffer.alloc(0),
+      Buffer.from(`open-codex-audio:${format}:${speech.model}:${speech.voice}:${speech.input}\n`, "utf8"),
+    ]),
+  };
+}
+
+function placeholderWavBuffer(speech = {}) {
+  const sampleRate = 24000;
+  const samples = Math.max(1200, Math.min(24000, Math.trunc(stringifyContent(speech.input).length * 120)));
+  const pcm = Buffer.alloc(samples * 2);
+  const header = Buffer.alloc(44);
+  header.write("RIFF", 0, "ascii");
+  header.writeUInt32LE(36 + pcm.length, 4);
+  header.write("WAVE", 8, "ascii");
+  header.write("fmt ", 12, "ascii");
+  header.writeUInt32LE(16, 16);
+  header.writeUInt16LE(1, 20);
+  header.writeUInt16LE(1, 22);
+  header.writeUInt32LE(sampleRate, 24);
+  header.writeUInt32LE(sampleRate * 2, 28);
+  header.writeUInt16LE(2, 32);
+  header.writeUInt16LE(16, 34);
+  header.write("data", 36, "ascii");
+  header.writeUInt32LE(pcm.length, 40);
+  return Buffer.concat([header, pcm]);
+}
+
+function placeholderPcmBuffer(speech = {}) {
+  const samples = Math.max(1200, Math.min(24000, Math.trunc(stringifyContent(speech.input).length * 120)));
+  return Buffer.alloc(samples * 2);
+}
+
+function writeAudioSpeechStream(res, speech, content) {
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  const b64 = content.buffer.toString("base64");
+  writeSse(res, "speech.audio.delta", {
+    type: "speech.audio.delta",
+    delta: b64,
+    audio: b64,
+    format: speech.response_format,
+  });
+  writeSse(res, "speech.audio.done", {
+    type: "speech.audio.done",
+    format: speech.response_format,
+  });
+  res.end();
+}
+
+async function readAudioFileRequest(req, config = {}) {
+  const contentType = req.headers["content-type"] || "";
+  if (/^multipart\/form-data\b/i.test(contentType)) {
+    const maxBytes = Number(config.audioMaxInputBytes || 25 * 1024 * 1024);
+    const form = parseMultipartFormBinary(await readRawBody(req, maxBytes + 1024 * 1024), contentType);
+    const file = form.files.find((item) => item.name === "file") || form.files[0];
+    return {
+      ...form.fields,
+      ...(file ? {
+        file_upload: {
+          filename: file.filename,
+          content_type: file.content_type || "application/octet-stream",
+          content: file.content,
+        },
+      } : {}),
+    };
+  }
+  if (!contentType || contentType.includes("application/json")) return await readJson(req);
+  throw requestError("audio requests must use application/json or multipart/form-data", {
+    status: 415,
+    code: "unsupported_content_type",
+    param: "content-type",
+  });
+}
+
+function normalizeAudioTranscriptRequest(request = {}, config = {}, task = "transcribe") {
+  if (!isPlainObject(request)) {
+    throw requestError("audio request body must be an object", {
+      code: "invalid_request_body",
+    });
+  }
+  const file = resolveAudioRequestFile(request, config);
+  const model = stringifyContent(request.model || (task === "translate" ? config.audioTranslationModel : config.audioTranscriptionModel) || "whisper-1");
+  const responseFormat = normalizeAudioTranscriptFormat(request.response_format, task);
+  return {
+    task,
+    model,
+    file,
+    prompt: stringifyContent(request.prompt || ""),
+    language: stringifyContent(request.language || ""),
+    response_format: responseFormat,
+    stream: task === "transcribe" && (request.stream === true || String(request.stream || "").toLowerCase() === "true"),
+    temperature: request.temperature,
+    include: normalizeArrayField(request.include),
+    timestamp_granularities: normalizeArrayField(request.timestamp_granularities || request["timestamp_granularities[]"]),
+  };
+}
+
+function resolveAudioRequestFile(request = {}, config = {}) {
+  const maxBytes = Number(config.audioMaxInputBytes || 25 * 1024 * 1024);
+  if (request.file_upload?.content) {
+    return normalizeAudioBuffer({
+      buffer: request.file_upload.content,
+      filename: request.file_upload.filename || "audio",
+      contentType: request.file_upload.content_type,
+      maxBytes,
+    });
+  }
+
+  const source = audioDataSource(request);
+  if (!source) {
+    throw requestError("file is required", {
+      code: "missing_required_parameter",
+      param: "file",
+    });
+  }
+  const parsed = parseAudioData(source.value, source.contentType);
+  if (!parsed) {
+    throw requestError("audio file data must be base64 encoded", {
+      code: "invalid_audio_file",
+      param: source.param,
+    });
+  }
+  return normalizeAudioBuffer({
+    buffer: parsed.buffer,
+    filename: source.filename || "audio",
+    contentType: parsed.contentType || source.contentType,
+    maxBytes,
+  });
+}
+
+function audioDataSource(request = {}) {
+  const fromFile = request.file;
+  if (isPlainObject(fromFile)) {
+    const value = fromFile.data || fromFile.file_data || fromFile.audio_data || fromFile.content_base64 || fromFile.b64_json;
+    if (value) {
+      return {
+        value,
+        filename: fromFile.filename || fromFile.name,
+        contentType: fromFile.content_type || fromFile.mime_type || fromFile.media_type,
+        param: "file",
+      };
+    }
+  }
+  if (typeof fromFile === "string" && fromFile.trim()) {
+    return {
+      value: fromFile,
+      filename: request.filename,
+      contentType: request.content_type || request.mime_type || request.media_type,
+      param: "file",
+    };
+  }
+  for (const key of ["file_data", "audio_data", "data", "content_base64"]) {
+    if (typeof request[key] === "string" && request[key].trim()) {
+      return {
+        value: request[key],
+        filename: request.filename,
+        contentType: request.content_type || request.mime_type || request.media_type,
+        param: key,
+      };
+    }
+  }
+  return null;
+}
+
+function parseAudioData(value, contentType = "") {
+  const text = String(value || "").trim();
+  const dataUrl = text.match(/^data:([^;,]+)?(?:;[^,]*)?;base64,(.*)$/is);
+  const encoded = dataUrl ? dataUrl[2] : text;
+  const normalized = encoded.replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
+  if (!normalized || !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)) return null;
+  try {
+    return {
+      buffer: Buffer.from(normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "="), "base64"),
+      contentType: dataUrl?.[1] || contentType || "application/octet-stream",
+    };
+  } catch {
+    return null;
+  }
+}
+
+function normalizeAudioBuffer({ buffer, filename, contentType, maxBytes }) {
+  if (!Buffer.isBuffer(buffer) || !buffer.length) {
+    throw requestError("audio file is empty", {
+      code: "invalid_audio_file",
+      param: "file",
+    });
+  }
+  if (buffer.length > maxBytes) {
+    throw requestError(`audio file exceeds local limit of ${maxBytes} bytes`, {
+      code: "audio_file_too_large",
+      param: "file",
+    });
+  }
+  return {
+    filename: stringifyContent(filename || "audio").split(/[\\/]/).pop() || "audio",
+    content_type: stringifyContent(contentType || "application/octet-stream"),
+    bytes: buffer.length,
+    content: buffer,
+  };
+}
+
+function normalizeAudioTranscriptFormat(value, task) {
+  const fallback = "json";
+  const format = String(value || fallback).trim().toLowerCase();
+  const allowed = task === "translate"
+    ? new Set(["json", "text", "srt", "verbose_json", "vtt"])
+    : new Set(["json", "text", "srt", "verbose_json", "vtt", "diarized_json"]);
+  if (allowed.has(format)) return format;
+  throw requestError(`unsupported audio response_format: ${format || "empty"}`, {
+    code: "invalid_request_parameter",
+    param: "response_format",
+  });
+}
+
+function normalizeArrayField(value) {
+  if (value === undefined || value === null || value === "") return [];
+  if (Array.isArray(value)) return value.map((item) => stringifyContent(item)).filter(Boolean);
+  return String(value).split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+function placeholderAudioTranscriptText(normalized = {}, task = "transcribe") {
+  const action = task === "translate" ? "translation in English" : "transcription";
+  const prompt = normalized.prompt ? ` Prompt hint: ${normalized.prompt}` : "";
+  return `Local audio ${action} placeholder for ${normalized.file.filename} (${normalized.file.bytes} bytes).${prompt}`.trim();
+}
+
+function createAudioTranscriptResponse(normalized = {}, text = "", task = "transcribe") {
+  const duration = estimateAudioDuration(normalized.file);
+  const usage = { type: "duration", seconds: Math.max(1, Math.ceil(duration)) };
+  const format = normalized.response_format || "json";
+  const compatibility = audioTranscriptCompatibility(normalized, task);
+  if (format === "text") {
+    return { kind: "text", contentType: "text/plain; charset=utf-8", text: `${text}\n` };
+  }
+  if (format === "srt") {
+    return { kind: "text", contentType: "text/plain; charset=utf-8", text: audioSrt(text, duration) };
+  }
+  if (format === "vtt") {
+    return { kind: "text", contentType: "text/vtt; charset=utf-8", text: audioVtt(text, duration) };
+  }
+
+  if (format === "verbose_json") {
+    return {
+      kind: "json",
+      body: {
+        task,
+        language: task === "translate" ? "english" : (normalized.language || "unknown"),
+        duration,
+        text,
+        segments: [verboseAudioSegment(text, duration)],
+        usage,
+        compatibility,
+      },
+    };
+  }
+
+  if (format === "diarized_json") {
+    return {
+      kind: "json",
+      body: {
+        task: "transcribe",
+        duration,
+        text: `A: ${text}`,
+        segments: [{
+          type: "transcript.text.segment",
+          id: "seg_001",
+          start: 0,
+          end: duration,
+          text,
+          speaker: "A",
+        }],
+        usage,
+        compatibility,
+      },
+    };
+  }
+
+  return {
+    kind: "json",
+    body: {
+      text,
+      usage,
+      compatibility,
+    },
+  };
+}
+
+function audioTranscriptCompatibility(normalized = {}, task = "transcribe") {
+  return {
+    provider: "local",
+    operation: task === "translate" ? "audio_translation" : "audio_transcription",
+    model: normalized.model,
+    file: {
+      filename: normalized.file?.filename || "audio",
+      bytes: normalized.file?.bytes || 0,
+      content_type: normalized.file?.content_type || "application/octet-stream",
+    },
+  };
+}
+
+function verboseAudioSegment(text, duration) {
+  return {
+    id: 0,
+    seek: 0,
+    start: 0,
+    end: duration,
+    text,
+    tokens: [],
+    temperature: 0,
+    avg_logprob: 0,
+    compression_ratio: 1,
+    no_speech_prob: 0,
+  };
+}
+
+function estimateAudioDuration(file = {}) {
+  const seconds = Number(file.duration || 0);
+  if (Number.isFinite(seconds) && seconds > 0) return Number(seconds.toFixed(3));
+  const estimated = Math.max(1, Math.min(600, (file.bytes || 0) / 16000));
+  return Number(estimated.toFixed(3));
+}
+
+function audioTimestamp(seconds) {
+  const totalMs = Math.max(0, Math.round(seconds * 1000));
+  const ms = totalMs % 1000;
+  const totalSeconds = Math.floor(totalMs / 1000);
+  const s = totalSeconds % 60;
+  const totalMinutes = Math.floor(totalSeconds / 60);
+  const m = totalMinutes % 60;
+  const h = Math.floor(totalMinutes / 60);
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")},${String(ms).padStart(3, "0")}`;
+}
+
+function audioSrt(text, duration) {
+  return `1\n${audioTimestamp(0)} --> ${audioTimestamp(duration)}\n${text}\n`;
+}
+
+function audioVtt(text, duration) {
+  return `WEBVTT\n\n00:00:00.000 --> ${audioTimestamp(duration).replace(",", ".")}\n${text}\n`;
+}
+
+function writeAudioTranscriptStream(res, normalized, text) {
+  const usage = { type: "duration", seconds: Math.max(1, Math.ceil(estimateAudioDuration(normalized.file))) };
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-store",
+    connection: "keep-alive",
+  });
+  writeSse(res, "transcript.text.delta", {
+    type: "transcript.text.delta",
+    delta: text,
+  });
+  writeSse(res, "transcript.text.done", {
+    type: "transcript.text.done",
+    text,
+    usage,
+  });
+  res.end();
+}
+
+function requestError(message, details = {}) {
+  const error = new Error(message);
+  error.status = details.status || 400;
+  error.code = details.code || "invalid_request_error";
+  error.type = details.type || "invalid_request_error";
+  error.param = details.param || null;
+  return error;
 }
 
 async function handleImagesGenerations(req, res, config) {
@@ -5880,6 +6437,10 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
       await handleLegacyCompletions(req, res, config);
     } else if (endpoint === "/v1/embeddings") {
       await handleEmbeddings(req, res, config);
+    } else if (endpoint === "/v1/audio/transcriptions") {
+      await handleAudioTranscriptions(req, res, config);
+    } else if (endpoint === "/v1/audio/translations") {
+      await handleAudioTranslations(req, res, config);
     } else if (endpoint === "/v1/images/generations") {
       await handleImagesGenerations(req, res, config);
     } else if (endpoint === "/v1/images/edits") {
@@ -6672,6 +7233,21 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/moderations") {
         await handleModerations(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/audio/speech") {
+        await handleAudioSpeech(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/audio/transcriptions") {
+        await handleAudioTranscriptions(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/audio/translations") {
+        await handleAudioTranslations(req, res, config);
         return;
       }
 

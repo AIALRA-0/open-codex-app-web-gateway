@@ -1265,6 +1265,137 @@ test("POST /v1/responses maps Chat audio output and replays it", async () => {
   });
 });
 
+test("POST /v1/audio/speech returns local speech bytes", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local audio speech");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        input: "Say the protocol marker.",
+        voice: "alloy",
+        response_format: "wav",
+        speed: 1.1,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "audio/wav");
+    assert.equal(response.headers.get("x-audio-model"), "gpt-4o-mini-tts");
+    assert.equal(response.headers.get("x-audio-provider"), "placeholder");
+    assert.equal(response.headers.get("x-audio-voice"), "alloy");
+    const audio = Buffer.from(await response.arrayBuffer());
+    assert.equal(audio.subarray(0, 4).toString("ascii"), "RIFF");
+    assert.equal(audio.subarray(8, 12).toString("ascii"), "WAVE");
+    assert.ok(audio.length > 44);
+    assert.equal(requests.length, 0);
+
+    const missing = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ voice: "alloy" }),
+    });
+    assert.equal(missing.status, 400);
+    const error = await missing.json();
+    assert.equal(error.error.param, "input");
+    assert.equal(error.error.code, "missing_required_parameter");
+  });
+});
+
+test("POST /v1/audio/transcriptions accepts multipart, verbose JSON, and streams events", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local audio transcriptions");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const form = new FormData();
+    form.append("model", "gpt-4o-transcribe");
+    form.append("prompt", "name the source");
+    form.append("language", "en");
+    form.append("response_format", "verbose_json");
+    form.append("file", new Blob([Buffer.from("tiny audio")], { type: "audio/wav" }), "source.wav");
+
+    const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.task, "transcribe");
+    assert.equal(json.language, "en");
+    assert.match(json.text, /Local audio transcription placeholder for source\.wav/);
+    assert.equal(json.segments.length, 1);
+    assert.equal(json.usage.type, "duration");
+    assert.equal(json.compatibility.provider, "local");
+    assert.equal(json.compatibility.model, "gpt-4o-transcribe");
+    assert.equal(json.compatibility.file.filename, "source.wav");
+
+    const audioData = Buffer.from("stream audio", "utf8").toString("base64");
+    const streamed = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-transcribe",
+        file: {
+          data: `data:audio/wav;base64,${audioData}`,
+          filename: "stream.wav",
+          content_type: "audio/wav",
+        },
+        stream: true,
+      }),
+    });
+    assert.equal(streamed.status, 200);
+    assert.match(streamed.headers.get("content-type"), /^text\/event-stream/);
+    const events = parseSseEvents(await streamed.text());
+    assert.equal(events[0].event, "transcript.text.delta");
+    assert.equal(events[1].event, "transcript.text.done");
+    assert.match(events[1].data.text, /stream\.wav/);
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/audio/translations accepts multipart and JSON audio data", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local audio translations");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const form = new FormData();
+    form.append("model", "whisper-1");
+    form.append("response_format", "text");
+    form.append("file", new Blob([Buffer.from("tiny translation audio")], { type: "audio/wav" }), "translate.wav");
+
+    const textResponse = await fetch(`${baseUrl}/v1/audio/translations`, {
+      method: "POST",
+      body: form,
+    });
+    assert.equal(textResponse.status, 200);
+    assert.match(textResponse.headers.get("content-type"), /^text\/plain/);
+    assert.match(await textResponse.text(), /Local audio translation in English placeholder for translate\.wav/);
+
+    const audioData = Buffer.from("json translation audio", "utf8").toString("base64");
+    const jsonResponse = await fetch(`${baseUrl}/v1/audio/translations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "whisper-1",
+        file: {
+          data: `data:audio/wav;base64,${audioData}`,
+          filename: "json-translate.wav",
+        },
+        response_format: "json",
+      }),
+    });
+    assert.equal(jsonResponse.status, 200);
+    const json = await jsonResponse.json();
+    assert.match(json.text, /translation in English/);
+    assert.equal(json.compatibility.operation, "audio_translation");
+    assert.equal(json.compatibility.file.filename, "json-translate.wav");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses preserves non-streaming refusal logprobs metadata", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -8175,6 +8306,87 @@ test("local Batch API executes Responses image_generation JSONL", async () => {
     assert.equal(fs.existsSync(path.join(stateDir, "local-image-generations", `${body.output[0].id}.json`)), true);
   }, {
     imageGenerationPlaceholderSize: 16,
+  });
+});
+
+test("local Batch API executes direct Audio transcription and translation JSONL", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local direct audio batches");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const audioData = Buffer.from("tiny batch audio", "utf8").toString("base64");
+    const runBatch = async (endpoint, filename, body) => {
+      const jsonl = `${JSON.stringify({
+        custom_id: `${filename}-ok`,
+        method: "POST",
+        url: endpoint,
+        body,
+      })}\n`;
+      const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename: `${filename}.jsonl`,
+          purpose: "batch",
+          content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+          mime_type: "application/jsonl",
+        }),
+      });
+      assert.equal(fileResponse.status, 200);
+      const file = await fileResponse.json();
+
+      const created = await fetch(`${baseUrl}/v1/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input_file_id: file.id,
+          endpoint,
+          completion_window: "24h",
+          metadata: { suite: filename },
+        }),
+      });
+      assert.equal(created.status, 200);
+      const batch = await created.json();
+      assert.equal(batch.object, "batch");
+      assert.equal(batch.status, "completed");
+      assert.equal(batch.endpoint, endpoint);
+      assert.equal(batch.request_counts.total, 1);
+      assert.equal(batch.request_counts.completed, 1);
+      assert.equal(batch.request_counts.failed, 0);
+      assert.equal(batch.error_file_id, null);
+      assert.equal(batch.metadata.compatibility.supported_endpoints.includes(endpoint), true);
+
+      const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+      assert.equal(outputResponse.status, 200);
+      const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+      assert.equal(outputLines.length, 1);
+      assert.equal(outputLines[0].response.status_code, 200);
+      return outputLines[0].response.body;
+    };
+
+    const transcription = await runBatch("/v1/audio/transcriptions", "batch-audio-transcription", {
+      model: "gpt-4o-transcribe",
+      file: {
+        data: `data:audio/wav;base64,${audioData}`,
+        filename: "batch-transcribe.wav",
+      },
+      response_format: "verbose_json",
+    });
+    assert.equal(transcription.task, "transcribe");
+    assert.match(transcription.text, /batch-transcribe\.wav/);
+    assert.equal(transcription.compatibility.operation, "audio_transcription");
+
+    const translation = await runBatch("/v1/audio/translations", "batch-audio-translation", {
+      model: "whisper-1",
+      file: {
+        data: `data:audio/wav;base64,${audioData}`,
+        filename: "batch-translate.wav",
+      },
+      response_format: "json",
+    });
+    assert.match(translation.text, /translation in English/);
+    assert.equal(translation.compatibility.operation, "audio_translation");
+    assert.equal(requests.length, 0);
   });
 });
 
