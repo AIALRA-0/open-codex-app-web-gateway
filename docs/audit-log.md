@@ -4369,6 +4369,93 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Organization users and invites compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - OpenAPI endpoint list confirmed `/v1/organization/users`,
+    `/v1/organization/users/{user_id}`, `/v1/organization/invites`, and
+    `/v1/organization/invites/{invite_id}`;
+  - OpenAPI spec for `GET /v1/organization/users` documents
+    `organization.user` list pagination and `emails` filtering;
+  - OpenAPI spec for `GET/POST /v1/organization/invites` documents
+    `organization.invite`, `owner|reader` org roles, pending/accepted/expired
+    statuses, project membership grants, and pagination;
+  - OpenAI Node SDK generated organization users resource documents
+    retrieve/update/list/delete methods, `organization.user.deleted`, optional
+    user metadata, nested user details, and local role updates;
+  - OpenAI Node SDK generated organization invites resource documents
+    retrieve/delete methods and `organization.invite.deleted`.
+- Extended the local file-backed Organization admin compatibility layer:
+  - `GET /v1/organization/users` lists local `organization.user` records with
+    `emails` filtering, nested local project memberships, nested `user`
+    details, and OpenAI-style pagination;
+  - `GET/POST/DELETE /v1/organization/users/{user_id}` retrieves, updates
+    local org role/persona/technical-level metadata, and deletes local org
+    users with `organization.user.deleted`;
+  - creating a local project user now also seeds/synchronizes a matching local
+    organization user, making admin pages see coherent org/project membership
+    state;
+  - deleting a local organization user removes their local project membership
+    records;
+  - `GET/POST /v1/organization/invites` lists and creates local pending
+    `organization.invite` records with expiry timestamps and optional project
+    membership grants;
+  - `GET/DELETE /v1/organization/invites/{invite_id}` retrieves and deletes
+    local invites with `organization.invite.deleted`;
+  - invalid org roles return `400 invalid_organization_role`; invalid invite
+    project roles return `400 invalid_project_role`.
+- Current boundary: this closes another admin SDK/UI 404 class for organization
+  users and invites when the gateway is backed by a Chat Completions provider.
+  It does not send invitation email, accept invites, create real provider
+  accounts, synchronize with OpenAI/DeepSeek identity systems, or implement
+  custom role-assignment endpoints.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies org user listing/retrieval/email
+    filtering/update/delete, project-user-to-org-user synchronization, project
+    membership cleanup after org-user deletion, invite create/list/retrieve/
+    delete, invalid role errors, and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-users-invites`,
+    covering the same lifecycle against the deployed DeepSeek-backed bridge.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Organization unit tests passed 4/4.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-users-invites`: passed 1/1 against
+    `deepseek-v4-pro`, latency 1876 ms, output
+    `organization_users_invites:...`, and zero provider token usage.
+  - `npm test`: passed 204/204.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1395 ms, P95 latency 1688 ms, and total usage 99 tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 101/101,
+    pass rate 1.0, average latency 1528 ms, P95 latency 5177 ms, and total
+    usage 24768 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T17-28-32-837Z.png`.
+  - `npm run prune:runtime -- --dry-run`: scanned 2008 runtime candidates
+    across 13 targets, selected 1 old UI-smoke screenshot, selected 85635
+    bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    85635 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; local bridge healthz returned `ok:true`; public
+    `https://opencodexapp.aialra.online/` returned HTTP 200; the filesystem had
+    28 GB available; `state/` was 28 MB, `output/` was 4.4 MB,
+    `/srv/aialra/data/opencodexapp` was 136 KB, and
+    `/srv/aialra/logs/opencodexapp` was 28 MB.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, or invite secrets were added to the repository. Invite
+  and organization-user records are local protocol metadata only.
+
 ## 2026-06-15 - Local Organization project users and rate limits compatibility
 
 - Used official OpenAI sources for the next Organization project admin slice:

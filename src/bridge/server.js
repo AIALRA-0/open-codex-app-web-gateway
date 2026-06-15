@@ -8245,6 +8245,54 @@ function handleOrganizationUsage(res, kind, url) {
   sendJson(res, 200, createOrganizationUsagePage(kind, url));
 }
 
+async function handleOrganizationInviteCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization invite request body must be a JSON object", {
+      code: "invalid_organization_invite_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createInvite(body));
+}
+
+function handleOrganizationInvitesList(res, organizationAdminStore, url) {
+  const invites = organizationAdminStore.listInvites();
+  sendJson(res, 200, paginateListWithDefaultOrder(invites, url, "asc", 20, 100));
+}
+
+function handleOrganizationInviteGet(res, organizationAdminStore, inviteId) {
+  sendJson(res, 200, organizationAdminStore.getInvite(inviteId));
+}
+
+function handleOrganizationInviteDelete(res, organizationAdminStore, inviteId) {
+  sendJson(res, 200, organizationAdminStore.deleteInvite(inviteId));
+}
+
+function handleOrganizationUsersList(res, organizationAdminStore, url) {
+  const users = organizationAdminStore.listOrganizationUsers({
+    emails: organizationUserEmailFilters(url),
+  });
+  sendJson(res, 200, paginateListWithDefaultOrder(users, url, "asc", 20, 100));
+}
+
+function handleOrganizationUserGet(res, organizationAdminStore, userId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationUser(userId));
+}
+
+async function handleOrganizationUserUpdate(req, res, organizationAdminStore, userId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization user update body must be a JSON object", {
+      code: "invalid_organization_user_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationUser(userId, body));
+}
+
+function handleOrganizationUserDelete(res, organizationAdminStore, userId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationUser(userId));
+}
+
 async function handleOrganizationProjectCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -9498,6 +9546,17 @@ function paginateList(items, url) {
     last_id: page.at(-1)?.id || null,
     has_more: data.length > page.length,
   };
+}
+
+function organizationUserEmailFilters(url) {
+  const values = [
+    ...url.searchParams.getAll("emails"),
+    ...url.searchParams.getAll("emails[]"),
+  ];
+  return values
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function fineTuningMetadataFilter(url) {
@@ -11806,6 +11865,54 @@ function createServer(config = loadConfig()) {
       if (organizationUsageRoute && req.method === "GET") {
         handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url);
         return;
+      }
+
+      if (url.pathname === "/v1/organization/invites") {
+        if (req.method === "GET") {
+          handleOrganizationInvitesList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationInviteCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationInviteRoute = url.pathname.match(/^\/v1\/organization\/invites\/([^/]+)$/);
+      if (organizationInviteRoute) {
+        const inviteId = decodeURIComponent(organizationInviteRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationInviteGet(res, organizationAdminStore, inviteId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationInviteDelete(res, organizationAdminStore, inviteId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/organization/users") {
+        if (req.method === "GET") {
+          handleOrganizationUsersList(res, organizationAdminStore, url);
+          return;
+        }
+      }
+
+      const organizationUserRoute = url.pathname.match(/^\/v1\/organization\/users\/([^/]+)$/);
+      if (organizationUserRoute) {
+        const userId = decodeURIComponent(organizationUserRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationUserGet(res, organizationAdminStore, userId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationUserUpdate(req, res, organizationAdminStore, userId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationUserDelete(res, organizationAdminStore, userId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/organization/projects") {

@@ -51,6 +51,11 @@ function normalizeProjectRole(value, fallback = "member") {
   return ["owner", "member"].includes(role) ? role : fallback;
 }
 
+function normalizeOrganizationRole(value, fallback = "reader") {
+  const role = String(value || fallback).trim().toLowerCase();
+  return ["owner", "reader"].includes(role) ? role : fallback;
+}
+
 function compareCreatedThenIdAsc(a, b) {
   const created = Number(a.created_at || 0) - Number(b.created_at || 0);
   if (created) return created;
@@ -129,10 +134,20 @@ class LocalOrganizationAdminStore {
   ensureDir() {
     fs.mkdirSync(this.projectsDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.projectResourcesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationUsersDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationInvitesDir(), { recursive: true, mode: 0o700 });
   }
 
   projectsDir() {
     return path.join(this.dir, "projects");
+  }
+
+  organizationUsersDir() {
+    return path.join(this.dir, "organization_users");
+  }
+
+  organizationInvitesDir() {
+    return path.join(this.dir, "organization_invites");
   }
 
   projectResourcesDir() {
@@ -143,6 +158,18 @@ class LocalOrganizationAdminStore {
     const clean = safeId(projectId);
     if (!clean) return null;
     return path.join(this.projectsDir(), `${clean}.json`);
+  }
+
+  organizationUserPath(userId) {
+    const clean = safeId(userId);
+    if (!clean) return null;
+    return path.join(this.organizationUsersDir(), `${clean}.json`);
+  }
+
+  organizationInvitePath(inviteId) {
+    const clean = safeId(inviteId);
+    if (!clean) return null;
+    return path.join(this.organizationInvitesDir(), `${clean}.json`);
   }
 
   projectResourceDir(projectId, resource) {
@@ -177,6 +204,190 @@ class LocalOrganizationAdminStore {
     const dir = this.projectResourceDir(projectId, "rate_limits");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
+  }
+
+  createInvite(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const email = optionalString(request.email);
+    if (!email) {
+      throw organizationAdminError("email is required", {
+        code: "missing_required_parameter",
+        param: "email",
+      });
+    }
+    const roleText = optionalString(request.role);
+    if (!roleText) {
+      throw organizationAdminError("role is required", {
+        code: "missing_required_parameter",
+        param: "role",
+      });
+    }
+    const role = normalizeOrganizationRole(roleText, "");
+    if (!role) {
+      throw organizationAdminError("role must be owner or reader", {
+        code: "invalid_organization_role",
+        param: "role",
+      });
+    }
+    const projects = this.normalizeInviteProjects(request.projects);
+    const now = nowSeconds();
+    const invite = {
+      id: `invite_${randomToken(14)}`,
+      object: "organization.invite",
+      email,
+      role,
+      status: "pending",
+      created_at: now,
+      expires_at: now + 7 * 24 * 60 * 60,
+      accepted_at: null,
+      projects,
+      compatibility: localCompatibility("organization_invite_protocol_compatibility", {
+        locally_persisted: true,
+        default_project_membership_emulated: request.projects === undefined,
+      }),
+    };
+    this.writeJson(this.organizationInvitePath(invite.id), invite);
+    this.cleanup();
+    return clone(invite);
+  }
+
+  listInvites() {
+    return this.listJsonFiles(this.organizationInvitesDir())
+      .sort(compareCreatedThenIdAsc)
+      .map(clone);
+  }
+
+  getInvite(inviteId) {
+    const invite = this.readJson(this.organizationInvitePath(inviteId));
+    if (!invite) {
+      throw organizationAdminError(`organization invite not found: ${inviteId}`, {
+        status: 404,
+        code: "organization_invite_not_found",
+        param: "invite_id",
+      });
+    }
+    return clone(invite);
+  }
+
+  deleteInvite(inviteId) {
+    const invite = this.getInvite(inviteId);
+    if (invite.status === "accepted") {
+      throw organizationAdminError("accepted organization invites cannot be deleted", {
+        code: "organization_invite_accepted",
+        param: "invite_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationInvitePath(invite.id)); } catch {}
+    return {
+      object: "organization.invite.deleted",
+      id: invite.id,
+      deleted: true,
+    };
+  }
+
+  listOrganizationUsers({ emails = [] } = {}) {
+    const filterEmails = new Set(emails.map((email) => String(email || "").trim().toLowerCase()).filter(Boolean));
+    return this.listJsonFiles(this.organizationUsersDir())
+      .filter((user) => !filterEmails.size || filterEmails.has(String(user.email || "").toLowerCase()))
+      .sort(compareAddedThenIdAsc)
+      .map((user) => this.organizationUserProjection(user));
+  }
+
+  getOrganizationUser(userId) {
+    const user = this.readJson(this.organizationUserPath(userId));
+    if (!user) {
+      throw organizationAdminError(`organization user not found: ${userId}`, {
+        status: 404,
+        code: "organization_user_not_found",
+        param: "user_id",
+      });
+    }
+    return this.organizationUserProjection(user);
+  }
+
+  updateOrganizationUser(userId, body = {}) {
+    const user = this.readJson(this.organizationUserPath(userId));
+    if (!user) {
+      throw organizationAdminError(`organization user not found: ${userId}`, {
+        status: 404,
+        code: "organization_user_not_found",
+        param: "user_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    if (request.role !== undefined && request.role !== null) {
+      const role = normalizeOrganizationRole(request.role, "");
+      if (!role) {
+        throw organizationAdminError("role must be owner or reader", {
+          code: "invalid_organization_role",
+          param: "role",
+        });
+      }
+      user.role = role;
+    }
+    if (request.role_id !== undefined) user.role_id = optionalNullableString(request.role_id);
+    if (request.developer_persona !== undefined) {
+      user.developer_persona = optionalNullableString(request.developer_persona);
+    }
+    if (request.technical_level !== undefined) {
+      user.technical_level = optionalNullableString(request.technical_level);
+    }
+    user.compatibility = {
+      ...(isPlainObject(user.compatibility) ? user.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.organizationUserPath(user.id), user);
+    return this.organizationUserProjection(user);
+  }
+
+  deleteOrganizationUser(userId) {
+    const user = this.readJson(this.organizationUserPath(userId));
+    if (!user) {
+      throw organizationAdminError(`organization user not found: ${userId}`, {
+        status: 404,
+        code: "organization_user_not_found",
+        param: "user_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationUserPath(user.id)); } catch {}
+    for (const project of this.listProjects({ includeArchived: true })) {
+      try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
+    }
+    return {
+      object: "organization.user.deleted",
+      id: user.id,
+      deleted: true,
+    };
+  }
+
+  ensureOrganizationUser(fields = {}) {
+    const userId = this.localOrganizationUserId(fields.userId, fields.email);
+    const existing = this.readJson(this.organizationUserPath(userId));
+    const now = nowSeconds();
+    const email = fields.email !== undefined ? optionalNullableString(fields.email) : existing?.email ?? null;
+    const name = fields.name !== undefined ? optionalNullableString(fields.name) : existing?.name ?? null;
+    const user = {
+      id: userId,
+      object: "organization.user",
+      added_at: existing?.added_at || now,
+      created: existing?.created || now,
+      api_key_last_used_at: existing?.api_key_last_used_at ?? null,
+      developer_persona: existing?.developer_persona ?? null,
+      email,
+      is_default: existing?.is_default ?? false,
+      is_scale_tier_authorized_purchaser: existing?.is_scale_tier_authorized_purchaser ?? null,
+      is_scim_managed: existing?.is_scim_managed ?? false,
+      is_service_account: existing?.is_service_account ?? false,
+      name,
+      role: existing?.role || normalizeOrganizationRole(fields.role, "reader"),
+      technical_level: existing?.technical_level ?? null,
+      ...(existing?.role_id ? { role_id: existing.role_id } : {}),
+      compatibility: localCompatibility("organization_user_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationUserPath(user.id), user);
+    return this.organizationUserProjection(user);
   }
 
   createProject(body = {}) {
@@ -460,6 +671,12 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.projectUserPath(project.id, user.id), user);
+    this.ensureOrganizationUser({
+      userId: user.id,
+      email: user.email,
+      name: user.name,
+      role: "reader",
+    });
     this.cleanup();
     return clone(user);
   }
@@ -585,11 +802,84 @@ class LocalOrganizationAdminStore {
     }
   }
 
+  normalizeInviteProjects(projects) {
+    if (projects === undefined) return [];
+    if (!Array.isArray(projects)) {
+      throw organizationAdminError("projects must be an array", {
+        code: "invalid_invite_projects",
+        param: "projects",
+      });
+    }
+    return projects.map((project, index) => {
+      if (!isPlainObject(project)) {
+        throw organizationAdminError("invite project entries must be objects", {
+          code: "invalid_invite_projects",
+          param: `projects.${index}`,
+        });
+      }
+      const id = optionalString(project.id);
+      if (!id) {
+        throw organizationAdminError("invite project id is required", {
+          code: "missing_required_parameter",
+          param: `projects.${index}.id`,
+        });
+      }
+      const role = normalizeProjectRole(project.role, "");
+      if (!role) {
+        throw organizationAdminError("invite project role must be owner or member", {
+          code: "invalid_project_role",
+          param: `projects.${index}.role`,
+        });
+      }
+      return { id, role };
+    });
+  }
+
+  localOrganizationUserId(userId, email) {
+    const requested = safeId(userId);
+    if (requested) return requested;
+    if (email) return `user_${stableToken(String(email).toLowerCase(), 20)}`;
+    return `user_${randomToken(14)}`;
+  }
+
   localProjectUserId(userId, email) {
     const requested = safeId(userId);
     if (requested) return requested;
     if (email) return `user_${stableToken(String(email).toLowerCase(), 20)}`;
     return `user_${randomToken(14)}`;
+  }
+
+  organizationUserProjection(user) {
+    const value = clone(user);
+    value.projects = {
+      object: "list",
+      data: this.organizationUserProjects(value.id),
+    };
+    value.user = {
+      id: value.id,
+      object: "user",
+      banned: false,
+      banned_at: null,
+      email: value.email ?? null,
+      enabled: true,
+      name: value.name ?? null,
+      picture: null,
+    };
+    return value;
+  }
+
+  organizationUserProjects(userId) {
+    const projects = [];
+    for (const project of this.listProjects({ includeArchived: true })) {
+      const projectUser = this.readJson(this.projectUserPath(project.id, userId));
+      if (!projectUser) continue;
+      projects.push({
+        id: project.id,
+        name: project.name ?? null,
+        role: projectUser.role ?? null,
+      });
+    }
+    return projects.sort((a, b) => String(a.id || "").localeCompare(String(b.id || "")));
   }
 
   ensureDefaultProjectRateLimits(projectId) {
@@ -676,7 +966,7 @@ class LocalOrganizationAdminStore {
 
   cleanup() {
     this.ensureDir();
-    for (const dir of [this.projectsDir()]) {
+    for (const dir of [this.projectsDir(), this.organizationUsersDir(), this.organizationInvitesDir()]) {
       const files = this.listCleanupEntries(dir);
       for (const entry of files.slice(this.maxRecords)) {
         try { fs.unlinkSync(entry.filePath); } catch {}

@@ -383,6 +383,61 @@ function buildSuites(defaultModel) {
           && missingStart?.status === 400,
       },
       {
+        id: "organization-users-invites",
+        mode: "organization-users-invites",
+        check: ({
+          project,
+          projectUser,
+          users,
+          fetchedUser,
+          updatedUser,
+          invalidUserRole,
+          invite,
+          invites,
+          fetchedInvite,
+          invalidInviteRole,
+          invalidInviteProjectRole,
+          deletedInvite,
+          missingInvite,
+          deletedUser,
+          projectUsersAfterOrgDelete,
+          missingUser,
+        }) => project?.object === "organization.project"
+          && projectUser?.object === "organization.project.user"
+          && users?.object === "list"
+          && users.data?.some((entry) => entry.object === "organization.user"
+            && entry.id === projectUser.id
+            && entry.email === "bridge-org-eval@example.com"
+            && entry.projects?.data?.some((membership) => membership.id === project.id && membership.role === "owner"))
+          && fetchedUser?.id === projectUser.id
+          && fetchedUser.projects?.data?.some((membership) => membership.id === project.id)
+          && updatedUser?.role === "owner"
+          && updatedUser?.developer_persona === "builder"
+          && updatedUser?.technical_level === "advanced"
+          && invalidUserRole?.status === 400
+          && invalidUserRole.json?.error?.code === "invalid_organization_role"
+          && invite?.object === "organization.invite"
+          && invite.id?.startsWith("invite_")
+          && invite.status === "pending"
+          && invite.role === "reader"
+          && invite.projects?.[0]?.id === project.id
+          && invites?.data?.some((entry) => entry.id === invite.id)
+          && fetchedInvite?.id === invite.id
+          && invalidInviteRole?.status === 400
+          && invalidInviteRole.json?.error?.code === "invalid_organization_role"
+          && invalidInviteProjectRole?.status === 400
+          && invalidInviteProjectRole.json?.error?.code === "invalid_project_role"
+          && deletedInvite?.object === "organization.invite.deleted"
+          && deletedInvite.deleted === true
+          && missingInvite?.status === 404
+          && missingInvite.json?.error?.code === "organization_invite_not_found"
+          && deletedUser?.object === "organization.user.deleted"
+          && deletedUser.deleted === true
+          && projectUsersAfterOrgDelete?.data?.every((entry) => entry.id !== projectUser.id)
+          && missingUser?.status === 404
+          && missingUser.json?.error?.code === "organization_user_not_found",
+      },
+      {
         id: "organization-project-admin",
         mode: "organization-project-admin",
         check: ({
@@ -3097,6 +3152,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-usage-costs") {
       return await runOrganizationUsageCostsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-users-invites") {
+      return await runOrganizationUsersInvitesCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-admin") {
       return await runOrganizationProjectAdminCase(testCase, context, started);
     }
@@ -3564,6 +3622,90 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     usage_bucket_count: completions.json?.data?.length || 0,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_usage:${costs.json?.data?.length || 0}:${completions.json?.data?.length || 0}`,
+  });
+}
+
+async function runOrganizationUsersInvitesCase(testCase, context, started) {
+  const marker = `bridge-org-${Date.now()}-${context.iteration}`;
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Org Admin ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const projectUser = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users`, {
+    user_id: `user_${marker.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+    email: "bridge-org-eval@example.com",
+    name: "Bridge Org Eval User",
+    role: "owner",
+  });
+  const userId = encodeURIComponent(projectUser.json?.id || "missing_user");
+  const users = await getJson(`${baseUrl}/v1/organization/users?limit=20&emails=bridge-org-eval@example.com`);
+  const fetchedUser = await getJson(`${baseUrl}/v1/organization/users/${userId}`);
+  const updatedUser = await postJsonCapture(`${baseUrl}/v1/organization/users/${userId}`, {
+    role: "owner",
+    developer_persona: "builder",
+    technical_level: "advanced",
+  });
+  const invalidUserRole = await postJsonCapture(`${baseUrl}/v1/organization/users/${userId}`, {
+    role: "writer",
+  });
+  const invite = await postJsonCapture(`${baseUrl}/v1/organization/invites`, {
+    email: "bridge-org-invite@example.com",
+    role: "reader",
+    projects: [{ id: project.json.id, role: "member" }],
+  });
+  const inviteId = encodeURIComponent(invite.json?.id || "missing_invite");
+  const invites = await getJson(`${baseUrl}/v1/organization/invites?limit=20`);
+  const fetchedInvite = await getJson(`${baseUrl}/v1/organization/invites/${inviteId}`);
+  const invalidInviteRole = await postJsonCapture(`${baseUrl}/v1/organization/invites`, {
+    email: "bridge-org-invalid-role@example.com",
+    role: "member",
+  });
+  const invalidInviteProjectRole = await postJsonCapture(`${baseUrl}/v1/organization/invites`, {
+    email: "bridge-org-invalid-project-role@example.com",
+    role: "reader",
+    projects: [{ id: project.json.id, role: "reader" }],
+  });
+  const deletedInviteRaw = await deleteJson(`${baseUrl}/v1/organization/invites/${inviteId}`);
+  const deletedInvite = parseJsonish(deletedInviteRaw.body);
+  const missingInvite = await getJson(`${baseUrl}/v1/organization/invites/${inviteId}`);
+  const deletedUserRaw = await deleteJson(`${baseUrl}/v1/organization/users/${userId}`);
+  const deletedUser = parseJsonish(deletedUserRaw.body);
+  const projectUsersAfterOrgDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/users?limit=20`);
+  const missingUser = await getJson(`${baseUrl}/v1/organization/users/${userId}`);
+  const ok = !!testCase.check({
+    project: project.json,
+    projectUser: projectUser.json,
+    users: users.json,
+    fetchedUser: fetchedUser.json,
+    updatedUser: updatedUser.json,
+    invalidUserRole,
+    invite: invite.json,
+    invites: invites.json,
+    fetchedInvite: fetchedInvite.json,
+    invalidInviteRole,
+    invalidInviteProjectRole,
+    deletedInvite,
+    missingInvite,
+    deletedUser,
+    projectUsersAfterOrgDelete: projectUsersAfterOrgDelete.json,
+    missingUser,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: project.status,
+    project_id: project.json.id,
+    user_id: projectUser.json?.id || null,
+    invite_id: invite.json?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_users_invites:${projectUser.json?.id || "missing"}:${invite.json?.id || "missing"}`,
   });
 }
 

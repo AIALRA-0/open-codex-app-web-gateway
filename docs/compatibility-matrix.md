@@ -49,12 +49,16 @@ Primary sources:
 - OpenAI Organization images usage OpenAPI operation `usage-images`: https://api.openai.com/v1/organization/usage/images
 - OpenAI Organization file-search usage OpenAPI operation `usage-file-search-calls`: https://api.openai.com/v1/organization/usage/file_search_calls
 - OpenAI Organization web-search usage OpenAPI operation `usage-web-search-calls`: https://api.openai.com/v1/organization/usage/web_search_calls
+- OpenAI Organization users OpenAPI operation `list-users`: https://api.openai.com/v1/organization/users
+- OpenAI Organization invites OpenAPI operation `list-invites`: https://api.openai.com/v1/organization/invites
 - OpenAI Organization projects OpenAPI operation `admin-api-keys-list-projects`: https://api.openai.com/v1/organization/projects
 - OpenAI Organization project OpenAPI operation `admin-api-keys-retrieve-project`: https://api.openai.com/v1/organization/projects/{project_id}
 - OpenAI Organization project archive OpenAPI operation `admin-api-keys-archive-project`: https://api.openai.com/v1/organization/projects/{project_id}/archive
 - OpenAI Organization project API keys OpenAPI operation `admin-api-keys-list-project-api-keys`: https://api.openai.com/v1/organization/projects/{project_id}/api_keys
 - OpenAI Organization project service accounts OpenAPI operation `admin-api-keys-list-project-service-accounts`: https://api.openai.com/v1/organization/projects/{project_id}/service_accounts
 - OpenAI RBAC permissions guide: https://developers.openai.com/api/docs/guides/rbac#permissions
+- OpenAI Node SDK generated organization users resource: https://github.com/openai/openai-node/blob/main/src/resources/admin/organization/users/users.ts
+- OpenAI Node SDK generated organization invites resource: https://github.com/openai/openai-node/blob/main/src/resources/admin/organization/invites.ts
 - OpenAI Node SDK generated project users resource: https://github.com/openai/openai-node/blob/main/src/resources/admin/organization/projects/users/users.ts
 - OpenAI Node SDK generated project rate-limits resource: https://github.com/openai/openai-node/blob/main/src/resources/admin/organization/projects/rate-limits.ts
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
@@ -525,18 +529,27 @@ or replace provider-specific billing exports. It exists so SDKs, diagnostics,
 and dashboards can query the documented endpoint family without breaking on
 404 while the deployment remains backed by a Chat Completions provider.
 
-## Organization Projects Admin Coverage
+## Organization Admin Coverage
 
 The bridge also implements a local file-backed subset of OpenAI Organization
-project administration so SDKs and admin pages can exercise project lifecycle,
-project user lifecycle, project service-account lifecycle, project API-key
-inspection flows, and project rate-limit update flows without calling hosted
-OpenAI admin APIs. These records are protocol-compatibility metadata only; they
-do not create provider accounts, grant provider access, enforce traffic
-throttling, or represent real OpenAI organization state.
+administration so SDKs and admin pages can exercise organization user/invite
+lifecycle, project lifecycle, project user lifecycle, project service-account
+lifecycle, project API-key inspection flows, and project rate-limit update
+flows without calling hosted OpenAI admin APIs. These records are
+protocol-compatibility metadata only; they do not create provider accounts,
+grant provider access, send invitation email, enforce traffic throttling, or
+represent real OpenAI organization state.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
+| `GET /v1/organization/users` | Implemented locally | Lists local `organization.user` records with optional `emails` filtering, nested local project memberships, and OpenAI-style pagination |
+| `GET /v1/organization/users/{user_id}` | Implemented locally | Retrieves a local organization user or returns `404 organization_user_not_found` |
+| `POST /v1/organization/users/{user_id}` | Implemented locally | Updates local organization user `role`, `role_id`, `developer_persona`, and `technical_level`; invalid org roles return `400 invalid_organization_role` |
+| `DELETE /v1/organization/users/{user_id}` | Implemented locally | Removes a local organization user, deletes their local project memberships, and returns `organization.user.deleted` |
+| `GET /v1/organization/invites` | Implemented locally | Lists local `organization.invite` records with OpenAI-style pagination |
+| `POST /v1/organization/invites` | Implemented locally | Creates a local pending organization invite with `email`, org role `owner`/`reader`, optional project memberships, expiry timestamp, and no outbound email delivery |
+| `GET /v1/organization/invites/{invite_id}` | Implemented locally | Retrieves a local organization invite or returns `404 organization_invite_not_found` |
+| `DELETE /v1/organization/invites/{invite_id}` | Implemented locally | Deletes a pending/expired local invite and returns `organization.invite.deleted`; accepted invites are rejected with `organization_invite_accepted` |
 | `GET /v1/organization/projects` | Implemented locally | Lists local `organization.project` records with OpenAI-style `object:"list"`, `first_id`, `last_id`, and `has_more`; excludes archived projects unless `include_archived=true` |
 | `POST /v1/organization/projects` | Implemented locally | Creates a local `organization.project` with `status:"active"`, `archived_at:null`, and compatibility metadata; requires `name` |
 | `GET /v1/organization/projects/{project_id}` | Implemented locally | Retrieves a local project or returns `404 project_not_found` |
@@ -558,7 +571,7 @@ throttling, or represent real OpenAI organization state.
 | `GET /v1/organization/projects/{project_id}/rate_limits` | Implemented locally | Lazily seeds and lists local `project.rate_limit` records with model, requests-per-minute, tokens-per-minute, and relevant optional limits such as requests/day, images/min, audio MB/min, and batch input tokens/day |
 | `POST /v1/organization/projects/{project_id}/rate_limits/{rate_limit_id}` | Implemented locally | Updates numeric local rate-limit fields and returns `project.rate_limit`; invalid values return `400 invalid_rate_limit_value` |
 
-Local Organization project admin state lives under
+Local Organization admin state lives under
 `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-organization-admin`
 by default. `scripts/prune-runtime-state.mjs` prunes JSON records in this tree
 with age, count, and byte caps. Because the service-account create response
@@ -1570,7 +1583,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Fine-tuning full parity | The local adapter covers job create/list/retrieve, cancel/pause/resume lifecycle events, checkpoint listing, and checkpoint permission list/create/delete, but it does not validate training datasets, schedule hosted training, produce a real provider-deployed fine-tuned model, enforce organization/project permissions, or train DeepSeek/OpenAI weights | Add provider-specific tuning backends where available, dataset validators, async job workers, artifact/result-file generation, permission middleware, and quality evals comparing tuned-model behavior against baseline models |
-| OpenAI Organization admin full parity | The local adapter covers the documented costs and usage response shapes with zero-value buckets, plus local project create/list/retrieve/update/archive, project user lifecycle, project service-account lifecycle, redacted project API-key inspection/deletion boundaries, and project rate-limit listing/updating so admin SDK calls do not 404 for those families. It is not real OpenAI organization billing or hosted organization administration, does not aggregate local bridge usage history into invoices, does not create provider accounts or usable provider keys, and does not yet cover admin API keys, audit logs, certificates, data retention, groups, invites, roles, spend alerts, organization users, project groups, model permissions, or hosted-tool permissions | Add optional local usage aggregation over bridge audit events, provider-specific billing importers, admin-auth middleware, export jobs, dashboard reconciliation tests, and the remaining Organization admin endpoint families with project-scoped authorization checks |
+| OpenAI Organization admin full parity | The local adapter covers the documented costs and usage response shapes with zero-value buckets, plus local organization user/invite lifecycle, project create/list/retrieve/update/archive, project user lifecycle, project service-account lifecycle, redacted project API-key inspection/deletion boundaries, and project rate-limit listing/updating so admin SDK calls do not 404 for those families. It is not real OpenAI organization billing or hosted organization administration, does not aggregate local bridge usage history into invoices, does not create provider accounts, send invite email, or produce usable provider keys, and does not yet cover admin API keys, audit logs, certificates, data retention, groups, roles, spend alerts, project groups, model permissions, or hosted-tool permissions | Add optional local usage aggregation over bridge audit events, provider-specific billing importers, admin-auth middleware, export jobs, dashboard reconciliation tests, and the remaining Organization admin endpoint families with project-scoped authorization checks |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
 | OpenAI Realtime full parity | The local adapter covers REST creation of Realtime sessions, client secrets, transcription sessions, translation client secrets, WebRTC call setup response shape, and local call accept/reject/refer/hangup lifecycle state. It is not a low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket event runtime, speech-to-speech model loop, or hosted tracing backend | Add a real WebRTC/WebSocket relay backed by an audio-capable provider or OpenAI Realtime, server-side event translation, media/session isolation, call monitoring streams, token validation/accounting, and audio latency/quality evals |

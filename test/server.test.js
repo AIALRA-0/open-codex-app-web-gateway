@@ -11673,6 +11673,168 @@ test("Organization usage and costs APIs return local zero-value admin pages", as
   });
 });
 
+test("Organization users and invites manage local admin lifecycle", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization users/invites compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const emptyUsers = await fetch(`${baseUrl}/v1/organization/users`);
+    assert.equal(emptyUsers.status, 200);
+    assert.equal((await emptyUsers.json()).data.length, 0);
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Org Admin Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const projectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_org",
+        email: "bridge-org@example.com",
+        name: "Bridge Org User",
+        role: "owner",
+      }),
+    });
+    assert.equal(projectUserResponse.status, 200);
+    const projectUser = await projectUserResponse.json();
+
+    const users = await fetch(`${baseUrl}/v1/organization/users?limit=20&emails=bridge-org@example.com`);
+    assert.equal(users.status, 200);
+    const usersJson = await users.json();
+    assert.equal(usersJson.object, "list");
+    assert.equal(usersJson.data.length, 1);
+    assert.equal(usersJson.data[0].object, "organization.user");
+    assert.equal(usersJson.data[0].id, projectUser.id);
+    assert.equal(usersJson.data[0].email, "bridge-org@example.com");
+    assert.equal(usersJson.data[0].name, "Bridge Org User");
+    assert.equal(usersJson.data[0].role, "reader");
+    assert.equal(usersJson.data[0].projects.object, "list");
+    assert.equal(usersJson.data[0].projects.data[0].id, project.id);
+    assert.equal(usersJson.data[0].projects.data[0].role, "owner");
+    assert.equal(usersJson.data[0].user.object, "user");
+    assert.equal(usersJson.data[0].compatibility.actual_openai_admin_data, false);
+
+    const fetchedUser = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`);
+    assert.equal(fetchedUser.status, 200);
+    assert.equal((await fetchedUser.json()).projects.data[0].name, "Bridge Org Admin Project");
+
+    const updatedUser = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role: "owner",
+        role_id: "role_local_owner",
+        developer_persona: "builder",
+        technical_level: "advanced",
+      }),
+    });
+    assert.equal(updatedUser.status, 200);
+    const updatedUserJson = await updatedUser.json();
+    assert.equal(updatedUserJson.role, "owner");
+    assert.equal(updatedUserJson.role_id, "role_local_owner");
+    assert.equal(updatedUserJson.developer_persona, "builder");
+    assert.equal(updatedUserJson.technical_level, "advanced");
+
+    const invalidUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "writer" }),
+    });
+    assert.equal(invalidUserRole.status, 400);
+    assert.equal((await invalidUserRole.json()).error.code, "invalid_organization_role");
+
+    const inviteResponse = await fetch(`${baseUrl}/v1/organization/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "new-org-user@example.com",
+        role: "reader",
+        projects: [{ id: project.id, role: "member" }],
+      }),
+    });
+    assert.equal(inviteResponse.status, 200);
+    const invite = await inviteResponse.json();
+    assert.equal(invite.object, "organization.invite");
+    assert.match(invite.id, /^invite_/);
+    assert.equal(invite.email, "new-org-user@example.com");
+    assert.equal(invite.role, "reader");
+    assert.equal(invite.status, "pending");
+    assert.equal(invite.accepted_at, null);
+    assert.equal(invite.projects[0].id, project.id);
+    assert.equal(invite.projects[0].role, "member");
+
+    const invites = await fetch(`${baseUrl}/v1/organization/invites?limit=20`);
+    assert.equal(invites.status, 200);
+    const invitesJson = await invites.json();
+    assert.equal(invitesJson.object, "list");
+    assert.equal(invitesJson.data.length, 1);
+    assert.equal(invitesJson.data[0].id, invite.id);
+
+    const fetchedInvite = await fetch(`${baseUrl}/v1/organization/invites/${invite.id}`);
+    assert.equal(fetchedInvite.status, 200);
+    assert.equal((await fetchedInvite.json()).email, "new-org-user@example.com");
+
+    const invalidInviteRole = await fetch(`${baseUrl}/v1/organization/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: "bad-role@example.com", role: "member" }),
+    });
+    assert.equal(invalidInviteRole.status, 400);
+    assert.equal((await invalidInviteRole.json()).error.code, "invalid_organization_role");
+
+    const invalidInviteProjectRole = await fetch(`${baseUrl}/v1/organization/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "bad-project-role@example.com",
+        role: "reader",
+        projects: [{ id: project.id, role: "reader" }],
+      }),
+    });
+    assert.equal(invalidInviteProjectRole.status, 400);
+    assert.equal((await invalidInviteProjectRole.json()).error.code, "invalid_project_role");
+
+    const deletedInvite = await fetch(`${baseUrl}/v1/organization/invites/${invite.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedInvite.status, 200);
+    assert.deepEqual(await deletedInvite.json(), {
+      object: "organization.invite.deleted",
+      id: invite.id,
+      deleted: true,
+    });
+
+    const missingInvite = await fetch(`${baseUrl}/v1/organization/invites/${invite.id}`);
+    assert.equal(missingInvite.status, 404);
+    assert.equal((await missingInvite.json()).error.code, "organization_invite_not_found");
+
+    const deletedUser = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedUser.status, 200);
+    assert.deepEqual(await deletedUser.json(), {
+      object: "organization.user.deleted",
+      id: projectUser.id,
+      deleted: true,
+    });
+
+    const projectUsersAfterOrgDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`);
+    assert.equal(projectUsersAfterOrgDelete.status, 200);
+    assert.equal((await projectUsersAfterOrgDelete.json()).data.length, 0);
+
+    const missingUser = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`);
+    assert.equal(missingUser.status, 404);
+    assert.equal((await missingUser.json()).error.code, "organization_user_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization projects manage local service accounts and redacted API keys", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization project admin compatibility should not call upstream provider");
