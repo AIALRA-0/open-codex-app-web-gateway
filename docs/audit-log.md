@@ -4463,6 +4463,83 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization project groups compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - OpenAI endpoint inventory lists
+    `/organization/projects/{project_id}/groups` and
+    `/organization/projects/{project_id}/groups/{group_id}`;
+  - OpenAI Node SDK generated project groups resource documents
+    `client.admin.organization.projects.groups.create/retrieve/list/delete()`,
+    create body `group_id` and `role`, list `order` pagination, retrieve query
+    `group_type`, the `project.group` response object, and
+    `project.group.deleted`;
+  - RBAC guide confirms that project-level access can apply to groups as well
+    as users, with effective access coming from assigned roles.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added project group access records under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/project_resources/<project>/groups`;
+  - added `GET`, `POST`, `GET /{group_id}`, and `DELETE /{group_id}` for
+    `/v1/organization/projects/{project_id}/groups`;
+  - persists protocol metadata only: `project_id`, `group_id`, `group_name`,
+    `group_type`, grant timestamp, requested `role`, and compatibility
+    metadata;
+  - returns OpenAI-style `project.group` records without a synthetic `id`
+    field, while paginating by `group_id` for stable cursor behavior;
+  - cascades Organization group deletion into project group access cleanup so
+    project group lists do not retain orphan local membership records;
+  - records local `project.group.created` and `project.group.deleted` audit
+    events with project and group resource filters.
+- Current boundary: this is local protocol compatibility for admin SDKs and
+  dashboards. It does not grant provider-side access, enforce RBAC decisions,
+  create real OpenAI project roles, sync SCIM tenant groups, or authenticate
+  requests based on the local records. The requested `role` is persisted for
+  audit/replay and future project-role work, but no hosted permission engine is
+  attached yet.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies empty list shape, missing `group_id`
+    and `role` errors, create/list/retrieve/delete, `group_type` retrieve
+    filtering, audit-log writes, source group cleanup, missing group errors,
+    and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-project-groups`,
+    covering the same lifecycle against the deployed DeepSeek-backed bridge
+    with zero provider token usage.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused unit test
+    `Organization projects manage local group access` passed 1/1.
+  - Focused Organization unit tests passed 8/8.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz on port
+    `12912` returned `ok:true`, provider base `https://api.deepseek.com`,
+    default model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-project-groups`: passed 1/1, latency 2341 ms,
+    zero provider token usage, and output only project/group ids.
+  - `npm test`: passed 208/208.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1694 ms, P95 latency 1740 ms, and total usage 99
+    tokens.
+  - `npm run smoke:bridge`: returned `bridge-ok`.
+  - Full live `bridge-regression` with report output passed 105/105 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1785 ms, P95 latency
+    4564 ms, and total usage 24820 tokens. The suite now includes
+    `organization-project-groups`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online`; exercised sidebar controls, page
+    navigation, project dialog/browser upload, prompt send, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project create/reopen/cleanup, and reported zero console errors/warnings.
+  - Service check: app-server, bridge, and web services were all `active`;
+    `https://opencodexapp.aialra.online` returned HTTP 200.
+  - Space check after the run: `/` was 168G used of 193G, 25G available, 88%
+    used; repo `state` was 32M, `output` was 4.5M,
+    `/srv/aialra/data/opencodexapp` was 136K, and
+    `/srv/aialra/logs/opencodexapp` was 29M.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, provider group credentials, or reusable secrets were
+  added to tracked files.
+
 ## 2026-06-15 - Local Organization admin API keys compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

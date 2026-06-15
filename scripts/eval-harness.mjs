@@ -662,6 +662,66 @@ function buildSuites(defaultModel) {
           && missingProject.json?.error?.code === "project_not_found",
       },
       {
+        id: "organization-project-groups",
+        mode: "organization-project-groups",
+        check: ({
+          project,
+          group,
+          emptyGroups,
+          missingGroupId,
+          missingRole,
+          created,
+          groups,
+          fetched,
+          fetchedByType,
+          wrongType,
+          createLogs,
+          deleted,
+          deleteLogs,
+          missingAfterDelete,
+          recreated,
+          groupsAfterOrgGroupDelete,
+          missingOrgGroupCreate,
+        }) => project?.object === "organization.project"
+          && group?.object === "group"
+          && emptyGroups?.object === "list"
+          && emptyGroups.data?.length === 0
+          && missingGroupId?.status === 400
+          && missingGroupId.json?.error?.code === "missing_required_parameter"
+          && missingGroupId.json?.error?.param === "group_id"
+          && missingRole?.status === 400
+          && missingRole.json?.error?.param === "role"
+          && created?.object === "project.group"
+          && created.project_id === project.id
+          && created.group_id === group.id
+          && created.group_name?.startsWith("Bridge Eval Project Group")
+          && created.group_type === "group"
+          && created.compatibility?.actual_openai_admin_data === false
+          && groups?.object === "list"
+          && groups.first_id === group.id
+          && groups.last_id === group.id
+          && groups.data?.some((entry) => entry.group_id === group.id
+            && !Object.prototype.hasOwnProperty.call(entry, "id"))
+          && fetched?.group_id === group.id
+          && fetchedByType?.group_type === "group"
+          && wrongType?.status === 404
+          && wrongType.json?.error?.code === "project_group_not_found"
+          && createLogs?.data?.some((entry) => entry.type === "project.group.created"
+            && entry["project.group.created"]?.project_id === project.id
+            && entry["project.group.created"]?.data?.group_id === group.id
+            && entry["project.group.created"]?.data?.role === "member")
+          && deleted?.object === "project.group.deleted"
+          && deleted.deleted === true
+          && deleteLogs?.data?.some((entry) => entry.type === "project.group.deleted"
+            && entry["project.group.deleted"]?.data?.group_id === group.id)
+          && missingAfterDelete?.status === 404
+          && missingAfterDelete.json?.error?.code === "project_group_not_found"
+          && recreated?.object === "project.group"
+          && groupsAfterOrgGroupDelete?.data?.every((entry) => entry.group_id !== group.id)
+          && missingOrgGroupCreate?.status === 404
+          && missingOrgGroupCreate.json?.error?.code === "organization_group_not_found",
+      },
+      {
         id: "organization-project-users-rate-limits",
         mode: "organization-project-users-rate-limits",
         check: ({
@@ -3338,6 +3398,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-project-admin") {
       return await runOrganizationProjectAdminCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-project-groups") {
+      return await runOrganizationProjectGroupsCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-users-rate-limits") {
       return await runOrganizationProjectUsersRateLimitsCase(testCase, context, started);
     }
@@ -4196,6 +4259,92 @@ async function runOrganizationProjectAdminCase(testCase, context, started) {
     api_key_id: serviceAccount.json?.api_key?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_project:${project.json.id}:${serviceAccount.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationProjectGroupsCase(testCase, context, started) {
+  const marker = `bridge-project-group-${Date.now()}-${context.iteration}`;
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Project Groups ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const group = await postJsonCapture(`${baseUrl}/v1/organization/groups`, {
+    name: `Bridge Eval Project Group ${marker}`,
+  });
+  if (!group.ok || !group.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: group.status,
+      error: truncate(group.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const groupId = encodeURIComponent(group.json.id);
+  const emptyGroups = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups?limit=20`);
+  const missingGroupId = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/groups`, {
+    role: "member",
+  });
+  const missingRole = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/groups`, {
+    group_id: group.json.id,
+  });
+  const created = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/groups`, {
+    group_id: group.json.id,
+    role: "member",
+  });
+  const groups = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups?limit=20`);
+  const fetched = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups/${groupId}`);
+  const fetchedByType = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups/${groupId}?group_type=group`);
+  const wrongType = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups/${groupId}?group_type=tenant_group`);
+  const createLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=project.group.created&project_ids%5B%5D=${projectId}&resource_ids%5B%5D=${groupId}&limit=20`);
+  const deletedRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/groups/${groupId}`);
+  const deleted = parseJsonish(deletedRaw.body);
+  const deleteLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=project.group.deleted&project_ids%5B%5D=${projectId}&resource_ids%5B%5D=${groupId}&limit=20`);
+  const missingAfterDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups/${groupId}`);
+  const recreated = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/groups`, {
+    group_id: group.json.id,
+    role: "owner",
+  });
+  await deleteJson(`${baseUrl}/v1/organization/groups/${groupId}`);
+  const groupsAfterOrgGroupDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/groups?limit=20`);
+  const missingOrgGroupCreate = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/groups`, {
+    group_id: `group_missing_${context.iteration}`,
+    role: "member",
+  });
+
+  const ok = !!testCase.check({
+    project: project.json,
+    group: group.json,
+    emptyGroups: emptyGroups.json,
+    missingGroupId,
+    missingRole,
+    created: created.json,
+    groups: groups.json,
+    fetched: fetched.json,
+    fetchedByType: fetchedByType.json,
+    wrongType,
+    createLogs: createLogs.json,
+    deleted,
+    deleteLogs: deleteLogs.json,
+    missingAfterDelete,
+    recreated: recreated.json,
+    groupsAfterOrgGroupDelete: groupsAfterOrgGroupDelete.json,
+    missingOrgGroupCreate,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: created.status,
+    project_id: project.json.id,
+    group_id: group.json.id,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_project_groups:${project.json.id}:${group.json.id}`,
   });
 }
 

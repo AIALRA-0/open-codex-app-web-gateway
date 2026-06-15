@@ -12518,6 +12518,138 @@ test("Organization projects manage local service accounts and redacted API keys"
   }
 });
 
+test("Organization projects manage local group access", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization project groups compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project Groups" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const groupResponse = await fetch(`${baseUrl}/v1/organization/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project Group" }),
+    });
+    assert.equal(groupResponse.status, 200);
+    const group = await groupResponse.json();
+
+    const emptyGroups = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`);
+    assert.equal(emptyGroups.status, 200);
+    assert.deepEqual(await emptyGroups.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: false,
+    });
+
+    const missingGroup = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "member" }),
+    });
+    assert.equal(missingGroup.status, 400);
+    assert.equal((await missingGroup.json()).error.code, "missing_required_parameter");
+
+    const missingRole = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ group_id: group.id }),
+    });
+    assert.equal(missingRole.status, 400);
+    assert.equal((await missingRole.json()).error.param, "role");
+
+    const createdResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ group_id: group.id, role: "member" }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const created = await createdResponse.json();
+    assert.equal(created.object, "project.group");
+    assert.equal(created.project_id, project.id);
+    assert.equal(created.group_id, group.id);
+    assert.equal(created.group_name, "Bridge Project Group");
+    assert.equal(created.group_type, "group");
+    assert.equal(typeof created.created_at, "number");
+    assert.equal(created.compatibility.actual_openai_admin_data, false);
+
+    const listed = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?limit=10`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.object, "list");
+    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.first_id, group.id);
+    assert.equal(listedJson.last_id, group.id);
+    assert.equal(listedJson.data[0].group_id, group.id);
+
+    const fetched = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}`);
+    assert.equal(fetched.status, 200);
+    assert.equal((await fetched.json()).group_id, group.id);
+
+    const fetchedByType = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}?group_type=group`);
+    assert.equal(fetchedByType.status, 200);
+    assert.equal((await fetchedByType.json()).group_type, "group");
+
+    const wrongType = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}?group_type=tenant_group`);
+    assert.equal(wrongType.status, 404);
+    assert.equal((await wrongType.json()).error.code, "project_group_not_found");
+
+    const createLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=project.group.created&project_ids%5B%5D=${project.id}&resource_ids%5B%5D=${group.id}`);
+    assert.equal(createLogs.status, 200);
+    const createLogsJson = await createLogs.json();
+    assert.equal(createLogsJson.data.length, 1);
+    assert.equal(createLogsJson.data[0]["project.group.created"].project_id, project.id);
+    assert.equal(createLogsJson.data[0]["project.group.created"].data.group_id, group.id);
+    assert.equal(createLogsJson.data[0]["project.group.created"].data.role, "member");
+
+    const deleted = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      object: "project.group.deleted",
+      deleted: true,
+    });
+
+    const deleteLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=project.group.deleted&project_ids%5B%5D=${project.id}&resource_ids%5B%5D=${group.id}`);
+    assert.equal(deleteLogs.status, 200);
+    assert.equal((await deleteLogs.json()).data[0]["project.group.deleted"].data.group_id, group.id);
+
+    const missingAfterDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}`);
+    assert.equal(missingAfterDelete.status, 404);
+    assert.equal((await missingAfterDelete.json()).error.code, "project_group_not_found");
+
+    const recreated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ group_id: group.id, role: "owner" }),
+    });
+    assert.equal(recreated.status, 200);
+    await fetch(`${baseUrl}/v1/organization/groups/${group.id}`, { method: "DELETE" });
+    const listAfterGroupDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`);
+    assert.equal(listAfterGroupDelete.status, 200);
+    assert.equal((await listAfterGroupDelete.json()).data.length, 0);
+
+    const missingGroupCreate = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ group_id: "group_missing", role: "member" }),
+    });
+    assert.equal(missingGroupCreate.status, 404);
+    assert.equal((await missingGroupCreate.json()).error.code, "organization_group_not_found");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization projects manage local users and rate limits", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization project users/rate limits compatibility should not call upstream provider");

@@ -8604,6 +8604,31 @@ function handleOrganizationProjectUserDelete(res, organizationAdminStore, projec
   sendJson(res, 200, organizationAdminStore.deleteProjectUser(projectId, userId));
 }
 
+async function handleOrganizationProjectGroupCreate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project group request body must be a JSON object", {
+      code: "invalid_project_group_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createProjectGroup(projectId, body));
+}
+
+function handleOrganizationProjectGroupsList(res, organizationAdminStore, projectId, url) {
+  const groups = organizationAdminStore.listProjectGroups(projectId);
+  sendJson(res, 200, paginateListByCursorFieldWithDefaultOrder(groups, url, "group_id", "asc", 20, 100));
+}
+
+function handleOrganizationProjectGroupGet(res, organizationAdminStore, projectId, groupId, url) {
+  sendJson(res, 200, organizationAdminStore.getProjectGroup(projectId, groupId, {
+    groupType: url.searchParams.get("group_type"),
+  }));
+}
+
+function handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectGroup(projectId, groupId));
+}
+
 function handleOrganizationProjectRateLimitsList(res, organizationAdminStore, projectId, url) {
   const rateLimits = organizationAdminStore.listProjectRateLimits(projectId);
   sendJson(res, 200, paginateListWithDefaultOrder(rateLimits, url, "asc", 20, 100));
@@ -9716,6 +9741,33 @@ function paginateListWithDefaultOrder(items, url, order, fallbackLimit = 20, max
     result.has_more = true;
   }
   return result;
+}
+
+function paginateListByCursorFieldWithDefaultOrder(items, url, cursorField, order, fallbackLimit = 20, maxLimit = 100) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  const requestedOrder = String(localUrl.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = localUrl.searchParams.get("after");
+  const before = localUrl.searchParams.get("before");
+  const limit = parseLimit(localUrl.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (requestedOrder === "desc") data.reverse();
+  if (after) {
+    const index = data.findIndex((item) => item?.[cursorField] === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+  if (before) {
+    const index = data.findIndex((item) => item?.[cursorField] === before);
+    data = index === -1 ? [] : data.slice(0, index);
+  }
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    first_id: page[0]?.[cursorField] || null,
+    last_id: page.at(-1)?.[cursorField] || null,
+    has_more: data.length > page.length,
+  };
 }
 
 function paginateNextListWithDefaultOrder(items, url, order, fallbackLimit = 20, maxLimit = 1000) {
@@ -12391,6 +12443,28 @@ function createServer(config = loadConfig()) {
         }
         if (userId && req.method === "DELETE") {
           handleOrganizationProjectUserDelete(res, organizationAdminStore, projectId, userId);
+          return;
+        }
+      }
+
+      const organizationProjectGroupRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/groups(?:\/([^/]+))?$/);
+      if (organizationProjectGroupRoute) {
+        const projectId = decodeURIComponent(organizationProjectGroupRoute[1]);
+        const groupId = organizationProjectGroupRoute[2] ? decodeURIComponent(organizationProjectGroupRoute[2]) : "";
+        if (!groupId && req.method === "GET") {
+          handleOrganizationProjectGroupsList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (!groupId && req.method === "POST") {
+          await handleOrganizationProjectGroupCreate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (groupId && req.method === "GET") {
+          handleOrganizationProjectGroupGet(res, organizationAdminStore, projectId, groupId, url);
+          return;
+        }
+        if (groupId && req.method === "DELETE") {
+          handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId);
           return;
         }
       }

@@ -305,6 +305,13 @@ class LocalOrganizationAdminStore {
     return path.join(dir, `${clean}.json`);
   }
 
+  projectGroupPath(projectId, groupId) {
+    const clean = safeId(groupId);
+    const dir = this.projectResourceDir(projectId, "groups");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
   rateLimitPath(projectId, rateLimitId) {
     const clean = safeId(rateLimitId);
     const dir = this.projectResourceDir(projectId, "rate_limits");
@@ -650,6 +657,9 @@ class LocalOrganizationAdminStore {
     }
     try { fs.unlinkSync(this.organizationGroupPath(group.id)); } catch {}
     this.removeDir(path.join(this.organizationGroupResourcesDir(), group.id));
+    for (const project of this.listProjects({ includeArchived: true })) {
+      try { fs.unlinkSync(this.projectGroupPath(project.id, group.id)); } catch {}
+    }
     this.recordAuditLog("group.deleted", {
       id: group.id,
     }, {
@@ -1599,6 +1609,116 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  createProjectGroup(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const request = isPlainObject(body) ? body : {};
+    const groupId = optionalString(request.group_id);
+    if (!groupId) {
+      throw organizationAdminError("group_id is required", {
+        code: "missing_required_parameter",
+        param: "group_id",
+      });
+    }
+    const role = optionalString(request.role);
+    if (!role) {
+      throw organizationAdminError("role is required", {
+        code: "missing_required_parameter",
+        param: "role",
+      });
+    }
+    const group = this.getRequiredOrganizationGroup(groupId);
+    const existing = this.readJson(this.projectGroupPath(project.id, group.id));
+    const membership = {
+      object: "project.group",
+      project_id: project.id,
+      group_id: group.id,
+      group_name: group.name,
+      group_type: group.group_type || "group",
+      created_at: existing?.created_at || nowSeconds(),
+      role,
+      compatibility: localCompatibility("project_group_protocol_compatibility", {
+        locally_persisted: true,
+        project_id: project.id,
+        role_id_or_name: role,
+      }),
+    };
+    this.writeJson(this.projectGroupPath(project.id, group.id), membership);
+    this.recordAuditLog("project.group.created", {
+      id: `project_group_${stableToken(`${project.id}:${group.id}`, 20)}`,
+      project_id: project.id,
+      data: {
+        group_id: group.id,
+        group_name: group.name,
+        role,
+      },
+    }, {
+      projectId: project.id,
+      resourceIds: [project.id, group.id],
+    });
+    this.cleanup();
+    return this.projectGroupProjection(membership);
+  }
+
+  listProjectGroups(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    return this.listJsonFiles(this.projectResourceDir(project.id, "groups"))
+      .sort(compareCreatedThenIdAsc)
+      .map((membership) => this.projectGroupProjection(membership));
+  }
+
+  getProjectGroup(projectId, groupId, options = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const groupType = optionalString(options.groupType);
+    const membership = this.readJson(this.projectGroupPath(project.id, groupId));
+    if (!membership) {
+      throw organizationAdminError(`project group not found: ${groupId}`, {
+        status: 404,
+        code: "project_group_not_found",
+        param: "group_id",
+      });
+    }
+    if (groupType && membership.group_type !== groupType) {
+      throw organizationAdminError(`project group not found for group_type: ${groupType}`, {
+        status: 404,
+        code: "project_group_not_found",
+        param: "group_type",
+      });
+    }
+    return this.projectGroupProjection(membership);
+  }
+
+  deleteProjectGroup(projectId, groupId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const membership = this.readJson(this.projectGroupPath(project.id, groupId));
+    if (!membership) {
+      throw organizationAdminError(`project group not found: ${groupId}`, {
+        status: 404,
+        code: "project_group_not_found",
+        param: "group_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectGroupPath(project.id, groupId)); } catch {}
+    this.recordAuditLog("project.group.deleted", {
+      id: `project_group_${stableToken(`${project.id}:${groupId}`, 20)}`,
+      project_id: project.id,
+      data: {
+        group_id: membership.group_id || groupId,
+        group_name: membership.group_name ?? null,
+      },
+    }, {
+      projectId: project.id,
+      resourceIds: [project.id, groupId],
+    });
+    return {
+      object: "project.group.deleted",
+      deleted: true,
+    };
+  }
+
   listProjectRateLimits(projectId) {
     const project = this.getRequiredProject(projectId);
     this.assertProjectActive(project);
@@ -1787,6 +1907,18 @@ class LocalOrganizationAdminStore {
       name: group.name,
       created_at: group.created_at,
       scim_managed: group.is_scim_managed === true,
+    };
+  }
+
+  projectGroupProjection(membership) {
+    return {
+      object: "project.group",
+      project_id: membership.project_id,
+      group_id: membership.group_id,
+      group_name: membership.group_name ?? membership.group_id,
+      group_type: membership.group_type || "group",
+      created_at: membership.created_at ?? null,
+      compatibility: isPlainObject(membership.compatibility) ? clone(membership.compatibility) : undefined,
     };
   }
 
@@ -2077,7 +2209,7 @@ class LocalOrganizationAdminStore {
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
-      for (const resource of ["api_keys", "service_accounts", "users", "rate_limits"]) {
+      for (const resource of ["api_keys", "service_accounts", "users", "groups", "rate_limits"]) {
         const files = this.listCleanupEntries(path.join(projectDir, resource));
         for (const entry of files.slice(this.maxRecords)) {
           try { fs.unlinkSync(entry.filePath); } catch {}
