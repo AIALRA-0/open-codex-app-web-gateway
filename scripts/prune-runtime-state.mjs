@@ -186,6 +186,15 @@ function runtimeTargets({ root, maxAgeHoursOverride, maxFilesOverride, maxBytesO
       maxFiles: 5000,
       maxBytes: 64 * 1024 * 1024,
     }),
+    common({
+      id: "local-organization-admin-records",
+      path: path.join(stateDir, "local-organization-admin"),
+      mode: "tree-files",
+      include: (entry) => entry.isFile() && entry.name.endsWith(".json"),
+      maxAgeHours: 336,
+      maxFiles: 5000,
+      maxBytes: 128 * 1024 * 1024,
+    }),
   ];
 }
 
@@ -248,6 +257,7 @@ function pruneTarget(target, { apply, nowMs }) {
 }
 
 function listCandidates(target, safePath, nowMs) {
+  if (target.mode === "tree-files") return listTreeCandidates(target, safePath, nowMs);
   let entries = [];
   try {
     entries = fs.readdirSync(safePath, { withFileTypes: true });
@@ -277,6 +287,45 @@ function listCandidates(target, safePath, nowMs) {
       reasons: [],
     });
   }
+  return candidates;
+}
+
+function listTreeCandidates(target, safePath, nowMs) {
+  const candidates = [];
+  const visit = (dir) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      const entryPath = path.join(dir, entry.name);
+      const resolved = path.resolve(entryPath);
+      if (!isPathInside(safePath, resolved)) continue;
+      if (entry.isDirectory()) {
+        visit(resolved);
+        continue;
+      }
+      if (!target.include(entry)) continue;
+      let stat;
+      try {
+        stat = fs.lstatSync(resolved);
+      } catch {
+        continue;
+      }
+      const type = stat.isSymbolicLink() ? "symlink" : "file";
+      candidates.push({
+        path: resolved,
+        type,
+        bytes: stat.size,
+        mtime_ms: stat.mtimeMs,
+        age_hours: Math.max(0, (nowMs - stat.mtimeMs) / (60 * 60 * 1000)),
+        reasons: [],
+      });
+    }
+  };
+  visit(safePath);
   return candidates;
 }
 

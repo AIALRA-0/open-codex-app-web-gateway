@@ -53,6 +53,7 @@ const {
   OFFICIAL_UPLOAD_PART_MAX_BYTES,
 } = require("./local_uploads");
 const { LocalFineTuningStore } = require("./local_fine_tuning");
+const { LocalOrganizationAdminStore } = require("./local_organization_admin");
 const {
   createOrganizationCostsPage,
   createOrganizationUsagePage,
@@ -278,6 +279,8 @@ function loadConfig(overrides = {}) {
     chatKitStateDir: process.env.CODEXCOMPAT_CHATKIT_STATE_DIR || path.join(stateDir, "local-chatkit"),
     fineTuningStateDir: process.env.CODEXCOMPAT_FINE_TUNING_STATE_DIR || path.join(stateDir, "local-fine-tuning"),
     fineTuningMaxRecords: numberFromEnv("CODEXCOMPAT_FINE_TUNING_MAX_RECORDS", 5000, 1, 100000),
+    organizationAdminStateDir: process.env.CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR || path.join(stateDir, "local-organization-admin"),
+    organizationAdminMaxRecords: numberFromEnv("CODEXCOMPAT_ORGANIZATION_ADMIN_MAX_RECORDS", 5000, 1, 100000),
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     assistantStateDir: process.env.CODEXCOMPAT_ASSISTANT_STATE_DIR || path.join(stateDir, "local-assistants"),
     requestTimeoutMs,
@@ -8242,6 +8245,86 @@ function handleOrganizationUsage(res, kind, url) {
   sendJson(res, 200, createOrganizationUsagePage(kind, url));
 }
 
+async function handleOrganizationProjectCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project request body must be a JSON object", {
+      code: "invalid_project_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createProject(body));
+}
+
+function handleOrganizationProjectsList(res, organizationAdminStore, url) {
+  const includeArchived = /^true$/i.test(String(url.searchParams.get("include_archived") || ""));
+  const projects = organizationAdminStore.listProjects({ includeArchived });
+  sendJson(res, 200, paginateListWithDefaultOrder(projects, url, "asc", 20, 100));
+}
+
+function handleOrganizationProjectGet(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.getRequiredProject(projectId));
+}
+
+async function handleOrganizationProjectUpdate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project update body must be a JSON object", {
+      code: "invalid_project_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProject(projectId, body));
+}
+
+function handleOrganizationProjectArchive(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.archiveProject(projectId));
+}
+
+function handleOrganizationProjectApiKeysList(res, organizationAdminStore, projectId, url) {
+  const apiKeys = organizationAdminStore.listProjectApiKeys(projectId);
+  sendJson(res, 200, paginateListWithDefaultOrder(apiKeys, url, "asc", 20, 100));
+}
+
+function handleOrganizationProjectApiKeyGet(res, organizationAdminStore, projectId, apiKeyId) {
+  sendJson(res, 200, organizationAdminStore.getProjectApiKey(projectId, apiKeyId));
+}
+
+function handleOrganizationProjectApiKeyDelete(res, organizationAdminStore, projectId, apiKeyId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectApiKey(projectId, apiKeyId));
+}
+
+async function handleOrganizationProjectServiceAccountCreate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("service account request body must be a JSON object", {
+      code: "invalid_service_account_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createServiceAccount(projectId, body));
+}
+
+function handleOrganizationProjectServiceAccountsList(res, organizationAdminStore, projectId, url) {
+  const serviceAccounts = organizationAdminStore.listProjectServiceAccounts(projectId);
+  sendJson(res, 200, paginateListWithDefaultOrder(serviceAccounts, url, "asc", 20, 100));
+}
+
+function handleOrganizationProjectServiceAccountGet(res, organizationAdminStore, projectId, serviceAccountId) {
+  sendJson(res, 200, organizationAdminStore.getProjectServiceAccount(projectId, serviceAccountId));
+}
+
+async function handleOrganizationProjectServiceAccountUpdate(req, res, organizationAdminStore, projectId, serviceAccountId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("service account update body must be a JSON object", {
+      code: "invalid_service_account_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectServiceAccount(projectId, serviceAccountId, body));
+}
+
+function handleOrganizationProjectServiceAccountDelete(res, organizationAdminStore, projectId, serviceAccountId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectServiceAccount(projectId, serviceAccountId));
+}
+
 async function handleFineTuningJobCreate(req, res, fineTuningStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -11629,6 +11712,10 @@ function createServer(config = loadConfig()) {
     dir: config.fineTuningStateDir || path.join(config.stateDir || process.cwd(), "local-fine-tuning"),
     maxRecords: config.fineTuningMaxRecords,
   });
+  const organizationAdminStore = config.organizationAdminStore || new LocalOrganizationAdminStore({
+    dir: config.organizationAdminStateDir || path.join(config.stateDir || process.cwd(), "local-organization-admin"),
+    maxRecords: config.organizationAdminMaxRecords,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -11671,6 +11758,79 @@ function createServer(config = loadConfig()) {
       if (organizationUsageRoute && req.method === "GET") {
         handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url);
         return;
+      }
+
+      if (url.pathname === "/v1/organization/projects") {
+        if (req.method === "GET") {
+          handleOrganizationProjectsList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationProjectCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationProjectApiKeyRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/api_keys(?:\/([^/]+))?$/);
+      if (organizationProjectApiKeyRoute) {
+        const projectId = decodeURIComponent(organizationProjectApiKeyRoute[1]);
+        const apiKeyId = organizationProjectApiKeyRoute[2] ? decodeURIComponent(organizationProjectApiKeyRoute[2]) : "";
+        if (!apiKeyId && req.method === "GET") {
+          handleOrganizationProjectApiKeysList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (apiKeyId && req.method === "GET") {
+          handleOrganizationProjectApiKeyGet(res, organizationAdminStore, projectId, apiKeyId);
+          return;
+        }
+        if (apiKeyId && req.method === "DELETE") {
+          handleOrganizationProjectApiKeyDelete(res, organizationAdminStore, projectId, apiKeyId);
+          return;
+        }
+      }
+
+      const organizationProjectServiceAccountRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/service_accounts(?:\/([^/]+))?$/);
+      if (organizationProjectServiceAccountRoute) {
+        const projectId = decodeURIComponent(organizationProjectServiceAccountRoute[1]);
+        const serviceAccountId = organizationProjectServiceAccountRoute[2] ? decodeURIComponent(organizationProjectServiceAccountRoute[2]) : "";
+        if (!serviceAccountId && req.method === "GET") {
+          handleOrganizationProjectServiceAccountsList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (!serviceAccountId && req.method === "POST") {
+          await handleOrganizationProjectServiceAccountCreate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (serviceAccountId && req.method === "GET") {
+          handleOrganizationProjectServiceAccountGet(res, organizationAdminStore, projectId, serviceAccountId);
+          return;
+        }
+        if (serviceAccountId && req.method === "POST") {
+          await handleOrganizationProjectServiceAccountUpdate(req, res, organizationAdminStore, projectId, serviceAccountId);
+          return;
+        }
+        if (serviceAccountId && req.method === "DELETE") {
+          handleOrganizationProjectServiceAccountDelete(res, organizationAdminStore, projectId, serviceAccountId);
+          return;
+        }
+      }
+
+      const organizationProjectRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)(?:\/(archive))?$/);
+      if (organizationProjectRoute) {
+        const projectId = decodeURIComponent(organizationProjectRoute[1]);
+        const action = organizationProjectRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleOrganizationProjectGet(res, organizationAdminStore, projectId);
+          return;
+        }
+        if (!action && req.method === "POST") {
+          await handleOrganizationProjectUpdate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (action === "archive" && req.method === "POST") {
+          handleOrganizationProjectArchive(res, organizationAdminStore, projectId);
+          return;
+        }
       }
 
       if (req.method === "GET" && url.pathname === "/v1/models") {

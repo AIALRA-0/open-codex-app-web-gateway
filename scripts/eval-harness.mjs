@@ -383,6 +383,61 @@ function buildSuites(defaultModel) {
           && missingStart?.status === 400,
       },
       {
+        id: "organization-project-admin",
+        mode: "organization-project-admin",
+        check: ({
+          project,
+          updatedProject,
+          projects,
+          serviceAccount,
+          serviceAccounts,
+          apiKeys,
+          apiKey,
+          serviceAccountKeyDelete,
+          updatedServiceAccount,
+          deletedServiceAccount,
+          apiKeysAfterServiceAccountDelete,
+          archivedProject,
+          activeProjectsAfterArchive,
+          archivedProjects,
+          archivedServiceAccounts,
+          missingProject,
+        }) => project?.object === "organization.project"
+          && project.id?.startsWith("proj_")
+          && project.status === "active"
+          && updatedProject?.name === "Bridge Eval Project Updated"
+          && projects?.object === "list"
+          && projects.data?.some((entry) => entry.id === project.id)
+          && serviceAccount?.object === "organization.project.service_account"
+          && serviceAccount.id?.startsWith("svc_acct_")
+          && serviceAccount.role === "owner"
+          && serviceAccount.api_key?.object === "organization.project.service_account.api_key"
+          && /^oc_local_key_/.test(serviceAccount.api_key.value || "")
+          && !String(serviceAccount.api_key.value || "").startsWith("sk-")
+          && serviceAccounts?.data?.some((entry) => entry.id === serviceAccount.id)
+          && !Object.prototype.hasOwnProperty.call(serviceAccounts?.data?.[0] || {}, "api_key")
+          && apiKeys?.data?.some((entry) => entry.id === serviceAccount.api_key.id
+            && entry.object === "organization.project.api_key"
+            && entry.owner?.type === "service_account"
+            && entry.redacted_value
+            && !Object.prototype.hasOwnProperty.call(entry, "value"))
+          && apiKey?.id === serviceAccount.api_key.id
+          && !Object.prototype.hasOwnProperty.call(apiKey || {}, "value")
+          && serviceAccountKeyDelete?.status === 400
+          && serviceAccountKeyDelete.json?.error?.code === "service_account_api_key_delete_not_supported"
+          && updatedServiceAccount?.name === "Bridge Eval Service Updated"
+          && updatedServiceAccount?.role === "member"
+          && deletedServiceAccount?.deleted === true
+          && apiKeysAfterServiceAccountDelete?.data?.length === 0
+          && archivedProject?.status === "archived"
+          && activeProjectsAfterArchive?.data?.every((entry) => entry.id !== project.id)
+          && archivedProjects?.data?.some((entry) => entry.id === project.id && entry.status === "archived")
+          && archivedServiceAccounts?.status === 400
+          && archivedServiceAccounts.json?.error?.code === "project_archived"
+          && missingProject?.status === 404
+          && missingProject.json?.error?.code === "project_not_found",
+      },
+      {
         id: "chatkit-lifecycle",
         mode: "chatkit-lifecycle",
         request: {
@@ -2989,6 +3044,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-usage-costs") {
       return await runOrganizationUsageCostsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-project-admin") {
+      return await runOrganizationProjectAdminCase(testCase, context, started);
+    }
     if (testCase.mode === "chatkit-lifecycle") {
       return await runChatKitLifecycleCase(testCase, context, started);
     }
@@ -3450,6 +3508,80 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     usage_bucket_count: completions.json?.data?.length || 0,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_usage:${costs.json?.data?.length || 0}:${completions.json?.data?.length || 0}`,
+  });
+}
+
+async function runOrganizationProjectAdminCase(testCase, context, started) {
+  const marker = `bridge-eval-${Date.now()}-${context.iteration}`;
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Project ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const updatedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}`, {
+    name: "Bridge Eval Project Updated",
+  });
+  const projects = await getJson(`${baseUrl}/v1/organization/projects?limit=20`);
+  const serviceAccount = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts`, {
+    name: "Bridge Eval Service",
+    role: "owner",
+  });
+  const serviceAccountId = encodeURIComponent(serviceAccount.json?.id || "missing_service_account");
+  const apiKeyId = encodeURIComponent(serviceAccount.json?.api_key?.id || "missing_api_key");
+  const serviceAccounts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts?limit=20`);
+  const apiKeys = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/api_keys?limit=20`);
+  const apiKey = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/api_keys/${apiKeyId}`);
+  const serviceAccountKeyDeleteRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/api_keys/${apiKeyId}`);
+  const serviceAccountKeyDelete = {
+    ...serviceAccountKeyDeleteRaw,
+    json: parseJsonish(serviceAccountKeyDeleteRaw.body),
+  };
+  const updatedServiceAccount = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts/${serviceAccountId}`, {
+    name: "Bridge Eval Service Updated",
+    role: "member",
+  });
+  const deletedServiceAccountRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts/${serviceAccountId}`);
+  const deletedServiceAccount = parseJsonish(deletedServiceAccountRaw.body);
+  const apiKeysAfterServiceAccountDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/api_keys?limit=20`);
+  const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
+  const activeProjectsAfterArchive = await getJson(`${baseUrl}/v1/organization/projects?limit=20`);
+  const archivedProjects = await getJson(`${baseUrl}/v1/organization/projects?limit=20&include_archived=true`);
+  const archivedServiceAccounts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts?limit=20`);
+  const missingProject = await getJson(`${baseUrl}/v1/organization/projects/proj_missing_${context.iteration}`);
+
+  const ok = !!testCase.check({
+    project: project.json,
+    updatedProject: updatedProject.json,
+    projects: projects.json,
+    serviceAccount: serviceAccount.json,
+    serviceAccounts: serviceAccounts.json,
+    apiKeys: apiKeys.json,
+    apiKey: apiKey.json,
+    serviceAccountKeyDelete,
+    updatedServiceAccount: updatedServiceAccount.json,
+    deletedServiceAccount,
+    apiKeysAfterServiceAccountDelete: apiKeysAfterServiceAccountDelete.json,
+    archivedProject: archivedProject.json,
+    activeProjectsAfterArchive: activeProjectsAfterArchive.json,
+    archivedProjects: archivedProjects.json,
+    archivedServiceAccounts,
+    missingProject,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: project.status,
+    project_id: project.json.id,
+    service_account_id: serviceAccount.json?.id || null,
+    api_key_id: serviceAccount.json?.api_key?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_project:${project.json.id}:${serviceAccount.json?.id || "missing"}`,
   });
 }
 

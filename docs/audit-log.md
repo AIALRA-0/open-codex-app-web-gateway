@@ -4369,6 +4369,94 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Organization project admin compatibility
+
+- Used the official OpenAI OpenAPI specs through the developer-docs MCP for:
+  - `GET/POST /v1/organization/projects`;
+  - `GET/POST /v1/organization/projects/{project_id}`;
+  - `POST /v1/organization/projects/{project_id}/archive`;
+  - `GET /v1/organization/projects/{project_id}/api_keys`;
+  - `GET/DELETE /v1/organization/projects/{project_id}/api_keys/{api_key_id}`;
+  - `GET/POST /v1/organization/projects/{project_id}/service_accounts`;
+  - `GET/POST/DELETE /v1/organization/projects/{project_id}/service_accounts/{service_account_id}`.
+- Added a local file-backed Organization project admin compatibility layer:
+  - local projects persist as `organization.project` records with
+    create/list/retrieve/update/archive behavior and `include_archived`
+    filtering;
+  - local project service accounts persist as
+    `organization.project.service_account` records with create/list/retrieve,
+    update, and delete lifecycle;
+  - service-account creation also creates a matching redacted
+    `organization.project.api_key` record while returning a one-time synthetic
+    `organization.project.service_account.api_key` value prefixed
+    `oc_local_key_`, never `sk-`;
+  - persisted project API-key records never include a secret `value`;
+  - deleting a service-account-owned key directly returns
+    `service_account_api_key_delete_not_supported`; deleting the owning service
+    account removes its local key records;
+  - missing and archived project paths return OpenAI-style error envelopes with
+    `project_not_found` and `project_archived` codes.
+- Added runtime controls:
+  - `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR`, defaulting to
+    `$CODEXCOMPAT_STATE_DIR/local-organization-admin`;
+  - `CODEXCOMPAT_ORGANIZATION_ADMIN_MAX_RECORDS`, defaulting to `5000`;
+  - `scripts/prune-runtime-state.mjs` now recursively prunes local
+    Organization admin JSON files with age, count, and byte caps.
+- Current boundary: this closes SDK/admin-page 404s for local project,
+  service-account, and project API-key lifecycle flows when the gateway is
+  backed by a Chat Completions provider. It does not create real provider
+  accounts, grant real provider access, produce usable OpenAI/DeepSeek keys, or
+  implement the remaining Organization admin families such as admin API keys,
+  audit logs, certificates, data retention, groups, invites, project users/rate
+  limits, roles, spend alerts, or organization users.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies project lifecycle, service-account
+    lifecycle, redacted key listing/retrieval, one-time key non-persistence,
+    service-account key deletion rejection, project archive filtering, and
+    zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-project-admin`, covering
+    the same lifecycle against the deployed DeepSeek-backed bridge.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`,
+    `scripts/prune-runtime-state.mjs`, and `test/server.test.js`.
+  - Focused Organization project unit test passed 1/1.
+  - `npm test`: passed 202/202.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-project-admin`: passed 1/1 against
+    `deepseek-v4-pro`, latency 363 ms, output `organization_project:...`, and
+    zero provider token usage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 99/99,
+    pass rate 1.0, average latency 1313 ms, P95 latency 3662 ms, and total
+    usage 24851 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1008 ms, P95 latency 1054 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T16-50-50-715Z.png`.
+  - `npm run prune:runtime -- --dry-run`: scanned 1905 runtime candidates
+    across 13 targets, selected 1 old UI-smoke screenshot, selected 70914
+    bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    70914 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 30 GB available; `state/` was 27 MB,
+    `output/` was 4.4 MB, `/srv/aialra/data/opencodexapp` was 136 KB, and
+    `/srv/aialra/logs/opencodexapp` was 28 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. The compatibility
+  service-account key value is synthetic, one-time only, prefixed
+  `oc_local_key_`, and not persisted.
+
 ## 2026-06-15 - Local Organization usage and costs compatibility
 
 - Used the official OpenAI OpenAPI specs through the developer-docs MCP for:

@@ -49,6 +49,11 @@ Primary sources:
 - OpenAI Organization images usage OpenAPI operation `usage-images`: https://api.openai.com/v1/organization/usage/images
 - OpenAI Organization file-search usage OpenAPI operation `usage-file-search-calls`: https://api.openai.com/v1/organization/usage/file_search_calls
 - OpenAI Organization web-search usage OpenAPI operation `usage-web-search-calls`: https://api.openai.com/v1/organization/usage/web_search_calls
+- OpenAI Organization projects OpenAPI operation `admin-api-keys-list-projects`: https://api.openai.com/v1/organization/projects
+- OpenAI Organization project OpenAPI operation `admin-api-keys-retrieve-project`: https://api.openai.com/v1/organization/projects/{project_id}
+- OpenAI Organization project archive OpenAPI operation `admin-api-keys-archive-project`: https://api.openai.com/v1/organization/projects/{project_id}/archive
+- OpenAI Organization project API keys OpenAPI operation `admin-api-keys-list-project-api-keys`: https://api.openai.com/v1/organization/projects/{project_id}/api_keys
+- OpenAI Organization project service accounts OpenAPI operation `admin-api-keys-list-project-service-accounts`: https://api.openai.com/v1/organization/projects/{project_id}/service_accounts
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
 - OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
 - OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
@@ -516,6 +521,38 @@ not write runtime files, expose real OpenAI admin data, meter provider bills,
 or replace provider-specific billing exports. It exists so SDKs, diagnostics,
 and dashboards can query the documented endpoint family without breaking on
 404 while the deployment remains backed by a Chat Completions provider.
+
+## Organization Projects Admin Coverage
+
+The bridge also implements a local file-backed subset of OpenAI Organization
+project administration so SDKs and admin pages can exercise project lifecycle,
+project service-account lifecycle, and project API-key inspection flows without
+calling hosted OpenAI admin APIs. These records are protocol-compatibility
+metadata only; they do not create provider accounts, grant provider access, or
+represent real OpenAI organization state.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /v1/organization/projects` | Implemented locally | Lists local `organization.project` records with OpenAI-style `object:"list"`, `first_id`, `last_id`, and `has_more`; excludes archived projects unless `include_archived=true` |
+| `POST /v1/organization/projects` | Implemented locally | Creates a local `organization.project` with `status:"active"`, `archived_at:null`, and compatibility metadata; requires `name` |
+| `GET /v1/organization/projects/{project_id}` | Implemented locally | Retrieves a local project or returns `404 project_not_found` |
+| `POST /v1/organization/projects/{project_id}` | Implemented locally | Updates the local project `name`; archived projects reject mutations with `project_archived` |
+| `POST /v1/organization/projects/{project_id}/archive` | Implemented locally | Marks the project `status:"archived"` and sets `archived_at`; repeated archive calls are idempotent |
+| `GET /v1/organization/projects/{project_id}/api_keys` | Implemented locally | Lists local redacted `organization.project.api_key` records; persisted records never include a secret `value` |
+| `GET /v1/organization/projects/{project_id}/api_keys/{api_key_id}` | Implemented locally | Retrieves a redacted project API key with owner metadata |
+| `DELETE /v1/organization/projects/{project_id}/api_keys/{api_key_id}` | Implemented locally for user-owned keys | Deletes compatible user-owned key records; service-account keys return `400 service_account_api_key_delete_not_supported` and are removed by deleting the service account |
+| `GET /v1/organization/projects/{project_id}/service_accounts` | Implemented locally | Lists local `organization.project.service_account` records for active projects |
+| `POST /v1/organization/projects/{project_id}/service_accounts` | Implemented locally | Creates a local service account and a matching redacted project API key; the response includes a one-time compatibility key value prefixed `oc_local_key_`, never `sk-`, and that value is not persisted |
+| `GET /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Retrieves a local service account for an active project |
+| `POST /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Updates local service-account `name` and `role`, then refreshes owner metadata on its redacted key records |
+| `DELETE /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Deletes the service account and its locally owned project API keys |
+
+Local Organization project admin state lives under
+`CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-organization-admin`
+by default. `scripts/prune-runtime-state.mjs` prunes JSON records in this tree
+with age, count, and byte caps. Because the service-account create response
+contains a one-time synthetic secret, keep logs and test fixtures from storing
+the full response body unless needed for a local-only diagnostic.
 
 ## Conversations Endpoint Coverage
 
@@ -1522,7 +1559,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Fine-tuning full parity | The local adapter covers job create/list/retrieve, cancel/pause/resume lifecycle events, checkpoint listing, and checkpoint permission list/create/delete, but it does not validate training datasets, schedule hosted training, produce a real provider-deployed fine-tuned model, enforce organization/project permissions, or train DeepSeek/OpenAI weights | Add provider-specific tuning backends where available, dataset validators, async job workers, artifact/result-file generation, permission middleware, and quality evals comparing tuned-model behavior against baseline models |
-| OpenAI Organization admin usage/costs full parity | The local adapter covers the documented costs and usage response shapes with zero-value buckets so admin SDK calls do not 404, but it is not real OpenAI organization billing, does not aggregate local bridge usage history into invoices, and does not validate admin-key authorization beyond normal gateway access | Add optional local usage aggregation over bridge audit events, provider-specific billing importers, admin-auth middleware, export jobs, and dashboard reconciliation tests |
+| OpenAI Organization admin full parity | The local adapter covers the documented costs and usage response shapes with zero-value buckets, plus local project create/list/retrieve/update/archive, project service-account lifecycle, and redacted project API-key inspection/deletion boundaries so admin SDK calls do not 404 for those families. It is not real OpenAI organization billing or hosted organization administration, does not aggregate local bridge usage history into invoices, does not create provider accounts or usable provider keys, and does not yet cover admin API keys, audit logs, certificates, data retention, groups, invites, project users/rate limits, roles, spend alerts, or organization users | Add optional local usage aggregation over bridge audit events, provider-specific billing importers, admin-auth middleware, export jobs, dashboard reconciliation tests, and the remaining Organization admin endpoint families with project-scoped authorization checks |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
 | OpenAI Realtime full parity | The local adapter covers REST creation of Realtime sessions, client secrets, transcription sessions, translation client secrets, WebRTC call setup response shape, and local call accept/reject/refer/hangup lifecycle state. It is not a low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket event runtime, speech-to-speech model loop, or hosted tracing backend | Add a real WebRTC/WebSocket relay backed by an audio-capable provider or OpenAI Realtime, server-side event translation, media/session isolation, call monitoring streams, token validation/accounting, and audio latency/quality evals |

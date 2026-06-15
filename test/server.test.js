@@ -11673,6 +11673,157 @@ test("Organization usage and costs APIs return local zero-value admin pages", as
   });
 });
 
+test("Organization projects manage local service accounts and redacted API keys", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization project admin compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const emptyList = await fetch(`${baseUrl}/v1/organization/projects`);
+    assert.equal(emptyList.status, 200);
+    assert.equal((await emptyList.json()).data.length, 0);
+
+    const createdResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Admin Project" }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const project = await createdResponse.json();
+    assert.equal(project.object, "organization.project");
+    assert.match(project.id, /^proj_/);
+    assert.equal(project.name, "Bridge Admin Project");
+    assert.equal(project.status, "active");
+    assert.equal(project.archived_at, null);
+    assert.equal(project.compatibility.actual_openai_admin_data, false);
+
+    const updatedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Admin Project Updated" }),
+    });
+    assert.equal(updatedResponse.status, 200);
+    assert.equal((await updatedResponse.json()).name, "Bridge Admin Project Updated");
+
+    const listedProjects = await fetch(`${baseUrl}/v1/organization/projects?limit=20`);
+    assert.equal(listedProjects.status, 200);
+    const listedProjectsJson = await listedProjects.json();
+    assert.equal(listedProjectsJson.object, "list");
+    assert.equal(listedProjectsJson.data.length, 1);
+    assert.equal(listedProjectsJson.first_id, project.id);
+
+    const serviceAccountResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Service Account", role: "owner" }),
+    });
+    assert.equal(serviceAccountResponse.status, 200);
+    const serviceAccount = await serviceAccountResponse.json();
+    assert.equal(serviceAccount.object, "organization.project.service_account");
+    assert.match(serviceAccount.id, /^svc_acct_/);
+    assert.equal(serviceAccount.role, "owner");
+    assert.equal(serviceAccount.api_key.object, "organization.project.service_account.api_key");
+    assert.match(serviceAccount.api_key.id, /^key_/);
+    assert.match(serviceAccount.api_key.value, /^oc_local_key_/);
+    assert.equal(/^sk-/.test(serviceAccount.api_key.value), false);
+
+    const persistedAdminState = readAllFiles(path.join(stateDir, "local-organization-admin")).join("\n");
+    assert.equal(persistedAdminState.includes(serviceAccount.api_key.value), false);
+
+    const serviceAccounts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts`);
+    assert.equal(serviceAccounts.status, 200);
+    const serviceAccountsJson = await serviceAccounts.json();
+    assert.equal(serviceAccountsJson.object, "list");
+    assert.equal(serviceAccountsJson.data.length, 1);
+    assert.equal(serviceAccountsJson.data[0].id, serviceAccount.id);
+    assert.equal(serviceAccountsJson.data[0].api_key, undefined);
+
+    const apiKeys = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys`);
+    assert.equal(apiKeys.status, 200);
+    const apiKeysJson = await apiKeys.json();
+    assert.equal(apiKeysJson.object, "list");
+    assert.equal(apiKeysJson.data.length, 1);
+    assert.equal(apiKeysJson.data[0].object, "organization.project.api_key");
+    assert.equal(apiKeysJson.data[0].id, serviceAccount.api_key.id);
+    assert.match(apiKeysJson.data[0].redacted_value, /^oc-local-/);
+    assert.equal(apiKeysJson.data[0].value, undefined);
+    assert.equal(apiKeysJson.data[0].owner.type, "service_account");
+
+    const apiKey = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys/${serviceAccount.api_key.id}`);
+    assert.equal(apiKey.status, 200);
+    const apiKeyJson = await apiKey.json();
+    assert.equal(apiKeyJson.id, serviceAccount.api_key.id);
+    assert.equal(apiKeyJson.value, undefined);
+    assert.equal(apiKeyJson.owner.service_account.id, serviceAccount.id);
+
+    const apiKeyDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys/${serviceAccount.api_key.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(apiKeyDelete.status, 400);
+    assert.equal((await apiKeyDelete.json()).error.code, "service_account_api_key_delete_not_supported");
+
+    const updatedServiceAccount = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts/${serviceAccount.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Service Account Updated", role: "member" }),
+    });
+    assert.equal(updatedServiceAccount.status, 200);
+    const updatedServiceAccountJson = await updatedServiceAccount.json();
+    assert.equal(updatedServiceAccountJson.name, "Bridge Service Account Updated");
+    assert.equal(updatedServiceAccountJson.role, "member");
+
+    const deletedServiceAccount = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts/${serviceAccount.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedServiceAccount.status, 200);
+    assert.deepEqual(await deletedServiceAccount.json(), {
+      object: "organization.project.service_account.deleted",
+      id: serviceAccount.id,
+      deleted: true,
+    });
+
+    const apiKeysAfterServiceDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys`);
+    assert.equal(apiKeysAfterServiceDelete.status, 200);
+    assert.equal((await apiKeysAfterServiceDelete.json()).data.length, 0);
+
+    const archivedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedResponse.status, 200);
+    const archived = await archivedResponse.json();
+    assert.equal(archived.status, "archived");
+    assert.equal(typeof archived.archived_at, "number");
+
+    const activeOnlyProjects = await fetch(`${baseUrl}/v1/organization/projects`);
+    assert.equal((await activeOnlyProjects.json()).data.length, 0);
+    const allProjects = await fetch(`${baseUrl}/v1/organization/projects?include_archived=true`);
+    assert.equal((await allProjects.json()).data[0].id, project.id);
+
+    const archivedServiceAccounts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts`);
+    assert.equal(archivedServiceAccounts.status, 400);
+    assert.equal((await archivedServiceAccounts.json()).error.code, "project_archived");
+
+    const missingProject = await fetch(`${baseUrl}/v1/organization/projects/proj_missing`);
+    assert.equal(missingProject.status, 404);
+    assert.equal((await missingProject.json()).error.code, "project_not_found");
+    assert.equal(requests.length, 0);
+  });
+
+  function readAllFiles(root) {
+    const values = [];
+    const visit = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) visit(entryPath);
+        else if (entry.isFile()) values.push(fs.readFileSync(entryPath, "utf8"));
+      }
+    };
+    visit(root);
+    return values;
+  }
+});
+
 test("Realtime API creates local sessions, client secrets, and call lifecycle state", async () => {
   await withMockProvider(async () => {
     assert.fail("Realtime compatibility should not call upstream provider");
