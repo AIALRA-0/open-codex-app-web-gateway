@@ -48,7 +48,7 @@ class LocalUploadStore {
 
   addPart(uploadId, data, options = {}) {
     const record = this.requireUploadRecord(uploadId);
-    const upload = this.requirePendingUpload(record.upload);
+    const upload = this.requirePendingUpload(record);
     const content = Buffer.isBuffer(data) ? data : Buffer.from(String(data || ""), "utf8");
     if (!content.length) throw httpError("part data is required", 400, "missing_part_data", "data");
     if (content.length > OFFICIAL_UPLOAD_PART_MAX_BYTES || content.length > this.maxPartBytes) {
@@ -94,7 +94,7 @@ class LocalUploadStore {
 
   completeUpload(uploadId, body = {}, fileSearchStore) {
     const record = this.requireUploadRecord(uploadId);
-    const upload = this.requirePendingUpload(record.upload);
+    const upload = this.requirePendingUpload(record);
     if (!fileSearchStore || typeof fileSearchStore.createFile !== "function") {
       throw httpError("file store is unavailable", 500, "file_store_unavailable");
     }
@@ -173,6 +173,8 @@ class LocalUploadStore {
     if (upload.status === "completed") {
       throw httpError("completed uploads cannot be cancelled", 400, "upload_already_completed");
     }
+    if (upload.status === "cancelled") return publicUpload(upload);
+    this.requirePendingUpload(record);
     const cancelled = {
       ...upload,
       status: "cancelled",
@@ -191,15 +193,32 @@ class LocalUploadStore {
     return record;
   }
 
-  requirePendingUpload(upload) {
+  requirePendingUpload(recordOrUpload) {
+    const record = recordOrUpload?.upload ? recordOrUpload : null;
+    const upload = record?.upload || recordOrUpload;
     if (!upload) throw httpError("upload not found", 404, "upload_not_found");
     if (upload.status === "cancelled") throw httpError("upload has been cancelled", 400, "upload_cancelled");
     if (upload.status === "completed") throw httpError("upload has already completed", 400, "upload_already_completed");
+    if (upload.status === "expired") throw httpError("upload has expired", 400, "upload_expired");
     if (upload.expires_at && upload.expires_at <= nowSeconds()) {
-      upload.status = "expired";
+      this.expireUploadRecord(record, upload);
       throw httpError("upload has expired", 400, "upload_expired");
     }
     return upload;
+  }
+
+  expireUploadRecord(record, upload) {
+    if (!record || !upload?.id) return null;
+    const expired = {
+      ...upload,
+      status: "expired",
+      expired_at: nowSeconds(),
+    };
+    this.writeJson(this.uploadJsonPath(upload.id), {
+      ...record,
+      upload: expired,
+    });
+    return expired;
   }
 
   uploadsDir() {

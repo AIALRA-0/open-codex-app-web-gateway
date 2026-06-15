@@ -72,6 +72,19 @@ function updateAssistantMessageForTest(stateDir, threadId, messageId, updater) {
   return record.message;
 }
 
+function expireUploadForTest(stateDir, uploadId) {
+  const uploadPath = path.join(stateDir, "local-uploads", "uploads", uploadId, "upload.json");
+  const record = JSON.parse(fs.readFileSync(uploadPath, "utf8"));
+  record.upload.expires_at = Math.floor(Date.now() / 1000) - 1;
+  fs.writeFileSync(uploadPath, `${JSON.stringify(record, null, 2)}\n`);
+  return record.upload;
+}
+
+function readUploadRecordForTest(stateDir, uploadId) {
+  const uploadPath = path.join(stateDir, "local-uploads", "uploads", uploadId, "upload.json");
+  return JSON.parse(fs.readFileSync(uploadPath, "utf8"));
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -8834,7 +8847,7 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
       }],
       usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
     }));
-  }, async ({ bridgeAddress }) => {
+  }, async ({ bridgeAddress, stateDir }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const partAContent = "Upload fixture says ";
     const partBContent = "upload-input-ok.";
@@ -9023,6 +9036,62 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     });
     assert.equal(completeChecksumMismatch.status, 400);
     assert.equal((await completeChecksumMismatch.json()).error.code, "upload_checksum_mismatch");
+
+    const expiredAddUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "expired-add.txt",
+        purpose: "assistants",
+        bytes: 1,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(expiredAddUploadResponse.status, 200);
+    const expiredAddUpload = await expiredAddUploadResponse.json();
+    expireUploadForTest(stateDir, expiredAddUpload.id);
+    const expiredAddPart = await fetch(`${baseUrl}/v1/uploads/${expiredAddUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "x",
+    });
+    assert.equal(expiredAddPart.status, 400);
+    assert.equal((await expiredAddPart.json()).error.code, "upload_expired");
+    const expiredAddRecord = readUploadRecordForTest(stateDir, expiredAddUpload.id);
+    assert.equal(expiredAddRecord.upload.status, "expired");
+    assert.ok(expiredAddRecord.upload.expired_at);
+    const expiredCancel = await fetch(`${baseUrl}/v1/uploads/${expiredAddUpload.id}/cancel`, { method: "POST" });
+    assert.equal(expiredCancel.status, 400);
+    assert.equal((await expiredCancel.json()).error.code, "upload_expired");
+
+    const expiredCompleteUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "expired-complete.txt",
+        purpose: "assistants",
+        bytes: 1,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(expiredCompleteUploadResponse.status, 200);
+    const expiredCompleteUpload = await expiredCompleteUploadResponse.json();
+    const expiredCompletePartResponse = await fetch(`${baseUrl}/v1/uploads/${expiredCompleteUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "x",
+    });
+    assert.equal(expiredCompletePartResponse.status, 200);
+    const expiredCompletePart = await expiredCompletePartResponse.json();
+    expireUploadForTest(stateDir, expiredCompleteUpload.id);
+    const expiredComplete = await fetch(`${baseUrl}/v1/uploads/${expiredCompleteUpload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [expiredCompletePart.id] }),
+    });
+    assert.equal(expiredComplete.status, 400);
+    assert.equal((await expiredComplete.json()).error.code, "upload_expired");
+    assert.equal(readUploadRecordForTest(stateDir, expiredCompleteUpload.id).upload.status, "expired");
   });
 });
 

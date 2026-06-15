@@ -1,5 +1,51 @@
 # Audit Log
 
+## 2026-06-16 Uploads Expiration Persistence
+
+- Tightened the local Uploads lifecycle against the official Uploads surface:
+  OpenAI exposes create Upload, add Parts, complete Upload, and cancel Upload
+  endpoints, and created Uploads expire after one hour. There is no public
+  retrieve/list-parts endpoint in the current OpenAPI endpoint list, so this
+  change keeps the public route surface unchanged.
+- Persisted expired pending Uploads as `status:"expired"` with `expired_at`
+  before returning `upload_expired` from Part creation or completion. This
+  avoids transient in-memory-only expiry state and makes local audit/prune
+  behavior deterministic.
+- Cancel now preserves the lifecycle boundary for already-expired Uploads:
+  expired Uploads continue to return `upload_expired` instead of being converted
+  to `cancelled`; already-cancelled Uploads remain idempotently cancelled, and
+  completed Uploads still reject cancellation with `upload_already_completed`.
+- Security/storage boundary: the change only writes Upload lifecycle metadata
+  under `$CODEXCOMPAT_STATE_DIR/local-uploads`; no uploaded bytes,
+  Authorization headers, provider credentials, or API keys are written to
+  Git-tracked files.
+- Validation:
+  - `node --check` passed for `src/bridge/local_uploads.js` and
+    `test/server.test.js`.
+  - `node --test test/server.test.js --test-name-pattern "Uploads"` passed
+    through the server suite (181/181 tests), including expired add-Part,
+    expired complete, persisted `status:"expired"`, and expired cancel
+    rejection coverage.
+  - Full `npm test` passed 221/221 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; it returned `active`, and
+    local `/healthz` returned `ok:true` with DeepSeek provider base
+    `https://api.deepseek.com` and default model `deepseek-v4-pro`.
+  - Deployed direct Upload expiry validation passed without a model call:
+    created a one-second Upload, waited for expiration, verified Part creation
+    and cancel both return `upload_expired`, and confirmed the local Upload
+    record persisted `status:"expired"` plus `expired_at`.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors; the
+    `local-upload-workdirs` target still bounds old Upload workdirs.
+  - Public HTTPS entrypoint returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Storage check: repo path 111 MB,
+    `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 7.2 GB
+    available.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+
 ## 2026-06-16 Uploads Checksum And Runtime Prune Coverage
 
 - Tightened local Uploads API compatibility around the official Uploads
