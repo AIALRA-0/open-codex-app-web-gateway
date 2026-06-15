@@ -11673,6 +11673,175 @@ test("Organization usage and costs APIs return local zero-value admin pages", as
   });
 });
 
+test("Organization usage and costs aggregate local bridge usage ledger", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_usage_ledger",
+      object: "chat.completion",
+      created: Math.floor(Date.now() / 1000),
+      model: call.body.model || "mock-model",
+      service_tier: "default",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "usage ledger ok" },
+        finish_reason: "stop",
+      }],
+      usage: {
+        prompt_tokens: 12,
+        completion_tokens: 5,
+        total_tokens: 17,
+        prompt_tokens_details: { cached_tokens: 3 },
+      },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const startTime = Math.floor(Date.now() / 1000) - 10;
+    const headers = {
+      "content-type": "application/json",
+      "authorization": "Bearer local-usage-test-token",
+      "openai-project": "proj_usage_ledger",
+    };
+
+    const chatResponse = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "Count this usage." }],
+        user: "user_usage_ledger",
+      }),
+    });
+    assert.equal(chatResponse.status, 200);
+    assert.equal((await chatResponse.json()).choices[0].message.content, "usage ledger ok");
+
+    const embeddingsResponse = await fetch(`${baseUrl}/v1/embeddings`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "embed-ledger", input: ["alpha beta", "gamma"] }),
+    });
+    assert.equal(embeddingsResponse.status, 200);
+
+    const moderationsResponse = await fetch(`${baseUrl}/v1/moderations`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "moderation-ledger", input: ["calm text", "another calm text"] }),
+    });
+    assert.equal(moderationsResponse.status, 200);
+
+    const speechInput = "hello usage ledger";
+    const speechResponse = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ model: "tts-ledger", voice: "alloy", input: speechInput, response_format: "mp3" }),
+    });
+    assert.equal(speechResponse.status, 200);
+    await speechResponse.arrayBuffer();
+
+    const transcriptionResponse = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "transcribe-ledger",
+        file: Buffer.from("fake audio bytes").toString("base64"),
+        filename: "ledger.wav",
+      }),
+    });
+    assert.equal(transcriptionResponse.status, 200);
+
+    const imageResponse = await fetch(`${baseUrl}/v1/images/generations`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "image-ledger",
+        prompt: "usage ledger square",
+        n: 2,
+        size: "1024x1024",
+      }),
+    });
+    assert.equal(imageResponse.status, 200);
+
+    const completions = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=project_id&group_by%5B%5D=user_id&group_by%5B%5D=api_key_id&group_by%5B%5D=model&project_ids%5B%5D=proj_usage_ledger&user_ids%5B%5D=user_usage_ledger&models%5B%5D=mock-model`);
+    assert.equal(completions.status, 200);
+    const completionsJson = await completions.json();
+    const completionResult = completionsJson.data[0].results[0];
+    assert.equal(completionResult.object, "organization.usage.completions.result");
+    assert.equal(completionResult.input_tokens, 12);
+    assert.equal(completionResult.output_tokens, 5);
+    assert.equal(completionResult.input_cached_tokens, 3);
+    assert.equal(completionResult.num_model_requests, 1);
+    assert.equal(completionResult.project_id, "proj_usage_ledger");
+    assert.equal(completionResult.user_id, "user_usage_ledger");
+    assert.equal(completionResult.model, "mock-model");
+    assert.match(completionResult.api_key_id, /^key_sha256_[a-f0-9]{16}$/);
+    assert.equal(JSON.stringify(completionsJson).includes("local-usage-test-token"), false);
+    assert.equal(completionsJson.compatibility.source, "local_usage_ledger");
+
+    const filteredOut = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&project_ids%5B%5D=proj_missing`);
+    assert.equal(filteredOut.status, 200);
+    assert.equal((await filteredOut.json()).data[0].results[0].input_tokens, 0);
+
+    const embeddings = await fetch(`${baseUrl}/v1/organization/usage/embeddings?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models=embed-ledger`);
+    assert.equal(embeddings.status, 200);
+    const embeddingResult = (await embeddings.json()).data[0].results[0];
+    assert.equal(embeddingResult.object, "organization.usage.embeddings.result");
+    assert.ok(embeddingResult.input_tokens > 0);
+    assert.equal(embeddingResult.num_model_requests, 2);
+    assert.equal(embeddingResult.model, "embed-ledger");
+
+    const moderations = await fetch(`${baseUrl}/v1/organization/usage/moderations?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models=moderation-ledger`);
+    assert.equal(moderations.status, 200);
+    const moderationResult = (await moderations.json()).data[0].results[0];
+    assert.equal(moderationResult.object, "organization.usage.moderations.result");
+    assert.ok(moderationResult.input_tokens > 0);
+    assert.equal(moderationResult.num_model_requests, 2);
+
+    const speeches = await fetch(`${baseUrl}/v1/organization/usage/audio_speeches?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models=tts-ledger`);
+    assert.equal(speeches.status, 200);
+    const speechResult = (await speeches.json()).data[0].results[0];
+    assert.equal(speechResult.characters, speechInput.length);
+    assert.equal(speechResult.model, "tts-ledger");
+
+    const transcriptions = await fetch(`${baseUrl}/v1/organization/usage/audio_transcriptions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models=transcribe-ledger`);
+    assert.equal(transcriptions.status, 200);
+    const transcriptionResult = (await transcriptions.json()).data[0].results[0];
+    assert.ok(transcriptionResult.seconds >= 1);
+    assert.equal(transcriptionResult.model, "transcribe-ledger");
+
+    const images = await fetch(`${baseUrl}/v1/organization/usage/images?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=source&group_by%5B%5D=size&group_by%5B%5D=model&sources%5B%5D=image.generation&sizes%5B%5D=1024x1024`);
+    assert.equal(images.status, 200);
+    const imageResult = (await images.json()).data[0].results[0];
+    assert.equal(imageResult.object, "organization.usage.images.result");
+    assert.equal(imageResult.images, 2);
+    assert.equal(imageResult.num_model_requests, 2);
+    assert.equal(imageResult.source, "image.generation");
+    assert.equal(imageResult.size, "1024x1024");
+    assert.equal(imageResult.model, "image-ledger");
+
+    const costs = await fetch(`${baseUrl}/v1/organization/costs?start_time=${startTime}&end_time=${startTime + 86400}&limit=1&group_by%5B%5D=line_item&group_by%5B%5D=project_id`);
+    assert.equal(costs.status, 200);
+    const costResults = (await costs.json()).data[0].results;
+    const completionsCost = costResults.find((result) => result.line_item === "Completions");
+    const imagesCost = costResults.find((result) => result.line_item === "Images");
+    assert.equal(completionsCost.amount.value, 0);
+    assert.equal(completionsCost.amount.currency, "usd");
+    assert.equal(completionsCost.quantity, 17);
+    assert.equal(completionsCost.project_id, "proj_usage_ledger");
+    assert.equal(imagesCost.quantity, 2);
+
+    const pageOne = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 7200}&bucket_width=1h&limit=1`);
+    assert.equal(pageOne.status, 200);
+    const pageOneJson = await pageOne.json();
+    assert.equal(pageOneJson.has_more, true);
+    assert.ok(pageOneJson.next_page);
+    const pageTwo = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 7200}&bucket_width=1h&limit=1&page=${encodeURIComponent(pageOneJson.next_page)}`);
+    assert.equal(pageTwo.status, 200);
+    assert.equal((await pageTwo.json()).data[0].start_time, startTime + 3600);
+
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("Organization users and invites manage local admin lifecycle", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization users/invites compatibility should not call upstream provider");

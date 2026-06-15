@@ -57,6 +57,7 @@ const { LocalOrganizationAdminStore } = require("./local_organization_admin");
 const {
   createOrganizationCostsPage,
   createOrganizationUsagePage,
+  LocalOrganizationUsageStore,
 } = require("./local_organization_usage");
 const {
   attachShellOutput,
@@ -279,6 +280,8 @@ function loadConfig(overrides = {}) {
     chatKitStateDir: process.env.CODEXCOMPAT_CHATKIT_STATE_DIR || path.join(stateDir, "local-chatkit"),
     fineTuningStateDir: process.env.CODEXCOMPAT_FINE_TUNING_STATE_DIR || path.join(stateDir, "local-fine-tuning"),
     fineTuningMaxRecords: numberFromEnv("CODEXCOMPAT_FINE_TUNING_MAX_RECORDS", 5000, 1, 100000),
+    organizationUsageStateDir: process.env.CODEXCOMPAT_ORGANIZATION_USAGE_STATE_DIR || path.join(stateDir, "local-organization-usage"),
+    organizationUsageMaxRecords: numberFromEnv("CODEXCOMPAT_ORGANIZATION_USAGE_MAX_RECORDS", 5000, 1, 100000),
     organizationAdminStateDir: process.env.CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR || path.join(stateDir, "local-organization-admin"),
     organizationAdminMaxRecords: numberFromEnv("CODEXCOMPAT_ORGANIZATION_ADMIN_MAX_RECORDS", 5000, 1, 100000),
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
@@ -776,6 +779,14 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   }
   const publicResponse = projectResponseForRequestIncludes(response, request);
   appendResponseToConversation(conversationStore, conversation, request, publicResponse);
+  recordOrganizationUsage(config, req, "completions", {
+    endpoint: "/v1/responses",
+    request,
+    created_at: response.created_at,
+    model: response.model || chat.model,
+    service_tier: response.service_tier || chat.service_tier,
+    usage: response.usage,
+  });
 
   sendJson(res, 200, publicResponse);
 }
@@ -1237,6 +1248,14 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     ],
   });
   appendResponseToConversation(conversationStore, conversation, request, projectResponseForRequestIncludes(response, request));
+  recordOrganizationUsage(config, { headers: incomingHeaders }, "completions", {
+    endpoint: "/v1/responses",
+    request,
+    created_at: response.created_at,
+    model: response.model || chat.model,
+    service_tier: response.service_tier || chat.service_tier,
+    usage: response.usage,
+  });
 }
 
 function prependLocalOutputItems(response, items = []) {
@@ -2184,6 +2203,14 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     return;
   }
 
+  recordOrganizationUsage(config, req, "completions", {
+    endpoint: "/v1/responses/input_tokens",
+    request,
+    created_at: upstreamJson?.created,
+    model: upstreamJson?.model || chat.model,
+    service_tier: upstreamJson?.service_tier || chat.service_tier,
+    usage: upstreamJson?.usage,
+  });
   sendJson(res, 200, {
     object: "response.input_tokens",
     input_tokens: inputTokens,
@@ -2248,6 +2275,14 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     });
   }
 
+  recordOrganizationUsage(config, req, "completions", {
+    endpoint: "/v1/responses/compact",
+    request,
+    created_at: response.created_at,
+    model: upstreamJson?.model || chat.model,
+    service_tier: upstreamJson?.service_tier || chat.service_tier,
+    usage: response.usage,
+  });
   sendJson(res, 200, response);
 }
 
@@ -3111,6 +3146,14 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
       });
     }
     appendResponseToConversation(conversationStore, conversation, request, response);
+    recordOrganizationUsage(config, req, "completions", {
+      endpoint: "/v1/responses",
+      request,
+      created_at: response.created_at,
+      model: response.model || chat.model,
+      service_tier: response.service_tier || state.serviceTier || chat.service_tier,
+      usage: response.usage,
+    });
   } catch (error) {
     emitError(res, state, error.message, 500);
   } finally {
@@ -3894,24 +3937,39 @@ async function handleChatPassthrough(req, res, config, store) {
   const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(body, config);
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
-  if (body.store === true && body.stream && upstream.ok && isEventStreamResponse(upstream)) {
-    await handleStoredChatStreamPassthrough(res, upstream, headers, body, store, compatibility);
+  if (body.stream && upstream.ok && isEventStreamResponse(upstream)) {
+    await handleChatStreamPassthrough(res, upstream, headers, body, store, compatibility, config, req.headers);
     return;
   }
 
-  const needsJsonPostProcessing = !body.stream
+  const shouldInspectJson = !body.stream
     && isJsonResponse(upstream)
-    && (body.store === true || inlineModerationConfig(body.moderation).enabled || compatibility);
-  if (needsJsonPostProcessing) {
+    && (
+      body.store === true
+      || inlineModerationConfig(body.moderation).enabled
+      || compatibility
+      || !!config.organizationUsageStore
+    );
+  if (shouldInspectJson) {
     const text = await upstream.text();
     const json = parseJsonOrNull(text);
     const localModeration = upstream.ok ? attachLocalChatInlineModeration(json, body, config) : null;
     const attachedCompatibility = upstream.ok ? attachChatPassthroughCompatibility(json, body, compatibility) : false;
-    if (upstream.ok && json?.id) {
+    if (upstream.ok && json?.id && body.store === true) {
       store.put(json.id, {
         chat_completion: json,
         chat_messages: normalizeStoredChatMessages(body.messages, json),
         chat_request: sanitizeChatRequest(body),
+      });
+    }
+    if (upstream.ok && json?.usage) {
+      recordOrganizationUsage(config, req, "completions", {
+        endpoint: "/v1/chat/completions",
+        request: body,
+        created_at: json.created,
+        model: json.model || body.model,
+        service_tier: json.service_tier || body.service_tier,
+        usage: json.usage,
       });
     }
     if ((localModeration || attachedCompatibility) && isPlainObject(json)) {
@@ -4377,7 +4435,7 @@ function attachChatPassthroughCompatibility(completion, request, compatibility) 
   return true;
 }
 
-async function handleStoredChatStreamPassthrough(res, upstream, headers, request, store, compatibility = null) {
+async function handleChatStreamPassthrough(res, upstream, headers, request, store, compatibility = null, config = {}, incomingHeaders = {}) {
   const accumulator = createChatStreamAccumulator(request);
   res.writeHead(upstream.status, headers);
 
@@ -4394,10 +4452,20 @@ async function handleStoredChatStreamPassthrough(res, upstream, headers, request
     const completion = finalizeChatStreamCompletion(accumulator);
     if (completion?.id) {
       attachChatPassthroughCompatibility(completion, request, compatibility);
-      store.put(completion.id, {
-        chat_completion: completion,
-        chat_messages: normalizeStoredChatMessages(request.messages, completion),
-        chat_request: sanitizeChatRequest(request),
+      if (request.store === true) {
+        store.put(completion.id, {
+          chat_completion: completion,
+          chat_messages: normalizeStoredChatMessages(request.messages, completion),
+          chat_request: sanitizeChatRequest(request),
+        });
+      }
+      recordOrganizationUsage(config, { headers: incomingHeaders }, "completions", {
+        endpoint: "/v1/chat/completions",
+        request,
+        created_at: completion.created,
+        model: completion.model || request.model,
+        service_tier: completion.service_tier || request.service_tier,
+        usage: completion.usage,
       });
     }
   } finally {
@@ -4472,6 +4540,15 @@ async function handleLegacyCompletions(req, res, config) {
     ...(systemFingerprint ? { system_fingerprint: systemFingerprint } : {}),
     ...(sawUsage ? { usage } : {}),
   };
+  if (sawUsage) {
+    recordOrganizationUsage(config, req, "completions", {
+      endpoint: "/v1/completions",
+      request,
+      created_at: created,
+      model,
+      usage,
+    });
+  }
   sendJson(res, 200, response);
 }
 
@@ -4480,6 +4557,9 @@ async function handleStreamingLegacyCompletions(req, res, config, request, promp
   const created = nowSeconds();
   let headersWritten = false;
   const echoedChoices = new Set();
+  const usage = emptyCompletionUsage();
+  let sawUsage = false;
+  let model = request.model || config.defaultModel;
 
   for (let promptIndex = 0; promptIndex < prompts.length; promptIndex += 1) {
     const prompt = prompts[promptIndex];
@@ -4525,6 +4605,8 @@ async function handleStreamingLegacyCompletions(req, res, config, request, promp
         indexBase: choiceBase,
         echoedChoices,
       });
+      if (addCompletionUsage(usage, payload?.usage)) sawUsage = true;
+      if (payload?.model) model = payload.model;
       writeLegacyCompletionSse(res, chunk);
     }
   }
@@ -4539,6 +4621,15 @@ async function handleStreamingLegacyCompletions(req, res, config, request, promp
   }
   res.write("data: [DONE]\n\n");
   res.end();
+  if (sawUsage) {
+    recordOrganizationUsage(config, req, "completions", {
+      endpoint: "/v1/completions",
+      request,
+      created_at: created,
+      model,
+      usage,
+    });
+  }
 }
 
 function legacyCompletionId() {
@@ -5154,7 +5245,7 @@ async function handleEmbeddings(req, res, config) {
   });
   const promptTokens = inputs.reduce((sum, input) => sum + input.tokens, 0);
 
-  sendJson(res, 200, {
+  const response = {
     object: "list",
     data,
     model,
@@ -5169,7 +5260,15 @@ async function handleEmbeddings(req, res, config) {
       encoding_format: encodingFormat,
       reason: "chat_provider_embedding_compatibility",
     },
+  };
+  recordOrganizationUsage(config, req, "embeddings", {
+    endpoint: "/v1/embeddings",
+    request,
+    model,
+    input_tokens: promptTokens,
+    num_model_requests: inputs.length,
   });
+  sendJson(res, 200, response);
 }
 
 async function handleModerations(req, res, config) {
@@ -5188,8 +5287,9 @@ async function handleModerations(req, res, config) {
 
   const model = request.model || config.moderationsModel || "omni-moderation-latest";
   const results = inputs.map((input) => classifyModerationInput(input));
+  const inputTokens = inputs.reduce((sum, input) => sum + estimateUsageTextTokens(input.text), 0);
 
-  sendJson(res, 200, {
+  const response = {
     id: prefixedId("modr"),
     model,
     results,
@@ -5199,7 +5299,15 @@ async function handleModerations(req, res, config) {
       reason: "chat_provider_moderation_compatibility",
       supports_image_inspection: false,
     },
+  };
+  recordOrganizationUsage(config, req, "moderations", {
+    endpoint: "/v1/moderations",
+    request,
+    model,
+    input_tokens: inputTokens,
+    num_model_requests: inputs.length,
   });
+  sendJson(res, 200, response);
 }
 
 async function handleAudioSpeech(req, res, config) {
@@ -5216,6 +5324,13 @@ async function handleAudioSpeech(req, res, config) {
     const request = await readJson(req);
     const speech = normalizeAudioSpeechRequest(request, config);
     const content = placeholderSpeechContent(speech);
+    recordOrganizationUsage(config, req, "audio_speeches", {
+      endpoint: "/v1/audio/speech",
+      request,
+      model: speech.model,
+      characters: speech.input.length,
+      num_model_requests: 1,
+    });
     if (speech.stream) {
       writeAudioSpeechStream(res, speech, content);
       return;
@@ -5268,6 +5383,13 @@ async function handleAudioTranscriptLike(req, res, config, task) {
     }
 
     const response = createAudioTranscriptResponse(normalized, text, task);
+    recordOrganizationUsage(config, req, "audio_transcriptions", {
+      endpoint: task === "translate" ? "/v1/audio/translations" : "/v1/audio/transcriptions",
+      request,
+      model: normalized.model,
+      seconds: response.body?.usage?.seconds ?? Math.max(1, Math.ceil(estimateAudioDuration(normalized.file))),
+      num_model_requests: 1,
+    });
     if (response.kind === "text") {
       res.writeHead(200, {
         "content-type": response.contentType,
@@ -6013,10 +6135,26 @@ async function handleImagesGenerations(req, res, config) {
     request = await readJson(req);
     if (request.stream === true) {
       const events = await createImagesGenerationEventStream(request, config);
+      recordOrganizationUsage(config, req, "images", {
+        endpoint: "/v1/images/generations",
+        request,
+        model: request.model || config.imageGenerationModel,
+        source: "image.generation",
+        size: request.size,
+        images: imageRequestCount(request),
+      });
       await writeImageApiEventStream(res, events, "streaming image responses require b64_json output");
       return;
     }
     const response = await createImagesGenerationResponse(request, config);
+    recordOrganizationUsage(config, req, "images", {
+      endpoint: "/v1/images/generations",
+      request,
+      model: request.model || config.imageGenerationModel,
+      source: "image.generation",
+      size: request.size,
+      images: Array.isArray(response.data) ? response.data.length : imageRequestCount(request),
+    });
     sendJson(res, 200, response);
   } catch (error) {
     sendError(res, error.status || 400, error.message || "image generation request failed", {
@@ -6037,6 +6175,14 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
         imageGenerationStore,
         fetch: globalThis.fetch,
       });
+      recordOrganizationUsage(config, req, "images", {
+        endpoint: "/v1/images/edits",
+        request,
+        model: request.model || config.imageGenerationModel,
+        source: "image.edit",
+        size: request.size,
+        images: imageRequestCount(request),
+      });
       await writeImageApiEventStream(res, events, "streaming image edit responses require b64_json output");
       return;
     }
@@ -6044,6 +6190,14 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
       fileSearchStore,
       imageGenerationStore,
       fetch: globalThis.fetch,
+    });
+    recordOrganizationUsage(config, req, "images", {
+      endpoint: "/v1/images/edits",
+      request,
+      model: request.model || config.imageGenerationModel,
+      source: "image.edit",
+      size: request.size,
+      images: Array.isArray(response.data) ? response.data.length : imageRequestCount(request),
     });
     sendJson(res, 200, response);
   } catch (error) {
@@ -6063,6 +6217,14 @@ async function handleImagesVariations(req, res, config, fileSearchStore, imageGe
       fileSearchStore,
       imageGenerationStore,
       fetch: globalThis.fetch,
+    });
+    recordOrganizationUsage(config, req, "images", {
+      endpoint: "/v1/images/variations",
+      request,
+      model: request.model || config.imageGenerationVariationModel,
+      source: "image.variation",
+      size: request.size,
+      images: Array.isArray(response.data) ? response.data.length : imageRequestCount(request),
     });
     sendJson(res, 200, response);
   } catch (error) {
@@ -8237,12 +8399,190 @@ async function handleGraderRun(req, res, config) {
   sendJson(res, 200, response);
 }
 
-function handleOrganizationCosts(res, url) {
-  sendJson(res, 200, createOrganizationCostsPage(url));
+function handleOrganizationCosts(res, url, organizationUsageStore = null) {
+  sendJson(res, 200, createOrganizationCostsPage(url, { store: organizationUsageStore }));
 }
 
-function handleOrganizationUsage(res, kind, url) {
-  sendJson(res, 200, createOrganizationUsagePage(kind, url));
+function handleOrganizationUsage(res, kind, url, organizationUsageStore = null) {
+  sendJson(res, 200, createOrganizationUsagePage(kind, url, { store: organizationUsageStore }));
+}
+
+function recordOrganizationUsage(config, req, kind, details = {}) {
+  const store = config?.organizationUsageStore;
+  if (!store || typeof store.record !== "function") return null;
+  try {
+    const request = isPlainObject(details.request) ? details.request : {};
+    const usage = tokenUsageMetrics(details.usage || {});
+    const metrics = usageMetricsForKind(kind, details, usage);
+    const hasMetric = Object.values(metrics).some((value) => Number(value || 0) > 0);
+    if (!hasMetric) return null;
+    return store.record({
+      kind,
+      endpoint: details.endpoint,
+      created_at: details.created_at,
+      ...organizationUsageDimensions(req, request),
+      model: safeUsageDimension(details.model ?? request.model),
+      batch: typeof details.batch === "boolean" ? details.batch : false,
+      service_tier: safeUsageDimension(details.service_tier ?? request.service_tier),
+      source: safeUsageDimension(details.source),
+      size: safeUsageDimension(details.size ?? request.size),
+      context_level: safeUsageDimension(details.context_level),
+      vector_store_id: safeUsageDimension(details.vector_store_id),
+      ...metrics,
+    });
+  } catch (error) {
+    log("failed to record local organization usage event", { kind, error: error.message });
+    return null;
+  }
+}
+
+function usageMetricsForKind(kind, details = {}, usage = {}) {
+  if (kind === "completions") {
+    return {
+      input_tokens: numberMetric(details.input_tokens ?? usage.input_tokens),
+      output_tokens: numberMetric(details.output_tokens ?? usage.output_tokens),
+      input_cached_tokens: numberMetric(details.input_cached_tokens ?? usage.input_cached_tokens),
+      input_audio_tokens: numberMetric(details.input_audio_tokens ?? usage.input_audio_tokens),
+      output_audio_tokens: numberMetric(details.output_audio_tokens ?? usage.output_audio_tokens),
+      num_model_requests: numberMetric(details.num_model_requests ?? 1),
+    };
+  }
+  if (kind === "embeddings" || kind === "moderations") {
+    return {
+      input_tokens: numberMetric(details.input_tokens ?? usage.input_tokens),
+      num_model_requests: numberMetric(details.num_model_requests ?? 1),
+    };
+  }
+  if (kind === "images") {
+    const images = numberMetric(details.images);
+    return {
+      images,
+      num_model_requests: numberMetric(details.num_model_requests ?? (images || 1)),
+    };
+  }
+  if (kind === "audio_speeches") {
+    return {
+      characters: numberMetric(details.characters),
+      num_model_requests: numberMetric(details.num_model_requests ?? 1),
+    };
+  }
+  if (kind === "audio_transcriptions") {
+    return {
+      seconds: numberMetric(details.seconds),
+      num_model_requests: numberMetric(details.num_model_requests ?? 1),
+    };
+  }
+  if (kind === "vector_stores") return { usage_bytes: numberMetric(details.usage_bytes) };
+  if (kind === "file_search_calls") return { num_requests: numberMetric(details.num_requests ?? 1) };
+  if (kind === "web_search_calls") {
+    return {
+      num_model_requests: numberMetric(details.num_model_requests ?? 1),
+      num_requests: numberMetric(details.num_requests ?? 1),
+    };
+  }
+  if (kind === "code_interpreter_sessions") return { num_sessions: numberMetric(details.num_sessions ?? 1) };
+  return {};
+}
+
+function tokenUsageMetrics(usage = {}) {
+  if (!isPlainObject(usage)) return {};
+  const inputTokens = numberMetric(usage.input_tokens ?? usage.prompt_tokens);
+  const outputTokens = numberMetric(usage.output_tokens ?? usage.completion_tokens);
+  return {
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    input_cached_tokens: numberMetric(
+      usage.input_cached_tokens
+      ?? usage.input_tokens_details?.cached_tokens
+      ?? usage.prompt_tokens_details?.cached_tokens
+      ?? usage.prompt_cache_hit_tokens,
+    ),
+    input_audio_tokens: numberMetric(
+      usage.input_audio_tokens
+      ?? usage.input_tokens_details?.audio_tokens
+      ?? usage.prompt_tokens_details?.audio_tokens,
+    ),
+    output_audio_tokens: numberMetric(
+      usage.output_audio_tokens
+      ?? usage.output_tokens_details?.audio_tokens
+      ?? usage.completion_tokens_details?.audio_tokens,
+    ),
+    total_tokens: numberMetric(usage.total_tokens ?? inputTokens + outputTokens),
+  };
+}
+
+function organizationUsageDimensions(req, request = {}) {
+  const headers = req?.headers || {};
+  return {
+    project_id: safeUsageDimension(
+      request.project_id
+      ?? request.project
+      ?? firstHeader(headers, ["openai-project", "x-openai-project", "openai-project-id"]),
+    ),
+    user_id: safeUsageDimension(
+      request.user_id
+      ?? request.user
+      ?? firstHeader(headers, ["openai-user", "x-openai-user"]),
+    ),
+    api_key_id: organizationUsageApiKeyId(headers, request),
+  };
+}
+
+function organizationUsageApiKeyId(headers = {}, request = {}) {
+  const explicit = request.api_key_id
+    ?? firstHeader(headers, ["openai-api-key-id", "x-openai-api-key-id"]);
+  if (explicit) return safeApiKeyId(explicit);
+  const auth = firstHeader(headers, ["authorization"]);
+  const bearer = String(auth || "").match(/^bearer\s+(.+)$/i)?.[1];
+  if (bearer) return hashedApiKeyId(bearer);
+  const apiKey = firstHeader(headers, ["x-api-key", "api-key"]);
+  return apiKey ? hashedApiKeyId(apiKey) : null;
+}
+
+function firstHeader(headers = {}, names = []) {
+  for (const name of names) {
+    const value = headers[name] ?? headers[name.toLowerCase()];
+    if (Array.isArray(value) && value.length) return value[0];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return null;
+}
+
+function safeApiKeyId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  if (/^sk-/.test(raw) || raw.length > 96) return hashedApiKeyId(raw);
+  return safeUsageDimension(raw);
+}
+
+function hashedApiKeyId(value) {
+  const raw = String(value || "").trim();
+  if (!raw) return null;
+  return `key_sha256_${crypto.createHash("sha256").update(raw).digest("hex").slice(0, 16)}`;
+}
+
+function safeUsageDimension(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const normalized = stringifyContent(value).replace(/[\r\n\t]/g, " ").trim();
+  return normalized ? normalized.slice(0, 256) : null;
+}
+
+function numberMetric(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return 0;
+  return Number.isInteger(parsed) ? parsed : Number(parsed.toFixed(6));
+}
+
+function estimateUsageTextTokens(value) {
+  const text = stringifyContent(value || "");
+  if (!text) return 0;
+  return Math.max(1, Math.ceil(text.length / 4));
+}
+
+function imageRequestCount(request = {}) {
+  const parsed = Number(request?.n);
+  if (!Number.isFinite(parsed) || parsed < 1) return 1;
+  return Math.max(1, Math.trunc(parsed));
 }
 
 function handleOrganizationAuditLogsList(res, organizationAdminStore, url) {
@@ -12367,6 +12707,11 @@ function createServer(config = loadConfig()) {
     dir: config.fineTuningStateDir || path.join(config.stateDir || process.cwd(), "local-fine-tuning"),
     maxRecords: config.fineTuningMaxRecords,
   });
+  const organizationUsageStore = config.organizationUsageStore || new LocalOrganizationUsageStore({
+    dir: config.organizationUsageStateDir || path.join(config.stateDir || process.cwd(), "local-organization-usage"),
+    maxRecords: config.organizationUsageMaxRecords,
+  });
+  config.organizationUsageStore = organizationUsageStore;
   const organizationAdminStore = config.organizationAdminStore || new LocalOrganizationAdminStore({
     dir: config.organizationAdminStateDir || path.join(config.stateDir || process.cwd(), "local-organization-admin"),
     maxRecords: config.organizationAdminMaxRecords,
@@ -12405,13 +12750,13 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "GET" && url.pathname === "/v1/organization/costs") {
-        handleOrganizationCosts(res, url);
+        handleOrganizationCosts(res, url, organizationUsageStore);
         return;
       }
 
       const organizationUsageRoute = url.pathname.match(/^\/v1\/organization\/usage\/([^/]+)$/);
       if (organizationUsageRoute && req.method === "GET") {
-        handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url);
+        handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url, organizationUsageStore);
         return;
       }
 

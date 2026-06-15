@@ -5235,6 +5235,103 @@ Open follow-ups:
   service-account key value is synthetic, one-time only, prefixed
   `oc_local_key_`, and not persisted.
 
+## 2026-06-15 - Local Organization usage ledger aggregation
+
+- Used official OpenAI sources for the Organization usage/cost upgrade:
+  - OpenAI OpenAPI endpoint list confirms the current `/organization/costs`
+    and `/organization/usage/*` endpoint family;
+  - OpenAI OpenAPI `usage-costs` documents `start_time`, `end_time`,
+    `bucket_width:"1d"`, `project_ids[]`, `api_key_ids[]`,
+    `group_by[]=project_id|line_item|api_key_id`, `limit`, `page`, and
+    `organization.costs.result`;
+  - OpenAI OpenAPI `usage-completions` documents `1m|1h|1d` buckets,
+    project/user/API-key/model/batch/service-tier filters and grouping, token
+    result fields, and cursor pagination;
+  - OpenAI OpenAPI `usage-embeddings`, `usage-moderations`,
+    `usage-images`, `usage-audio-speeches`, and
+    `usage-audio-transcriptions` document the resource-specific result fields
+    now populated from the local ledger.
+- Replaced the old pure zero-value usage/cost implementation with a bounded
+  local Organization usage ledger:
+  - added `LocalOrganizationUsageStore` under
+    `CODEXCOMPAT_ORGANIZATION_USAGE_STATE_DIR`, defaulting to
+    `$CODEXCOMPAT_STATE_DIR/local-organization-usage`;
+  - records numeric usage events for `/v1/responses`, `/v1/responses/compact`,
+    `/v1/responses/input_tokens`, `/v1/chat/completions`,
+    `/v1/completions`, `/v1/embeddings`, `/v1/moderations`,
+    `/v1/audio/speech`, `/v1/audio/transcriptions`,
+    `/v1/audio/translations`, `/v1/images/generations`,
+    `/v1/images/edits`, and `/v1/images/variations`;
+  - stores only endpoint, created time, model/dimension identifiers, hashed API
+    key IDs, and numeric usage totals. It does not store prompts, messages,
+    uploaded file bodies, raw Authorization headers, API keys, or provider
+    secrets;
+  - supports official-style `page` cursor pagination, `project_ids[]`,
+    `user_ids[]`, `api_key_ids[]`, `models[]`, `batch`, image `sources[]` /
+    `sizes[]`, and supported `group_by[]` dimensions;
+  - keeps zero-value bucket rows for no-match queries and for not-yet-metered
+    local hosted-tool counters such as vector stores, file search, web search,
+    and code-interpreter sessions;
+  - costs now aggregates local `quantity` when grouped by `line_item`, while
+    `amount.value` remains `0` because this is not a real provider invoice or
+    billing importer.
+- Added `CODEXCOMPAT_ORGANIZATION_USAGE_STATE_DIR` and
+  `CODEXCOMPAT_ORGANIZATION_USAGE_MAX_RECORDS` deployment docs, plus a prune
+  target for `local-organization-usage/events`.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies local ledger aggregation from Chat,
+    Embeddings, Moderations, Audio speech, Audio transcription, and Images;
+    `group_by`/filter behavior; hashed API-key dimensions; zero-value
+    no-match fallback; costs `line_item` quantity; page cursor pagination; and
+    that raw bearer tokens are absent from admin responses;
+  - `bridge-regression` `organization-usage-costs` now creates live
+    Chat/Embeddings/Images ledger events before querying usage and costs.
+- Current boundary: this is local operational usage telemetry for the gateway,
+  not OpenAI hosted billing and not DeepSeek invoice reconciliation. It does
+  not yet meter internal hosted-tool calls for vector stores/file search/web
+  search/code-interpreter sessions, and it does not enforce Organization admin
+  authorization or project-scoped billing access.
+- Adjusted live eval assertions to focus on protocol facts rather than
+  provider phrasing for remote MCP approval flows: the suite now treats the
+  approval ID, remote tool call, arguments, output, auth/session forwarding,
+  and secret redaction as authoritative, while final assistant text is only an
+  auxiliary signal.
+- Verification completed:
+  - `node --check` passed for `src/bridge/local_organization_usage.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`,
+    `scripts/prune-runtime-state.mjs`, and `test/server.test.js`;
+  - focused Organization usage tests passed 2/2;
+  - affected Chat/Completions/Embeddings/Moderations/Audio/Images/usage tests
+    passed 55/55.
+  - `npm test` passed 212/212;
+  - `npm run eval:protocol` passed 2/2;
+  - `npm run smoke:bridge` returned a completed `bridge-ok` response;
+  - focused live `organization-usage-costs` passed 1/1 after fixing the eval
+    case to send the configured model;
+  - `node scripts/eval-harness.mjs --suite bridge-regression --timeout-ms
+    180000 --output output/bridge-regression-latest.json` passed 108/108
+    against the live DeepSeek-backed bridge with average latency 1293 ms, p95
+    3283 ms, and total usage 24,945 tokens;
+  - `npm run smoke:ui -- --timeout-ms 180000` passed against
+    `https://opencodexapp.aialra.online`, covering page navigation, sidebar
+    controls, project creation/reopen/cleanup, browser upload, conversation
+    submission/reload, completed-turn actions, and generated image artifacts
+    with no browser console errors;
+  - systemd reported `aialra-opencodexapp-app-server.service`,
+    `aialra-opencodexapp-bridge.service`, and
+    `aialra-opencodexapp-web.service` active; bridge `/healthz` returned OK
+    with provider base `https://api.deepseek.com` and default model
+    `deepseek-v4-pro`; the public domain returned HTTP 200;
+  - storage check: `/` was 92% used, but this project remained small
+    (`state` 40M, `output` 4.6M, app data 136K, app logs 30M). Runtime prune
+    scanned 14 targets, selected 2 old UI screenshots, and with `--apply`
+    deleted both candidates without errors; local Organization usage events
+    scanned 281 files and selected 0.
+- Secret handling: no API keys, account credentials, provider headers, prompt
+  text, message content, file bodies, or local deployment env files were added
+  to the repository. The ledger hashes bearer/API-key values before storing an
+  API-key dimension.
+
 ## 2026-06-15 - Local Organization usage and costs compatibility
 
 - Used the official OpenAI OpenAPI specs through the developer-docs MCP for:

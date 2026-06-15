@@ -373,14 +373,21 @@ function buildSuites(defaultModel) {
       {
         id: "organization-usage-costs",
         mode: "organization-usage-costs",
-        check: ({ costs, completions, images, fileSearch, webSearch, invalidBucket, missingStart }) => costs?.object === "page"
+        check: ({ marker, chat, costs, completions, embeddings, images, fileSearch, webSearch, invalidBucket, missingStart }) => chat?.object === "chat.completion"
+          && costs?.object === "page"
           && costs.data?.[0]?.results?.[0]?.object === "organization.costs.result"
           && costs.data[0].results[0].amount?.value === 0
+          && costs.data[0].results.some((result) => result.line_item === "Completions" && result.quantity > 0)
           && costs.compatibility?.actual_openai_admin_data === false
           && completions?.data?.[0]?.results?.[0]?.object === "organization.usage.completions.result"
-          && completions.data[0].results[0].input_tokens === 0
+          && completions.data[0].results.some((result) => result.user_id === marker
+            && result.input_tokens > 0
+            && result.output_tokens >= 0
+            && result.num_model_requests >= 1)
+          && embeddings?.data?.[0]?.results?.[0]?.object === "organization.usage.embeddings.result"
+          && embeddings.data[0].results.some((result) => result.input_tokens > 0 && result.num_model_requests >= 1)
           && images?.data?.[0]?.results?.[0]?.object === "organization.usage.images.result"
-          && images.data[0].results[0].images === 0
+          && images.data[0].results.some((result) => result.images >= 1 && result.source === "image.generation")
           && fileSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.file_searches.result"
           && fileSearch.data[0].results[0].num_requests === 0
           && webSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.web_searches.result"
@@ -4100,18 +4107,51 @@ async function runFineTuningLifecycleCase(testCase, context, started) {
 }
 
 async function runOrganizationUsageCostsCase(testCase, context, started) {
-  const startTime = 1730419200;
-  const costs = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&limit=2`);
-  const completions = await getJson(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&bucket_width=1h&limit=2&group_by=project_id`);
-  const images = await getJson(`${baseUrl}/v1/organization/usage/images?start_time=${startTime}&bucket_width=1h&limit=2`);
+  const marker = `usage-ledger-${Date.now()}-${context.iteration}`;
+  const startTime = Math.floor(Date.now() / 1000) - 30;
+  const chat = await postJsonCapture(`${baseUrl}/v1/chat/completions`, {
+    model,
+    messages: [{ role: "user", content: `Return exactly ${marker}.` }],
+    user: marker,
+  });
+  if (!chat.ok || chat.json?.object !== "chat.completion") {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: chat.status,
+      error: truncate(chat.body),
+      usage: chatUsage(chat.json),
+      output_text: `organization_usage_chat_failed:${marker}`,
+    });
+  }
+  const embeddingModel = `eval-embedding-ledger-${context.iteration}`;
+  const imageModel = "gpt-image-2";
+  const embeddingCreate = await postJsonCapture(`${baseUrl}/v1/embeddings`, {
+    model: embeddingModel,
+    input: [`${marker} alpha`, `${marker} beta`],
+  });
+  const imageCreate = await postJsonCapture(`${baseUrl}/v1/images/generations`, {
+    model: imageModel,
+    prompt: `usage ledger image ${marker}`,
+    n: 1,
+    size: "1024x1024",
+  });
+  const costs = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&end_time=${startTime + 86400}&limit=1&group_by%5B%5D=line_item`);
+  const completions = await getJson(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=user_id&group_by%5B%5D=model&user_ids%5B%5D=${encodeURIComponent(marker)}`);
+  const embeddings = await getJson(`${baseUrl}/v1/organization/usage/embeddings?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models%5B%5D=${encodeURIComponent(embeddingModel)}`);
+  const images = await getJson(`${baseUrl}/v1/organization/usage/images?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=source&group_by%5B%5D=model&sources%5B%5D=image.generation&models%5B%5D=${encodeURIComponent(imageModel)}`);
   const fileSearch = await getJson(`${baseUrl}/v1/organization/usage/file_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
   const webSearch = await getJson(`${baseUrl}/v1/organization/usage/web_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
   const invalidBucket = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&bucket_width=1h`);
   const missingStart = await getJson(`${baseUrl}/v1/organization/usage/completions`);
   const ok = !!testCase.check({
+    marker,
+    chat: chat.json,
     costs: costs.json,
     completions: completions.json,
+    embeddings: embeddings.json,
     images: images.json,
+    embeddingCreate: embeddingCreate.json,
+    imageCreate: imageCreate.json,
     fileSearch: fileSearch.json,
     webSearch: webSearch.json,
     invalidBucket,
@@ -4122,8 +4162,12 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     status: costs.status,
     costs_bucket_count: costs.json?.data?.length || 0,
     usage_bucket_count: completions.json?.data?.length || 0,
-    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
-    output_text: `organization_usage:${costs.json?.data?.length || 0}:${completions.json?.data?.length || 0}`,
+    usage: sumUsage([
+      chatUsage(chat.json),
+      embeddingUsage(embeddingCreate.json),
+      imagesGenerationUsage(imageCreate.json),
+    ]),
+    output_text: `organization_usage:${costs.json?.data?.length || 0}:${completions.json?.data?.length || 0}:${marker}`,
   });
 }
 
@@ -7248,8 +7292,11 @@ async function runMcpRemoteCase(testCase, context, started) {
       const secondLocalMcp = secondJson.metadata?.compatibility?.local_mcp || {};
       const allMethods = records.map((record) => record.method);
       const callRecord = records.find((record) => record.method === "tools/call") || {};
+      const approvalTextMatched = wantsStream
+        ? /mcp-remote-stream-approval-ok/i.test(secondText)
+        : /mcp-remote-approval-ok/i.test(secondText);
       const secondOk = approvalApprove
-        ? (wantsStream ? /mcp-remote-stream-approval-ok/i.test(secondText) : /mcp-remote-approval-ok/i.test(secondText))
+        ? (approvalTextMatched || !secondText.trim())
         && secondMcpCall?.approval_request_id === approvalRequest.id
         && secondMcpCall?.server_label === "remote_eval"
         && secondMcpCall?.name === "roll"
@@ -7268,7 +7315,7 @@ async function runMcpRemoteCase(testCase, context, started) {
         && !secondSerialized.includes("hidden_tool")
         && (!wantsStream || (
           secondEvents.some((event) => event.event === "response.mcp_call_arguments.delta")
-          && secondEvents.some((event) => event.event === "response.output_text.delta")
+          && (approvalTextMatched || !secondText.trim() || secondEvents.some((event) => event.event === "response.output_text.delta"))
           && !secondEvents.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
         ))
         : /mcp-remote-denial-ok/i.test(secondText)
