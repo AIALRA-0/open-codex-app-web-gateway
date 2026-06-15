@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Uploads Intermediate Part Data Pruning
+
+- Tightened Uploads runtime storage behavior for the `/srv/aialra/apps`
+  deployment constraint. The current OpenAI Uploads API surface exposes create
+  Upload, add Parts, complete Upload, and cancel Upload; it does not expose a
+  public Part-content retrieval endpoint. After completion, the created File is
+  the platform-visible byte-preserving object.
+- Added default cleanup of intermediate Upload Part `.bin` files when an Upload
+  reaches a terminal local state:
+  - `completed`: File bytes are created first, then intermediate Part bytes are
+    removed while Part metadata, per-Part SHA-256 values, completed checksum
+    metadata, and cleanup statistics remain in `upload.json`;
+  - `cancelled`: existing Part bytes are removed after the Upload is marked
+    cancelled;
+  - `expired`: existing Part bytes are removed when an expired pending Upload is
+    detected and persisted as `status:"expired"`.
+- Added `CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA=false|true`. The default is
+  `false` for disk safety; set it to `true` only for temporary debugging when
+  intermediate Part byte files must be retained.
+- Security/storage boundary: uploaded content bytes remain outside Git; terminal
+  Upload state keeps only metadata/checksum/cleanup records after pruning.
+  Provider credentials, Authorization headers, and API keys are not written to
+  Git-tracked files.
+- Validation:
+  - `node --check` passed for `src/bridge/local_uploads.js`,
+    `src/bridge/server.js`, and `test/server.test.js`.
+  - `node --test test/server.test.js --test-name-pattern "Uploads API"`
+    passed through the server suite (182/182 tests), including completed,
+    cancelled, and expired Upload Part data pruning plus explicit
+    `uploadRetainPartData` retention behavior.
+  - Full `npm test` passed 222/222 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; it returned `active`, and
+    local `/healthz` returned `ok:true` with DeepSeek provider base
+    `https://api.deepseek.com` and default model `deepseek-v4-pro`.
+  - Deployed direct Upload completion validation passed without a model call:
+    created a two-Part Upload, completed it, verified the created File content
+    stayed byte-exact, verified both intermediate Part `.bin` files were
+    removed, and confirmed `part_data_cleanup` recorded two deleted Parts,
+    45 deleted bytes, and no errors.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors; the
+    `local-upload-workdirs` target still bounds old Upload workdirs.
+  - Public HTTPS entrypoint returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Storage check: repo path 112 MB,
+    `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 6.7 GB
+    available at 97% usage.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+
 ## 2026-06-16 Uploads Expiration Persistence
 
 - Tightened the local Uploads lifecycle against the official Uploads surface:

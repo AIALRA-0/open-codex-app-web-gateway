@@ -296,6 +296,9 @@ function loadConfig(overrides = {}) {
     1024,
     OFFICIAL_UPLOAD_PART_MAX_BYTES,
   );
+  const uploadRetainPartData = Object.prototype.hasOwnProperty.call(overrides, "uploadRetainPartData")
+    ? !!overrides.uploadRetainPartData
+    : parseBoolean(process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA, false);
   const requestTimeoutMs = overrides.requestTimeoutMs
     || numberFromEnv("CODEXCOMPAT_REQUEST_TIMEOUT_MS", 10 * 60 * 1000, 5000, 60 * 60 * 1000);
   return {
@@ -377,6 +380,7 @@ function loadConfig(overrides = {}) {
     uploadStateDir: process.env.CODEXCOMPAT_UPLOAD_STATE_DIR || path.join(stateDir, "local-uploads"),
     uploadMaxBytes,
     uploadMaxPartBytes,
+    uploadRetainPartData,
     shellProvider: process.env.CODEXCOMPAT_SHELL_PROVIDER || "local",
     shellStateDir: process.env.CODEXCOMPAT_SHELL_STATE_DIR || path.join(stateDir, "local-containers"),
     shellCommandTimeoutMs: numberFromEnv("CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS", 10 * 1000, 1000, 120 * 1000),

@@ -14,6 +14,7 @@ class LocalUploadStore {
     this.dir = path.resolve(config.uploadStateDir || path.join(config.stateDir || process.cwd(), "local-uploads"));
     this.maxUploadBytes = config.uploadMaxBytes || 64 * 1024 * 1024;
     this.maxPartBytes = config.uploadMaxPartBytes || OFFICIAL_UPLOAD_PART_MAX_BYTES;
+    this.retainPartData = config.uploadRetainPartData === true;
   }
 
   createUpload(body = {}) {
@@ -153,6 +154,7 @@ class LocalUploadStore {
       status: "completed",
       completed_at: nowSeconds(),
     };
+    const partDataCleanup = this.cleanupPartData(upload.id, body.part_ids);
     this.writeJson(this.uploadJsonPath(upload.id), {
       ...record,
       upload: completed,
@@ -162,6 +164,7 @@ class LocalUploadStore {
         value: checksum,
       },
       completed_part_checksums: orderedPartChecksums,
+      part_data_cleanup: partDataCleanup,
     });
     return publicUpload(completed, file);
   }
@@ -180,9 +183,11 @@ class LocalUploadStore {
       status: "cancelled",
       cancelled_at: nowSeconds(),
     };
+    const partDataCleanup = this.cleanupPartData(upload.id, record.part_ids || []);
     this.writeJson(this.uploadJsonPath(upload.id), {
       ...record,
       upload: cancelled,
+      part_data_cleanup: partDataCleanup,
     });
     return publicUpload(cancelled);
   }
@@ -214,11 +219,49 @@ class LocalUploadStore {
       status: "expired",
       expired_at: nowSeconds(),
     };
+    const partDataCleanup = this.cleanupPartData(upload.id, record.part_ids || []);
     this.writeJson(this.uploadJsonPath(upload.id), {
       ...record,
       upload: expired,
+      part_data_cleanup: partDataCleanup,
     });
     return expired;
+  }
+
+  cleanupPartData(uploadId, partIds = []) {
+    const uniquePartIds = Array.from(new Set((partIds || []).map((partId) => safeId(partId))));
+    if (this.retainPartData) {
+      return {
+        retained: true,
+        reason: "upload_retain_part_data",
+        part_count: uniquePartIds.length,
+      };
+    }
+    const cleanup = {
+      retained: false,
+      pruned_at: nowSeconds(),
+      part_count: uniquePartIds.length,
+      deleted_count: 0,
+      deleted_bytes: 0,
+      errors: [],
+    };
+    for (const partId of uniquePartIds) {
+      const filePath = this.partDataPath(uploadId, partId);
+      try {
+        const stat = fs.statSync(filePath);
+        fs.rmSync(filePath, { force: true });
+        cleanup.deleted_count += 1;
+        cleanup.deleted_bytes += stat.size;
+      } catch (error) {
+        if (error?.code === "ENOENT") continue;
+        cleanup.errors.push({
+          part_id: partId,
+          code: error?.code || "cleanup_failed",
+          message: String(error?.message || error),
+        });
+      }
+    }
+    return cleanup;
   }
 
   uploadsDir() {

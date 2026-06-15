@@ -85,6 +85,10 @@ function readUploadRecordForTest(stateDir, uploadId) {
   return JSON.parse(fs.readFileSync(uploadPath, "utf8"));
 }
 
+function uploadPartDataPathForTest(stateDir, uploadId, partId) {
+  return path.join(stateDir, "local-uploads", "uploads", uploadId, "parts", `${partId}.bin`);
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -8908,6 +8912,13 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     assert.equal(completed.file.metadata.upload_checksum_algorithm, "sha256");
     assert.equal(completed.file.metadata.upload_sha256, fullSha256);
     assert.equal(completed.file.metadata.upload_part_count, "2");
+    assert.equal(fs.existsSync(uploadPartDataPathForTest(stateDir, upload.id, partA.id)), false);
+    assert.equal(fs.existsSync(uploadPartDataPathForTest(stateDir, upload.id, partB.id)), false);
+    const completedRecord = readUploadRecordForTest(stateDir, upload.id);
+    assert.equal(completedRecord.part_data_cleanup.retained, false);
+    assert.equal(completedRecord.part_data_cleanup.deleted_count, 2);
+    assert.equal(completedRecord.part_data_cleanup.deleted_bytes, Buffer.byteLength(fullContent, "utf8"));
+    assert.equal(completedRecord.part_data_cleanup.errors.length, 0);
 
     const contentResponse = await fetch(`${baseUrl}/v1/files/${completed.file.id}/content`);
     assert.equal(contentResponse.status, 200);
@@ -8953,9 +8964,20 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     });
     assert.equal(cancelUploadResponse.status, 200);
     const cancelUpload = await cancelUploadResponse.json();
+    const cancelPartResponse = await fetch(`${baseUrl}/v1/uploads/${cancelUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "x",
+    });
+    assert.equal(cancelPartResponse.status, 200);
+    const cancelPart = await cancelPartResponse.json();
     const cancelResponse = await fetch(`${baseUrl}/v1/uploads/${cancelUpload.id}/cancel`, { method: "POST" });
     assert.equal(cancelResponse.status, 200);
     assert.equal((await cancelResponse.json()).status, "cancelled");
+    assert.equal(fs.existsSync(uploadPartDataPathForTest(stateDir, cancelUpload.id, cancelPart.id)), false);
+    const cancelledRecord = readUploadRecordForTest(stateDir, cancelUpload.id);
+    assert.equal(cancelledRecord.part_data_cleanup.deleted_count, 1);
+    assert.equal(cancelledRecord.part_data_cleanup.deleted_bytes, 1);
     const afterCancelPart = await fetch(`${baseUrl}/v1/uploads/${cancelUpload.id}/parts`, {
       method: "POST",
       headers: { "content-type": "text/plain" },
@@ -9091,8 +9113,60 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     });
     assert.equal(expiredComplete.status, 400);
     assert.equal((await expiredComplete.json()).error.code, "upload_expired");
-    assert.equal(readUploadRecordForTest(stateDir, expiredCompleteUpload.id).upload.status, "expired");
+    const expiredCompleteRecord = readUploadRecordForTest(stateDir, expiredCompleteUpload.id);
+    assert.equal(expiredCompleteRecord.upload.status, "expired");
+    assert.equal(expiredCompleteRecord.part_data_cleanup.deleted_count, 1);
+    assert.equal(expiredCompleteRecord.part_data_cleanup.deleted_bytes, 1);
+    assert.equal(fs.existsSync(uploadPartDataPathForTest(stateDir, expiredCompleteUpload.id, expiredCompletePart.id)), false);
   });
+});
+
+test("local Uploads API can retain terminal Part bytes when configured", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local Upload retention");
+  }, async ({ bridgeAddress, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const content = "retain upload part bytes";
+    const createResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "retain-part.txt",
+        purpose: "user_data",
+        bytes: Buffer.byteLength(content, "utf8"),
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const upload = await createResponse.json();
+
+    const partResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: content,
+    });
+    assert.equal(partResponse.status, 200);
+    const part = await partResponse.json();
+
+    const completeResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [part.id] }),
+    });
+    assert.equal(completeResponse.status, 200);
+    const completed = await completeResponse.json();
+    assert.equal(completed.status, "completed");
+    assert.equal(fs.existsSync(uploadPartDataPathForTest(stateDir, upload.id, part.id)), true);
+
+    const record = readUploadRecordForTest(stateDir, upload.id);
+    assert.equal(record.part_data_cleanup.retained, true);
+    assert.equal(record.part_data_cleanup.reason, "upload_retain_part_data");
+    assert.equal(record.part_data_cleanup.part_count, 1);
+
+    const contentResponse = await fetch(`${baseUrl}/v1/files/${completed.file.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    assert.equal(await contentResponse.text(), content);
+  }, { uploadRetainPartData: true });
 });
 
 test("local Uploads and Files preserve binary bytes for PDF input_file extraction", async () => {
@@ -17436,6 +17510,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousChatImageInputMode = process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   const previousChatAudioInputMode = process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   const previousChatFileInputMode = process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
+  const previousUploadRetainPartData = process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
@@ -17444,6 +17519,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
+  delete process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
@@ -17454,6 +17530,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(deepseekConfig.chatImageInputMode, "text");
     assert.equal(deepseekConfig.chatAudioInputMode, "text");
     assert.equal(deepseekConfig.chatFileInputMode, "text");
+    assert.equal(deepseekConfig.uploadRetainPartData, false);
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com", uploadRetainPartData: true }).uploadRetainPartData, true);
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
@@ -17491,6 +17569,9 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
       loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields,
       ["include_usage", "provider_extra"],
     );
+
+    process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA = "true";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).uploadRetainPartData, true);
   } finally {
     if (previousServiceTier === undefined) delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
     else process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER = previousServiceTier;
@@ -17508,6 +17589,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = previousChatAudioInputMode;
     if (previousChatFileInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
     else process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = previousChatFileInputMode;
+    if (previousUploadRetainPartData === undefined) delete process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
+    else process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA = previousUploadRetainPartData;
   }
 });
 

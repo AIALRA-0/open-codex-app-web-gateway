@@ -176,6 +176,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_UPLOAD_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-uploads` | Local Uploads API intermediate state path; keep outside Git. Runtime pruning covers bounded Upload workdirs, and completed Files carry local SHA-256 metadata for auditability |
 | `CODEXCOMPAT_UPLOAD_MAX_BYTES` | same as `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | Maximum local Upload size before completion into a File; capped at OpenAI's 8 GB Upload limit but defaults small for `/srv/aialra/apps` disk safety |
 | `CODEXCOMPAT_UPLOAD_MAX_PART_BYTES` | min(64 MB, upload max) | Maximum local Upload Part size; capped at OpenAI's 64 MB Part limit |
+| `CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA` | `false` | Set to true only for temporary debugging; by default terminal Uploads prune intermediate Part `.bin` files after File creation, cancellation, or expiration while keeping metadata/checksums |
 | `CODEXCOMPAT_SHELL_PROVIDER` | `local` | Local Responses `shell` / `code_interpreter` adapter provider. Use `disabled` to leave it unsupported |
 | `CODEXCOMPAT_SHELL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-containers` | Local container workspace/artifact path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_SHELL_COMMAND_TIMEOUT_MS` | `10000` | Per-command local shell timeout |
