@@ -438,6 +438,80 @@ function buildSuites(defaultModel) {
           && missingUser.json?.error?.code === "organization_user_not_found",
       },
       {
+        id: "organization-roles-groups",
+        mode: "organization-roles-groups",
+        check: ({
+          role,
+          roles,
+          updatedRole,
+          invalidRole,
+          group,
+          groups,
+          updatedGroup,
+          projectUser,
+          groupUser,
+          groupUsers,
+          fetchedGroupUser,
+          userRole,
+          userRoles,
+          fetchedUserRole,
+          groupRole,
+          groupRoles,
+          fetchedGroupRole,
+          deletedUserRole,
+          deletedGroupRole,
+          deletedGroupUser,
+          deletedRole,
+          deletedGroup,
+          missingRole,
+          missingGroup,
+        }) => role?.object === "role"
+          && role.id?.startsWith("role_")
+          && role.permissions?.includes("api.groups.read")
+          && roles?.object === "list"
+          && roles.next === null
+          && roles.data?.some((entry) => entry.id === role.id)
+          && updatedRole?.name === "Bridge Eval Group Operator"
+          && updatedRole?.permissions?.length === 1
+          && invalidRole?.status === 400
+          && invalidRole.json?.error?.code === "invalid_role_permissions"
+          && group?.object === "group"
+          && group.id?.startsWith("group_")
+          && groups?.object === "list"
+          && groups.data?.some((entry) => entry.id === group.id)
+          && updatedGroup?.name === "Bridge Eval Group Updated"
+          && projectUser?.object === "organization.project.user"
+          && groupUser?.object === "group.user"
+          && groupUser.user_id === projectUser.id
+          && groupUsers?.data?.some((entry) => entry.id === projectUser.id)
+          && fetchedGroupUser?.id === projectUser.id
+          && fetchedGroupUser.user_type === "user"
+          && userRole?.object === "user.role"
+          && userRole.role?.id === role.id
+          && userRoles?.data?.some((entry) => entry.id === role.id
+            && entry.assignment_sources?.[0]?.principal_type === "user")
+          && fetchedUserRole?.id === role.id
+          && groupRole?.object === "group.role"
+          && groupRole.role?.id === role.id
+          && groupRoles?.data?.some((entry) => entry.id === role.id
+            && entry.assignment_sources?.[0]?.principal_type === "group")
+          && fetchedGroupRole?.id === role.id
+          && deletedUserRole?.object === "user.role.deleted"
+          && deletedUserRole.deleted === true
+          && deletedGroupRole?.object === "group.role.deleted"
+          && deletedGroupRole.deleted === true
+          && deletedGroupUser?.object === "group.user.deleted"
+          && deletedGroupUser.deleted === true
+          && deletedRole?.object === "role.deleted"
+          && deletedRole.deleted === true
+          && deletedGroup?.object === "group.deleted"
+          && deletedGroup.deleted === true
+          && missingRole?.status === 404
+          && missingRole.json?.error?.code === "organization_role_not_found"
+          && missingGroup?.status === 404
+          && missingGroup.json?.error?.code === "organization_group_not_found",
+      },
+      {
         id: "organization-project-admin",
         mode: "organization-project-admin",
         check: ({
@@ -3155,6 +3229,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-users-invites") {
       return await runOrganizationUsersInvitesCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-roles-groups") {
+      return await runOrganizationRolesGroupsCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-admin") {
       return await runOrganizationProjectAdminCase(testCase, context, started);
     }
@@ -3706,6 +3783,110 @@ async function runOrganizationUsersInvitesCase(testCase, context, started) {
     invite_id: invite.json?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_users_invites:${projectUser.json?.id || "missing"}:${invite.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationRolesGroupsCase(testCase, context, started) {
+  const marker = `bridge-rbac-${Date.now()}-${context.iteration}`;
+  const role = await postJsonCapture(`${baseUrl}/v1/organization/roles`, {
+    role_name: `Bridge Eval Group Manager ${marker}`,
+    description: "Manage local eval groups",
+    permissions: ["api.groups.read", "api.groups.write"],
+  });
+  if (!role.ok || !role.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: role.status,
+      error: truncate(role.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const roleId = encodeURIComponent(role.json.id);
+  const roles = await getJson(`${baseUrl}/v1/organization/roles?limit=20`);
+  const updatedRole = await postJsonCapture(`${baseUrl}/v1/organization/roles/${roleId}`, {
+    role_name: "Bridge Eval Group Operator",
+    permissions: ["api.groups.read"],
+    description: null,
+  });
+  const invalidRole = await postJsonCapture(`${baseUrl}/v1/organization/roles`, {
+    role_name: "Bridge Eval Invalid Role",
+    permissions: [],
+  });
+  const group = await postJsonCapture(`${baseUrl}/v1/organization/groups`, {
+    name: `Bridge Eval Group ${marker}`,
+  });
+  const groupId = encodeURIComponent(group.json?.id || "missing_group");
+  const groups = await getJson(`${baseUrl}/v1/organization/groups?limit=20`);
+  const updatedGroup = await postJsonCapture(`${baseUrl}/v1/organization/groups/${groupId}`, {
+    name: "Bridge Eval Group Updated",
+  });
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval RBAC Project ${marker}`,
+  });
+  const projectId = encodeURIComponent(project.json?.id || "missing_project");
+  const projectUser = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users`, {
+    user_id: `user_${marker.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+    email: "bridge-rbac-eval@example.com",
+    name: "Bridge Eval RBAC User",
+    role: "member",
+  });
+  const userId = encodeURIComponent(projectUser.json?.id || "missing_user");
+  const groupUser = await postJsonCapture(`${baseUrl}/v1/organization/groups/${groupId}/users`, {
+    user_id: projectUser.json?.id || "missing_user",
+  });
+  const groupUsers = await getJson(`${baseUrl}/v1/organization/groups/${groupId}/users?limit=20`);
+  const fetchedGroupUser = await getJson(`${baseUrl}/v1/organization/groups/${groupId}/users/${userId}`);
+  const userRole = await postJsonCapture(`${baseUrl}/v1/organization/users/${userId}/roles`, {
+    role_id: role.json.id,
+  });
+  const userRoles = await getJson(`${baseUrl}/v1/organization/users/${userId}/roles?limit=20`);
+  const fetchedUserRole = await getJson(`${baseUrl}/v1/organization/users/${userId}/roles/${roleId}`);
+  const groupRole = await postJsonCapture(`${baseUrl}/v1/organization/groups/${groupId}/roles`, {
+    role_id: role.json.id,
+  });
+  const groupRoles = await getJson(`${baseUrl}/v1/organization/groups/${groupId}/roles?limit=20`);
+  const fetchedGroupRole = await getJson(`${baseUrl}/v1/organization/groups/${groupId}/roles/${roleId}`);
+  const deletedUserRoleRaw = await deleteJson(`${baseUrl}/v1/organization/users/${userId}/roles/${roleId}`);
+  const deletedGroupRoleRaw = await deleteJson(`${baseUrl}/v1/organization/groups/${groupId}/roles/${roleId}`);
+  const deletedGroupUserRaw = await deleteJson(`${baseUrl}/v1/organization/groups/${groupId}/users/${userId}`);
+  const deletedRoleRaw = await deleteJson(`${baseUrl}/v1/organization/roles/${roleId}`);
+  const deletedGroupRaw = await deleteJson(`${baseUrl}/v1/organization/groups/${groupId}`);
+  const missingRole = await getJson(`${baseUrl}/v1/organization/roles/${roleId}`);
+  const missingGroup = await getJson(`${baseUrl}/v1/organization/groups/${groupId}`);
+  const ok = !!testCase.check({
+    role: role.json,
+    roles: roles.json,
+    updatedRole: updatedRole.json,
+    invalidRole,
+    group: group.json,
+    groups: groups.json,
+    updatedGroup: updatedGroup.json,
+    projectUser: projectUser.json,
+    groupUser: groupUser.json,
+    groupUsers: groupUsers.json,
+    fetchedGroupUser: fetchedGroupUser.json,
+    userRole: userRole.json,
+    userRoles: userRoles.json,
+    fetchedUserRole: fetchedUserRole.json,
+    groupRole: groupRole.json,
+    groupRoles: groupRoles.json,
+    fetchedGroupRole: fetchedGroupRole.json,
+    deletedUserRole: parseJsonish(deletedUserRoleRaw.body),
+    deletedGroupRole: parseJsonish(deletedGroupRoleRaw.body),
+    deletedGroupUser: parseJsonish(deletedGroupUserRaw.body),
+    deletedRole: parseJsonish(deletedRoleRaw.body),
+    deletedGroup: parseJsonish(deletedGroupRaw.body),
+    missingRole,
+    missingGroup,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: role.status,
+    role_id: role.json.id,
+    group_id: group.json?.id || null,
+    user_id: projectUser.json?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_roles_groups:${role.json.id}:${group.json?.id || "missing"}`,
   });
 }
 

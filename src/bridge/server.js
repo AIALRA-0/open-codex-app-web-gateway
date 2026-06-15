@@ -8245,6 +8245,166 @@ function handleOrganizationUsage(res, kind, url) {
   sendJson(res, 200, createOrganizationUsagePage(kind, url));
 }
 
+async function handleOrganizationRoleCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization role request body must be a JSON object", {
+      code: "invalid_organization_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createOrganizationRole(body));
+}
+
+function handleOrganizationRolesList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listOrganizationRoles(),
+    url,
+    "asc",
+    1000,
+    1000,
+  ));
+}
+
+function handleOrganizationRoleGet(res, organizationAdminStore, roleId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationRole(roleId));
+}
+
+async function handleOrganizationRoleUpdate(req, res, organizationAdminStore, roleId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization role update body must be a JSON object", {
+      code: "invalid_organization_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationRole(roleId, body));
+}
+
+function handleOrganizationRoleDelete(res, organizationAdminStore, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationRole(roleId));
+}
+
+async function handleOrganizationGroupCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization group request body must be a JSON object", {
+      code: "invalid_organization_group_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createOrganizationGroup(body));
+}
+
+function handleOrganizationGroupsList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listOrganizationGroups(),
+    url,
+    "asc",
+    100,
+    1000,
+  ));
+}
+
+function handleOrganizationGroupGet(res, organizationAdminStore, groupId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationGroup(groupId));
+}
+
+async function handleOrganizationGroupUpdate(req, res, organizationAdminStore, groupId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization group update body must be a JSON object", {
+      code: "invalid_organization_group_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationGroup(groupId, body));
+}
+
+function handleOrganizationGroupDelete(res, organizationAdminStore, groupId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationGroup(groupId));
+}
+
+async function handleOrganizationGroupUserCreate(req, res, organizationAdminStore, groupId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization group user request body must be a JSON object", {
+      code: "invalid_organization_group_user_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.addOrganizationGroupUser(groupId, body));
+}
+
+function handleOrganizationGroupUsersList(res, organizationAdminStore, groupId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listOrganizationGroupUsers(groupId),
+    url,
+    "asc",
+    20,
+    1000,
+  ));
+}
+
+function handleOrganizationGroupUserGet(res, organizationAdminStore, groupId, userId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationGroupUser(groupId, userId));
+}
+
+function handleOrganizationGroupUserDelete(res, organizationAdminStore, groupId, userId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationGroupUser(groupId, userId));
+}
+
+async function handleOrganizationUserRoleCreate(req, res, organizationAdminStore, userId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization user role request body must be a JSON object", {
+      code: "invalid_organization_user_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.assignOrganizationUserRole(userId, body));
+}
+
+function handleOrganizationUserRolesList(res, organizationAdminStore, userId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listOrganizationUserRoles(userId),
+    url,
+    "asc",
+    20,
+    1000,
+  ));
+}
+
+function handleOrganizationUserRoleGet(res, organizationAdminStore, userId, roleId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationUserRole(userId, roleId));
+}
+
+function handleOrganizationUserRoleDelete(res, organizationAdminStore, userId, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationUserRole(userId, roleId));
+}
+
+async function handleOrganizationGroupRoleCreate(req, res, organizationAdminStore, groupId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization group role request body must be a JSON object", {
+      code: "invalid_organization_group_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.assignOrganizationGroupRole(groupId, body));
+}
+
+function handleOrganizationGroupRolesList(res, organizationAdminStore, groupId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listOrganizationGroupRoles(groupId),
+    url,
+    "asc",
+    20,
+    1000,
+  ));
+}
+
+function handleOrganizationGroupRoleGet(res, organizationAdminStore, groupId, roleId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationGroupRole(groupId, roleId));
+}
+
+function handleOrganizationGroupRoleDelete(res, organizationAdminStore, groupId, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationGroupRole(groupId, roleId));
+}
+
 async function handleOrganizationInviteCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -9518,6 +9678,33 @@ function paginateListWithDefaultOrder(items, url, order, fallbackLimit = 20, max
     result.has_more = true;
   }
   return result;
+}
+
+function paginateNextListWithDefaultOrder(items, url, order, fallbackLimit = 20, maxLimit = 1000) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  return paginateNextList(items, localUrl, fallbackLimit, maxLimit);
+}
+
+function paginateNextList(items, url, fallbackLimit = 20, maxLimit = 1000) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const limit = parseLimit(url.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    has_more: data.length > page.length,
+    next: data.length > page.length ? page.at(-1)?.id || null : null,
+  };
 }
 
 function paginateList(items, url) {
@@ -11867,6 +12054,106 @@ function createServer(config = loadConfig()) {
         return;
       }
 
+      if (url.pathname === "/v1/organization/roles") {
+        if (req.method === "GET") {
+          handleOrganizationRolesList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationRoleCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationRoleRoute = url.pathname.match(/^\/v1\/organization\/roles\/([^/]+)$/);
+      if (organizationRoleRoute) {
+        const roleId = decodeURIComponent(organizationRoleRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationRoleGet(res, organizationAdminStore, roleId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationRoleUpdate(req, res, organizationAdminStore, roleId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationRoleDelete(res, organizationAdminStore, roleId);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/organization/groups") {
+        if (req.method === "GET") {
+          handleOrganizationGroupsList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationGroupCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationGroupUserRoute = url.pathname.match(/^\/v1\/organization\/groups\/([^/]+)\/users(?:\/([^/]+))?$/);
+      if (organizationGroupUserRoute) {
+        const groupId = decodeURIComponent(organizationGroupUserRoute[1]);
+        const userId = organizationGroupUserRoute[2] ? decodeURIComponent(organizationGroupUserRoute[2]) : "";
+        if (!userId && req.method === "GET") {
+          handleOrganizationGroupUsersList(res, organizationAdminStore, groupId, url);
+          return;
+        }
+        if (!userId && req.method === "POST") {
+          await handleOrganizationGroupUserCreate(req, res, organizationAdminStore, groupId);
+          return;
+        }
+        if (userId && req.method === "GET") {
+          handleOrganizationGroupUserGet(res, organizationAdminStore, groupId, userId);
+          return;
+        }
+        if (userId && req.method === "DELETE") {
+          handleOrganizationGroupUserDelete(res, organizationAdminStore, groupId, userId);
+          return;
+        }
+      }
+
+      const organizationGroupRoleRoute = url.pathname.match(/^\/v1\/organization\/groups\/([^/]+)\/roles(?:\/([^/]+))?$/);
+      if (organizationGroupRoleRoute) {
+        const groupId = decodeURIComponent(organizationGroupRoleRoute[1]);
+        const roleId = organizationGroupRoleRoute[2] ? decodeURIComponent(organizationGroupRoleRoute[2]) : "";
+        if (!roleId && req.method === "GET") {
+          handleOrganizationGroupRolesList(res, organizationAdminStore, groupId, url);
+          return;
+        }
+        if (!roleId && req.method === "POST") {
+          await handleOrganizationGroupRoleCreate(req, res, organizationAdminStore, groupId);
+          return;
+        }
+        if (roleId && req.method === "GET") {
+          handleOrganizationGroupRoleGet(res, organizationAdminStore, groupId, roleId);
+          return;
+        }
+        if (roleId && req.method === "DELETE") {
+          handleOrganizationGroupRoleDelete(res, organizationAdminStore, groupId, roleId);
+          return;
+        }
+      }
+
+      const organizationGroupRoute = url.pathname.match(/^\/v1\/organization\/groups\/([^/]+)$/);
+      if (organizationGroupRoute) {
+        const groupId = decodeURIComponent(organizationGroupRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationGroupGet(res, organizationAdminStore, groupId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationGroupUpdate(req, res, organizationAdminStore, groupId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationGroupDelete(res, organizationAdminStore, groupId);
+          return;
+        }
+      }
+
       if (url.pathname === "/v1/organization/invites") {
         if (req.method === "GET") {
           handleOrganizationInvitesList(res, organizationAdminStore, url);
@@ -11894,6 +12181,28 @@ function createServer(config = loadConfig()) {
       if (url.pathname === "/v1/organization/users") {
         if (req.method === "GET") {
           handleOrganizationUsersList(res, organizationAdminStore, url);
+          return;
+        }
+      }
+
+      const organizationUserRoleRoute = url.pathname.match(/^\/v1\/organization\/users\/([^/]+)\/roles(?:\/([^/]+))?$/);
+      if (organizationUserRoleRoute) {
+        const userId = decodeURIComponent(organizationUserRoleRoute[1]);
+        const roleId = organizationUserRoleRoute[2] ? decodeURIComponent(organizationUserRoleRoute[2]) : "";
+        if (!roleId && req.method === "GET") {
+          handleOrganizationUserRolesList(res, organizationAdminStore, userId, url);
+          return;
+        }
+        if (!roleId && req.method === "POST") {
+          await handleOrganizationUserRoleCreate(req, res, organizationAdminStore, userId);
+          return;
+        }
+        if (roleId && req.method === "GET") {
+          handleOrganizationUserRoleGet(res, organizationAdminStore, userId, roleId);
+          return;
+        }
+        if (roleId && req.method === "DELETE") {
+          handleOrganizationUserRoleDelete(res, organizationAdminStore, userId, roleId);
           return;
         }
       }

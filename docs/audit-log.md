@@ -4369,6 +4369,100 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Organization roles and groups compatibility
+
+- Used official OpenAI sources for the next Organization RBAC/admin slice:
+  - OpenAPI spec for `/v1/organization/roles` documents list/create shapes,
+    `role` objects, non-empty permissions, predefined-role flags, and
+    NextCursorPage pagination;
+  - OpenAPI spec for `/v1/organization/groups` documents list/create shapes,
+    `group` objects, `is_scim_managed`, and cursor pagination;
+  - OpenAI Node SDK generated Organization roles resource documents
+    create/retrieve/update/list/delete methods and `role.deleted`;
+  - OpenAI Node SDK generated Organization groups, group users, group roles,
+    and user roles resources document group CRUD, group membership CRUD, direct
+    user role assignments, direct group role assignments, and the
+    `group.user`, `user.role`, and `group.role` response families.
+- Extended the local file-backed Organization admin compatibility layer:
+  - `GET/POST /v1/organization/roles` and
+    `GET/POST/DELETE /v1/organization/roles/{role_id}` now manage local custom
+    roles with de-duplicated permissions, `resource_type:"api.organization"`,
+    predefined-role guardrails, and `role.deleted`;
+  - `GET/POST /v1/organization/groups` and
+    `GET/POST/DELETE /v1/organization/groups/{group_id}` now manage local
+    non-SCIM groups with `group_type:"group"` and `is_scim_managed:false`;
+  - `GET/POST /v1/organization/groups/{group_id}/users` plus
+    `GET/DELETE /v1/organization/groups/{group_id}/users/{user_id}` manage
+    local group memberships for existing local organization users;
+  - `GET/POST /v1/organization/users/{user_id}/roles` plus
+    `GET/DELETE /v1/organization/users/{user_id}/roles/{role_id}` manage
+    direct user role assignments;
+  - `GET/POST /v1/organization/groups/{group_id}/roles` plus
+    `GET/DELETE /v1/organization/groups/{group_id}/roles/{role_id}` manage
+    direct group role assignments;
+  - deleting an organization role removes local user/group assignments that
+    reference it, deleting an organization group removes its local memberships
+    and assignments, and deleting an organization user now removes direct role
+    assignments plus group memberships.
+- Current boundary: this closes another class of Organization admin/RBAC SDK
+  and UI 404s for Chat Completions-backed deployments. These records are local
+  protocol metadata only; the bridge still does not enforce RBAC authorization,
+  sync groups or roles to provider identity systems, manage SCIM, or implement
+  the remaining Organization families such as admin API keys, audit logs,
+  certificates, data retention, spend alerts, project groups, model
+  permissions, or hosted-tool permissions.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies role create/list/retrieve/update/
+    delete, invalid empty-permission errors, group create/list/retrieve/update/
+    delete, group user membership, direct user role assignment, direct group
+    role assignment, missing assignment errors, delete-marker shapes, and zero
+    upstream provider calls;
+  - live `bridge-regression` now includes `organization-roles-groups`, covering
+    the same lifecycle against the deployed DeepSeek-backed bridge with zero
+    provider token usage.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Organization unit tests passed 5/5.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-roles-groups`: passed 1/1 against
+    `deepseek-v4-pro`, latency 673 ms, output
+    `organization_roles_groups:role_...:group_...`, and zero provider token
+    usage.
+  - `npm test`: passed 205/205.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1226 ms, P95 latency 1278 ms, and total usage 99
+    tokens.
+  - `npm run eval:bridge -- --timeout-ms 180000`: passed 102/102 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1300 ms, P95 latency
+    3499 ms, and total usage 24960 tokens. The suite now includes
+    `organization-roles-groups`.
+  - `npm run smoke:bridge`: passed with `output_text:"bridge-ok"`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online`, exercised sidebar/page navigation,
+    project dialog, host upload verification, prompt send, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project create/reopen/cleanup, and reported no browser console errors or
+    warnings.
+  - Service check: app-server, bridge, and web services were all `active`;
+    `https://opencodexapp.aialra.online` returned HTTP 200.
+  - Space check after the run: `/` was 171G used of 193G, 23G available, 89%
+    used; repo `state` was 28M, `output` was 4.4M,
+    `/srv/aialra/data/opencodexapp` was 136K, and
+    `/srv/aialra/logs/opencodexapp` was 29M.
+  - Runtime prune dry-run selected one old UI screenshot; apply deleted one
+    file, 85079 bytes, with zero errors.
+- Updated compatibility/evaluation/deployment docs to list the new
+  Organization roles/groups/user-role/group-role/group-membership endpoints,
+  source references, live eval command, and state-directory boundaries.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, or usable synthetic project key values were added to
+  the repository. The local service-account compatibility key prefix remains
+  `oc_local_key_`, never `sk-`, and is not persisted.
+
 ## 2026-06-15 - Local Organization users and invites compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

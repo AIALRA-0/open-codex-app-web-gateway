@@ -11835,6 +11835,254 @@ test("Organization users and invites manage local admin lifecycle", async () => 
   });
 });
 
+test("Organization roles and groups manage local memberships and assignments", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization roles/groups compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const roleResponse = await fetch(`${baseUrl}/v1/organization/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role_name: "Bridge Group Manager",
+        description: "Manage local compatibility groups",
+        permissions: ["api.groups.read", "api.groups.write", "api.groups.read"],
+      }),
+    });
+    assert.equal(roleResponse.status, 200);
+    const role = await roleResponse.json();
+    assert.equal(role.object, "role");
+    assert.match(role.id, /^role_/);
+    assert.equal(role.name, "Bridge Group Manager");
+    assert.deepEqual(role.permissions, ["api.groups.read", "api.groups.write"]);
+    assert.equal(role.predefined_role, false);
+    assert.equal(role.resource_type, "api.organization");
+
+    const roles = await fetch(`${baseUrl}/v1/organization/roles?limit=20`);
+    assert.equal(roles.status, 200);
+    const rolesJson = await roles.json();
+    assert.equal(rolesJson.object, "list");
+    assert.equal(rolesJson.next, null);
+    assert.equal(rolesJson.data[0].id, role.id);
+
+    const fetchedRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`);
+    assert.equal(fetchedRole.status, 200);
+    assert.equal((await fetchedRole.json()).description, "Manage local compatibility groups");
+
+    const updatedRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role_name: "Bridge Group Operator",
+        permissions: ["api.groups.read"],
+        description: null,
+      }),
+    });
+    assert.equal(updatedRole.status, 200);
+    const updatedRoleJson = await updatedRole.json();
+    assert.equal(updatedRoleJson.name, "Bridge Group Operator");
+    assert.equal(updatedRoleJson.description, null);
+    assert.deepEqual(updatedRoleJson.permissions, ["api.groups.read"]);
+
+    const invalidRole = await fetch(`${baseUrl}/v1/organization/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_name: "Invalid Role", permissions: [] }),
+    });
+    assert.equal(invalidRole.status, 400);
+    assert.equal((await invalidRole.json()).error.code, "invalid_role_permissions");
+
+    const groupResponse = await fetch(`${baseUrl}/v1/organization/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Support Team" }),
+    });
+    assert.equal(groupResponse.status, 200);
+    const group = await groupResponse.json();
+    assert.equal(group.object, "group");
+    assert.match(group.id, /^group_/);
+    assert.equal(group.name, "Bridge Support Team");
+    assert.equal(group.group_type, "group");
+    assert.equal(group.is_scim_managed, false);
+
+    const groups = await fetch(`${baseUrl}/v1/organization/groups?limit=20`);
+    assert.equal(groups.status, 200);
+    const groupsJson = await groups.json();
+    assert.equal(groupsJson.object, "list");
+    assert.equal(groupsJson.next, null);
+    assert.equal(groupsJson.data[0].id, group.id);
+
+    const fetchedGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`);
+    assert.equal(fetchedGroup.status, 200);
+    assert.equal((await fetchedGroup.json()).name, "Bridge Support Team");
+
+    const updatedGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Support Ops" }),
+    });
+    assert.equal(updatedGroup.status, 200);
+    assert.equal((await updatedGroup.json()).name, "Bridge Support Ops");
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Role Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const projectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_role_member",
+        email: "bridge-role-member@example.com",
+        name: "Bridge Role Member",
+        role: "member",
+      }),
+    });
+    assert.equal(projectUserResponse.status, 200);
+    const projectUser = await projectUserResponse.json();
+
+    const groupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_id: projectUser.id }),
+    });
+    assert.equal(groupUser.status, 200);
+    assert.deepEqual(await groupUser.json(), {
+      object: "group.user",
+      group_id: group.id,
+      user_id: projectUser.id,
+    });
+
+    const groupUsers = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users?limit=20`);
+    assert.equal(groupUsers.status, 200);
+    const groupUsersJson = await groupUsers.json();
+    assert.equal(groupUsersJson.object, "list");
+    assert.equal(groupUsersJson.data[0].id, projectUser.id);
+    assert.equal(groupUsersJson.data[0].email, "bridge-role-member@example.com");
+    assert.equal(groupUsersJson.data[0].name, "Bridge Role Member");
+
+    const fetchedGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/${projectUser.id}`);
+    assert.equal(fetchedGroupUser.status, 200);
+    const fetchedGroupUserJson = await fetchedGroupUser.json();
+    assert.equal(fetchedGroupUserJson.id, projectUser.id);
+    assert.equal(fetchedGroupUserJson.user_type, "user");
+    assert.equal(fetchedGroupUserJson.is_service_account, false);
+
+    const userRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: role.id }),
+    });
+    assert.equal(userRole.status, 200);
+    const userRoleJson = await userRole.json();
+    assert.equal(userRoleJson.object, "user.role");
+    assert.equal(userRoleJson.role.id, role.id);
+    assert.equal(userRoleJson.user.id, projectUser.id);
+
+    const userRoles = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles?limit=20`);
+    assert.equal(userRoles.status, 200);
+    const userRolesJson = await userRoles.json();
+    assert.equal(userRolesJson.object, "list");
+    assert.equal(userRolesJson.data[0].id, role.id);
+    assert.equal(userRolesJson.data[0].assignment_sources[0].principal_type, "user");
+
+    const fetchedUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${role.id}`);
+    assert.equal(fetchedUserRole.status, 200);
+    assert.equal((await fetchedUserRole.json()).permissions[0], "api.groups.read");
+
+    const groupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: role.id }),
+    });
+    assert.equal(groupRole.status, 200);
+    const groupRoleJson = await groupRole.json();
+    assert.equal(groupRoleJson.object, "group.role");
+    assert.equal(groupRoleJson.role.id, role.id);
+    assert.equal(groupRoleJson.group.id, group.id);
+
+    const groupRoles = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles?limit=20`);
+    assert.equal(groupRoles.status, 200);
+    const groupRolesJson = await groupRoles.json();
+    assert.equal(groupRolesJson.object, "list");
+    assert.equal(groupRolesJson.data[0].id, role.id);
+    assert.equal(groupRolesJson.data[0].assignment_sources[0].principal_type, "group");
+
+    const fetchedGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles/${role.id}`);
+    assert.equal(fetchedGroupRole.status, 200);
+    assert.equal((await fetchedGroupRole.json()).name, "Bridge Group Operator");
+
+    const missingGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/user_missing`);
+    assert.equal(missingGroupUser.status, 404);
+    assert.equal((await missingGroupUser.json()).error.code, "organization_group_user_not_found");
+
+    const missingRoleAssignment = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/role_missing`);
+    assert.equal(missingRoleAssignment.status, 404);
+    assert.equal((await missingRoleAssignment.json()).error.code, "organization_user_role_not_found");
+
+    const deletedUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${role.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedUserRole.status, 200);
+    assert.deepEqual(await deletedUserRole.json(), {
+      object: "user.role.deleted",
+      deleted: true,
+    });
+
+    const deletedGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles/${role.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedGroupRole.status, 200);
+    assert.deepEqual(await deletedGroupRole.json(), {
+      object: "group.role.deleted",
+      deleted: true,
+    });
+
+    const deletedGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/${projectUser.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedGroupUser.status, 200);
+    assert.deepEqual(await deletedGroupUser.json(), {
+      object: "group.user.deleted",
+      deleted: true,
+    });
+
+    const deletedRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedRole.status, 200);
+    assert.deepEqual(await deletedRole.json(), {
+      object: "role.deleted",
+      id: role.id,
+      deleted: true,
+    });
+
+    const deletedGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedGroup.status, 200);
+    assert.deepEqual(await deletedGroup.json(), {
+      object: "group.deleted",
+      id: group.id,
+      deleted: true,
+    });
+
+    const missingRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`);
+    assert.equal(missingRole.status, 404);
+    assert.equal((await missingRole.json()).error.code, "organization_role_not_found");
+
+    const missingGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`);
+    assert.equal(missingGroup.status, 404);
+    assert.equal((await missingGroup.json()).error.code, "organization_group_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization projects manage local service accounts and redacted API keys", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization project admin compatibility should not call upstream provider");

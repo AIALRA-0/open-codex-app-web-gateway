@@ -136,6 +136,10 @@ class LocalOrganizationAdminStore {
     fs.mkdirSync(this.projectResourcesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationUsersDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationInvitesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationRolesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationGroupsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationUserRolesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationGroupResourcesDir(), { recursive: true, mode: 0o700 });
   }
 
   projectsDir() {
@@ -148,6 +152,22 @@ class LocalOrganizationAdminStore {
 
   organizationInvitesDir() {
     return path.join(this.dir, "organization_invites");
+  }
+
+  organizationRolesDir() {
+    return path.join(this.dir, "organization_roles");
+  }
+
+  organizationGroupsDir() {
+    return path.join(this.dir, "organization_groups");
+  }
+
+  organizationUserRolesDir() {
+    return path.join(this.dir, "organization_user_roles");
+  }
+
+  organizationGroupResourcesDir() {
+    return path.join(this.dir, "organization_group_resources");
   }
 
   projectResourcesDir() {
@@ -170,6 +190,51 @@ class LocalOrganizationAdminStore {
     const clean = safeId(inviteId);
     if (!clean) return null;
     return path.join(this.organizationInvitesDir(), `${clean}.json`);
+  }
+
+  organizationRolePath(roleId) {
+    const clean = safeId(roleId);
+    if (!clean) return null;
+    return path.join(this.organizationRolesDir(), `${clean}.json`);
+  }
+
+  organizationGroupPath(groupId) {
+    const clean = safeId(groupId);
+    if (!clean) return null;
+    return path.join(this.organizationGroupsDir(), `${clean}.json`);
+  }
+
+  organizationUserRoleDir(userId) {
+    const clean = safeId(userId);
+    if (!clean) return null;
+    return path.join(this.organizationUserRolesDir(), clean);
+  }
+
+  organizationUserRolePath(userId, roleId) {
+    const clean = safeId(roleId);
+    const dir = this.organizationUserRoleDir(userId);
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  organizationGroupResourceDir(groupId, resource) {
+    const clean = safeId(groupId);
+    if (!clean) return null;
+    return path.join(this.organizationGroupResourcesDir(), clean, resource);
+  }
+
+  organizationGroupUserPath(groupId, userId) {
+    const clean = safeId(userId);
+    const dir = this.organizationGroupResourceDir(groupId, "users");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  organizationGroupRolePath(groupId, roleId) {
+    const clean = safeId(roleId);
+    const dir = this.organizationGroupResourceDir(groupId, "roles");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
   }
 
   projectResourceDir(projectId, resource) {
@@ -204,6 +269,355 @@ class LocalOrganizationAdminStore {
     const dir = this.projectResourceDir(projectId, "rate_limits");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
+  }
+
+  createOrganizationRole(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.role_name);
+    if (!name) {
+      throw organizationAdminError("role_name is required", {
+        code: "missing_required_parameter",
+        param: "role_name",
+      });
+    }
+    const permissions = this.normalizeRolePermissions(request.permissions);
+    const now = nowSeconds();
+    const role = {
+      id: `role_${randomToken(14)}`,
+      object: "role",
+      name,
+      description: optionalNullableString(request.description) ?? null,
+      permissions,
+      predefined_role: false,
+      resource_type: "api.organization",
+      created_at: now,
+      updated_at: now,
+      compatibility: localCompatibility("organization_role_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationRolePath(role.id), role);
+    this.cleanup();
+    return this.organizationRoleProjection(role);
+  }
+
+  listOrganizationRoles() {
+    return this.listJsonFiles(this.organizationRolesDir())
+      .sort(compareCreatedThenIdAsc)
+      .map((role) => this.organizationRoleProjection(role));
+  }
+
+  getOrganizationRole(roleId) {
+    const role = this.getRequiredOrganizationRole(roleId);
+    return this.organizationRoleProjection(role);
+  }
+
+  updateOrganizationRole(roleId, body = {}) {
+    const role = this.getRequiredOrganizationRole(roleId);
+    if (role.predefined_role) {
+      throw organizationAdminError("predefined organization roles cannot be updated", {
+        code: "predefined_role_update_not_supported",
+        param: "role_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.role_name);
+    if (name) role.name = name;
+    if (request.description !== undefined) role.description = optionalNullableString(request.description);
+    if (request.permissions !== undefined && request.permissions !== null) {
+      role.permissions = this.normalizeRolePermissions(request.permissions);
+    }
+    role.updated_at = nowSeconds();
+    role.compatibility = {
+      ...(isPlainObject(role.compatibility) ? role.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.organizationRolePath(role.id), role);
+    return this.organizationRoleProjection(role);
+  }
+
+  deleteOrganizationRole(roleId) {
+    const role = this.getRequiredOrganizationRole(roleId);
+    if (role.predefined_role) {
+      throw organizationAdminError("predefined organization roles cannot be deleted", {
+        code: "predefined_role_delete_not_supported",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationRolePath(role.id)); } catch {}
+    for (const userRoleDir of this.listOrganizationUserRoleDirs()) {
+      try { fs.unlinkSync(path.join(userRoleDir, `${role.id}.json`)); } catch {}
+    }
+    for (const groupDir of this.listOrganizationGroupResourceDirs()) {
+      try { fs.unlinkSync(path.join(groupDir, "roles", `${role.id}.json`)); } catch {}
+    }
+    return {
+      object: "role.deleted",
+      id: role.id,
+      deleted: true,
+    };
+  }
+
+  createOrganizationGroup(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.name);
+    if (!name) {
+      throw organizationAdminError("name is required", {
+        code: "missing_required_parameter",
+        param: "name",
+      });
+    }
+    const now = nowSeconds();
+    const group = {
+      id: `group_${randomToken(14)}`,
+      object: "group",
+      name,
+      created_at: now,
+      group_type: "group",
+      is_scim_managed: false,
+      compatibility: localCompatibility("organization_group_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationGroupPath(group.id), group);
+    this.cleanup();
+    return clone(group);
+  }
+
+  listOrganizationGroups() {
+    return this.listJsonFiles(this.organizationGroupsDir())
+      .sort(compareCreatedThenIdAsc)
+      .map(clone);
+  }
+
+  getOrganizationGroup(groupId) {
+    return clone(this.getRequiredOrganizationGroup(groupId));
+  }
+
+  updateOrganizationGroup(groupId, body = {}) {
+    const group = this.getRequiredOrganizationGroup(groupId);
+    if (group.is_scim_managed) {
+      throw organizationAdminError("SCIM-managed groups cannot be updated locally", {
+        code: "scim_managed_group_update_not_supported",
+        param: "group_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.name);
+    if (!name) {
+      throw organizationAdminError("name is required", {
+        code: "missing_required_parameter",
+        param: "name",
+      });
+    }
+    group.name = name;
+    group.compatibility = {
+      ...(isPlainObject(group.compatibility) ? group.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.organizationGroupPath(group.id), group);
+    return clone(group);
+  }
+
+  deleteOrganizationGroup(groupId) {
+    const group = this.getRequiredOrganizationGroup(groupId);
+    if (group.is_scim_managed) {
+      throw organizationAdminError("SCIM-managed groups cannot be deleted locally", {
+        code: "scim_managed_group_delete_not_supported",
+        param: "group_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationGroupPath(group.id)); } catch {}
+    this.removeDir(path.join(this.organizationGroupResourcesDir(), group.id));
+    return {
+      object: "group.deleted",
+      id: group.id,
+      deleted: true,
+    };
+  }
+
+  addOrganizationGroupUser(groupId, body = {}) {
+    const group = this.getRequiredOrganizationGroup(groupId);
+    const request = isPlainObject(body) ? body : {};
+    const userId = optionalString(request.user_id);
+    if (!userId) {
+      throw organizationAdminError("user_id is required", {
+        code: "missing_required_parameter",
+        param: "user_id",
+      });
+    }
+    const user = this.getRequiredOrganizationUser(userId);
+    const membership = {
+      id: user.id,
+      group_id: group.id,
+      user_id: user.id,
+      created_at: nowSeconds(),
+      compatibility: localCompatibility("organization_group_user_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationGroupUserPath(group.id, user.id), membership);
+    this.cleanup();
+    return {
+      object: "group.user",
+      group_id: group.id,
+      user_id: user.id,
+    };
+  }
+
+  listOrganizationGroupUsers(groupId) {
+    this.getRequiredOrganizationGroup(groupId);
+    return this.listJsonFiles(this.organizationGroupResourceDir(groupId, "users"))
+      .sort(compareCreatedThenIdAsc)
+      .map((membership) => this.organizationGroupUserProjection(membership.user_id || membership.id));
+  }
+
+  getOrganizationGroupUser(groupId, userId) {
+    this.getRequiredOrganizationGroup(groupId);
+    const membership = this.readJson(this.organizationGroupUserPath(groupId, userId));
+    if (!membership) {
+      throw organizationAdminError(`organization group user not found: ${userId}`, {
+        status: 404,
+        code: "organization_group_user_not_found",
+        param: "user_id",
+      });
+    }
+    return this.organizationGroupUserDetail(membership.user_id || membership.id);
+  }
+
+  deleteOrganizationGroupUser(groupId, userId) {
+    this.getRequiredOrganizationGroup(groupId);
+    const membership = this.readJson(this.organizationGroupUserPath(groupId, userId));
+    if (!membership) {
+      throw organizationAdminError(`organization group user not found: ${userId}`, {
+        status: 404,
+        code: "organization_group_user_not_found",
+        param: "user_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationGroupUserPath(groupId, userId)); } catch {}
+    return {
+      object: "group.user.deleted",
+      deleted: true,
+    };
+  }
+
+  assignOrganizationUserRole(userId, body = {}) {
+    const user = this.getRequiredOrganizationUser(userId);
+    const role = this.getRequiredOrganizationRole(this.requiredRoleId(body));
+    const assignment = {
+      id: role.id,
+      role_id: role.id,
+      principal_id: user.id,
+      principal_type: "user",
+      created_at: nowSeconds(),
+      compatibility: localCompatibility("organization_user_role_assignment_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationUserRolePath(user.id, role.id), assignment);
+    this.cleanup();
+    return {
+      object: "user.role",
+      role: this.organizationRoleProjection(role),
+      user: this.organizationUserProjection(user),
+    };
+  }
+
+  listOrganizationUserRoles(userId) {
+    this.getRequiredOrganizationUser(userId);
+    return this.listJsonFiles(this.organizationUserRoleDir(userId))
+      .sort(compareCreatedThenIdAsc)
+      .map((assignment) => this.organizationRoleAssignmentProjection(assignment));
+  }
+
+  getOrganizationUserRole(userId, roleId) {
+    this.getRequiredOrganizationUser(userId);
+    const assignment = this.readJson(this.organizationUserRolePath(userId, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`organization user role not found: ${roleId}`, {
+        status: 404,
+        code: "organization_user_role_not_found",
+        param: "role_id",
+      });
+    }
+    return this.organizationRoleAssignmentProjection(assignment);
+  }
+
+  deleteOrganizationUserRole(userId, roleId) {
+    this.getRequiredOrganizationUser(userId);
+    const assignment = this.readJson(this.organizationUserRolePath(userId, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`organization user role not found: ${roleId}`, {
+        status: 404,
+        code: "organization_user_role_not_found",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationUserRolePath(userId, roleId)); } catch {}
+    return {
+      object: "user.role.deleted",
+      deleted: true,
+    };
+  }
+
+  assignOrganizationGroupRole(groupId, body = {}) {
+    const group = this.getRequiredOrganizationGroup(groupId);
+    const role = this.getRequiredOrganizationRole(this.requiredRoleId(body));
+    const assignment = {
+      id: role.id,
+      role_id: role.id,
+      principal_id: group.id,
+      principal_type: "group",
+      created_at: nowSeconds(),
+      compatibility: localCompatibility("organization_group_role_assignment_protocol_compatibility", {
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.organizationGroupRolePath(group.id, role.id), assignment);
+    this.cleanup();
+    return {
+      object: "group.role",
+      role: this.organizationRoleProjection(role),
+      group: this.organizationGroupRoleSummary(group),
+    };
+  }
+
+  listOrganizationGroupRoles(groupId) {
+    this.getRequiredOrganizationGroup(groupId);
+    return this.listJsonFiles(this.organizationGroupResourceDir(groupId, "roles"))
+      .sort(compareCreatedThenIdAsc)
+      .map((assignment) => this.organizationRoleAssignmentProjection(assignment));
+  }
+
+  getOrganizationGroupRole(groupId, roleId) {
+    this.getRequiredOrganizationGroup(groupId);
+    const assignment = this.readJson(this.organizationGroupRolePath(groupId, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`organization group role not found: ${roleId}`, {
+        status: 404,
+        code: "organization_group_role_not_found",
+        param: "role_id",
+      });
+    }
+    return this.organizationRoleAssignmentProjection(assignment);
+  }
+
+  deleteOrganizationGroupRole(groupId, roleId) {
+    this.getRequiredOrganizationGroup(groupId);
+    const assignment = this.readJson(this.organizationGroupRolePath(groupId, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`organization group role not found: ${roleId}`, {
+        status: 404,
+        code: "organization_group_role_not_found",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationGroupRolePath(groupId, roleId)); } catch {}
+    return {
+      object: "group.role.deleted",
+      deleted: true,
+    };
   }
 
   createInvite(body = {}) {
@@ -350,6 +764,10 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.organizationUserPath(user.id)); } catch {}
+    this.removeDir(this.organizationUserRoleDir(user.id));
+    for (const groupDir of this.listOrganizationGroupResourceDirs()) {
+      try { fs.unlinkSync(path.join(groupDir, "users", `${user.id}.json`)); } catch {}
+    }
     for (const project of this.listProjects({ includeArchived: true })) {
       try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
     }
@@ -802,6 +1220,136 @@ class LocalOrganizationAdminStore {
     }
   }
 
+  getRequiredOrganizationRole(roleId) {
+    const role = this.readJson(this.organizationRolePath(roleId));
+    if (!role) {
+      throw organizationAdminError(`organization role not found: ${roleId}`, {
+        status: 404,
+        code: "organization_role_not_found",
+        param: "role_id",
+      });
+    }
+    return role;
+  }
+
+  getRequiredOrganizationGroup(groupId) {
+    const group = this.readJson(this.organizationGroupPath(groupId));
+    if (!group) {
+      throw organizationAdminError(`organization group not found: ${groupId}`, {
+        status: 404,
+        code: "organization_group_not_found",
+        param: "group_id",
+      });
+    }
+    return group;
+  }
+
+  getRequiredOrganizationUser(userId) {
+    const user = this.readJson(this.organizationUserPath(userId));
+    if (!user) {
+      throw organizationAdminError(`organization user not found: ${userId}`, {
+        status: 404,
+        code: "organization_user_not_found",
+        param: "user_id",
+      });
+    }
+    return user;
+  }
+
+  normalizeRolePermissions(value) {
+    if (!Array.isArray(value)) {
+      throw organizationAdminError("permissions must be an array", {
+        code: "invalid_role_permissions",
+        param: "permissions",
+      });
+    }
+    const permissions = Array.from(new Set(value.map((permission) => optionalString(permission)).filter(Boolean)));
+    if (!permissions.length) {
+      throw organizationAdminError("permissions must contain at least one permission", {
+        code: "invalid_role_permissions",
+        param: "permissions",
+      });
+    }
+    return permissions;
+  }
+
+  requiredRoleId(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const roleId = optionalString(request.role_id);
+    if (!roleId) {
+      throw organizationAdminError("role_id is required", {
+        code: "missing_required_parameter",
+        param: "role_id",
+      });
+    }
+    return roleId;
+  }
+
+  organizationRoleProjection(role) {
+    return {
+      id: role.id,
+      object: "role",
+      name: role.name,
+      description: role.description ?? null,
+      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
+      predefined_role: role.predefined_role === true,
+      resource_type: role.resource_type || "api.organization",
+      compatibility: isPlainObject(role.compatibility) ? clone(role.compatibility) : undefined,
+    };
+  }
+
+  organizationRoleAssignmentProjection(assignment) {
+    const role = this.getRequiredOrganizationRole(assignment.role_id || assignment.id);
+    return {
+      id: role.id,
+      assignment_sources: [{
+        principal_id: assignment.principal_id,
+        principal_type: assignment.principal_type,
+      }],
+      created_at: assignment.created_at ?? role.created_at ?? null,
+      created_by: null,
+      created_by_user_obj: null,
+      description: role.description ?? null,
+      metadata: null,
+      name: role.name,
+      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
+      predefined_role: role.predefined_role === true,
+      resource_type: role.resource_type || "api.organization",
+      updated_at: role.updated_at ?? null,
+    };
+  }
+
+  organizationGroupUserProjection(userId) {
+    const user = this.getRequiredOrganizationUser(userId);
+    return {
+      id: user.id,
+      email: user.email ?? null,
+      name: user.name ?? "",
+    };
+  }
+
+  organizationGroupUserDetail(userId) {
+    const user = this.getRequiredOrganizationUser(userId);
+    return {
+      id: user.id,
+      email: user.email ?? null,
+      is_service_account: user.is_service_account ?? false,
+      name: user.name ?? "",
+      picture: user.user?.picture ?? null,
+      user_type: "user",
+    };
+  }
+
+  organizationGroupRoleSummary(group) {
+    return {
+      id: group.id,
+      object: "group",
+      name: group.name,
+      created_at: group.created_at,
+      scim_managed: group.is_scim_managed === true,
+    };
+  }
+
   normalizeInviteProjects(projects) {
     if (projects === undefined) return [];
     if (!Array.isArray(projects)) {
@@ -966,10 +1514,30 @@ class LocalOrganizationAdminStore {
 
   cleanup() {
     this.ensureDir();
-    for (const dir of [this.projectsDir(), this.organizationUsersDir(), this.organizationInvitesDir()]) {
+    for (const dir of [
+      this.projectsDir(),
+      this.organizationUsersDir(),
+      this.organizationInvitesDir(),
+      this.organizationRolesDir(),
+      this.organizationGroupsDir(),
+    ]) {
       const files = this.listCleanupEntries(dir);
       for (const entry of files.slice(this.maxRecords)) {
         try { fs.unlinkSync(entry.filePath); } catch {}
+      }
+    }
+    for (const userRoleDir of this.listOrganizationUserRoleDirs()) {
+      const files = this.listCleanupEntries(userRoleDir);
+      for (const entry of files.slice(this.maxRecords)) {
+        try { fs.unlinkSync(entry.filePath); } catch {}
+      }
+    }
+    for (const groupDir of this.listOrganizationGroupResourceDirs()) {
+      for (const resource of ["roles", "users"]) {
+        const files = this.listCleanupEntries(path.join(groupDir, resource));
+        for (const entry of files.slice(this.maxRecords)) {
+          try { fs.unlinkSync(entry.filePath); } catch {}
+        }
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
@@ -979,6 +1547,28 @@ class LocalOrganizationAdminStore {
           try { fs.unlinkSync(entry.filePath); } catch {}
         }
       }
+    }
+  }
+
+  listOrganizationUserRoleDirs() {
+    this.ensureDir();
+    try {
+      return fs.readdirSync(this.organizationUserRolesDir(), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(this.organizationUserRolesDir(), entry.name));
+    } catch {
+      return [];
+    }
+  }
+
+  listOrganizationGroupResourceDirs() {
+    this.ensureDir();
+    try {
+      return fs.readdirSync(this.organizationGroupResourcesDir(), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(this.organizationGroupResourcesDir(), entry.name));
+    } catch {
+      return [];
     }
   }
 
@@ -1005,6 +1595,11 @@ class LocalOrganizationAdminStore {
     } catch {
       return [];
     }
+  }
+
+  removeDir(dir) {
+    if (!dir) return;
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch {}
   }
 }
 
