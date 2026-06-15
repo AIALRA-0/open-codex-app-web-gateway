@@ -122,6 +122,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote `input_file.file_url` fetches |
 | `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR` | `pdftotext` | Uses local Poppler `pdftotext` to extract text-layer content from PDFs; set `disabled` to skip PDFs |
 | `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS` | `10000` | Timeout for each local PDF extraction process |
+| `CODEXCOMPAT_INPUT_FILE_PDF_OCR` | `auto` | When PDF text extraction returns no text, attempts bounded local OCR through `pdftoppm` and `tesseract`; set `disabled` to skip OCR fallback |
+| `CODEXCOMPAT_INPUT_FILE_PDF_OCR_MAX_PAGES` | `3` | Maximum first pages rendered for OCR fallback per PDF |
+| `CODEXCOMPAT_INPUT_FILE_PDF_OCR_DPI` | `150` | Render DPI for OCR fallback, bounded to 72-300 |
+| `CODEXCOMPAT_INPUT_FILE_PDF_OCR_LANGUAGE` | `eng` | Tesseract language selector for OCR fallback |
 | `CODEXCOMPAT_INPUT_IMAGE_PROVIDER` | `local` | Local Responses and Assistants image-file resolver; use `disabled` to leave image file IDs as marker-only compatibility hints |
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES` | `32` | Maximum local image file IDs resolved per upstream Chat request |
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before conversion to a data URL for vision-capable Chat providers |

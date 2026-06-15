@@ -89,6 +89,23 @@ function uploadPartDataPathForTest(stateDir, uploadId, partId) {
   return path.join(stateDir, "local-uploads", "uploads", uploadId, "parts", `${partId}.bin`);
 }
 
+async function withTemporaryExecutableBin(commands, run) {
+  const binDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-test-bin-"));
+  const previousPath = process.env.PATH;
+  try {
+    for (const [name, script] of Object.entries(commands)) {
+      const filePath = path.join(binDir, name);
+      fs.writeFileSync(filePath, script, { mode: 0o700 });
+    }
+    process.env.PATH = `${binDir}${path.delimiter}${previousPath || ""}`;
+    return await run();
+  } finally {
+    if (previousPath === undefined) delete process.env.PATH;
+    else process.env.PATH = previousPath;
+    fs.rmSync(binDir, { recursive: true, force: true });
+  }
+}
+
 async function withMockProvider(handler, run, configOverrides = {}) {
   const requests = [];
   const provider = http.createServer(async (req, res) => {
@@ -9628,6 +9645,83 @@ test("Responses input_file file_id and file_data are extracted for Chat compatib
   });
 });
 
+test("Responses input_file PDF falls back to local OCR when text layer is empty", async () => {
+  await withTemporaryExecutableBin({
+    pdftotext: [
+      "#!/bin/sh",
+      "exit 0",
+      "",
+    ].join("\n"),
+    pdftoppm: [
+      "#!/bin/sh",
+      "prefix=\"\"",
+      "for arg do prefix=\"$arg\"; done",
+      "printf 'fake png bytes' > \"${prefix}-1.png\"",
+      "exit 0",
+      "",
+    ].join("\n"),
+    tesseract: [
+      "#!/bin/sh",
+      "printf 'Scanned PDF OCR says scanned-pdf-ok.\\n'",
+      "exit 0",
+      "",
+    ].join("\n"),
+  }, async () => {
+    await withMockProvider(async (_req, res, call) => {
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
+      assert.match(prompt, /extraction_method: pdftoppm_tesseract_ocr/);
+      assert.match(prompt, /ocr_pages: 1/);
+      assert.match(prompt, /Page 1 OCR:/);
+      assert.match(prompt, /Scanned PDF OCR says scanned-pdf-ok/);
+      assert.doesNotMatch(prompt, /%PDF-1\.4/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_input_file_pdf_ocr",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "scanned-pdf-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 12, completion_tokens: 3, total_tokens: 15 },
+      }));
+    }, async ({ bridgeAddress }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const inlinePdf = tinyPdfBuffer("").toString("base64");
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_file", filename: "scanned.pdf", file_data: `data:application/pdf;base64,${inlinePdf}` },
+              { type: "input_text", text: "Return scanned-pdf-ok." },
+            ],
+          }],
+          store: false,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.output[0].content[0].text, "scanned-pdf-ok");
+      assert.equal(json.metadata.compatibility.local_input_files.status, "completed");
+      assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+      assert.equal(json.metadata.compatibility.local_input_files.failed_count, 0);
+      assert.equal(json.metadata.compatibility.local_input_files.pdf_extracted_count, 1);
+      assert.equal(json.metadata.compatibility.local_input_files.pdf_ocr_extracted_count, 1);
+    }, {
+      inputFilePdfOcr: "tesseract",
+      inputFilePdfOcrMaxPages: 1,
+      inputFilePdfOcrDpi: 72,
+    });
+  });
+});
+
 test("Responses input_file file_url truncates remote files for Chat compatibility", async () => {
   const remoteBody = "Remote URL fixture says url-ok.\n" + "padding ".repeat(80);
   const remote = http.createServer((req, res) => {
@@ -17591,6 +17685,51 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = previousChatFileInputMode;
     if (previousUploadRetainPartData === undefined) delete process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
     else process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA = previousUploadRetainPartData;
+  }
+});
+
+test("loadConfig reads input_file PDF OCR settings", () => {
+  const envNames = [
+    "CODEXCOMPAT_INPUT_FILE_PDF_OCR",
+    "CODEXCOMPAT_INPUT_FILE_PDF_OCR_MAX_PAGES",
+    "CODEXCOMPAT_INPUT_FILE_PDF_OCR_DPI",
+    "CODEXCOMPAT_INPUT_FILE_PDF_OCR_LANGUAGE",
+  ];
+  const previous = new Map(envNames.map((name) => [name, process.env[name]]));
+  for (const name of envNames) delete process.env[name];
+  try {
+    const defaults = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
+    assert.equal(defaults.inputFilePdfOcr, "auto");
+    assert.equal(defaults.inputFilePdfOcrMaxPages, 3);
+    assert.equal(defaults.inputFilePdfOcrDpi, 150);
+    assert.equal(defaults.inputFilePdfOcrLanguage, "eng");
+
+    process.env.CODEXCOMPAT_INPUT_FILE_PDF_OCR = "disabled";
+    process.env.CODEXCOMPAT_INPUT_FILE_PDF_OCR_MAX_PAGES = "5";
+    process.env.CODEXCOMPAT_INPUT_FILE_PDF_OCR_DPI = "200";
+    process.env.CODEXCOMPAT_INPUT_FILE_PDF_OCR_LANGUAGE = "deu+eng";
+    const configured = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
+    assert.equal(configured.inputFilePdfOcr, "disabled");
+    assert.equal(configured.inputFilePdfOcrMaxPages, 5);
+    assert.equal(configured.inputFilePdfOcrDpi, 200);
+    assert.equal(configured.inputFilePdfOcrLanguage, "deu+eng");
+
+    const overridden = loadConfig({
+      providerBaseUrl: "https://api.deepseek.com",
+      inputFilePdfOcr: "tesseract",
+      inputFilePdfOcrMaxPages: 1,
+      inputFilePdfOcrDpi: 72,
+      inputFilePdfOcrLanguage: "spa",
+    });
+    assert.equal(overridden.inputFilePdfOcr, "tesseract");
+    assert.equal(overridden.inputFilePdfOcrMaxPages, 1);
+    assert.equal(overridden.inputFilePdfOcrDpi, 72);
+    assert.equal(overridden.inputFilePdfOcrLanguage, "spa");
+  } finally {
+    for (const [name, value] of previous.entries()) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });
 

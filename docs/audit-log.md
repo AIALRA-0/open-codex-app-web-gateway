@@ -1,5 +1,58 @@
 # Audit Log
 
+## 2026-06-16 Input File PDF OCR Fallback
+
+- Closed another Responses `input_file` compatibility gap for Chat-only
+  providers. Current OpenAI file-input guidance says PDF inputs on
+  vision-capable models are processed with both extracted text and page images;
+  the bridge still cannot make DeepSeek a hosted vision PDF model, but it can
+  now recover text from scanned/image PDFs when local OCR is available.
+- Added optional local PDF OCR fallback after `pdftotext` returns no text:
+  - `pdftoppm` renders only the first bounded pages to temporary PNGs;
+  - `tesseract` extracts OCR text from those page images;
+  - injected prompt metadata uses
+    `extraction_method: pdftoppm_tesseract_ocr` and `ocr_pages`;
+  - `metadata.compatibility.local_input_files.pdf_ocr_extracted_count`
+    records the OCR path while `pdf_extracted_count` continues to count PDF
+    extraction success.
+- Added deployment/configuration knobs:
+  `CODEXCOMPAT_INPUT_FILE_PDF_OCR`, `_MAX_PAGES`, `_DPI`, and `_LANGUAGE`.
+  The default is `auto`; set OCR to `disabled` to keep scanned PDFs as
+  metadata-only failures.
+- Installed the lightweight deployment dependency `tesseract-ocr` on the
+  `/srv/aialra/apps` host so the production bridge can use the new fallback.
+  The install added about 22 MB, and no OCR bytes or uploaded file contents are
+  written to Git-tracked files.
+- Validation:
+  - Official OpenAI docs MCP check confirmed PDF `input_file` processing sends
+    extracted text plus page images for vision-capable models; this bridge
+    change is a local text/OCR compatibility fallback for Chat-only providers.
+  - `node --check` passed for `src/bridge/input_files.js`,
+    `src/bridge/server.js`, and `test/server.test.js`.
+  - `node --test test/server.test.js --test-name-pattern "input_file PDF|input_file file_id|loadConfig reads input_file PDF OCR"`
+    passed through the server suite (184/184 tests), including PDF text-layer
+    extraction, OCR fallback through mocked `pdftotext`/`pdftoppm`/`tesseract`,
+    and OCR config loading.
+  - Full `npm test` passed 224/224 tests.
+  - Real host OCR validation passed without provider calls: generated a tiny
+    image-only PDF, confirmed `pdftotext` produced no meaningful text, then
+    `prepareInputFileContext` extracted `SCANNED PDF OK 2468` with
+    `pdftoppm_tesseract_ocr`, `ocr_pages:1`,
+    `pdf_extracted_count:1`, and `pdf_ocr_extracted_count:1`.
+  - Restarted `aialra-opencodexapp-bridge.service`; it returned `active`, and
+    local `/healthz` returned `ok:true` with DeepSeek provider base
+    `https://api.deepseek.com` and default model `deepseek-v4-pro`.
+  - Public HTTPS entrypoint returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors.
+  - Storage check after OCR package installation: repo path 112 MB,
+    `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 6.4 GB
+    available at 97% usage.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+
 ## 2026-06-16 Uploads Intermediate Part Data Pruning
 
 - Tightened Uploads runtime storage behavior for the `/srv/aialra/apps`

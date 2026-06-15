@@ -52,7 +52,8 @@ function inputFileCompatibility(context) {
       resolved_count: context.files?.filter((file) => file.status === "completed").length || 0,
       failed_count: context.files?.filter((file) => file.status !== "completed").length || 0,
       truncated_count: context.files?.filter((file) => file.truncated).length || 0,
-      pdf_extracted_count: context.files?.filter((file) => file.extraction_method === "pdftotext").length || 0,
+      pdf_extracted_count: context.files?.filter((file) => isPdfExtractionMethod(file.extraction_method)).length || 0,
+      pdf_ocr_extracted_count: context.files?.filter((file) => isPdfOcrExtractionMethod(file.extraction_method)).length || 0,
       office_extracted_count: context.files?.filter((file) => String(file.extraction_method || "").startsWith("ooxml_")).length || 0,
       spreadsheet_extracted_count: context.files?.filter((file) => isSpreadsheetExtractionMethod(file.extraction_method)).length || 0,
     },
@@ -73,6 +74,7 @@ function inputFilePrompt(context) {
       file.file_url ? `file_url: ${file.file_url}` : null,
       file.media_type ? `media_type: ${file.media_type}` : null,
       file.extraction_method ? `extraction_method: ${file.extraction_method}` : null,
+      file.ocr_pages ? `ocr_pages: ${file.ocr_pages}` : null,
       `bytes: ${file.bytes || 0}`,
       `status: ${file.status}`,
       file.truncated ? "truncated: true" : null,
@@ -264,6 +266,7 @@ function fileRecordToInputFile({ source, file_id, file_url, filename, media_type
     content: extracted.content,
     truncated: Boolean(truncated || extracted.truncated),
     ...(extracted.method ? { extraction_method: extracted.method } : {}),
+    ...(extracted.ocr_pages ? { ocr_pages: extracted.ocr_pages } : {}),
     ...(extracted.error ? { error: extracted.error } : {}),
   };
 }
@@ -330,7 +333,11 @@ function extractPdfText(buffer, config = {}) {
     });
 
     if (result.error) {
-      return {
+      return extractPdfOcrText(buffer, config, {
+        fallbackError: result.error.code === "ENOENT"
+          ? "pdftotext is not installed"
+          : `pdftotext failed: ${result.error.message}`,
+      }) || {
         content: "",
         truncated: false,
         error: result.error.code === "ENOENT"
@@ -339,7 +346,9 @@ function extractPdfText(buffer, config = {}) {
       };
     }
     if (result.status !== 0) {
-      return {
+      return extractPdfOcrText(buffer, config, {
+        fallbackError: `pdftotext exited with status ${result.status}${result.stderr ? `: ${String(result.stderr).trim()}` : ""}`,
+      }) || {
         content: "",
         truncated: false,
         error: `pdftotext exited with status ${result.status}${result.stderr ? `: ${String(result.stderr).trim()}` : ""}`,
@@ -351,7 +360,9 @@ function extractPdfText(buffer, config = {}) {
     const truncated = text.length > maxChars;
     if (truncated) text = text.slice(0, maxChars);
     if (!text) {
-      return {
+      return extractPdfOcrText(buffer, config, {
+        fallbackError: "pdftotext returned no extractable text",
+      }) || {
         content: "",
         truncated: false,
         error: "pdftotext returned no extractable text",
@@ -365,6 +376,135 @@ function extractPdfText(buffer, config = {}) {
       // Best-effort cleanup of temporary PDF extraction files.
     }
   }
+}
+
+function extractPdfOcrText(buffer, config = {}, options = {}) {
+  const mode = normalizePdfOcrMode(config.inputFilePdfOcr);
+  const fallbackError = options.fallbackError || "pdftotext returned no extractable text";
+  if (mode === "disabled") return null;
+
+  const workDir = fs.mkdtempSync(path.join(os.tmpdir(), "open-codex-input-pdf-ocr-"));
+  const inputPath = path.join(workDir, "input.pdf");
+  const pagePrefix = path.join(workDir, "page");
+  try {
+    fs.writeFileSync(inputPath, buffer, { mode: 0o600 });
+    const maxPages = Math.max(1, Math.min(Number(config.inputFilePdfOcrMaxPages || 3), 25));
+    const dpi = Math.max(72, Math.min(Number(config.inputFilePdfOcrDpi || 150), 300));
+    const timeoutMs = Math.max(1000, Number(config.inputFilePdfTimeoutMs || 10000));
+    const render = childProcess.spawnSync("pdftoppm", [
+      "-r", String(dpi),
+      "-f", "1",
+      "-l", String(maxPages),
+      "-png",
+      "-q",
+      inputPath,
+      pagePrefix,
+    ], {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024,
+      timeout: timeoutMs,
+      windowsHide: true,
+    });
+
+    if (render.error) {
+      return {
+        content: "",
+        truncated: false,
+        error: `${fallbackError}; PDF OCR skipped: ${render.error.code === "ENOENT"
+          ? "pdftoppm is not installed"
+          : `pdftoppm failed: ${render.error.message}`}`,
+      };
+    }
+    if (render.status !== 0) {
+      return {
+        content: "",
+        truncated: false,
+        error: `${fallbackError}; PDF OCR render failed with status ${render.status}${render.stderr ? `: ${String(render.stderr).trim()}` : ""}`,
+      };
+    }
+
+    const pageImages = fs.readdirSync(workDir)
+      .filter((name) => /^page-\d+\.png$/i.test(name))
+      .sort(naturalCompare)
+      .map((name) => path.join(workDir, name));
+    if (!pageImages.length) {
+      return {
+        content: "",
+        truncated: false,
+        error: `${fallbackError}; PDF OCR render produced no page images`,
+      };
+    }
+
+    const language = normalizeOcrLanguage(config.inputFilePdfOcrLanguage || "eng");
+    const sections = [];
+    for (const [index, imagePath] of pageImages.entries()) {
+      const result = childProcess.spawnSync("tesseract", [
+        imagePath,
+        "stdout",
+        "--psm", "6",
+        "-l", language,
+      ], {
+        encoding: "utf8",
+        maxBuffer: Math.max(1024, Number(config.inputFileMaxTextChars || 200000) * 4),
+        timeout: timeoutMs,
+        windowsHide: true,
+      });
+      if (result.error) {
+        return {
+          content: "",
+          truncated: false,
+          error: `${fallbackError}; PDF OCR skipped: ${result.error.code === "ENOENT"
+            ? "tesseract is not installed"
+            : `tesseract failed: ${result.error.message}`}`,
+        };
+      }
+      if (result.status !== 0) {
+        return {
+          content: "",
+          truncated: false,
+          error: `${fallbackError}; PDF OCR failed with status ${result.status}${result.stderr ? `: ${String(result.stderr).trim()}` : ""}`,
+        };
+      }
+      const pageText = String(result.stdout || "").replace(/\u0000/g, "").trim();
+      if (pageText) sections.push(`Page ${index + 1} OCR:\n${pageText}`);
+    }
+
+    let text = sections.join("\n\n").trim();
+    const maxChars = config.inputFileMaxTextChars || 200000;
+    const truncated = text.length > maxChars;
+    if (truncated) text = text.slice(0, maxChars);
+    if (!text) {
+      return {
+        content: "",
+        truncated: false,
+        error: `${fallbackError}; tesseract returned no OCR text`,
+      };
+    }
+    return {
+      content: text,
+      truncated,
+      method: "pdftoppm_tesseract_ocr",
+      ocr_pages: sections.length,
+    };
+  } finally {
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    } catch {
+      // Best-effort cleanup of temporary PDF OCR files.
+    }
+  }
+}
+
+function normalizePdfOcrMode(value) {
+  const mode = String(value || "auto").trim().toLowerCase();
+  if (["disabled", "none", "off", "false", "0"].includes(mode)) return "disabled";
+  if (["auto", "tesseract", "ocr", "true", "1"].includes(mode)) return "tesseract";
+  return "disabled";
+}
+
+function normalizeOcrLanguage(value) {
+  const normalized = String(value || "eng").replace(/[^\w+.-]/g, "").slice(0, 64);
+  return normalized || "eng";
 }
 
 function extractOfficeText(buffer, extension, mediaType, config = {}) {
@@ -772,6 +912,14 @@ function spreadsheetDelimiter(extension, mediaType = "") {
 
 function isSpreadsheetExtractionMethod(method) {
   return ["ooxml_xlsx", "spreadsheet_csv", "spreadsheet_tsv"].includes(String(method || ""));
+}
+
+function isPdfExtractionMethod(method) {
+  return ["pdftotext", "pdftoppm_tesseract_ocr"].includes(String(method || ""));
+}
+
+function isPdfOcrExtractionMethod(method) {
+  return String(method || "") === "pdftoppm_tesseract_ocr";
 }
 
 function isTextLike(mediaType, extension, buffer) {
