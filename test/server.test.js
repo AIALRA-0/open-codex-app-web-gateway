@@ -15519,6 +15519,109 @@ test("POST /v1/chat/completions extracts direct Chat file content for text provi
   }, { chatFileInputMode: "text" });
 });
 
+test("POST /v1/chat/completions OCRs direct Chat PDF file content for text providers", async () => {
+  await withTemporaryExecutableBin({
+    pdftotext: [
+      "#!/bin/sh",
+      "exit 0",
+      "",
+    ].join("\n"),
+    pdftoppm: [
+      "#!/bin/sh",
+      "prefix=\"\"",
+      "for arg do prefix=\"$arg\"; done",
+      "printf 'fake png bytes' > \"${prefix}-1.png\"",
+      "exit 0",
+      "",
+    ].join("\n"),
+    tesseract: [
+      "#!/bin/sh",
+      "printf 'Direct Chat OCR says chat-scanned-pdf-ok.\\n'",
+      "exit 0",
+      "",
+    ].join("\n"),
+  }, async () => {
+    const inlinePdf = tinyPdfBuffer("").toString("base64");
+    await withMockProvider(async (_req, res, call) => {
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
+      assert.deepEqual(call.body.messages.map((message) => message.role), ["user", "system"]);
+      assert.equal(typeof call.body.messages[0].content, "string");
+      assert.match(call.body.messages[0].content, /Read direct Chat scanned PDF/);
+      assert.match(call.body.messages[0].content, /\[file:inline-chat-scanned\.pdf\]/);
+      assert.doesNotMatch(call.body.messages[0].content, new RegExp(inlinePdf));
+      assert.doesNotMatch(call.body.messages[0].content, /data:application\/pdf/);
+      assert.match(call.body.messages[1].content, /Local Responses input_file compatibility extracted file inputs follow/);
+      assert.match(call.body.messages[1].content, /extraction_method: pdftoppm_tesseract_ocr/);
+      assert.match(call.body.messages[1].content, /ocr_pages: 1/);
+      assert.match(call.body.messages[1].content, /Page 1 OCR:/);
+      assert.match(call.body.messages[1].content, /Direct Chat OCR says chat-scanned-pdf-ok/);
+      assert.doesNotMatch(call.body.messages[1].content, /%PDF-1\.4/);
+
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_direct_file_pdf_ocr",
+        object: "chat.completion",
+        created: 1700000414,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "chat-scanned-pdf-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 20, completion_tokens: 4, total_tokens: 24 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          store: true,
+          metadata: { suite: "direct-chat-file-pdf-ocr" },
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Read direct Chat scanned PDF." },
+              {
+                type: "file",
+                file: {
+                  filename: "inline-chat-scanned.pdf",
+                  file_data: `data:application/pdf;base64,${inlinePdf}`,
+                  mime_type: "application/pdf",
+                },
+              },
+            ],
+          }],
+        }),
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.choices[0].message.content, "chat-scanned-pdf-ok");
+      assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.provider, "text_fallback");
+      assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.mode, "text");
+      assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.file_part_count, 1);
+      assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.inline_file_count, 1);
+      assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.resolved_count, 1);
+      assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.failed_count, 0);
+      assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.pdf_extracted_count, 1);
+      assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.pdf_ocr_extracted_count, 1);
+      assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.deepseek_thinking, "disabled_for_input_files");
+      assert.equal(requests.length, 1);
+
+      const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+      assert.equal(messages.status, 200);
+      const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+      assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "file"]);
+    }, {
+      chatFileInputMode: "text",
+      inputFilePdfOcr: "tesseract",
+      inputFilePdfOcrMaxPages: 1,
+      inputFilePdfOcrDpi: 72,
+    });
+  });
+});
+
 test("POST /v1/chat/completions streams with direct Chat image text fallback", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, true);

@@ -76,6 +76,12 @@ larger agent evaluations.
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 | `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
+PDF `input_file` OCR is covered in mock-provider regression tests for both
+Responses translation and direct Chat passthrough text fallback. These tests
+force empty PDF text-layer extraction and verify the bounded
+`pdftoppm`/`tesseract` path plus `pdf_ocr_extracted_count` metadata before
+larger live or SWE-bench style evaluations are run.
+
 The `assistants-lifecycle` bridge-regression case also checks that
 create-and-run streaming produces `thread.message.delta` text fragments before
 completion. Unit/mock-provider coverage adds streamed Chat tool-call argument

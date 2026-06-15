@@ -1,5 +1,41 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat PDF OCR Regression Coverage
+
+- Extended mock-provider regression coverage from Responses `input_file` OCR to
+  direct `/v1/chat/completions` passthrough file parts. The new test exercises
+  a Chat-native `type:"file"` PDF content part with
+  `CODEXCOMPAT_CHAT_FILE_INPUT_MODE=text`.
+- The test forces an empty PDF text layer, then validates that the shared local
+  input-file fallback renders a bounded page image with `pdftoppm`, extracts
+  OCR text with `tesseract`, injects only safe text context upstream, and never
+  forwards inline base64 PDF bytes to the Chat provider prompt.
+- It asserts direct Chat compatibility metadata under
+  `metadata.compatibility.chat_passthrough`, including
+  `chat_file_inputs.mode:"text"`, `local_input_files.pdf_extracted_count`, and
+  `local_input_files.pdf_ocr_extracted_count`.
+- Updated the evaluation plan to explicitly call out PDF OCR mock-provider
+  coverage for both Responses translation and direct Chat passthrough before
+  larger live or SWE-bench-style evaluations.
+- Validation:
+  - `node --check test/server.test.js scripts/eval-harness.mjs`: passed.
+  - `node --test test/server.test.js --test-name-pattern "direct Chat file|direct Chat PDF|input_file PDF|loadConfig reads input_file PDF OCR"`:
+    passed through the server suite (185/185 tests), including the new direct
+    Chat PDF OCR case.
+  - Full `npm test` passed 225/225 tests.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were all `active`; local bridge
+    `/healthz` on port 12912 returned `ok:true`, and public HTTPS returned
+    HTTP 200.
+  - Storage check: repo path 113 MB, `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 6.0 GB
+    available at 97% usage.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors.
+
 ## 2026-06-16 Input File PDF OCR Fallback
 
 - Closed another Responses `input_file` compatibility gap for Chat-only
