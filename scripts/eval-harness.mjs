@@ -465,6 +465,30 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "assistants-token-budget-incomplete",
+        mode: "assistants-token-budget",
+        request: {
+          model: defaultModel,
+        },
+        check: ({ run, fetchedRun, runs, messages }) => {
+          const budget = run?.metadata?.compatibility?.local_assistants?.token_budget || {};
+          return run?.status === "incomplete"
+            && run?.max_completion_tokens === 1
+            && run?.incomplete_details?.reason === "max_completion_tokens"
+            && Number.isInteger(run?.incomplete_at)
+            && run?.completed_at === null
+            && fetchedRun?.status === "incomplete"
+            && fetchedRun?.incomplete_details?.reason === "max_completion_tokens"
+            && runs?.data?.some((item) => item.id === run.id
+              && item.status === "incomplete"
+              && item.incomplete_details?.reason === "max_completion_tokens")
+            && budget.reason === "max_completion_tokens"
+            && budget.status === "incomplete"
+            && ["finish_reason_length", "usage_exceeded_budget"].includes(budget.trigger)
+            && messages?.data?.some((message) => message.role === "assistant");
+        },
+      },
+      {
         id: "assistants-additional-messages",
         mode: "assistants-additional-messages",
         request: {
@@ -2754,6 +2778,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-truncation") {
       return await runAssistantsTruncationCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-token-budget") {
+      return await runAssistantsTokenBudgetCase(testCase, context, started);
+    }
     if (testCase.mode === "assistants-additional-messages") {
       return await runAssistantsAdditionalMessagesCase(testCase, context, started);
     }
@@ -3331,6 +3358,95 @@ async function runAssistantsTruncationCase(testCase, context, started) {
       dropped_message_count: run.json?.metadata?.compatibility?.local_assistants?.truncation?.dropped_message_count,
       included_message_count: run.json?.metadata?.compatibility?.local_assistants?.truncation?.included_message_count,
       max_prompt_tokens: run.json?.max_prompt_tokens,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        fetchedRun: fetchedRun.json,
+        runs: runs.json,
+        messages: messages.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsTokenBudgetCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  try {
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Return the requested marker and then continue with several words.",
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: "Return assistants-token-budget-live-ok and five extra words.",
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        assistant_id: assistantId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      max_completion_tokens: 1,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(run.body),
+      });
+    }
+
+    const fetchedRun = await getJson(`${baseUrl}/v1/threads/${threadId}/runs/${run.json.id}`);
+    const runs = await getJson(`${baseUrl}/v1/threads/${threadId}/runs?limit=20`);
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const ok = !!testCase.check({
+      assistant: assistant.json,
+      thread: thread.json,
+      run: run.json,
+      fetchedRun: fetchedRun.json,
+      runs: runs.json,
+      messages: messages.json,
+    });
+
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.json?.status || run.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      run_id: run.json?.id,
+      incomplete_reason: run.json?.incomplete_details?.reason,
+      token_budget_trigger: run.json?.metadata?.compatibility?.local_assistants?.token_budget?.trigger,
+      run_count: runs.json?.data?.length || 0,
+      message_count: messages.json?.data?.length || 0,
       usage: assistantsUsage(run.json),
       output_text: assistantMessageTextFromList(messages.json?.data || []),
       error: ok ? undefined : truncate(JSON.stringify({
@@ -6405,10 +6521,22 @@ function assistantMessageTextFromList(messages = []) {
   return messages
     .filter((message) => message?.role === "assistant")
     .map((message) => (message.content || [])
-      .map((part) => part?.text?.value || part?.text || part?.content || "")
+      .map(assistantMessagePartText)
       .join(""))
     .filter(Boolean)
     .join("\n");
+}
+
+function assistantMessagePartText(part) {
+  const value = part?.text?.value ?? part?.text ?? part?.content ?? "";
+  if (value == null) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
 }
 
 function responseUsage(response) {

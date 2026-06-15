@@ -4369,6 +4369,103 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Assistants token budgets and MCP tool choice hardening
+
+- Used the official OpenAI Assistants create-run/create-thread-and-run
+  references to close the next token-budget compatibility gap:
+  - `max_completion_tokens` and `max_prompt_tokens` are documented as
+    best-effort budgets over a Run;
+  - if either budget is exceeded, the hosted Run ends with
+    `status:"incomplete"` and callers should inspect `incomplete_details`.
+- Extended local Chat-backed Assistants Runs:
+  - synchronous Runs now compare aggregate Chat `usage.prompt_tokens` and
+    `usage.completion_tokens` against Run `max_prompt_tokens` and
+    `max_completion_tokens`;
+  - streaming Runs now do the same after reconstructing the streamed Chat
+    completion and also treat length-style Chat `finish_reason` values as
+    `max_completion_tokens` exhaustion when that Run budget is set;
+  - token-budget terminal states now persist `status:"incomplete"`,
+    `incomplete_at`, `incomplete_details.reason`, aggregate `usage`, and
+    compatibility metadata under
+    `metadata.compatibility.local_assistants.token_budget`;
+  - streamed Runs now emit `thread.run.incomplete` instead of
+    `thread.run.completed` for those observed token-budget terminal states.
+- Extended regression coverage:
+  - added unit/mock-provider coverage for synchronous `max_prompt_tokens`
+    and `max_completion_tokens` incomplete Runs;
+  - added unit/mock-provider coverage for streamed
+    `thread.run.incomplete` when Chat ends with `finish_reason:"length"`;
+  - added live bridge-regression case `assistants-token-budget-incomplete`.
+- Hardened remote MCP tool-choice compatibility after the first full live run
+  exposed a flaky `responses-mcp-remote-background-call` failure:
+  - `tools:[{type:"mcp"}]` requests now preserve exact MCP `tool_choice`
+    intent while local MCP tools are reserved from initial Chat translation;
+  - after remote `tools/list` import, the bridge maps exact original MCP tool
+    names such as `roll` to the generated Chat function name when exactly one
+    matching remote MCP tool exists;
+  - ambiguous or missing MCP tool-choice names are recorded and left to normal
+    Chat tool selection rather than forcing the wrong server;
+  - compatibility metadata now records the mapping under
+    `metadata.compatibility.local_mcp.tool_choice`.
+- Updated docs:
+  - compatibility matrix now documents observed Assistants token-budget
+    incomplete mapping and narrows the remaining gap to exact hosted tokenizer
+    accounting before provider calls and async worker scheduling;
+  - compatibility matrix now documents exact MCP `tool_choice` mapping for
+    generated Chat function tools;
+  - evaluation plan now lists the new synchronous, streaming, live Assistants
+    regression coverage, plus the remote MCP forced-tool-choice guard.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/local_mcp.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Assistants API unit tests passed 17/17.
+  - Focused remote MCP unit tests passed 9/9.
+  - `npm test`: passed 194/194.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `assistants-token-budget-incomplete`: passed 1/1 against
+    `deepseek-v4-pro`, latency 1026 ms in the final focused run,
+    `status:"incomplete"`, `incomplete_reason:"max_completion_tokens"`,
+    trigger `finish_reason_length`, and 31 total tokens.
+  - Focused live `responses-mcp-remote-background-call`: passed 1/1 after
+    MCP `tool_choice` mapping, latency 5275 ms, output
+    `mcp-remote-background-call-ok`, status history
+    `in_progress -> completed`, `remote_call_success_count:1`, and observed
+    remote MCP methods `initialize`, `notifications/initialized`,
+    `tools/list`, and `tools/call`.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 91/91,
+    pass rate 1.0, average latency 1328 ms, P95 latency 3446 ms, and total
+    usage 22214 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1031 ms, P95 latency 1154 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering sidebar navigation, core
+    pages, project dialog/upload, prompt submission, completed-turn controls,
+    reload persistence, generated image artifact display, saved project
+    reopen/cleanup, and console error/warning checks; screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T13-42-10-474Z.png`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 1601 runtime
+    candidates, selected 17 old Playwright/UI-smoke artifacts, selected
+    293945 bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted those 17 artifacts, freed
+    293945 bytes, and reported 0 errors.
+  - Final `node --check` passed for `src/bridge/server.js`,
+    `src/bridge/local_mcp.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 37 GB available; `state/` was 23 MB,
+    `output/` was 4.7 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 26 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-11 - Assistants run reasoning effort
 
 - Used official OpenAI docs via the developer-docs MCP:

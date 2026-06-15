@@ -1885,6 +1885,178 @@ test("Assistants API create run applies truncation_strategy and max_prompt_token
   });
 });
 
+test("Assistants API marks synchronous runs incomplete when run token budgets are exceeded", async () => {
+  let providerCalls = 0;
+  await withMockProvider((_req, res, request) => {
+    providerCalls += 1;
+    const promptBudgetCase = providerCalls === 1;
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: promptBudgetCase ? "chatcmpl_assistants_prompt_budget" : "chatcmpl_assistants_completion_budget",
+      object: "chat.completion",
+      created: 1700000004,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: promptBudgetCase ? "assistants-prompt-budget-partial" : "assistants-completion-budget-partial",
+        },
+        finish_reason: "stop",
+      }],
+      usage: promptBudgetCase
+        ? { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 }
+        : { prompt_tokens: 4, completion_tokens: 5, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Return the requested token-budget marker.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const promptThreadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "prompt-budget-case" }],
+      }),
+    });
+    assert.equal(promptThreadResponse.status, 200);
+    const promptThread = await promptThreadResponse.json();
+    const promptRunResponse = await fetch(`${baseUrl}/v1/threads/${promptThread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        max_prompt_tokens: 8,
+        metadata: { suite: "assistants-prompt-budget" },
+      }),
+    });
+    assert.equal(promptRunResponse.status, 200);
+    const promptRun = await promptRunResponse.json();
+    assert.equal(promptRun.status, "incomplete");
+    assert.deepEqual(promptRun.incomplete_details, { reason: "max_prompt_tokens" });
+    assert.equal(promptRun.completed_at, null);
+    assert.ok(Number.isInteger(promptRun.incomplete_at));
+    assert.deepEqual(promptRun.usage, { prompt_tokens: 12, completion_tokens: 1, total_tokens: 13 });
+    assert.equal(promptRun.metadata.compatibility.local_assistants.token_budget.reason, "max_prompt_tokens");
+    assert.equal(promptRun.metadata.compatibility.local_assistants.token_budget.trigger, "usage_exceeded_budget");
+    assert.equal(promptRun.metadata.compatibility.local_assistants.token_budget.max_prompt_tokens, 8);
+
+    const promptMessages = await fetch(`${baseUrl}/v1/threads/${promptThread.id}/messages?order=asc&limit=10`);
+    assert.equal(promptMessages.status, 200);
+    const promptMessagesJson = await promptMessages.json();
+    const promptAssistantMessage = promptMessagesJson.data.find((message) => message.role === "assistant");
+    assert.equal(promptAssistantMessage.content[0].text.value, "assistants-prompt-budget-partial");
+
+    const completionThreadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "completion-budget-case" }],
+      }),
+    });
+    assert.equal(completionThreadResponse.status, 200);
+    const completionThread = await completionThreadResponse.json();
+    const completionRunResponse = await fetch(`${baseUrl}/v1/threads/${completionThread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        max_completion_tokens: 2,
+        metadata: { suite: "assistants-completion-budget" },
+      }),
+    });
+    assert.equal(completionRunResponse.status, 200);
+    const completionRun = await completionRunResponse.json();
+    assert.equal(completionRun.status, "incomplete");
+    assert.deepEqual(completionRun.incomplete_details, { reason: "max_completion_tokens" });
+    assert.equal(completionRun.completed_at, null);
+    assert.ok(Number.isInteger(completionRun.incomplete_at));
+    assert.deepEqual(completionRun.usage, { prompt_tokens: 4, completion_tokens: 5, total_tokens: 9 });
+    assert.equal(completionRun.metadata.compatibility.local_assistants.token_budget.reason, "max_completion_tokens");
+    assert.equal(completionRun.metadata.compatibility.local_assistants.token_budget.trigger, "usage_exceeded_budget");
+    assert.equal(completionRun.metadata.compatibility.local_assistants.token_budget.max_completion_tokens, 2);
+
+    const fetchedCompletionRun = await fetch(`${baseUrl}/v1/threads/${completionThread.id}/runs/${completionRun.id}`);
+    assert.equal(fetchedCompletionRun.status, 200);
+    assert.equal((await fetchedCompletionRun.json()).status, "incomplete");
+
+    const cancelIncompleteRun = await fetch(`${baseUrl}/v1/threads/${completionThread.id}/runs/${completionRun.id}/cancel`, {
+      method: "POST",
+    });
+    assert.equal(cancelIncompleteRun.status, 200);
+    assert.equal((await cancelIncompleteRun.json()).status, "incomplete");
+  });
+});
+
+test("Assistants API streamed runs emit thread.run.incomplete when Chat stops at max_completion_tokens", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.stream, true);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_assistants_stream_incomplete",
+      object: "chat.completion.chunk",
+      created: 1700000004,
+      model: request.body.model,
+      choices: [{ index: 0, delta: { role: "assistant", content: "assistants-stream-budget" }, finish_reason: null }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_assistants_stream_incomplete",
+      object: "chat.completion.chunk",
+      created: 1700000004,
+      model: request.body.model,
+      choices: [{ index: 0, delta: {}, finish_reason: "length" }],
+      usage: { prompt_tokens: 6, completion_tokens: 2, total_tokens: 8 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Stream the token-budget marker.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const streamResponse = await fetch(`${baseUrl}/v1/threads/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        stream: true,
+        max_completion_tokens: 2,
+        thread: { messages: [{ role: "user", content: "stream completion budget" }] },
+      }),
+    });
+    assert.equal(streamResponse.status, 200);
+    const events = parseSseEvents(await streamResponse.text());
+    assert.ok(events.some((event) => event.event === "thread.message.completed"));
+    assert.ok(events.some((event) => event.event === "thread.run.step.completed"));
+    assert.equal(events.some((event) => event.event === "thread.run.completed"), false);
+    const incompleteEvent = events.find((event) => event.event === "thread.run.incomplete");
+    assert.ok(incompleteEvent);
+    assert.equal(incompleteEvent.data.status, "incomplete");
+    assert.deepEqual(incompleteEvent.data.incomplete_details, { reason: "max_completion_tokens" });
+    assert.equal(incompleteEvent.data.metadata.compatibility.local_assistants.token_budget.trigger, "finish_reason_length");
+    assert.deepEqual(incompleteEvent.data.metadata.compatibility.local_assistants.token_budget.finish_reasons, ["length"]);
+    assert.equal(events.at(-1).event, "done");
+    assert.equal(events.at(-1).data, "[DONE]");
+  });
+});
+
 test("Assistants API create run appends additional_messages before upstream Chat", async () => {
   await withMockProvider((_req, res, request) => {
     assert.equal(request.body.tools, undefined);
@@ -4632,7 +4804,10 @@ test("POST /v1/responses executes auto-approved remote MCP tools/call through Ch
       const toolName = call.body.tools[0].function.name;
       assert.match(toolName, /^mcp_remote_call_roll_/);
       assert.equal(call.body.tools[0].function.parameters.properties.diceRollExpression.type, "string");
-      assert.equal(call.body.tool_choice, "auto");
+      assert.deepEqual(call.body.tool_choice, {
+        type: "function",
+        function: { name: toolName },
+      });
       assert.deepEqual(call.body.thinking, { type: "disabled" });
       assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
       res.writeHead(200, { "content-type": "application/json" });
@@ -4674,6 +4849,7 @@ test("POST /v1/responses executes auto-approved remote MCP tools/call through Ch
             require_approval: "never",
             allowed_tools: ["roll"],
           }],
+          tool_choice: { type: "function", name: "roll" },
           max_tool_calls: 2,
           store: false,
         }),
@@ -4699,6 +4875,16 @@ test("POST /v1/responses executes auto-approved remote MCP tools/call through Ch
       assert.equal(json.metadata.compatibility.local_mcp.remote_call_success_count, 1);
       assert.equal(json.metadata.compatibility.local_mcp.remote_call_failed_count, 0);
       assert.equal(json.metadata.compatibility.local_mcp.boundary, "remote_list_tools_and_call_execution");
+      assert.deepEqual(json.metadata.compatibility.local_mcp.tool_choice, {
+        source: "tool_choice",
+        requested_type: "function",
+        requested_name: "roll",
+        match_count: 1,
+        forwarded: true,
+        target: "function",
+        chat_name: requests[0].body.tools[0].function.name,
+        reason: "mcp_tool_choice_mapped",
+      });
       assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
         max_tool_calls: 2,
         used: 2,
@@ -5046,7 +5232,10 @@ test("POST /v1/responses background executes auto-approved remote MCP tools/call
       assert.equal(call.body.tools.length, 1);
       const toolName = call.body.tools[0].function.name;
       assert.match(toolName, /^mcp_background_remote_call_roll_/);
-      assert.equal(call.body.tool_choice, "auto");
+      assert.deepEqual(call.body.tool_choice, {
+        type: "function",
+        function: { name: toolName },
+      });
       assert.deepEqual(call.body.thinking, { type: "disabled" });
       assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
       res.writeHead(200, { "content-type": "application/json" });
@@ -5090,6 +5279,7 @@ test("POST /v1/responses background executes auto-approved remote MCP tools/call
             require_approval: "never",
             allowed_tools: ["roll"],
           }],
+          tool_choice: { type: "function", name: "roll" },
           max_tool_calls: 2,
           store: false,
         }),
@@ -5132,6 +5322,16 @@ test("POST /v1/responses background executes auto-approved remote MCP tools/call
       assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_attempt_count, 1);
       assert.equal(finalJson.metadata.compatibility.local_mcp.remote_call_success_count, 1);
       assert.equal(finalJson.metadata.compatibility.local_mcp.boundary, "remote_list_tools_and_call_execution");
+      assert.deepEqual(finalJson.metadata.compatibility.local_mcp.tool_choice, {
+        source: "tool_choice",
+        requested_type: "function",
+        requested_name: "roll",
+        match_count: 1,
+        forwarded: true,
+        target: "function",
+        chat_name: requests[0].body.tools[0].function.name,
+        reason: "mcp_tool_choice_mapped",
+      });
       assert.deepEqual(finalJson.metadata.compatibility.local_tool_budget, {
         max_tool_calls: 2,
         used: 2,

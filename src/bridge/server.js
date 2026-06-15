@@ -10019,15 +10019,50 @@ async function runAssistantChatTurn({
   }
 
   const usage = assistantRunUsage(upstreamJson?.usage);
+  const aggregateUsage = aggregateAssistantRunUsage(run.usage, usage);
+  const budgetState = assistantRunTokenBudgetState(run, aggregateUsage, upstreamJson);
   const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
   if (toolCalls.length) {
     const step = assistantStore.createToolCallsStep(run, toolCalls, usage);
+    if (budgetState) {
+      const incompleteAt = nowSeconds();
+      const incompleteRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
+        ...existing,
+        status: "incomplete",
+        started_at: existing.started_at || nowSeconds(),
+        expires_at: null,
+        required_action: null,
+        incomplete_at: incompleteAt,
+        incomplete_details: budgetState.incomplete_details,
+        usage: aggregateUsage,
+        metadata: {
+          ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+          compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
+            local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+              ...preparedChat.assistantCompatibility,
+              run_mode: chatOptions.toolOutputs ? "incomplete_submit_tool_outputs" : "incomplete_required_action",
+              token_budget: budgetState.compatibility,
+              tool_call_count: toolCalls.length,
+              ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+            }),
+          }),
+        },
+      }));
+      return {
+        ok: true,
+        thread,
+        initialRun,
+        run: incompleteRun,
+        message: null,
+        step,
+      };
+    }
     const pendingRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
       ...existing,
       status: "requires_action",
       expires_at: existing.expires_at || nowSeconds() + 600,
       required_action: assistantRequiredAction(toolCalls),
-      usage: aggregateAssistantRunUsage(existing.usage, usage),
+      usage: aggregateUsage,
       metadata: {
         ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
         compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
@@ -10060,20 +10095,25 @@ async function runAssistantChatTurn({
     run_id: run.id,
   });
   const step = assistantStore.createMessageCreationStep(run, message.id, usage);
-  const completedAt = nowSeconds();
+  const terminalAt = nowSeconds();
   const completedRun = assistantStore.updateRun(run.thread_id, run.id, {
     ...run,
-    status: "completed",
+    status: budgetState ? "incomplete" : "completed",
     started_at: run.started_at || nowSeconds(),
     expires_at: null,
-    completed_at: completedAt,
-    usage: aggregateAssistantRunUsage(run.usage, usage),
+    completed_at: budgetState ? null : terminalAt,
+    incomplete_at: budgetState ? terminalAt : null,
+    incomplete_details: budgetState?.incomplete_details || null,
+    usage: aggregateUsage,
     metadata: {
       ...(isPlainObject(run.metadata) ? run.metadata : {}),
       compatibility: mergeCompatibility(run.metadata?.compatibility, preparedChat.compatibility, {
         local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
           ...preparedChat.assistantCompatibility,
-          run_mode: chatOptions.toolOutputs ? "submit_tool_outputs" : "synchronous",
+          run_mode: budgetState
+            ? (chatOptions.toolOutputs ? "incomplete_submit_tool_outputs" : "incomplete")
+            : (chatOptions.toolOutputs ? "submit_tool_outputs" : "synchronous"),
+          ...(budgetState ? { token_budget: budgetState.compatibility } : {}),
           ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
         }),
       }),
@@ -10169,6 +10209,8 @@ async function streamAssistantChatTurn({
       usage: streamState.usage,
     };
     const usage = assistantRunUsage(upstreamJson?.usage);
+    const aggregateUsage = aggregateAssistantRunUsage(run.usage, usage);
+    const budgetState = assistantRunTokenBudgetState(run, aggregateUsage, upstreamJson);
     const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
     if (toolCalls.length) {
       completeAssistantTextStreamContext(res, assistantStore, run, streamState);
@@ -10176,12 +10218,41 @@ async function streamAssistantChatTurn({
         ? assistantStore.completeRunStep(run.thread_id, run.id, streamState.toolStep.id, usage, assistantToolCallsStepDetails(toolCalls))
         : assistantStore.createToolCallsStep(run, toolCalls, usage);
       if (step) writeSse(res, "thread.run.step.completed", step);
+      if (budgetState) {
+        const incompleteAt = nowSeconds();
+        const incompleteRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
+          ...existing,
+          status: "incomplete",
+          started_at: existing.started_at || nowSeconds(),
+          expires_at: null,
+          required_action: null,
+          incomplete_at: incompleteAt,
+          incomplete_details: budgetState.incomplete_details,
+          usage: aggregateUsage,
+          metadata: {
+            ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
+            compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
+              local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
+                ...preparedChat.assistantCompatibility,
+                run_mode: chatOptions.toolOutputs ? "streaming_incomplete_submit_tool_outputs" : "streaming_incomplete_required_action",
+                token_budget: budgetState.compatibility,
+                tool_call_count: toolCalls.length,
+                streaming_supported: "chat_stream_delta_relay",
+                ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
+              }),
+            }),
+          },
+        }));
+        writeSse(res, "thread.run.incomplete", incompleteRun);
+        writeAssistantStreamDone(res);
+        return;
+      }
       const pendingRun = assistantStore.updateRun(run.thread_id, run.id, (existing) => ({
         ...existing,
         status: "requires_action",
         expires_at: existing.expires_at || nowSeconds() + 600,
         required_action: assistantRequiredAction(toolCalls),
-        usage: aggregateAssistantRunUsage(existing.usage, usage),
+        usage: aggregateUsage,
         metadata: {
           ...(isPlainObject(existing.metadata) ? existing.metadata : {}),
           compatibility: mergeCompatibility(existing.metadata?.compatibility, preparedChat.compatibility, {
@@ -10207,21 +10278,26 @@ async function streamAssistantChatTurn({
       content: assistantMessageContentWithLocalToolAnnotations(assistantText, preparedChat.contexts),
     });
     const step = assistantStore.completeRunStep(run.thread_id, run.id, textContext.step.id, usage);
-    const completedAt = nowSeconds();
+    const terminalAt = nowSeconds();
     const completedRun = assistantStore.updateRun(run.thread_id, run.id, {
       ...run,
-      status: "completed",
+      status: budgetState ? "incomplete" : "completed",
       started_at: run.started_at || nowSeconds(),
       expires_at: null,
-      completed_at: completedAt,
-      usage: aggregateAssistantRunUsage(run.usage, usage),
+      completed_at: budgetState ? null : terminalAt,
+      incomplete_at: budgetState ? terminalAt : null,
+      incomplete_details: budgetState?.incomplete_details || null,
+      usage: aggregateUsage,
       metadata: {
         ...(isPlainObject(run.metadata) ? run.metadata : {}),
         compatibility: mergeCompatibility(run.metadata?.compatibility, preparedChat.compatibility, {
           local_assistants: assistantRunCompatibility(run, upstreamJson, compatibility, {
             ...preparedChat.assistantCompatibility,
-            run_mode: chatOptions.toolOutputs ? "streaming_submit_tool_outputs" : "streaming",
+            run_mode: budgetState
+              ? (chatOptions.toolOutputs ? "streaming_incomplete_submit_tool_outputs" : "streaming_incomplete")
+              : (chatOptions.toolOutputs ? "streaming_submit_tool_outputs" : "streaming"),
             streaming_supported: "chat_stream_delta_relay",
+            ...(budgetState ? { token_budget: budgetState.compatibility } : {}),
             ...(chatOptions.toolOutputs ? { submitted_tool_output_count: chatOptions.toolOutputs.length } : {}),
           }),
         }),
@@ -10229,7 +10305,7 @@ async function streamAssistantChatTurn({
     });
     writeSse(res, "thread.message.completed", message);
     writeSse(res, "thread.run.step.completed", step);
-    writeSse(res, "thread.run.completed", completedRun);
+    writeSse(res, `thread.run.${completedRun.status || "completed"}`, completedRun);
     writeAssistantStreamDone(res);
   } catch (error) {
     const failedRun = failAssistantStreamRun(assistantStore, run, null, error.message, 500);
@@ -10875,6 +10951,72 @@ function aggregateAssistantRunUsage(previous, next) {
     completion_tokens: completionTokens,
     total_tokens: Number(previous.total_tokens || 0) + Number(next.total_tokens || 0),
   };
+}
+
+function assistantRunTokenBudgetState(run, usage, upstreamJson) {
+  if (!usage) return null;
+  const promptTokens = Number(usage.prompt_tokens || 0);
+  const completionTokens = Number(usage.completion_tokens || 0);
+  const finishReasons = assistantChatFinishReasons(upstreamJson);
+  const maxPromptTokens = Number(run?.max_prompt_tokens);
+  const maxCompletionTokens = Number(run?.max_completion_tokens);
+
+  if (Number.isFinite(maxPromptTokens) && maxPromptTokens > 0 && promptTokens > maxPromptTokens) {
+    return assistantRunTokenBudgetResult("max_prompt_tokens", {
+      maxPromptTokens,
+      maxCompletionTokens,
+      promptTokens,
+      completionTokens,
+      finishReasons,
+      trigger: "usage_exceeded_budget",
+    });
+  }
+
+  const completionExceeded = Number.isFinite(maxCompletionTokens)
+    && maxCompletionTokens > 0
+    && completionTokens > maxCompletionTokens;
+  const lengthStopped = Number.isFinite(maxCompletionTokens)
+    && maxCompletionTokens > 0
+    && finishReasons.some((reason) => ["length", "max_tokens", "max_output_tokens"].includes(reason));
+  if (completionExceeded || lengthStopped) {
+    return assistantRunTokenBudgetResult("max_completion_tokens", {
+      maxPromptTokens,
+      maxCompletionTokens,
+      promptTokens,
+      completionTokens,
+      finishReasons,
+      trigger: completionExceeded ? "usage_exceeded_budget" : "finish_reason_length",
+    });
+  }
+
+  return null;
+}
+
+function assistantRunTokenBudgetResult(reason, details = {}) {
+  const compatibility = {
+    status: "incomplete",
+    reason,
+    trigger: details.trigger,
+    prompt_tokens: details.promptTokens,
+    completion_tokens: details.completionTokens,
+    ...(Number.isFinite(details.maxPromptTokens) && details.maxPromptTokens > 0
+      ? { max_prompt_tokens: details.maxPromptTokens }
+      : {}),
+    ...(Number.isFinite(details.maxCompletionTokens) && details.maxCompletionTokens > 0
+      ? { max_completion_tokens: details.maxCompletionTokens }
+      : {}),
+    ...(details.finishReasons?.length ? { finish_reasons: details.finishReasons } : {}),
+  };
+  return {
+    incomplete_details: { reason },
+    compatibility,
+  };
+}
+
+function assistantChatFinishReasons(upstreamJson) {
+  return (Array.isArray(upstreamJson?.choices) ? upstreamJson.choices : [])
+    .map((choice) => stringifyContent(choice?.finish_reason || "").trim())
+    .filter(Boolean);
 }
 
 function assistantRunCompatibility(run, upstreamJson, chatPassthrough, extra = {}) {

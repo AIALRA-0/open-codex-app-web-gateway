@@ -55,6 +55,7 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
       ...extractMcpContextItems(options.previousResponse?.output),
       ...extractMcpContextItems(request.input),
     ],
+    requested_tool_choice: normalizeMcpRequestedToolChoice(request.tool_choice),
     approval_request_items: [],
     call_items: [],
     execution_items: [],
@@ -483,9 +484,129 @@ function injectMcpChatTools(chat, context, config = {}, options = {}) {
   if (!tools.length) return;
   if (!Array.isArray(chat.tools)) chat.tools = [];
   chat.tools.push(...tools);
-  if (chat.tool_choice === undefined) chat.tool_choice = "auto";
   context.chat_tool_map = map;
   context.remote_call_tool_count = tools.length;
+  applyMcpChatToolChoice(chat, context);
+}
+
+function normalizeMcpRequestedToolChoice(toolChoice) {
+  if (toolChoice == null) return null;
+  if (typeof toolChoice === "string") {
+    const value = stringifyOptional(toolChoice);
+    if (["auto", "none", "required"].includes(value)) {
+      return { type: value, value };
+    }
+    return { type: "unsupported", value, reason: "unsupported_string_tool_choice" };
+  }
+  if (!isPlainObject(toolChoice)) {
+    return { type: "unsupported", value: stringifyOptional(toolChoice), reason: "unsupported_tool_choice" };
+  }
+
+  if (toolChoice.type === "function") {
+    const name = stringifyOptional(toolChoice.name || toolChoice.function?.name);
+    return name
+      ? { type: "function", name }
+      : { type: "unsupported", value: clone(toolChoice), reason: "missing_function_name" };
+  }
+
+  if (toolChoice.type === "mcp") {
+    const name = stringifyOptional(toolChoice.name || toolChoice.tool_name);
+    const serverLabel = stringifyOptional(toolChoice.server_label || toolChoice.serverLabel);
+    return name
+      ? { type: "mcp", name, ...(serverLabel ? { server_label: serverLabel } : {}) }
+      : { type: "unsupported", value: clone(toolChoice), reason: "missing_mcp_tool_name" };
+  }
+
+  return { type: "unsupported", value: clone(toolChoice), reason: "unsupported_object_tool_choice" };
+}
+
+function applyMcpChatToolChoice(chat, context) {
+  const requested = context.requested_tool_choice;
+  const existing = normalizeMcpExistingChatToolChoice(chat.tool_choice);
+
+  if (requested?.type === "function" || requested?.type === "mcp") {
+    const resolved = resolveMcpChatToolChoice(context.chat_tool_map, requested);
+    context.tool_choice_mapping = {
+      source: "tool_choice",
+      requested_type: requested.type,
+      requested_name: requested.name,
+      ...(requested.server_label ? { requested_server_label: requested.server_label } : {}),
+      match_count: resolved.matches.length,
+      forwarded: resolved.matches.length === 1,
+      ...(resolved.matches.length === 1
+        ? {
+          target: "function",
+          chat_name: resolved.matches[0].functionName,
+          reason: "mcp_tool_choice_mapped",
+        }
+        : {
+          reason: resolved.matches.length ? "ambiguous_mcp_tool_choice" : "mcp_tool_choice_not_found",
+        }),
+    };
+    if (resolved.matches.length === 1) {
+      chat.tool_choice = {
+        type: "function",
+        function: { name: resolved.matches[0].functionName },
+      };
+      return;
+    }
+  } else if (requested && ["auto", "none", "required"].includes(requested.type)) {
+    if (chat.tool_choice === undefined) chat.tool_choice = requested.type;
+    context.tool_choice_mapping = {
+      source: "tool_choice",
+      value: requested.type,
+      target: "tool_choice",
+      forwarded: chat.tool_choice === requested.type,
+      reason: chat.tool_choice === requested.type ? "mcp_tool_choice_passthrough" : "chat_tool_choice_already_set",
+    };
+    return;
+  } else if (requested?.type === "unsupported") {
+    context.tool_choice_mapping = {
+      source: "tool_choice",
+      forwarded: false,
+      reason: requested.reason,
+    };
+  }
+
+  if (existing?.type === "function") {
+    const resolved = resolveMcpChatToolChoice(context.chat_tool_map, existing);
+    if (resolved.matches.length === 1) {
+      chat.tool_choice = {
+        type: "function",
+        function: { name: resolved.matches[0].functionName },
+      };
+      context.tool_choice_mapping = {
+        source: "chat_tool_choice",
+        requested_type: "function",
+        requested_name: existing.name,
+        match_count: 1,
+        forwarded: true,
+        target: "function",
+        chat_name: resolved.matches[0].functionName,
+        reason: "mcp_chat_tool_choice_mapped",
+      };
+      return;
+    }
+  }
+
+  if (chat.tool_choice === undefined) chat.tool_choice = "auto";
+}
+
+function normalizeMcpExistingChatToolChoice(toolChoice) {
+  if (!isPlainObject(toolChoice) || toolChoice.type !== "function") return null;
+  const name = stringifyOptional(toolChoice.name || toolChoice.function?.name);
+  return name ? { type: "function", name } : null;
+}
+
+function resolveMcpChatToolChoice(chatToolMap, requested) {
+  const matches = [];
+  if (!chatToolMap || !requested?.name) return { matches };
+  for (const [functionName, mapping] of chatToolMap.entries()) {
+    if (mapping.tool_name !== requested.name) continue;
+    if (requested.server_label && mapping.server_label !== requested.server_label) continue;
+    matches.push({ functionName, mapping });
+  }
+  return { matches };
 }
 
 function canAutoCallMcpTool(requireApproval, toolName) {
@@ -1028,6 +1149,7 @@ function mcpCompatibility(context) {
       remote_call_skipped_count: context.remote_call_skipped_count || 0,
       input_item_count: context.input_items?.length || 0,
       skipped_count: context.skipped_calls?.length || 0,
+      ...(context.tool_choice_mapping ? { tool_choice: clone(context.tool_choice_mapping) } : {}),
       boundary: context.remote_call_attempt_count
         ? "remote_list_tools_and_call_execution"
         : context.remote_approval_request_count
