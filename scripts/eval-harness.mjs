@@ -2087,6 +2087,41 @@ function buildSuites(defaultModel) {
         check: ({ text }) => /chat-ok/i.test(text),
       },
       {
+        id: "chat-vision-content",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          store: true,
+          metadata: { suite: "chat-vision-content" },
+          thinking: { type: "disabled" },
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Return the exact marker chat-vision-live-ok and no extra words." },
+              {
+                type: "image_url",
+                image_url: {
+                  url: "https://example.test/direct-chat-vision-live.png",
+                  detail: "high",
+                },
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: `data:image/png;base64,${tinyPngBase64}`,
+                  detail: "low",
+                },
+              },
+            ],
+          }],
+          max_tokens: 128,
+        },
+        check: ({ json, text }) => /chat-vision-live-ok/i.test(text)
+          && json.metadata?.compatibility?.chat_passthrough?.chat_image_inputs?.provider === "text_fallback"
+          && json.metadata?.compatibility?.chat_passthrough?.chat_image_inputs?.image_part_count >= 2
+          && json.metadata?.compatibility?.chat_passthrough?.chat_image_inputs?.data_url_image_count >= 1,
+      },
+      {
         id: "chat-developer-compat",
         mode: "chat",
         request: {

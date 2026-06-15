@@ -14966,6 +14966,146 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
   });
 });
 
+test("POST /v1/chat/completions falls back to text markers for direct Chat image inputs", async () => {
+  const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.store, true);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user"]);
+    assert.equal(typeof call.body.messages[0].content, "string");
+    assert.match(call.body.messages[0].content, /Inspect direct Chat image markers\./);
+    assert.match(call.body.messages[0].content, /\[image:https:\/\/example\.test\/chat-vision\.png\]/);
+    assert.match(call.body.messages[0].content, /detail: high/);
+    assert.match(call.body.messages[0].content, /\[image:inline-data\]/);
+    assert.match(call.body.messages[0].content, /detail: low/);
+    assert.doesNotMatch(call.body.messages[0].content, /data:image/);
+    assert.doesNotMatch(call.body.messages[0].content, new RegExp(imageBase64));
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_direct_image_text_fallback",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-image-fallback-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-image-fallback" },
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect direct Chat image markers." },
+            {
+              type: "image_url",
+              image_url: {
+                url: "https://example.test/chat-vision.png",
+                detail: "high",
+              },
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: `data:image/png;base64,${imageBase64}`,
+                detail: "low",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-image-fallback-ok");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_image_inputs.provider, "text_fallback");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_image_inputs.mode, "text");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_image_inputs.image_part_count, 2);
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_image_inputs.data_url_image_count, 1);
+    assert.equal(requests.length, 1);
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/${json.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.chat_image_inputs.image_part_count, 2);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+    assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "image_url", "image_url"]);
+  }, { chatImageInputMode: "text" });
+});
+
+test("POST /v1/chat/completions streams with direct Chat image text fallback", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, true);
+    assert.equal(typeof call.body.messages[0].content, "string");
+    assert.match(call.body.messages[0].content, /\[image:https:\/\/example\.test\/chat-stream-vision\.png\]/);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_direct_image_stream_fallback",
+      object: "chat.completion.chunk",
+      created: 1700000412,
+      model: "mock-model",
+      choices: [{ index: 0, delta: { role: "assistant", content: "chat-image-" }, finish_reason: null }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_direct_image_stream_fallback",
+      object: "chat.completion.chunk",
+      created: 1700000412,
+      model: "mock-model",
+      choices: [{ index: 0, delta: { content: "stream-ok" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        stream: true,
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Stream direct Chat image markers." },
+            {
+              type: "image_url",
+              image_url: {
+                url: "https://example.test/chat-stream-vision.png",
+                detail: "auto",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+    const completionId = events[0].data.id;
+    assert.equal(events.slice(0, -1).map((event) => event.data.choices[0].delta.content || "").join(""), "chat-image-stream-ok");
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/${completionId}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.chat_image_inputs.provider, "text_fallback");
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.chat_image_inputs.image_part_count, 1);
+  }, { chatImageInputMode: "text" });
+});
+
 test("POST /v1/chat/completions maps OpenAI reasoning_effort values for DeepSeek-compatible providers", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.reasoning_effort, "max");

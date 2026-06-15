@@ -81,6 +81,12 @@ create-and-run streaming produces `thread.message.delta` text fragments before
 completion. Unit/mock-provider coverage adds streamed Chat tool-call argument
 chunks mapped to `thread.run.step.delta` and streamed
 `submit_tool_outputs` continuations mapped back to message deltas.
+Direct Chat image-content coverage verifies that `/v1/chat/completions`
+requests with `messages[].content[]` Chat `image_url` parts are rewritten to
+safe text markers for text-only providers such as DeepSeek, that data URLs are
+not copied into the upstream prompt, and that
+`metadata.compatibility.chat_passthrough.chat_image_inputs` records the
+provider mode and aggregate image-part counts.
 Bridge-regression live cases and unit/mock-provider coverage also check local
 Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
 vector-store resources, injects local retrieval evidence, persists a
@@ -175,6 +181,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-rem
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-stream-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-denial --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case completions-legacy --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case chat-vision-content --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case chat-stream-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool-stream --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose

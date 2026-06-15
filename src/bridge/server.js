@@ -4061,6 +4061,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
   if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
 
+  const imageInputs = normalizeChatPassthroughImageInputs(upstreamBody, config);
+  if (imageInputs) compatibility.chat_image_inputs = imageInputs;
+
   const storedChatFields = filterChatPassthroughStoredFields(upstreamBody, config);
   if (storedChatFields) compatibility.stored_chat_fields = storedChatFields;
 
@@ -4077,6 +4080,62 @@ function chatPassthroughUpstreamBody(body, config) {
     upstreamBody,
     compatibility: Object.keys(compatibility).length ? compatibility : null,
   };
+}
+
+function normalizeChatPassthroughImageInputs(upstreamBody, config = {}) {
+  if (!Array.isArray(upstreamBody.messages)) return null;
+  const stats = chatPassthroughImageInputStats(upstreamBody.messages);
+  if (!stats.image_part_count) return null;
+
+  const mode = String(config.chatImageInputMode || "vision").toLowerCase() === "text" ? "text" : "vision";
+  if (mode !== "text") return null;
+
+  upstreamBody.messages = upstreamBody.messages.map((message) => {
+    if (!isPlainObject(message) || !Array.isArray(message.content)) return message;
+    return {
+      ...message,
+      content: normalizeContentParts(message.content, message.role || "user", config),
+    };
+  });
+
+  return {
+    provider: "text_fallback",
+    mode,
+    ...stats,
+    reason: "provider_without_chat_vision_content_parts",
+  };
+}
+
+function chatPassthroughImageInputStats(messages = []) {
+  const stats = {
+    message_count: 0,
+    image_part_count: 0,
+    data_url_image_count: 0,
+    text_part_count: 0,
+  };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const parts = Array.isArray(message?.content) ? message.content : [];
+    let messageHasImage = false;
+    for (const part of parts) {
+      if (!isPlainObject(part)) continue;
+      if (part.type === "text" || part.type === "input_text") stats.text_part_count += 1;
+      if (part.type !== "image_url" && part.type !== "input_image") continue;
+      stats.image_part_count += 1;
+      messageHasImage = true;
+      const imageUrl = chatPassthroughImagePartUrl(part);
+      if (String(imageUrl).startsWith("data:")) stats.data_url_image_count += 1;
+    }
+    if (messageHasImage) stats.message_count += 1;
+  }
+  return stats;
+}
+
+function chatPassthroughImagePartUrl(part) {
+  if (!isPlainObject(part)) return "";
+  if (typeof part.image_url === "string") return part.image_url;
+  if (typeof part.image_url?.url === "string") return part.image_url.url;
+  if (typeof part.url === "string") return part.url;
+  return "";
 }
 
 function filterChatPassthroughStoredFields(upstreamBody, config = {}) {

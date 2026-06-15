@@ -418,7 +418,7 @@ stored Chat completion records.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers; non-streaming and streaming requests with `store:true` are recorded in the local Chat completion lifecycle store |
+| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers; non-streaming and streaming requests with `store:true` are recorded in the local Chat completion lifecycle store. Direct Chat image content parts use `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE`: vision-capable providers receive native `image_url` parts, while text-only providers receive safe `[image:...]` markers and record `metadata.compatibility.chat_passthrough.chat_image_inputs` |
 | `GET /v1/chat/completions` | Implemented for local `store:true` records | Lists locally stored upstream Chat completion objects with `model`, `metadata[key]`, `limit`, `after`, and `order` filters |
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
 | `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions |
@@ -1148,7 +1148,8 @@ stronger citation ranking.
 OpenAI Responses can reference image inputs by URL, base64 data URL, or Files
 API `file_id`. Chat Completions commonly accepts image URL/data URL content
 parts, so the bridge resolves local Files API image `file_id` inputs before the
-upstream Chat request:
+upstream Chat request and applies the same provider-aware mode to direct Chat
+Completions passthrough requests:
 
 - `image_url` strings and `image_url:{url,detail}` objects are forwarded
   directly when the configured Chat image mode is `vision`;
@@ -1159,8 +1160,11 @@ upstream Chat request:
   preserved;
 - text-only providers receive explicit `[image:...]` markers with URL/file
   hints, media type, and detail instead of Chat vision parts or data URLs;
+- direct `/v1/chat/completions` requests with Chat `image_url` content parts
+  use the same text fallback when `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE=text`;
 - compatibility metadata records only file IDs, filenames, media types, byte
-  counts, status, and errors; it does not echo the base64 image payload.
+  counts, status, errors, and image-part counts; it does not echo the base64
+  image payload.
 
 Configuration:
 

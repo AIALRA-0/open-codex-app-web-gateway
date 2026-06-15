@@ -1,5 +1,24 @@
 # Audit Log
 
+## 2026-06-15 Direct Chat Image Input Fallback
+
+- Extended provider-aware image input handling to direct
+  `POST /v1/chat/completions` passthrough requests, using the official Chat
+  image content-part shape documented in the OpenAI OpenAPI spec and Images
+  and vision guide.
+- When `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE=text`, Chat `image_url` /
+  `input_image` content parts are converted to safe text markers before the
+  upstream provider call. Data URLs are represented as `inline-data`, not
+  copied into the upstream prompt.
+- Direct Chat compatibility metadata now records
+  `metadata.compatibility.chat_passthrough.chat_image_inputs` with provider
+  mode, message count, image part count, text part count, and data-URL count.
+- Stored Chat completion messages continue to preserve the caller's original
+  content parts for local lifecycle retrieval; the transformed text prompt is
+  only used for the upstream provider request.
+- Added non-streaming, streaming/store, and live bridge-regression coverage for
+  direct Chat image input fallback.
+
 ## 2026-06-15 Assistants Vision Message Content
 
 - Added Assistants message-content mapping for image inputs before Chat
