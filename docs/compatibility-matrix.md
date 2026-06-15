@@ -39,6 +39,11 @@ Primary sources:
 - OpenAI Graders guide: https://developers.openai.com/api/docs/guides/graders
 - OpenAI Graders OpenAPI operation `validateGrader`: https://api.openai.com/v1/fine_tuning/alpha/graders/validate
 - OpenAI Graders OpenAPI operation `runGrader`: https://api.openai.com/v1/fine_tuning/alpha/graders/run
+- OpenAI Fine-tuning Jobs OpenAPI operation `createFineTuningJob`: https://api.openai.com/v1/fine_tuning/jobs
+- OpenAI Fine-tuning Jobs OpenAPI operation `retrieveFineTuningJob`: https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}
+- OpenAI Fine-tuning Jobs OpenAPI operation `listFineTuningEvents`: https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/events
+- OpenAI Fine-tuning Jobs OpenAPI operation `listFineTuningJobCheckpoints`: https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints
+- OpenAI Fine-tuning checkpoint permissions OpenAPI operation `createFineTuningCheckpointPermission`: https://api.openai.com/v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
 - OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
 - OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
@@ -445,6 +450,37 @@ default. `scripts/prune-runtime-state.mjs` prunes Realtime session files,
 client-secret files, and call files with separate age, count, and byte caps.
 The generated `ek_...` values are local compatibility tokens, not upstream
 provider credentials.
+
+## Fine-tuning Endpoint Coverage
+
+OpenAI's current endpoint list includes Fine-tuning Jobs plus checkpoint
+permission management. Chat Completions-only providers such as DeepSeek cannot
+train OpenAI fine-tuned models through those endpoints, so the bridge implements
+a local file-backed protocol layer. It accepts the official request shape,
+stores job metadata, creates deterministic lifecycle events, and returns a
+local synthetic checkpoint without calling the upstream Chat provider.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/fine_tuning/jobs` | Implemented locally | Requires `training_file`; preserves `model`, `validation_file`, `suffix`, `method`, `hyperparameters`, `integrations`, and `metadata`; returns `object:"fine_tuning.job"`, `status:"succeeded"`, a local `ft:...` model id, and compatibility metadata with `actual_model_training:false` |
+| `GET /v1/fine_tuning/jobs` | Implemented locally | Lists local jobs with `limit`, `after`, `before`, default newest-first ordering, and `metadata[k]=v` / `metadata=null` filters |
+| `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}` | Implemented locally | Retrieves a stored local Fine-tuning job |
+| `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel` | Implemented locally | Marks the local job `status:"cancelled"` and records a local lifecycle event |
+| `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/pause` | Implemented locally | Marks the local job `status:"paused"` and records a local lifecycle event |
+| `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/resume` | Implemented locally | Marks the local job `status:"queued"` and records a local lifecycle event |
+| `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/events` | Implemented locally | Lists OpenAI-style `fine_tuning.job.event` records for creation, simulated run, completion, and lifecycle actions |
+| `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints` | Implemented locally | Lists a synthetic `fine_tuning.job.checkpoint` with `fine_tuned_model_checkpoint`, `metrics`, `fine_tuning_job_id`, and `step_number` |
+| `GET /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions` | Implemented locally | Lists local `checkpoint.permission` records with `project_id`, `limit`, `after`, `before`, and `order` support |
+| `POST /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions` | Implemented locally | Accepts `project_ids[]` and returns the created or existing local permissions as an OpenAI-style list |
+| `DELETE /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}` | Implemented locally | Deletes a local checkpoint permission and returns `{object:"checkpoint.permission", deleted:true}` |
+
+Local Fine-tuning state lives under
+`CODEXCOMPAT_FINE_TUNING_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-fine-tuning`
+by default. `scripts/prune-runtime-state.mjs` prunes job files and checkpoint
+permission files with separate age, count, and byte caps. This layer is a
+protocol compatibility shim, not an implementation of hosted training,
+dataset validation, OpenAI model deployment, or permission enforcement across
+real projects.
 
 ## Conversations Endpoint Coverage
 
@@ -1450,6 +1486,7 @@ Configuration:
 | --- | --- | --- |
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
+| OpenAI Fine-tuning full parity | The local adapter covers job create/list/retrieve, cancel/pause/resume lifecycle events, checkpoint listing, and checkpoint permission list/create/delete, but it does not validate training datasets, schedule hosted training, produce a real provider-deployed fine-tuned model, enforce organization/project permissions, or train DeepSeek/OpenAI weights | Add provider-specific tuning backends where available, dataset validators, async job workers, artifact/result-file generation, permission middleware, and quality evals comparing tuned-model behavior against baseline models |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
 | OpenAI Realtime full parity | The local adapter covers REST creation of Realtime sessions, client secrets, transcription sessions, translation client secrets, WebRTC call setup response shape, and local call accept/reject/refer/hangup lifecycle state. It is not a low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket event runtime, speech-to-speech model loop, or hosted tracing backend | Add a real WebRTC/WebSocket relay backed by an audio-capable provider or OpenAI Realtime, server-side event translation, media/session isolation, call monitoring streams, token validation/accounting, and audio latency/quality evals |

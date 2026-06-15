@@ -341,6 +341,30 @@ function buildSuites(defaultModel) {
           && rejected?.status === "rejected",
       },
       {
+        id: "fine-tuning-lifecycle",
+        mode: "fine-tuning-lifecycle",
+        request: {
+          model: "gpt-4o-mini",
+        },
+        check: ({ job, fetched, jobs, events, checkpoints, permissionCreate, permissionList, permissionDelete, paused, resumed, cancelled, missingJob }) => job?.id?.startsWith("ftjob_")
+          && job.object === "fine_tuning.job"
+          && job.status === "succeeded"
+          && job.compatibility?.provider === "local"
+          && fetched?.id === job.id
+          && jobs?.data?.some((entry) => entry.id === job.id)
+          && events?.data?.some((event) => event.object === "fine_tuning.job.event" && /fine-tuned model/i.test(event.message || ""))
+          && checkpoints?.data?.some((checkpoint) => checkpoint.object === "fine_tuning.job.checkpoint" && checkpoint.fine_tuning_job_id === job.id)
+          && permissionCreate?.data?.length === 2
+          && permissionCreate.data.every((permission) => permission.object === "checkpoint.permission")
+          && permissionList?.data?.length === 1
+          && permissionList.data[0].project_id === "proj_bridge_regression_a"
+          && permissionDelete?.deleted === true
+          && paused?.status === "paused"
+          && resumed?.status === "queued"
+          && cancelled?.status === "cancelled"
+          && missingJob?.status === 404,
+      },
+      {
         id: "chatkit-lifecycle",
         mode: "chatkit-lifecycle",
         request: {
@@ -2941,6 +2965,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "realtime-lifecycle") {
       return await runRealtimeLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "fine-tuning-lifecycle") {
+      return await runFineTuningLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "chatkit-lifecycle") {
       return await runChatKitLifecycleCase(testCase, context, started);
     }
@@ -3302,6 +3329,78 @@ async function runRealtimeLifecycleCase(testCase, context, started) {
     rejected_call_id: rejectCallId,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `realtime:${session.json?.id || "missing"}:${callId || "missing"}`,
+  });
+}
+
+async function runFineTuningLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const marker = `${testCase.id}-${context.iteration}-${Date.now().toString(36)}`;
+  const job = await postJsonCapture(`${baseUrl}/v1/fine_tuning/jobs`, {
+    model: request.model || "gpt-4o-mini",
+    training_file: `file_train_${marker}`,
+    validation_file: `file_valid_${marker}`,
+    suffix: "bridge-regression",
+    method: {
+      type: "supervised",
+      supervised: {
+        hyperparameters: {
+          n_epochs: 2,
+        },
+      },
+    },
+    metadata: { suite: "bridge-regression", marker },
+  });
+  if (!job.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: job.status,
+      error: truncate(job.body),
+    });
+  }
+
+  const fetched = await getJson(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}`);
+  const jobs = await getJson(`${baseUrl}/v1/fine_tuning/jobs?limit=20&metadata%5Bsuite%5D=bridge-regression`);
+  const events = await getJson(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}/events?limit=10`);
+  const checkpoints = await getJson(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}/checkpoints?limit=10`);
+  const checkpoint = checkpoints.json?.data?.[0]?.fine_tuned_model_checkpoint || "";
+  const checkpointPath = encodeURIComponent(checkpoint);
+  const permissionCreate = checkpoint
+    ? await postJsonCapture(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {
+      project_ids: ["proj_bridge_regression_a", "proj_bridge_regression_b"],
+    })
+    : { ok: false, json: null, status: 0, body: "" };
+  const permissionList = checkpoint
+    ? await getJson(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?project_id=proj_bridge_regression_a&limit=10`)
+    : { ok: false, json: null, status: 0, body: "" };
+  const permissionDeleteRaw = checkpoint && permissionCreate.json?.data?.[0]?.id
+    ? await deleteJson(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${permissionCreate.json.data[0].id}`)
+    : { ok: false, status: 0, body: "" };
+  const paused = await postJsonCapture(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}/pause`, {});
+  const resumed = await postJsonCapture(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}/resume`, {});
+  const cancelled = await postJsonCapture(`${baseUrl}/v1/fine_tuning/jobs/${job.json.id}/cancel`, {});
+  const missingJob = await getJson(`${baseUrl}/v1/fine_tuning/jobs/ftjob_missing_${context.iteration}/events`);
+  const permissionDelete = parseJsonish(permissionDeleteRaw.body);
+  const ok = !!testCase.check({
+    job: job.json,
+    fetched: fetched.json,
+    jobs: jobs.json,
+    events: events.json,
+    checkpoints: checkpoints.json,
+    permissionCreate: permissionCreate.json,
+    permissionList: permissionList.json,
+    permissionDelete,
+    paused: paused.json,
+    resumed: resumed.json,
+    cancelled: cancelled.json,
+    missingJob,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: job.status,
+    job_id: job.json.id,
+    checkpoint,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `fine_tuning:${job.json.id}:${checkpoint || "missing"}`,
   });
 }
 

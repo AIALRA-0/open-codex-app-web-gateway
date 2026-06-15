@@ -52,6 +52,7 @@ const {
   OFFICIAL_UPLOAD_MAX_BYTES,
   OFFICIAL_UPLOAD_PART_MAX_BYTES,
 } = require("./local_uploads");
+const { LocalFineTuningStore } = require("./local_fine_tuning");
 const {
   attachShellOutput,
   injectShellMessages,
@@ -271,6 +272,8 @@ function loadConfig(overrides = {}) {
     localPromptTemplates: loadLocalPromptTemplates(),
     stateDir,
     chatKitStateDir: process.env.CODEXCOMPAT_CHATKIT_STATE_DIR || path.join(stateDir, "local-chatkit"),
+    fineTuningStateDir: process.env.CODEXCOMPAT_FINE_TUNING_STATE_DIR || path.join(stateDir, "local-fine-tuning"),
+    fineTuningMaxRecords: numberFromEnv("CODEXCOMPAT_FINE_TUNING_MAX_RECORDS", 5000, 1, 100000),
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     assistantStateDir: process.env.CODEXCOMPAT_ASSISTANT_STATE_DIR || path.join(stateDir, "local-assistants"),
     requestTimeoutMs,
@@ -8227,6 +8230,113 @@ async function handleGraderRun(req, res, config) {
   sendJson(res, 200, response);
 }
 
+async function handleFineTuningJobCreate(req, res, fineTuningStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Fine-tuning job request body must be a JSON object", {
+      code: "invalid_fine_tuning_job_request",
+    });
+  }
+  if (!stringifyContent(body.training_file).trim()) {
+    throw requestError("training_file is required", {
+      code: "missing_required_parameter",
+      param: "training_file",
+    });
+  }
+  sendJson(res, 200, fineTuningStore.createJob(body));
+}
+
+function handleFineTuningJobsList(res, fineTuningStore, url) {
+  const jobs = fineTuningStore.listJobs({ metadataFilter: fineTuningMetadataFilter(url) });
+  sendJson(res, 200, paginateListWithDefaultOrder(jobs, url, "desc", 20, 100));
+}
+
+function handleFineTuningJobGet(res, fineTuningStore, jobId) {
+  const job = fineTuningStore.getJob(jobId);
+  if (!job) {
+    sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
+      code: "fine_tuning_job_not_found",
+      param: "fine_tuning_job_id",
+    });
+    return;
+  }
+  sendJson(res, 200, job);
+}
+
+function handleFineTuningJobAction(res, fineTuningStore, jobId, action) {
+  const job = fineTuningStore.transitionJob(jobId, action);
+  if (!job) {
+    sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
+      code: "fine_tuning_job_not_found",
+      param: "fine_tuning_job_id",
+    });
+    return;
+  }
+  sendJson(res, 200, job);
+}
+
+function handleFineTuningJobEventsList(res, fineTuningStore, jobId, url) {
+  const events = fineTuningStore.listEvents(jobId);
+  if (!events) {
+    sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
+      code: "fine_tuning_job_not_found",
+      param: "fine_tuning_job_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateListWithDefaultOrder(events, url, "desc", 20, 100));
+}
+
+function handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url) {
+  const checkpoints = fineTuningStore.listCheckpoints(jobId);
+  if (!checkpoints) {
+    sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
+      code: "fine_tuning_job_not_found",
+      param: "fine_tuning_job_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateListWithDefaultOrder(checkpoints, url, "desc", 10, 100));
+}
+
+async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("checkpoint permission request body must be a JSON object", {
+      code: "invalid_checkpoint_permission_request",
+    });
+  }
+  const projectIds = Array.isArray(body.project_ids)
+    ? body.project_ids.map((id) => String(id || "").trim()).filter(Boolean)
+    : [];
+  if (!projectIds.length) {
+    throw requestError("project_ids is required", {
+      code: "missing_required_parameter",
+      param: "project_ids",
+    });
+  }
+  sendJson(res, 200, fineTuningStore.createCheckpointPermissions(checkpoint, projectIds));
+}
+
+function handleFineTuningCheckpointPermissionsList(res, fineTuningStore, checkpoint, url) {
+  const permissions = fineTuningStore.listCheckpointPermissions(checkpoint, {
+    projectId: url.searchParams.get("project_id") || null,
+  });
+  sendJson(res, 200, paginateListWithDefaultOrder(permissions, url, "desc", 10, 100));
+}
+
+function handleFineTuningCheckpointPermissionDelete(res, fineTuningStore, checkpoint, permissionId) {
+  const deleted = fineTuningStore.deleteCheckpointPermission(checkpoint, permissionId);
+  if (!deleted) {
+    sendError(res, 404, `Fine-tuning checkpoint permission not found: ${permissionId}`, {
+      code: "fine_tuning_checkpoint_permission_not_found",
+      param: "permission_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
 async function handleRealtimeSessionCreate(req, res, realtimeStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -9205,6 +9315,20 @@ function paginateChatKitThreads(items, url) {
   return paginateList(items, localUrl);
 }
 
+function paginateListWithDefaultOrder(items, url, order, fallbackLimit = 20, maxLimit = 100) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  const result = paginateList(items, localUrl);
+  const limit = parseLimit(localUrl.searchParams.get("limit"), fallbackLimit, maxLimit);
+  if (result.data.length > limit) {
+    result.data = result.data.slice(0, limit);
+    result.first_id = result.data[0]?.id || null;
+    result.last_id = result.data.at(-1)?.id || null;
+    result.has_more = true;
+  }
+  return result;
+}
+
 function paginateList(items, url) {
   const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
   const after = url.searchParams.get("after");
@@ -9231,6 +9355,16 @@ function paginateList(items, url) {
     last_id: page.at(-1)?.id || null,
     has_more: data.length > page.length,
   };
+}
+
+function fineTuningMetadataFilter(url) {
+  if (url.searchParams.get("metadata") === "null") return { none: true };
+  const values = {};
+  for (const [key, value] of url.searchParams.entries()) {
+    const match = key.match(/^metadata\[([^\]]+)\]$/);
+    if (match) values[match[1]] = value;
+  }
+  return Object.keys(values).length ? { values } : null;
 }
 
 function parseLimit(value, fallback, max) {
@@ -11479,6 +11613,10 @@ function createServer(config = loadConfig()) {
     dir: config.realtimeStateDir || path.join(config.stateDir || process.cwd(), "local-realtime"),
     maxRecords: config.realtimeMaxRecords,
   });
+  const fineTuningStore = config.fineTuningStore || new LocalFineTuningStore({
+    dir: config.fineTuningStateDir || path.join(config.stateDir || process.cwd(), "local-fine-tuning"),
+    maxRecords: config.fineTuningMaxRecords,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -11535,6 +11673,59 @@ function createServer(config = loadConfig()) {
       if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/run") {
         await handleGraderRun(req, res, config);
         return;
+      }
+
+      if (url.pathname === "/v1/fine_tuning/jobs") {
+        if (req.method === "GET") {
+          handleFineTuningJobsList(res, fineTuningStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleFineTuningJobCreate(req, res, fineTuningStore);
+          return;
+        }
+      }
+
+      const fineTuningJobRoute = url.pathname.match(/^\/v1\/fine_tuning\/jobs\/([^/]+)(?:\/(cancel|pause|resume|events|checkpoints))?$/);
+      if (fineTuningJobRoute) {
+        const jobId = decodeURIComponent(fineTuningJobRoute[1]);
+        const action = fineTuningJobRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleFineTuningJobGet(res, fineTuningStore, jobId);
+          return;
+        }
+        if (["cancel", "pause", "resume"].includes(action) && req.method === "POST") {
+          handleFineTuningJobAction(res, fineTuningStore, jobId, action);
+          return;
+        }
+        if (action === "events" && req.method === "GET") {
+          handleFineTuningJobEventsList(res, fineTuningStore, jobId, url);
+          return;
+        }
+        if (action === "checkpoints" && req.method === "GET") {
+          handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url);
+          return;
+        }
+      }
+
+      const fineTuningCheckpointPermissionRoute = url.pathname.match(/^\/v1\/fine_tuning\/checkpoints\/(.+)\/permissions(?:\/([^/]+))?$/);
+      if (fineTuningCheckpointPermissionRoute) {
+        const checkpoint = decodeURIComponent(fineTuningCheckpointPermissionRoute[1]);
+        const permissionId = fineTuningCheckpointPermissionRoute[2]
+          ? decodeURIComponent(fineTuningCheckpointPermissionRoute[2])
+          : "";
+        if (!permissionId && req.method === "GET") {
+          handleFineTuningCheckpointPermissionsList(res, fineTuningStore, checkpoint, url);
+          return;
+        }
+        if (!permissionId && req.method === "POST") {
+          await handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint);
+          return;
+        }
+        if (permissionId && req.method === "DELETE") {
+          handleFineTuningCheckpointPermissionDelete(res, fineTuningStore, checkpoint, permissionId);
+          return;
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/v1/realtime/sessions") {

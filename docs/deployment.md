@@ -96,6 +96,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_BATCH_MAX_REQUESTS` | `1000` | Maximum JSONL request lines accepted by the local synchronous Batch API; raise only with disk/quota controls in place |
 | `CODEXCOMPAT_EVAL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-evals` | Local Evals API state path for eval definitions, runs, and output items; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_EVAL_MAX_ROWS` | `100` | Maximum JSONL rows loaded for a local synchronous Eval run; raise only after disk/quota and runtime controls are ready |
+| `CODEXCOMPAT_FINE_TUNING_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-fine-tuning` | Local Fine-tuning Jobs/checkpoint permission compatibility state path; protocol metadata only, no real training artifacts |
+| `CODEXCOMPAT_FINE_TUNING_MAX_RECORDS` | `5000` | Maximum local Fine-tuning job and checkpoint-permission records retained before opportunistic cleanup |
 | `CODEXCOMPAT_PYTHON_GRADER_PROVIDER` | `local` | Local Python grader execution provider; use `disabled` to reject Python grader runs |
 | `CODEXCOMPAT_PYTHON_GRADER_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-python-graders` | Temporary local Python grader workdir root; keep outside Git |
 | `CODEXCOMPAT_PYTHON_GRADER_TIMEOUT_MS` | `120000` | Per-grader subprocess timeout, capped at the documented 2 minute limit |
@@ -242,6 +244,7 @@ npm run eval:bridge -- --case responses-input-file-spreadsheet --timeout-ms 9000
 npm run eval:bridge -- --case assistants-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case assistants-required-action --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case evals-lifecycle --timeout-ms 90000 --verbose
+npm run eval:bridge -- --case fine-tuning-lifecycle --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-local --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case graders-api-score-model --timeout-ms 90000 --verbose
 npm run eval:bridge -- --case responses-mcp-local --timeout-ms 90000 --verbose

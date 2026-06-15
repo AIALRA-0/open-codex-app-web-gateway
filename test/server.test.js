@@ -11733,6 +11733,130 @@ test("Realtime API creates local sessions, client secrets, and call lifecycle st
   });
 });
 
+test("Fine-tuning API manages local jobs, checkpoints, events, and permissions", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Fine-tuning compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const missingTrainingFile = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "gpt-4o-mini" }),
+    });
+    assert.equal(missingTrainingFile.status, 400);
+    assert.equal((await missingTrainingFile.json()).error.param, "training_file");
+
+    const createResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        training_file: "file_train_local",
+        validation_file: "file_valid_local",
+        suffix: "compat-suite",
+        method: {
+          type: "supervised",
+          supervised: {
+            hyperparameters: {
+              n_epochs: 2,
+            },
+          },
+        },
+        metadata: { suite: "fine-tuning-local" },
+      }),
+    });
+    assert.equal(createResponse.status, 200);
+    const job = await createResponse.json();
+    assert.match(job.id, /^ftjob_/);
+    assert.equal(job.object, "fine_tuning.job");
+    assert.equal(job.status, "succeeded");
+    assert.equal(job.model, "gpt-4o-mini");
+    assert.equal(job.training_file, "file_train_local");
+    assert.equal(job.validation_file, "file_valid_local");
+    assert.match(job.fine_tuned_model, /^ft:gpt-4o-mini:local:compat-suite:/);
+    assert.equal(job.method.type, "supervised");
+    assert.equal(job.method.supervised.hyperparameters.n_epochs, 2);
+    assert.equal(job.hyperparameters.n_epochs, 2);
+    assert.equal(job.metadata.suite, "fine-tuning-local");
+    assert.equal(job.compatibility.provider, "local");
+    assert.equal(job.compatibility.actual_model_training, false);
+
+    const fetched = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}`);
+    assert.equal(fetched.status, 200);
+    assert.equal((await fetched.json()).id, job.id);
+
+    const listed = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata%5Bsuite%5D=fine-tuning-local`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.object, "list");
+    assert.equal(listedJson.data.some((entry) => entry.id === job.id), true);
+
+    const eventsResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/events?limit=10`);
+    assert.equal(eventsResponse.status, 200);
+    const events = await eventsResponse.json();
+    assert.equal(events.object, "list");
+    assert.ok(events.data.length >= 3);
+    assert.equal(events.data[0].object, "fine_tuning.job.event");
+    assert.equal(events.data.some((event) => /fine-tuned model/i.test(event.message)), true);
+
+    const checkpointsResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=10`);
+    assert.equal(checkpointsResponse.status, 200);
+    const checkpoints = await checkpointsResponse.json();
+    assert.equal(checkpoints.object, "list");
+    assert.equal(checkpoints.data.length, 1);
+    const checkpoint = checkpoints.data[0];
+    assert.match(checkpoint.id, /^ftckpt_/);
+    assert.equal(checkpoint.object, "fine_tuning.job.checkpoint");
+    assert.equal(checkpoint.fine_tuning_job_id, job.id);
+    assert.equal(checkpoint.step_number, 1000);
+    assert.match(checkpoint.fine_tuned_model_checkpoint, /:ckpt-step-1000$/);
+
+    const checkpointPath = encodeURIComponent(checkpoint.fine_tuned_model_checkpoint);
+    const permissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project_ids: ["proj_local_a", "proj_local_b"] }),
+    });
+    assert.equal(permissionCreate.status, 200);
+    const createdPermissions = await permissionCreate.json();
+    assert.equal(createdPermissions.object, "list");
+    assert.equal(createdPermissions.data.length, 2);
+    assert.match(createdPermissions.data[0].id, /^cp_/);
+    assert.equal(createdPermissions.data[0].object, "checkpoint.permission");
+
+    const permissionList = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?project_id=proj_local_a`);
+    assert.equal(permissionList.status, 200);
+    const permissionListJson = await permissionList.json();
+    assert.equal(permissionListJson.data.length, 1);
+    assert.equal(permissionListJson.data[0].project_id, "proj_local_a");
+
+    const deletePermission = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletePermission.status, 200);
+    const deletePermissionJson = await deletePermission.json();
+    assert.equal(deletePermissionJson.deleted, true);
+    assert.equal(deletePermissionJson.id, createdPermissions.data[0].id);
+
+    const paused = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/pause`, { method: "POST" });
+    assert.equal(paused.status, 200);
+    assert.equal((await paused.json()).status, "paused");
+
+    const resumed = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/resume`, { method: "POST" });
+    assert.equal(resumed.status, 200);
+    assert.equal((await resumed.json()).status, "queued");
+
+    const cancelled = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/cancel`, { method: "POST" });
+    assert.equal(cancelled.status, 200);
+    assert.equal((await cancelled.json()).status, "cancelled");
+
+    const missing = await fetch(`${baseUrl}/v1/fine_tuning/jobs/ftjob_missing/events`);
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "fine_tuning_job_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("ChatKit API manages local sessions, threads, and items", async () => {
   await withMockProvider(async () => {
     assert.fail("ChatKit compatibility should not call upstream provider");

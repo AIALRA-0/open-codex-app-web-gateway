@@ -4369,6 +4369,90 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Fine-tuning lifecycle compatibility
+
+- Used the official OpenAI OpenAPI specs through the developer-docs MCP for:
+  - `POST/GET /v1/fine_tuning/jobs`;
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}`;
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel`;
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/pause`;
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/resume`;
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/events`;
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints`;
+  - `GET/POST /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions`;
+  - `DELETE /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}`.
+- Added a local file-backed Fine-tuning compatibility layer:
+  - `LocalFineTuningStore` persists job records under
+    `CODEXCOMPAT_FINE_TUNING_STATE_DIR`, defaulting to
+    `$CODEXCOMPAT_STATE_DIR/local-fine-tuning`;
+  - job creation accepts official fields including `training_file`, `model`,
+    `validation_file`, `suffix`, `method`, `hyperparameters`,
+    `integrations`, and `metadata`;
+  - creation returns an OpenAI-style `fine_tuning.job` with `status:"succeeded"`,
+    local compatibility metadata, a synthetic `ft:...` model id, lifecycle
+    events, and a synthetic `fine_tuning.job.checkpoint`;
+  - job list supports pagination plus `metadata[k]=v` and `metadata=null`
+    filters;
+  - retrieve/events/checkpoints/cancel/pause/resume return OpenAI-shaped JSON
+    without calling the upstream Chat Completions provider;
+  - checkpoint permission list/create/delete returns OpenAI-style
+    `checkpoint.permission` resources.
+- Added storage and docs controls:
+  - `CODEXCOMPAT_FINE_TUNING_STATE_DIR` and
+    `CODEXCOMPAT_FINE_TUNING_MAX_RECORDS` are documented for deployment;
+  - Fine-tuning job files and checkpoint-permission files are now pruned by
+    `scripts/prune-runtime-state.mjs`;
+  - compatibility/evaluation docs now describe covered endpoints, local state,
+    the focused `fine-tuning-lifecycle` case, and full-parity gaps.
+- Current boundary: this is protocol compatibility for SDK/UI/workflow smoke
+  tests. It does not validate datasets, schedule hosted training, produce a
+  real provider-deployed fine-tuned model, train DeepSeek/OpenAI weights,
+  create result artifacts, or enforce real organization/project permissions.
+- Verification:
+  - `node --check` passed for `src/bridge/local_fine_tuning.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `scripts/prune-runtime-state.mjs`.
+  - Focused Fine-tuning unit test passed 1/1.
+  - `npm test`: passed 200/200.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `fine-tuning-lifecycle`: passed 1/1 against
+    `deepseek-v4-pro`, latency 369 ms, zero provider token usage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 97/97,
+    pass rate 1.0, average latency 1318 ms, P95 latency 3955 ms, and total
+    usage 24849 tokens. The suite now includes `fine-tuning-lifecycle`.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1305 ms, P95 latency 1494 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: first attempt hit a transient
+    browser asset-load/network-change failure before the new-chat button was
+    visible; immediate retry passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T15-51-06-850Z.png`.
+  - `node scripts/prune-runtime-state.mjs --dry-run`: scanned 1784 runtime
+    candidates across 12 targets, including the new Fine-tuning job and
+    checkpoint-permission targets; selected 2 old UI-smoke screenshots,
+    selected 218996 bytes, and reported 0 errors.
+  - `node scripts/prune-runtime-state.mjs --apply`: deleted those 2
+    artifacts, freed 218996 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 29 GB available; `state/` was 25 MB,
+    `output/` was 4.4 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 28 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+  - Final `node --check` passed again for changed JavaScript files.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. Fine-tuning compatibility
+  records are protocol metadata only and remain in ignored runtime state.
+
 ## 2026-06-15 - Local Realtime REST handshake compatibility
 
 - Used the official OpenAI Realtime guide, Realtime OpenAPI operations, and SIP
