@@ -512,6 +512,51 @@ function buildSuites(defaultModel) {
           && missingGroup.json?.error?.code === "organization_group_not_found",
       },
       {
+        id: "organization-audit-logs",
+        mode: "organization-audit-logs",
+        check: ({
+          logs,
+          role,
+          roleLogs,
+          project,
+          projectLogs,
+          projectUser,
+          actorLogs,
+          actorEmailLogs,
+          effectiveLogs,
+          paged,
+          nextPage,
+          emptyFiltered,
+          invalidFilter,
+        }) => logs?.object === "list"
+          && logs.data?.some((entry) => entry.type === "project.created"
+            && entry["project.created"]?.id === project?.id)
+          && logs.data?.some((entry) => entry.type === "role.created"
+            && entry["role.created"]?.id === role?.id)
+          && logs.data?.some((entry) => entry.type === "role.assignment.created")
+          && logs.data?.every((entry) => entry._filter_project_ids === undefined)
+          && logs.data?.some((entry) => entry.actor?.type === "api_key"
+            && entry.actor.api_key?.id === "local-organization-admin"
+            && entry.compatibility?.actual_openai_admin_data === false)
+          && roleLogs?.data?.some((entry) => entry.type === "role.created"
+            && entry["role.created"]?.id === role?.id
+            && entry["role.created"]?.permissions?.includes("api.audit_logs.read"))
+          && projectLogs?.data?.some((entry) => entry.type === "project.created"
+            && entry["project.created"]?.id === project?.id)
+          && projectLogs?.data?.some((entry) => entry.type === "user.added"
+            && entry["user.added"]?.id === projectUser?.id)
+          && actorLogs?.data?.length >= 1
+          && actorEmailLogs?.data?.some((entry) => entry.type === "user.added"
+            && entry["user.added"]?.id === projectUser?.id)
+          && effectiveLogs?.data?.some((entry) => entry["project.created"]?.id === project?.id)
+          && paged?.data?.length === 2
+          && paged.has_more === true
+          && nextPage?.data?.length >= 1
+          && emptyFiltered?.data?.length === 0
+          && invalidFilter?.status === 400
+          && invalidFilter.json?.error?.code === "invalid_audit_log_filter",
+      },
+      {
         id: "organization-project-admin",
         mode: "organization-project-admin",
         check: ({
@@ -3232,6 +3277,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-roles-groups") {
       return await runOrganizationRolesGroupsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-audit-logs") {
+      return await runOrganizationAuditLogsCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-admin") {
       return await runOrganizationProjectAdminCase(testCase, context, started);
     }
@@ -3887,6 +3935,84 @@ async function runOrganizationRolesGroupsCase(testCase, context, started) {
     user_id: projectUser.json?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_roles_groups:${role.json.id}:${group.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationAuditLogsCase(testCase, context, started) {
+  const marker = `bridge-audit-${Date.now()}-${context.iteration}`;
+  const startedAt = Math.floor(Date.now() / 1000) - 2;
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Audit Project ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}`, {
+    name: `Bridge Eval Audit Project Updated ${marker}`,
+  });
+  const role = await postJsonCapture(`${baseUrl}/v1/organization/roles`, {
+    role_name: `Bridge Eval Audit Reader ${marker}`,
+    permissions: ["api.audit_logs.read"],
+  });
+  const roleId = encodeURIComponent(role.json?.id || "missing_role");
+  const group = await postJsonCapture(`${baseUrl}/v1/organization/groups`, {
+    name: `Bridge Eval Audit Group ${marker}`,
+  });
+  const groupId = encodeURIComponent(group.json?.id || "missing_group");
+  const projectUser = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users`, {
+    user_id: `user_${marker.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+    email: "bridge-audit-eval@example.com",
+    name: "Bridge Eval Audit User",
+    role: "member",
+  });
+  const userId = encodeURIComponent(projectUser.json?.id || "missing_user");
+  await postJsonCapture(`${baseUrl}/v1/organization/users/${userId}/roles`, {
+    role_id: role.json?.id || "missing_role",
+  });
+  const logs = await getJson(`${baseUrl}/v1/organization/audit_logs?limit=100`);
+  const roleLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=role.created&resource_ids%5B%5D=${roleId}&limit=20`);
+  const projectLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?project_ids%5B%5D=${projectId}&limit=20`);
+  const actorLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?actor_ids%5B%5D=local-organization-admin&limit=20`);
+  const actorEmailLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?actor_emails%5B%5D=bridge-audit-eval%40example.com&limit=20`);
+  const effectiveLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?effective_at%5Bgte%5D=${startedAt}&limit=100`);
+  const paged = await getJson(`${baseUrl}/v1/organization/audit_logs?limit=2`);
+  const nextCursor = paged.json?.last_id ? encodeURIComponent(paged.json.last_id) : "";
+  const nextPage = await getJson(`${baseUrl}/v1/organization/audit_logs?limit=2&after=${nextCursor}`);
+  const emptyFiltered = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.created&resource_ids%5B%5D=cert_${encodeURIComponent(marker)}`);
+  const invalidFilter = await getJson(`${baseUrl}/v1/organization/audit_logs?effective_at%5Bgte%5D=not-a-number`);
+  await deleteJson(`${baseUrl}/v1/organization/users/${userId}/roles/${roleId}`);
+  await deleteJson(`${baseUrl}/v1/organization/roles/${roleId}`);
+  await deleteJson(`${baseUrl}/v1/organization/groups/${groupId}`);
+  const ok = !!testCase.check({
+    logs: logs.json,
+    role: role.json,
+    roleLogs: roleLogs.json,
+    project: project.json,
+    projectLogs: projectLogs.json,
+    projectUser: projectUser.json,
+    actorLogs: actorLogs.json,
+    actorEmailLogs: actorEmailLogs.json,
+    effectiveLogs: effectiveLogs.json,
+    paged: paged.json,
+    nextPage: nextPage.json,
+    emptyFiltered: emptyFiltered.json,
+    invalidFilter,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: logs.status,
+    project_id: project.json.id,
+    role_id: role.json?.id || null,
+    user_id: projectUser.json?.id || null,
+    audit_log_count: logs.json?.data?.length || 0,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_audit_logs:${project.json.id}:${role.json?.id || "missing"}`,
   });
 }
 

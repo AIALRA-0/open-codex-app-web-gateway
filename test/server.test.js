@@ -12083,6 +12083,150 @@ test("Organization roles and groups manage local memberships and assignments", a
   });
 });
 
+test("Organization audit logs list local admin lifecycle events and filters", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization audit logs compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const startedAt = Math.floor(Date.now() / 1000) - 2;
+
+    const emptyLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=20`);
+    assert.equal(emptyLogs.status, 200);
+    const emptyLogsJson = await emptyLogs.json();
+    assert.equal(emptyLogsJson.object, "list");
+    assert.deepEqual(emptyLogsJson.data, []);
+    assert.equal(emptyLogsJson.first_id, null);
+    assert.equal(emptyLogsJson.last_id, null);
+    assert.equal(emptyLogsJson.has_more, false);
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Audit Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const updatedProject = await fetch(`${baseUrl}/v1/organization/projects/${project.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Audit Project Updated" }),
+    });
+    assert.equal(updatedProject.status, 200);
+
+    const roleResponse = await fetch(`${baseUrl}/v1/organization/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role_name: "Bridge Audit Reader",
+        permissions: ["api.audit_logs.read"],
+      }),
+    });
+    assert.equal(roleResponse.status, 200);
+    const role = await roleResponse.json();
+
+    const groupResponse = await fetch(`${baseUrl}/v1/organization/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Audit Group" }),
+    });
+    assert.equal(groupResponse.status, 200);
+    const group = await groupResponse.json();
+
+    const projectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_audit_member",
+        email: "bridge-audit-member@example.com",
+        name: "Bridge Audit Member",
+        role: "member",
+      }),
+    });
+    assert.equal(projectUserResponse.status, 200);
+    const projectUser = await projectUserResponse.json();
+
+    const assignedRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: role.id }),
+    });
+    assert.equal(assignedRole.status, 200);
+
+    const logs = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=50`);
+    assert.equal(logs.status, 200);
+    const logsJson = await logs.json();
+    assert.equal(logsJson.object, "list");
+    assert.equal(logsJson.has_more, false);
+    assert.ok(logsJson.first_id);
+    assert.ok(logsJson.last_id);
+    assert.equal(logsJson.data[0]._filter_project_ids, undefined);
+    assert.equal(logsJson.data[0].compatibility.actual_openai_admin_data, false);
+    assert.equal(logsJson.data[0].actor.type, "api_key");
+    assert.equal(logsJson.data[0].actor.api_key.id, "local-organization-admin");
+    const eventTypes = logsJson.data.map((entry) => entry.type);
+    assert.ok(eventTypes.includes("project.created"));
+    assert.ok(eventTypes.includes("project.updated"));
+    assert.ok(eventTypes.includes("role.created"));
+    assert.ok(eventTypes.includes("group.created"));
+    assert.ok(eventTypes.includes("role.assignment.created"));
+    assert.ok(eventTypes.includes("user.added"));
+
+    const roleLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=role.created&resource_ids%5B%5D=${role.id}`);
+    assert.equal(roleLogs.status, 200);
+    const roleLogsJson = await roleLogs.json();
+    assert.equal(roleLogsJson.data.length, 1);
+    assert.equal(roleLogsJson.data[0].type, "role.created");
+    assert.equal(roleLogsJson.data[0]["role.created"].id, role.id);
+    assert.deepEqual(roleLogsJson.data[0]["role.created"].permissions, ["api.audit_logs.read"]);
+
+    const projectLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?project_ids%5B%5D=${project.id}&limit=20`);
+    assert.equal(projectLogs.status, 200);
+    const projectLogTypes = (await projectLogs.json()).data.map((entry) => entry.type);
+    assert.ok(projectLogTypes.includes("project.created"));
+    assert.ok(projectLogTypes.includes("project.updated"));
+    assert.ok(projectLogTypes.includes("user.added"));
+
+    const actorLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?actor_ids%5B%5D=local-organization-admin&limit=50`);
+    assert.equal(actorLogs.status, 200);
+    assert.ok((await actorLogs.json()).data.length >= logsJson.data.length);
+
+    const actorEmailLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?actor_emails%5B%5D=bridge-audit-member@example.com&limit=20`);
+    assert.equal(actorEmailLogs.status, 200);
+    const actorEmailLogsJson = await actorEmailLogs.json();
+    assert.ok(actorEmailLogsJson.data.some((entry) => entry.type === "user.added"
+      && entry["user.added"]?.id === projectUser.id));
+
+    const effectiveLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?effective_at%5Bgte%5D=${startedAt}&limit=50`);
+    assert.equal(effectiveLogs.status, 200);
+    assert.ok((await effectiveLogs.json()).data.length >= logsJson.data.length);
+
+    const paged = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=2`);
+    assert.equal(paged.status, 200);
+    const pagedJson = await paged.json();
+    assert.equal(pagedJson.data.length, 2);
+    assert.equal(pagedJson.has_more, true);
+    const nextPage = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=2&after=${encodeURIComponent(pagedJson.last_id)}`);
+    assert.equal(nextPage.status, 200);
+    const nextPageJson = await nextPage.json();
+    assert.ok(nextPageJson.data.length >= 1);
+    assert.notEqual(nextPageJson.data[0].id, pagedJson.data[0].id);
+
+    const emptyFiltered = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.created`);
+    assert.equal(emptyFiltered.status, 200);
+    assert.deepEqual((await emptyFiltered.json()).data, []);
+
+    const invalidFilter = await fetch(`${baseUrl}/v1/organization/audit_logs?effective_at%5Bgte%5D=not-a-number`);
+    assert.equal(invalidFilter.status, 400);
+    assert.equal((await invalidFilter.json()).error.code, "invalid_audit_log_filter");
+
+    await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${role.id}`, { method: "DELETE" });
+    await fetch(`${baseUrl}/v1/organization/roles/${role.id}`, { method: "DELETE" });
+    await fetch(`${baseUrl}/v1/organization/groups/${group.id}`, { method: "DELETE" });
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization projects manage local service accounts and redacted API keys", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization project admin compatibility should not call upstream provider");

@@ -8245,6 +8245,16 @@ function handleOrganizationUsage(res, kind, url) {
   sendJson(res, 200, createOrganizationUsagePage(kind, url));
 }
 
+function handleOrganizationAuditLogsList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    organizationAdminStore.listAuditLogs(organizationAuditLogFilters(url)),
+    url,
+    "desc",
+    20,
+    100,
+  ));
+}
+
 async function handleOrganizationRoleCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -9744,6 +9754,55 @@ function organizationUserEmailFilters(url) {
     .flatMap((value) => String(value || "").split(","))
     .map((value) => value.trim())
     .filter(Boolean);
+}
+
+function organizationAuditLogFilters(url) {
+  return {
+    effectiveAt: organizationAuditLogEffectiveAtFilter(url),
+    projectIds: queryArrayValues(url, "project_ids"),
+    eventTypes: queryArrayValues(url, "event_types"),
+    actorIds: queryArrayValues(url, "actor_ids"),
+    actorEmails: queryArrayValues(url, "actor_emails"),
+    resourceIds: queryArrayValues(url, "resource_ids"),
+  };
+}
+
+function organizationAuditLogEffectiveAtFilter(url) {
+  const filter = {};
+  for (const op of ["gt", "gte", "lt", "lte"]) {
+    const value = firstQueryValue(url, [
+      `effective_at[${op}]`,
+      `effective_at.${op}`,
+      `effective_at_${op}`,
+    ]);
+    if (value === undefined) continue;
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      throw requestError("effective_at filters must be Unix second integers", {
+        code: "invalid_audit_log_filter",
+        param: `effective_at.${op}`,
+      });
+    }
+    filter[op] = Math.trunc(parsed);
+  }
+  return filter;
+}
+
+function queryArrayValues(url, name) {
+  return [
+    ...url.searchParams.getAll(name),
+    ...url.searchParams.getAll(`${name}[]`),
+  ]
+    .flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function firstQueryValue(url, names) {
+  for (const name of names) {
+    if (url.searchParams.has(name)) return url.searchParams.get(name);
+  }
+  return undefined;
 }
 
 function fineTuningMetadataFilter(url) {
@@ -12051,6 +12110,11 @@ function createServer(config = loadConfig()) {
       const organizationUsageRoute = url.pathname.match(/^\/v1\/organization\/usage\/([^/]+)$/);
       if (organizationUsageRoute && req.method === "GET") {
         handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url);
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/v1/organization/audit_logs") {
+        handleOrganizationAuditLogsList(res, organizationAdminStore, url);
         return;
       }
 

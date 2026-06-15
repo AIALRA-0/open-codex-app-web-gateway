@@ -4463,6 +4463,95 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization audit logs compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - Admin APIs guide lists audit log review as an administrative workflow and
+    points SDK users to the Administration API reference;
+  - OpenAPI spec for `GET /v1/organization/audit_logs` documents
+    `list-audit-logs`, `effective_at` range filters, `project_ids[]`,
+    `event_types[]`, `actor_ids[]`, `actor_emails[]`, `resource_ids[]`,
+    `after`/`before` cursor pagination, `limit`, and the
+    `object:"list"` / `data` / `first_id` / `last_id` / `has_more` response;
+  - OpenAI Node SDK generated Organization audit logs resource documents
+    `client.admin.organization.auditLogs.list()` and the audit-log event type
+    family, including project, invite, group, role, role-assignment,
+    service-account, API-key, user, rate-limit, certificate, and login/logout
+    events.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added an `audit_logs` state directory under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR`;
+  - added local audit-log writes for implemented admin mutations, including
+    project create/update/archive, invite send/delete, organization user
+    add/update/delete, custom role create/update/delete, group
+    create/update/delete, direct role assignment create/delete,
+    project user add/update/delete, service-account create/update/delete,
+    project API-key create/delete boundaries, and rate-limit updates;
+  - added `GET /v1/organization/audit_logs` with official list-page shape,
+    default newest-first ordering, `after`/`before` pagination, `limit`, and
+    local filtering for `effective_at`, project ids, event types, actor ids,
+    actor emails, and resource ids;
+  - hides internal filter-only metadata from public audit-log responses while
+    keeping `compatibility.actual_openai_admin_data:false` explicit.
+- Current boundary: this is a local compatibility audit trail for this bridge's
+  emulated Organization admin store. It is not a hosted OpenAI security audit
+  export, does not include real provider login/session/IP/device telemetry,
+  does not prove RBAC enforcement, and does not replace external SIEM or
+  compliance logging. It closes SDK/UI 404s and gives deterministic local admin
+  event review for Chat Completions-backed deployments.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies empty list shape, lifecycle event
+    writes, hidden internal metadata, local actor projection, event-type,
+    project, resource, actor id/email, and `effective_at` filters, pagination,
+    invalid filter errors, and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-audit-logs`, covering
+    the same lifecycle against the deployed DeepSeek-backed bridge with zero
+    provider token usage.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Organization unit tests passed 6/6.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-audit-logs`: passed 1/1 against
+    `deepseek-v4-pro`, latency 1319 ms, output
+    `organization_audit_logs:proj_...:role_...`, and zero provider token usage.
+  - `npm test`: passed 206/206.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1231 ms, P95 latency 1394 ms, and total usage 99
+    tokens.
+  - `npm run eval:bridge -- --timeout-ms 180000`: passed 103/103 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1196 ms, P95 latency
+    3159 ms, and total usage 24946 tokens. The suite now includes
+    `organization-audit-logs`.
+  - `npm run smoke:bridge`: passed with `output_text:"bridge-ok"`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online`, exercised sidebar/page navigation,
+    project dialog, host upload verification, prompt send, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project create/reopen/cleanup, and reported no browser console errors or
+    warnings.
+  - Service check: app-server, bridge, and web services were all `active`;
+    `https://opencodexapp.aialra.online` returned HTTP 200.
+  - Space check after the run: `/` was 165G used of 193G, 28G available, 86%
+    used; repo `state` was 29M, `output` was 4.4M,
+    `/srv/aialra/data/opencodexapp` was 136K, and
+    `/srv/aialra/logs/opencodexapp` was 29M.
+  - Runtime prune dry-run selected one old UI screenshot; apply deleted one
+    file, 83270 bytes, with zero errors.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+  - Direct search for the provided DeepSeek API key returned no repository
+    matches.
+- Updated compatibility/evaluation/deployment docs to list the new local audit
+  log endpoint, official sources, live eval command, state-directory boundary,
+  and remaining Organization admin gaps.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, or usable synthetic project key values were added to
+  the repository.
+
 ## 2026-06-15 - Local Organization users and invites compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

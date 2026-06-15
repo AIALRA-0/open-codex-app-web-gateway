@@ -62,6 +62,12 @@ function compareCreatedThenIdAsc(a, b) {
   return String(a.id || "").localeCompare(String(b.id || ""));
 }
 
+function compareEffectiveThenIdAsc(a, b) {
+  const effective = Number(a.effective_at || 0) - Number(b.effective_at || 0);
+  if (effective) return effective;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function compareAddedThenIdAsc(a, b) {
   const added = Number(a.added_at || 0) - Number(b.added_at || 0);
   if (added) return added;
@@ -81,6 +87,19 @@ function localCompatibility(reason, extra = {}) {
     actual_openai_admin_data: false,
     ...extra,
   };
+}
+
+function uniqueStrings(values = []) {
+  return Array.from(new Set((Array.isArray(values) ? values : [values])
+    .flatMap((value) => Array.isArray(value) ? value : [value])
+    .map((value) => optionalString(value))
+    .filter(Boolean)));
+}
+
+function intersects(values, filterValues) {
+  if (!filterValues?.length) return true;
+  const valueSet = new Set(values);
+  return filterValues.some((value) => valueSet.has(value));
 }
 
 const RATE_LIMIT_NUMERIC_FIELDS = Object.freeze([
@@ -140,6 +159,7 @@ class LocalOrganizationAdminStore {
     fs.mkdirSync(this.organizationGroupsDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationUserRolesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationGroupResourcesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.auditLogsDir(), { recursive: true, mode: 0o700 });
   }
 
   projectsDir() {
@@ -168,6 +188,10 @@ class LocalOrganizationAdminStore {
 
   organizationGroupResourcesDir() {
     return path.join(this.dir, "organization_group_resources");
+  }
+
+  auditLogsDir() {
+    return path.join(this.dir, "audit_logs");
   }
 
   projectResourcesDir() {
@@ -237,6 +261,12 @@ class LocalOrganizationAdminStore {
     return path.join(dir, `${clean}.json`);
   }
 
+  auditLogPath(auditLogId) {
+    const clean = safeId(auditLogId);
+    if (!clean) return null;
+    return path.join(this.auditLogsDir(), `${clean}.json`);
+  }
+
   projectResourceDir(projectId, resource) {
     const clean = safeId(projectId);
     if (!clean) return null;
@@ -271,6 +301,62 @@ class LocalOrganizationAdminStore {
     return path.join(dir, `${clean}.json`);
   }
 
+  recordAuditLog(type, details = {}, options = {}) {
+    const eventType = optionalString(type);
+    if (!eventType) return null;
+    const eventDetails = isPlainObject(details) ? clone(details) : {};
+    const projectIds = uniqueStrings([
+      options.projectId,
+      options.projectIds,
+      eventDetails.project_id,
+      eventType.startsWith("project.") && eventDetails.id ? eventDetails.id : null,
+    ]);
+    const resourceIds = uniqueStrings([
+      options.resourceId,
+      options.resourceIds,
+      eventDetails.id,
+      eventDetails.project_id,
+    ]);
+    const now = nowSeconds();
+    const auditLog = {
+      id: `audit_log_${randomToken(14)}`,
+      type: eventType,
+      effective_at: Number.isFinite(Number(options.effectiveAt)) ? Math.trunc(Number(options.effectiveAt)) : now,
+      actor: isPlainObject(options.actor) ? clone(options.actor) : this.localAuditActor(),
+      [eventType]: eventDetails,
+      compatibility: localCompatibility("organization_audit_log_protocol_compatibility", {
+        locally_persisted: true,
+        source: "local_organization_admin_store",
+      }),
+      _filter_project_ids: projectIds,
+      _filter_resource_ids: resourceIds,
+      _filter_actor_ids: uniqueStrings(options.actorIds),
+      _filter_actor_emails: uniqueStrings(options.actorEmails).map((email) => email.toLowerCase()),
+    };
+    this.writeJson(this.auditLogPath(auditLog.id), auditLog);
+    this.cleanup();
+    return this.auditLogProjection(auditLog);
+  }
+
+  listAuditLogs(filters = {}) {
+    const filter = isPlainObject(filters) ? filters : {};
+    const effectiveAt = isPlainObject(filter.effectiveAt) ? filter.effectiveAt : {};
+    const projectIds = uniqueStrings(filter.projectIds);
+    const eventTypes = uniqueStrings(filter.eventTypes);
+    const actorIds = uniqueStrings(filter.actorIds);
+    const actorEmails = uniqueStrings(filter.actorEmails).map((email) => email.toLowerCase());
+    const resourceIds = uniqueStrings(filter.resourceIds);
+    return this.listJsonFiles(this.auditLogsDir())
+      .filter((log) => this.auditLogMatchesEffectiveAt(log, effectiveAt))
+      .filter((log) => !eventTypes.length || eventTypes.includes(log.type))
+      .filter((log) => intersects(this.auditLogProjectIds(log), projectIds))
+      .filter((log) => intersects(this.auditLogActorIds(log), actorIds))
+      .filter((log) => intersects(this.auditLogActorEmails(log), actorEmails))
+      .filter((log) => intersects(this.auditLogResourceIds(log), resourceIds))
+      .sort(compareEffectiveThenIdAsc)
+      .map((log) => this.auditLogProjection(log));
+  }
+
   createOrganizationRole(body = {}) {
     const request = isPlainObject(body) ? body : {};
     const name = optionalString(request.role_name);
@@ -297,6 +383,14 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationRolePath(role.id), role);
+    this.recordAuditLog("role.created", {
+      id: role.id,
+      role_name: role.name,
+      permissions: role.permissions,
+      resource_type: role.resource_type,
+    }, {
+      resourceId: role.id,
+    });
     this.cleanup();
     return this.organizationRoleProjection(role);
   }
@@ -333,6 +427,16 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.organizationRolePath(role.id), role);
+    this.recordAuditLog("role.updated", {
+      id: role.id,
+      changes_requested: {
+        ...(name ? { role_name: name } : {}),
+        ...(request.description !== undefined ? { description: role.description } : {}),
+        ...(request.permissions !== undefined ? { permissions: role.permissions } : {}),
+      },
+    }, {
+      resourceId: role.id,
+    });
     return this.organizationRoleProjection(role);
   }
 
@@ -351,6 +455,11 @@ class LocalOrganizationAdminStore {
     for (const groupDir of this.listOrganizationGroupResourceDirs()) {
       try { fs.unlinkSync(path.join(groupDir, "roles", `${role.id}.json`)); } catch {}
     }
+    this.recordAuditLog("role.deleted", {
+      id: role.id,
+    }, {
+      resourceId: role.id,
+    });
     return {
       object: "role.deleted",
       id: role.id,
@@ -380,6 +489,14 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationGroupPath(group.id), group);
+    this.recordAuditLog("group.created", {
+      id: group.id,
+      data: {
+        group_name: group.name,
+      },
+    }, {
+      resourceId: group.id,
+    });
     this.cleanup();
     return clone(group);
   }
@@ -416,6 +533,14 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.organizationGroupPath(group.id), group);
+    this.recordAuditLog("group.updated", {
+      id: group.id,
+      changes_requested: {
+        group_name: group.name,
+      },
+    }, {
+      resourceId: group.id,
+    });
     return clone(group);
   }
 
@@ -429,6 +554,11 @@ class LocalOrganizationAdminStore {
     }
     try { fs.unlinkSync(this.organizationGroupPath(group.id)); } catch {}
     this.removeDir(path.join(this.organizationGroupResourcesDir(), group.id));
+    this.recordAuditLog("group.deleted", {
+      id: group.id,
+    }, {
+      resourceId: group.id,
+    });
     return {
       object: "group.deleted",
       id: group.id,
@@ -457,6 +587,14 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationGroupUserPath(group.id, user.id), membership);
+    this.recordAuditLog("group.updated", {
+      id: group.id,
+      changes_requested: {
+        added_user_id: user.id,
+      },
+    }, {
+      resourceIds: [group.id, user.id],
+    });
     this.cleanup();
     return {
       object: "group.user",
@@ -496,6 +634,14 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.organizationGroupUserPath(groupId, userId)); } catch {}
+    this.recordAuditLog("group.updated", {
+      id: groupId,
+      changes_requested: {
+        removed_user_id: userId,
+      },
+    }, {
+      resourceIds: [groupId, userId],
+    });
     return {
       object: "group.user.deleted",
       deleted: true,
@@ -516,6 +662,15 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationUserRolePath(user.id, role.id), assignment);
+    this.recordAuditLog("role.assignment.created", {
+      id: `assignment_${stableToken(`${user.id}:${role.id}`, 20)}`,
+      principal_id: user.id,
+      principal_type: "user",
+      resource_id: role.id,
+      resource_type: role.resource_type || "api.organization",
+    }, {
+      resourceIds: [role.id, user.id],
+    });
     this.cleanup();
     return {
       object: "user.role",
@@ -555,6 +710,15 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.organizationUserRolePath(userId, roleId)); } catch {}
+    this.recordAuditLog("role.assignment.deleted", {
+      id: `assignment_${stableToken(`${userId}:${roleId}`, 20)}`,
+      principal_id: userId,
+      principal_type: "user",
+      resource_id: roleId,
+      resource_type: "api.organization",
+    }, {
+      resourceIds: [roleId, userId],
+    });
     return {
       object: "user.role.deleted",
       deleted: true,
@@ -575,6 +739,15 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationGroupRolePath(group.id, role.id), assignment);
+    this.recordAuditLog("role.assignment.created", {
+      id: `assignment_${stableToken(`${group.id}:${role.id}`, 20)}`,
+      principal_id: group.id,
+      principal_type: "group",
+      resource_id: role.id,
+      resource_type: role.resource_type || "api.organization",
+    }, {
+      resourceIds: [role.id, group.id],
+    });
     this.cleanup();
     return {
       object: "group.role",
@@ -614,6 +787,15 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.organizationGroupRolePath(groupId, roleId)); } catch {}
+    this.recordAuditLog("role.assignment.deleted", {
+      id: `assignment_${stableToken(`${groupId}:${roleId}`, 20)}`,
+      principal_id: groupId,
+      principal_type: "group",
+      resource_id: roleId,
+      resource_type: "api.organization",
+    }, {
+      resourceIds: [roleId, groupId],
+    });
     return {
       object: "group.role.deleted",
       deleted: true,
@@ -661,6 +843,16 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationInvitePath(invite.id), invite);
+    this.recordAuditLog("invite.sent", {
+      id: invite.id,
+      data: {
+        email: invite.email,
+        role: invite.role,
+      },
+    }, {
+      resourceId: invite.id,
+      projectIds: invite.projects.map((project) => project.id),
+    });
     this.cleanup();
     return clone(invite);
   }
@@ -692,6 +884,12 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.organizationInvitePath(invite.id)); } catch {}
+    this.recordAuditLog("invite.deleted", {
+      id: invite.id,
+    }, {
+      resourceId: invite.id,
+      projectIds: invite.projects?.map((project) => project.id) || [],
+    });
     return {
       object: "organization.invite.deleted",
       id: invite.id,
@@ -751,6 +949,18 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.organizationUserPath(user.id), user);
+    this.recordAuditLog("user.updated", {
+      id: user.id,
+      changes_requested: {
+        ...(request.role !== undefined ? { role: user.role } : {}),
+        ...(request.role_id !== undefined ? { role_id: user.role_id ?? null } : {}),
+        ...(request.developer_persona !== undefined ? { developer_persona: user.developer_persona ?? null } : {}),
+        ...(request.technical_level !== undefined ? { technical_level: user.technical_level ?? null } : {}),
+      },
+    }, {
+      resourceId: user.id,
+      actorEmails: [user.email],
+    });
     return this.organizationUserProjection(user);
   }
 
@@ -771,6 +981,12 @@ class LocalOrganizationAdminStore {
     for (const project of this.listProjects({ includeArchived: true })) {
       try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
     }
+    this.recordAuditLog("user.deleted", {
+      id: user.id,
+    }, {
+      resourceId: user.id,
+      actorEmails: [user.email],
+    });
     return {
       object: "organization.user.deleted",
       id: user.id,
@@ -805,6 +1021,17 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.organizationUserPath(user.id), user);
+    if (!existing) {
+      this.recordAuditLog("user.added", {
+        id: user.id,
+        data: {
+          role: user.role,
+        },
+      }, {
+        resourceId: user.id,
+        actorEmails: [user.email],
+      });
+    }
     return this.organizationUserProjection(user);
   }
 
@@ -830,6 +1057,16 @@ class LocalOrganizationAdminStore {
       }),
     };
     this.writeJson(this.projectPath(project.id), project);
+    this.recordAuditLog("project.created", {
+      id: project.id,
+      data: {
+        name,
+        title: name,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
     this.cleanup();
     return clone(project);
   }
@@ -861,6 +1098,15 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.projectPath(project.id), project);
+    this.recordAuditLog("project.updated", {
+      id: project.id,
+      changes_requested: {
+        ...(name ? { title: name, name } : {}),
+      },
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
     return clone(project);
   }
 
@@ -874,6 +1120,12 @@ class LocalOrganizationAdminStore {
         last_lifecycle_action: "archive",
       };
       this.writeJson(this.projectPath(project.id), project);
+      this.recordAuditLog("project.archived", {
+        id: project.id,
+      }, {
+        projectId: project.id,
+        resourceId: project.id,
+      });
     }
     return clone(project);
   }
@@ -915,6 +1167,12 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.apiKeyPath(projectId, apiKeyId)); } catch {}
+    this.recordAuditLog("api_key.deleted", {
+      id: apiKey.id,
+    }, {
+      projectId,
+      resourceId: apiKey.id,
+    });
     return {
       object: "organization.project.api_key.deleted",
       id: apiKey.id,
@@ -963,6 +1221,26 @@ class LocalOrganizationAdminStore {
     };
     this.writeJson(this.serviceAccountPath(project.id, serviceAccount.id), serviceAccount);
     this.writeJson(this.apiKeyPath(project.id, apiKey.id), apiKey);
+    this.recordAuditLog("service_account.created", {
+      id: serviceAccount.id,
+      project_id: project.id,
+      data: {
+        role: serviceAccount.role,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: serviceAccount.id,
+    });
+    this.recordAuditLog("api_key.created", {
+      id: apiKey.id,
+      project_id: project.id,
+      data: {
+        scopes: ["api.model.request"],
+      },
+    }, {
+      projectId: project.id,
+      resourceId: apiKey.id,
+    });
     this.cleanup();
     return {
       ...clone(serviceAccount),
@@ -1024,6 +1302,17 @@ class LocalOrganizationAdminStore {
     };
     this.writeJson(this.serviceAccountPath(project.id, serviceAccount.id), serviceAccount);
     this.updateServiceAccountApiKeyOwners(project.id, serviceAccount);
+    this.recordAuditLog("service_account.updated", {
+      id: serviceAccount.id,
+      project_id: project.id,
+      changes_requested: {
+        ...(name ? { name } : {}),
+        ...(request.role !== undefined ? { role: serviceAccount.role } : {}),
+      },
+    }, {
+      projectId: project.id,
+      resourceId: serviceAccount.id,
+    });
     return clone(serviceAccount);
   }
 
@@ -1043,8 +1332,22 @@ class LocalOrganizationAdminStore {
       if (apiKey.owner?.type === "service_account"
         && apiKey.owner?.service_account?.id === serviceAccount.id) {
         try { fs.unlinkSync(this.apiKeyPath(project.id, apiKey.id)); } catch {}
+        this.recordAuditLog("api_key.deleted", {
+          id: apiKey.id,
+          project_id: project.id,
+        }, {
+          projectId: project.id,
+          resourceId: apiKey.id,
+        });
       }
     }
+    this.recordAuditLog("service_account.deleted", {
+      id: serviceAccount.id,
+      project_id: project.id,
+    }, {
+      projectId: project.id,
+      resourceId: serviceAccount.id,
+    });
     return {
       object: "organization.project.service_account.deleted",
       id: serviceAccount.id,
@@ -1094,6 +1397,17 @@ class LocalOrganizationAdminStore {
       email: user.email,
       name: user.name,
       role: "reader",
+    });
+    this.recordAuditLog("user.added", {
+      id: user.id,
+      project_id: project.id,
+      data: {
+        role: user.role,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: user.id,
+      actorEmails: [user.email],
     });
     this.cleanup();
     return clone(user);
@@ -1148,6 +1462,17 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.projectUserPath(project.id, user.id), user);
+    this.recordAuditLog("user.updated", {
+      id: user.id,
+      project_id: project.id,
+      changes_requested: {
+        ...(request.role !== undefined ? { role: user.role } : {}),
+      },
+    }, {
+      projectId: project.id,
+      resourceId: user.id,
+      actorEmails: [user.email],
+    });
     return clone(user);
   }
 
@@ -1163,6 +1488,14 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
+    this.recordAuditLog("user.deleted", {
+      id: user.id,
+      project_id: project.id,
+    }, {
+      projectId: project.id,
+      resourceId: user.id,
+      actorEmails: [user.email],
+    });
     return {
       object: "organization.project.user.deleted",
       id: user.id,
@@ -1208,6 +1541,17 @@ class LocalOrganizationAdminStore {
       last_lifecycle_action: "update",
     };
     this.writeJson(this.rateLimitPath(project.id, rateLimit.id), rateLimit);
+    this.recordAuditLog("rate_limit.updated", {
+      id: rateLimit.id,
+      project_id: project.id,
+      changes_requested: RATE_LIMIT_NUMERIC_FIELDS.reduce((changes, field) => {
+        if (request[field] !== undefined && request[field] !== null) changes[field] = rateLimit[field];
+        return changes;
+      }, {}),
+    }, {
+      projectId: project.id,
+      resourceId: rateLimit.id,
+    });
     return clone(rateLimit);
   }
 
@@ -1348,6 +1692,74 @@ class LocalOrganizationAdminStore {
       created_at: group.created_at,
       scim_managed: group.is_scim_managed === true,
     };
+  }
+
+  localAuditActor() {
+    return {
+      type: "api_key",
+      api_key: {
+        id: "local-organization-admin",
+        type: "service_account",
+        service_account: {
+          id: "svc_acct_local_bridge",
+        },
+      },
+    };
+  }
+
+  auditLogProjection(log) {
+    const value = clone(log);
+    for (const key of Object.keys(value)) {
+      if (key.startsWith("_filter_")) delete value[key];
+    }
+    return value;
+  }
+
+  auditLogMatchesEffectiveAt(log, filter = {}) {
+    const value = Number(log.effective_at || 0);
+    if (Number.isFinite(Number(filter.gt)) && !(value > Number(filter.gt))) return false;
+    if (Number.isFinite(Number(filter.gte)) && !(value >= Number(filter.gte))) return false;
+    if (Number.isFinite(Number(filter.lt)) && !(value < Number(filter.lt))) return false;
+    if (Number.isFinite(Number(filter.lte)) && !(value <= Number(filter.lte))) return false;
+    return true;
+  }
+
+  auditLogProjectIds(log) {
+    const details = isPlainObject(log?.[log.type]) ? log[log.type] : {};
+    return uniqueStrings([
+      log._filter_project_ids,
+      details.project_id,
+      String(log.type || "").startsWith("project.") ? details.id : null,
+    ]);
+  }
+
+  auditLogResourceIds(log) {
+    const details = isPlainObject(log?.[log.type]) ? log[log.type] : {};
+    return uniqueStrings([
+      log._filter_resource_ids,
+      details.id,
+      details.project_id,
+    ]);
+  }
+
+  auditLogActorIds(log) {
+    const actor = isPlainObject(log.actor) ? log.actor : {};
+    return uniqueStrings([
+      log._filter_actor_ids,
+      actor.api_key?.id,
+      actor.api_key?.user?.id,
+      actor.api_key?.service_account?.id,
+      actor.session?.user?.id,
+    ]);
+  }
+
+  auditLogActorEmails(log) {
+    const actor = isPlainObject(log.actor) ? log.actor : {};
+    return uniqueStrings([
+      log._filter_actor_emails,
+      actor.api_key?.user?.email,
+      actor.session?.user?.email,
+    ]).map((email) => email.toLowerCase());
   }
 
   normalizeInviteProjects(projects) {
@@ -1520,6 +1932,7 @@ class LocalOrganizationAdminStore {
       this.organizationInvitesDir(),
       this.organizationRolesDir(),
       this.organizationGroupsDir(),
+      this.auditLogsDir(),
     ]) {
       const files = this.listCleanupEntries(dir);
       for (const entry of files.slice(this.maxRecords)) {
