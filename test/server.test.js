@@ -11573,6 +11573,106 @@ test("POST /v1/moderations returns local OpenAI-compatible category results", as
   });
 });
 
+test("Organization usage and costs APIs return local zero-value admin pages", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization usage compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const startTime = 1730419200;
+    const costsResponse = await fetch(`${baseUrl}/v1/organization/costs?start_time=${startTime}&limit=2`);
+    assert.equal(costsResponse.status, 200);
+    const costs = await costsResponse.json();
+    assert.equal(costs.object, "page");
+    assert.equal(costs.data.length, 2);
+    assert.equal(costs.data[0].object, "bucket");
+    assert.equal(costs.data[0].start_time, startTime);
+    assert.equal(costs.data[0].end_time, startTime + 86400);
+    assert.equal(costs.data[0].results[0].object, "organization.costs.result");
+    assert.deepEqual(costs.data[0].results[0].amount, { value: 0, currency: "usd" });
+    assert.equal(costs.data[0].results[0].line_item, null);
+    assert.equal(costs.has_more, false);
+    assert.equal(costs.next_page, null);
+    assert.equal(costs.compatibility.provider, "local");
+    assert.equal(costs.compatibility.actual_openai_admin_data, false);
+
+    const usageExpectations = {
+      completions: {
+        object: "organization.usage.completions.result",
+        fields: { input_tokens: 0, output_tokens: 0, input_cached_tokens: 0, num_model_requests: 0 },
+      },
+      embeddings: {
+        object: "organization.usage.embeddings.result",
+        fields: { input_tokens: 0, num_model_requests: 0 },
+      },
+      moderations: {
+        object: "organization.usage.moderations.result",
+        fields: { input_tokens: 0, num_model_requests: 0 },
+      },
+      images: {
+        object: "organization.usage.images.result",
+        fields: { images: 0, num_model_requests: 0, size: null, source: null },
+      },
+      audio_speeches: {
+        object: "organization.usage.audio_speeches.result",
+        fields: { characters: 0, num_model_requests: 0 },
+      },
+      audio_transcriptions: {
+        object: "organization.usage.audio_transcriptions.result",
+        fields: { seconds: 0, num_model_requests: 0 },
+      },
+      vector_stores: {
+        object: "organization.usage.vector_stores.result",
+        fields: { usage_bytes: 0, project_id: null },
+      },
+      file_search_calls: {
+        object: "organization.usage.file_searches.result",
+        fields: { num_requests: 0, vector_store_id: null },
+      },
+      web_search_calls: {
+        object: "organization.usage.web_searches.result",
+        fields: { num_requests: 0, num_model_requests: 0, context_level: null },
+      },
+      code_interpreter_sessions: {
+        object: "organization.usage.code_interpreter_sessions.result",
+        fields: { num_sessions: 0, project_id: null },
+      },
+    };
+
+    for (const [kind, expectation] of Object.entries(usageExpectations)) {
+      const response = await fetch(`${baseUrl}/v1/organization/usage/${kind}?start_time=${startTime}&bucket_width=1h&limit=2&group_by=project_id`);
+      assert.equal(response.status, 200, kind);
+      const page = await response.json();
+      assert.equal(page.object, "page", kind);
+      assert.equal(page.data.length, 2, kind);
+      assert.equal(page.data[0].start_time, startTime, kind);
+      assert.equal(page.data[0].end_time, startTime + 3600, kind);
+      assert.equal(page.data[0].results[0].object, expectation.object, kind);
+      for (const [field, expected] of Object.entries(expectation.fields)) {
+        assert.equal(page.data[0].results[0][field], expected, `${kind}.${field}`);
+      }
+      assert.equal(page.compatibility.provider, "local", kind);
+      assert.equal(page.compatibility.actual_openai_admin_data, false, kind);
+    }
+
+    const bounded = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 60}&bucket_width=1m&limit=10`);
+    assert.equal(bounded.status, 200);
+    assert.equal((await bounded.json()).data.length, 1);
+
+    const missingStart = await fetch(`${baseUrl}/v1/organization/usage/completions`);
+    assert.equal(missingStart.status, 400);
+    assert.equal((await missingStart.json()).error.param, "start_time");
+
+    const invalidBucket = await fetch(`${baseUrl}/v1/organization/costs?start_time=${startTime}&bucket_width=1h`);
+    assert.equal(invalidBucket.status, 400);
+    assert.equal((await invalidBucket.json()).error.code, "invalid_bucket_width");
+
+    const missingResource = await fetch(`${baseUrl}/v1/organization/usage/unknown_resource?start_time=${startTime}`);
+    assert.equal(missingResource.status, 404);
+    assert.equal((await missingResource.json()).error.code, "organization_usage_resource_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Realtime API creates local sessions, client secrets, and call lifecycle state", async () => {
   await withMockProvider(async () => {
     assert.fail("Realtime compatibility should not call upstream provider");

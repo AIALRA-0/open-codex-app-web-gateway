@@ -365,6 +365,24 @@ function buildSuites(defaultModel) {
           && missingJob?.status === 404,
       },
       {
+        id: "organization-usage-costs",
+        mode: "organization-usage-costs",
+        check: ({ costs, completions, images, fileSearch, webSearch, invalidBucket, missingStart }) => costs?.object === "page"
+          && costs.data?.[0]?.results?.[0]?.object === "organization.costs.result"
+          && costs.data[0].results[0].amount?.value === 0
+          && costs.compatibility?.actual_openai_admin_data === false
+          && completions?.data?.[0]?.results?.[0]?.object === "organization.usage.completions.result"
+          && completions.data[0].results[0].input_tokens === 0
+          && images?.data?.[0]?.results?.[0]?.object === "organization.usage.images.result"
+          && images.data[0].results[0].images === 0
+          && fileSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.file_searches.result"
+          && fileSearch.data[0].results[0].num_requests === 0
+          && webSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.web_searches.result"
+          && webSearch.data[0].results[0].num_model_requests === 0
+          && invalidBucket?.status === 400
+          && missingStart?.status === 400,
+      },
+      {
         id: "chatkit-lifecycle",
         mode: "chatkit-lifecycle",
         request: {
@@ -2968,6 +2986,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "fine-tuning-lifecycle") {
       return await runFineTuningLifecycleCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-usage-costs") {
+      return await runOrganizationUsageCostsCase(testCase, context, started);
+    }
     if (testCase.mode === "chatkit-lifecycle") {
       return await runChatKitLifecycleCase(testCase, context, started);
     }
@@ -3401,6 +3422,34 @@ async function runFineTuningLifecycleCase(testCase, context, started) {
     checkpoint,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `fine_tuning:${job.json.id}:${checkpoint || "missing"}`,
+  });
+}
+
+async function runOrganizationUsageCostsCase(testCase, context, started) {
+  const startTime = 1730419200;
+  const costs = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&limit=2`);
+  const completions = await getJson(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&bucket_width=1h&limit=2&group_by=project_id`);
+  const images = await getJson(`${baseUrl}/v1/organization/usage/images?start_time=${startTime}&bucket_width=1h&limit=2`);
+  const fileSearch = await getJson(`${baseUrl}/v1/organization/usage/file_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
+  const webSearch = await getJson(`${baseUrl}/v1/organization/usage/web_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
+  const invalidBucket = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&bucket_width=1h`);
+  const missingStart = await getJson(`${baseUrl}/v1/organization/usage/completions`);
+  const ok = !!testCase.check({
+    costs: costs.json,
+    completions: completions.json,
+    images: images.json,
+    fileSearch: fileSearch.json,
+    webSearch: webSearch.json,
+    invalidBucket,
+    missingStart,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: costs.status,
+    costs_bucket_count: costs.json?.data?.length || 0,
+    usage_bucket_count: completions.json?.data?.length || 0,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_usage:${costs.json?.data?.length || 0}:${completions.json?.data?.length || 0}`,
   });
 }
 

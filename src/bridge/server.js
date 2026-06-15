@@ -54,6 +54,10 @@ const {
 } = require("./local_uploads");
 const { LocalFineTuningStore } = require("./local_fine_tuning");
 const {
+  createOrganizationCostsPage,
+  createOrganizationUsagePage,
+} = require("./local_organization_usage");
+const {
   attachShellOutput,
   injectShellMessages,
   localShellToolTypes,
@@ -8230,6 +8234,14 @@ async function handleGraderRun(req, res, config) {
   sendJson(res, 200, response);
 }
 
+function handleOrganizationCosts(res, url) {
+  sendJson(res, 200, createOrganizationCostsPage(url));
+}
+
+function handleOrganizationUsage(res, kind, url) {
+  sendJson(res, 200, createOrganizationUsagePage(kind, url));
+}
+
 async function handleFineTuningJobCreate(req, res, fineTuningStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -11647,6 +11659,17 @@ function createServer(config = loadConfig()) {
           default_model: config.defaultModel,
           has_provider_key: !!config.providerApiKey,
         });
+        return;
+      }
+
+      if (req.method === "GET" && url.pathname === "/v1/organization/costs") {
+        handleOrganizationCosts(res, url);
+        return;
+      }
+
+      const organizationUsageRoute = url.pathname.match(/^\/v1\/organization\/usage\/([^/]+)$/);
+      if (organizationUsageRoute && req.method === "GET") {
+        handleOrganizationUsage(res, decodeURIComponent(organizationUsageRoute[1]), url);
         return;
       }
 

@@ -428,6 +428,15 @@ async function runWorkflow(page, config) {
     return { clicked: true, name: found.name, rect: found.rect || null };
   }
 
+  async function clickNewChatIfVisible({ timeout = 5000, settleMs = 1000 } = {}) {
+    return await clickFirstVisibleButton(/新对话|New chat/i, {
+      timeout,
+      settleMs,
+      maxNameLength: 120,
+      viewportOnly: true,
+    });
+  }
+
   async function waitUntilNoVisibleButton(pattern, timeout = 10000, { maxNameLength = Infinity, viewportOnly = false } = {}) {
     const deadline = Date.now() + timeout;
     do {
@@ -942,11 +951,7 @@ async function runWorkflow(page, config) {
     try {
       await closeTransientOverlays();
       if (!(await ensureSidebarVisible())) throw new Error("sidebar is not visible before saving project");
-      const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
-      if (await isVisible(newChat)) {
-        await newChat.click({ timeout: 5000 });
-        await findEditor();
-      }
+      if ((await clickNewChatIfVisible({ timeout: 5000 })).clicked) await findEditor();
 
       const projectButton = page.getByRole("button", { name: /项目|Projects/i }).first();
       await projectButton.click({ timeout: 5000 });
@@ -980,7 +985,10 @@ async function runWorkflow(page, config) {
       const cleanup = await cleanupSavedUiSmokeProject(page, config.stateDir, projectName);
       await page.reload({ waitUntil: "domcontentloaded", timeout: config.timeoutMs });
       await waitForAppShell();
-      await page.getByRole("button", { name: /新对话|New chat/i }).first().click({ timeout: 5000 });
+      const newChatAfterCleanup = await clickNewChatIfVisible({ timeout: 5000 });
+      if (!newChatAfterCleanup.clicked) {
+        throw new Error(`new chat button is not clickable after saved project cleanup; visible=${JSON.stringify(newChatAfterCleanup.visible_names || [])}`);
+      }
       await findEditor();
 
       return {
@@ -1106,11 +1114,7 @@ async function runWorkflow(page, config) {
 
     await recordStep("create new conversation and submit prompt", async () => {
       await closeTransientOverlays();
-      const newChat = page.getByRole("button", { name: /新对话|New chat/i }).first();
-      if (await isVisible(newChat)) {
-        await newChat.click();
-        await page.waitForTimeout(1000);
-      }
+      await clickNewChatIfVisible({ timeout: 5000, settleMs: 1000 });
       await fillEditor(config.prompt);
       await page.keyboard.press("Enter");
       await page.waitForFunction((value) => {

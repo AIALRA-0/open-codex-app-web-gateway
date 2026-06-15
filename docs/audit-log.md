@@ -4369,6 +4369,99 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Organization usage and costs compatibility
+
+- Used the official OpenAI OpenAPI specs through the developer-docs MCP for:
+  - `GET /v1/organization/costs`;
+  - `GET /v1/organization/usage/completions`;
+  - `GET /v1/organization/usage/embeddings`;
+  - `GET /v1/organization/usage/images`;
+  - `GET /v1/organization/usage/audio_speeches`;
+  - `GET /v1/organization/usage/audio_transcriptions`;
+  - `GET /v1/organization/usage/vector_stores`;
+  - `GET /v1/organization/usage/file_search_calls`;
+  - `GET /v1/organization/usage/web_search_calls`;
+  - `GET /v1/organization/usage/moderations`;
+  - `GET /v1/organization/usage/code_interpreter_sessions`.
+- Added a local read-only Organization admin compatibility layer:
+  - costs and usage routes now return OpenAI-style `object:"page"` payloads
+    containing `object:"bucket"` entries;
+  - query validation covers required `start_time`, optional `end_time`,
+    `bucket_width`, and bounded `limit`;
+  - costs returns zero `organization.costs.result` rows with
+    `amount:{value:0,currency:"usd"}`;
+  - usage endpoints return zero result rows with the documented
+    resource-specific object names and numeric fields for completions,
+    embeddings, moderations, images, audio, vector stores, file search, web
+    search, and code-interpreter sessions;
+  - responses include compatibility metadata marking the payload as local
+    zero-value summary data and `actual_openai_admin_data:false`.
+- Current boundary: this closes SDK/UI 404s for the documented Organization
+  usage/cost endpoint family when the gateway is backed by a Chat Completions
+  provider. It is not real OpenAI organization billing, does not import
+  provider billing exports, does not meter local bridge history into invoices,
+  and does not add admin-key authorization beyond the existing gateway access
+  controls.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies all usage endpoint shapes, costs
+    shape, bounded ranges, missing `start_time`, invalid costs bucket width,
+    unknown usage resource 404, and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-usage-costs`, querying
+    costs plus representative completions, images, file-search, and web-search
+    usage endpoints.
+- Hardened the UI smoke script after two live runs repeated a Playwright
+  stability timeout on the visible `New chat` sidebar button during saved
+  project cleanup. The script now reuses its existing visible-button coordinate
+  click helper for `New chat`, which keeps the UI assertion while avoiding
+  sidebar animation/scroll timing flakes.
+- Updated compatibility/evaluation docs to list the Organization usage/cost
+  endpoint family, the local zero-value boundary, the focused harness command,
+  and the known full-parity gap.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_usage.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `scripts/ui-smoke.mjs`.
+  - Focused Organization unit test passed 1/1.
+  - `npm test`: passed 201/201.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-usage-costs`: passed 1/1 against
+    `deepseek-v4-pro`, latency 389 ms, output `organization_usage:2:2`, and
+    zero provider token usage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: first attempt
+    returned 97/98 with the new Organization case passing; immediate report
+    rerun passed 98/98, pass rate 1.0, average latency 1657 ms, P95 latency
+    4211 ms, and total usage 24798 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1481 ms, P95 latency 1632 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: first two attempts repeated
+    the saved-project `New chat` stability timeout; after the smoke script
+    hardening, the third run passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T16-28-18-773Z.png`.
+  - `node scripts/prune-runtime-state.mjs --dry-run`: scanned 1865 runtime
+    candidates across 12 targets, selected 3 old UI-smoke screenshots,
+    selected 309321 bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted those 3 screenshots, freed
+    309321 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 27 GB available; `state/` was 26 MB,
+    `output/` was 4.3 MB, `/srv/aialra/data/opencodexapp` was 136 KB, and
+    `/srv/aialra/logs/opencodexapp` was 28 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. Organization usage/costs
+  compatibility is stateless and writes no runtime records.
+
 ## 2026-06-15 - Local Fine-tuning lifecycle compatibility
 
 - Used the official OpenAI OpenAPI specs through the developer-docs MCP for:

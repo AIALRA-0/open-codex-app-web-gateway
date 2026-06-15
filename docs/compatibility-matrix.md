@@ -44,6 +44,11 @@ Primary sources:
 - OpenAI Fine-tuning Jobs OpenAPI operation `listFineTuningEvents`: https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/events
 - OpenAI Fine-tuning Jobs OpenAPI operation `listFineTuningJobCheckpoints`: https://api.openai.com/v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints
 - OpenAI Fine-tuning checkpoint permissions OpenAPI operation `createFineTuningCheckpointPermission`: https://api.openai.com/v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions
+- OpenAI Organization costs OpenAPI operation `usage-costs`: https://api.openai.com/v1/organization/costs
+- OpenAI Organization completions usage OpenAPI operation `usage-completions`: https://api.openai.com/v1/organization/usage/completions
+- OpenAI Organization images usage OpenAPI operation `usage-images`: https://api.openai.com/v1/organization/usage/images
+- OpenAI Organization file-search usage OpenAPI operation `usage-file-search-calls`: https://api.openai.com/v1/organization/usage/file_search_calls
+- OpenAI Organization web-search usage OpenAPI operation `usage-web-search-calls`: https://api.openai.com/v1/organization/usage/web_search_calls
 - OpenAI Audio speech OpenAPI operation `createSpeech`: https://api.openai.com/v1/audio/speech
 - OpenAI Audio transcription OpenAPI operation `createTranscription`: https://api.openai.com/v1/audio/transcriptions
 - OpenAI Audio translation OpenAPI operation `createTranslation`: https://api.openai.com/v1/audio/translations
@@ -481,6 +486,36 @@ permission files with separate age, count, and byte caps. This layer is a
 protocol compatibility shim, not an implementation of hosted training,
 dataset validation, OpenAI model deployment, or permission enforcement across
 real projects.
+
+## Organization Usage And Costs Coverage
+
+OpenAI's current endpoint list includes admin-key usage and costs endpoints for
+organization dashboards. Chat Completions-only providers do not expose OpenAI
+organization billing data, so the bridge implements a local read-only
+zero-value compatibility layer. It preserves the official `object:"page"` /
+`object:"bucket"` shape, bucket time boundaries, result object names, and
+resource-specific numeric fields while marking the payload as local protocol
+compatibility data.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `GET /v1/organization/costs` | Implemented locally | Requires `start_time`; supports `end_time`, `bucket_width:"1d"`, and `limit`; returns `organization.costs.result` with `amount:{value:0,currency:"usd"}`, null grouping dimensions, and `actual_openai_admin_data:false` |
+| `GET /v1/organization/usage/completions` | Implemented locally | Returns zero `organization.usage.completions.result` buckets with token, request, project/user/API-key/model/batch/service-tier fields |
+| `GET /v1/organization/usage/embeddings` | Implemented locally | Returns zero `organization.usage.embeddings.result` buckets with input-token/request and grouping fields |
+| `GET /v1/organization/usage/moderations` | Implemented locally | Returns zero `organization.usage.moderations.result` buckets with input-token/request and grouping fields |
+| `GET /v1/organization/usage/images` | Implemented locally | Returns zero `organization.usage.images.result` buckets with image count, request count, size/source, and grouping fields |
+| `GET /v1/organization/usage/audio_speeches` | Implemented locally | Returns zero `organization.usage.audio_speeches.result` buckets with character/request and grouping fields |
+| `GET /v1/organization/usage/audio_transcriptions` | Implemented locally | Returns zero `organization.usage.audio_transcriptions.result` buckets with seconds/request and grouping fields |
+| `GET /v1/organization/usage/vector_stores` | Implemented locally | Returns zero `organization.usage.vector_stores.result` buckets with `usage_bytes` and `project_id` |
+| `GET /v1/organization/usage/file_search_calls` | Implemented locally | Returns zero `organization.usage.file_searches.result` buckets with request count and vector-store grouping fields |
+| `GET /v1/organization/usage/web_search_calls` | Implemented locally | Returns zero `organization.usage.web_searches.result` buckets with request counts, model, and context-level fields |
+| `GET /v1/organization/usage/code_interpreter_sessions` | Implemented locally | Returns zero `organization.usage.code_interpreter_sessions.result` buckets with `num_sessions` and `project_id` |
+
+This compatibility surface is intentionally read-only and stateless; it does
+not write runtime files, expose real OpenAI admin data, meter provider bills,
+or replace provider-specific billing exports. It exists so SDKs, diagnostics,
+and dashboards can query the documented endpoint family without breaking on
+404 while the deployment remains backed by a Chat Completions provider.
 
 ## Conversations Endpoint Coverage
 
@@ -1487,6 +1522,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Fine-tuning full parity | The local adapter covers job create/list/retrieve, cancel/pause/resume lifecycle events, checkpoint listing, and checkpoint permission list/create/delete, but it does not validate training datasets, schedule hosted training, produce a real provider-deployed fine-tuned model, enforce organization/project permissions, or train DeepSeek/OpenAI weights | Add provider-specific tuning backends where available, dataset validators, async job workers, artifact/result-file generation, permission middleware, and quality evals comparing tuned-model behavior against baseline models |
+| OpenAI Organization admin usage/costs full parity | The local adapter covers the documented costs and usage response shapes with zero-value buckets so admin SDK calls do not 404, but it is not real OpenAI organization billing, does not aggregate local bridge usage history into invoices, and does not validate admin-key authorization beyond normal gateway access | Add optional local usage aggregation over bridge audit events, provider-specific billing importers, admin-auth middleware, export jobs, and dashboard reconciliation tests |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
 | OpenAI Realtime full parity | The local adapter covers REST creation of Realtime sessions, client secrets, transcription sessions, translation client secrets, WebRTC call setup response shape, and local call accept/reject/refer/hangup lifecycle state. It is not a low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket event runtime, speech-to-speech model loop, or hosted tracing backend | Add a real WebRTC/WebSocket relay backed by an audio-capable provider or OpenAI Realtime, server-side event translation, media/session isolation, call monitoring streams, token validation/accounting, and audio latency/quality evals |
