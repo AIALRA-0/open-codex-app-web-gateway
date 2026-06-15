@@ -374,10 +374,13 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   pause/resume/cancel without contacting the upstream Chat provider.
 - Local Organization usage/costs coverage records local ledger events from
   Chat Completions, Embeddings, Images, Moderations, Audio speech, and Audio
-  transcription paths; verifies usage `group_by`/filter aggregation,
-  hashed API-key dimensions, zero-cost `line_item` quantities, zero-value
-  fallback rows for unsupported local hosted-tool counters, cursor pagination,
-  and invalid/missing parameter errors.
+  transcription paths; also creates local vector-store attachments and a
+  Responses turn using `file_search`, `web_search_preview`, and
+  `code_interpreter` so hosted-tool counters are non-zero. It verifies usage
+  `group_by`/filter aggregation, hashed API-key dimensions, context-level and
+  vector-store filters, zero-cost `line_item` quantities for completions and
+  local hosted tools, ledger exclusion of prompt/file/code content, cursor
+  pagination, and invalid/missing parameter errors.
 - Local Organization users/invites coverage verifies project-user-to-org-user
   synchronization, organization user listing/retrieval/email filtering/update/
   delete behavior, project membership cleanup, invite create/list/retrieve/

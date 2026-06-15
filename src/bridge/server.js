@@ -787,6 +787,15 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     service_tier: response.service_tier || chat.service_tier,
     usage: response.usage,
   });
+  recordLocalHostedToolUsage(config, req, request, {
+    shell: localShell,
+    web_search: localWebSearch,
+    file_search: localFileSearch,
+  }, {
+    endpoint: "/v1/responses",
+    created_at: response.created_at,
+    model: response.model || chat.model,
+  });
 
   sendJson(res, 200, publicResponse);
 }
@@ -1255,6 +1264,11 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     model: response.model || chat.model,
     service_tier: response.service_tier || chat.service_tier,
     usage: response.usage,
+  });
+  recordLocalHostedToolUsage(config, { headers: incomingHeaders }, request, contexts || {}, {
+    endpoint: "/v1/responses",
+    created_at: response.created_at,
+    model: response.model || chat.model,
   });
 }
 
@@ -2395,22 +2409,27 @@ function handleVectorStoreDelete(res, fileSearchStore, storeId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleVectorStoreFileCreate(req, res, fileSearchStore, storeId) {
+async function handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId) {
   const body = await readJson(req);
   const attached = fileSearchStore.attachFile(storeId, body);
   if (!attached) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
     return;
   }
+  recordVectorStoreUsage(config, req, body, attached, { endpoint: "/v1/vector_stores/files" });
   sendJson(res, 200, attached);
 }
 
-async function handleVectorStoreFileBatchCreate(req, res, fileSearchStore, storeId) {
+async function handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId) {
   const body = await readJson(req);
   const batch = fileSearchStore.createVectorStoreFileBatch(storeId, body);
   if (!batch) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
     return;
+  }
+  const files = fileSearchStore.listVectorStoreFileBatchFiles(storeId, batch.id)?.data || [];
+  for (const file of files) {
+    recordVectorStoreUsage(config, req, body, file, { endpoint: "/v1/vector_stores/file_batches" });
   }
   sendJson(res, 200, batch);
 }
@@ -3153,6 +3172,15 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
       model: response.model || chat.model,
       service_tier: response.service_tier || state.serviceTier || chat.service_tier,
       usage: response.usage,
+    });
+    recordLocalHostedToolUsage(config, req, request, {
+      shell: localShell,
+      web_search: localWebSearch,
+      file_search: localFileSearch,
+    }, {
+      endpoint: "/v1/responses",
+      created_at: response.created_at,
+      model: response.model || chat.model,
     });
   } catch (error) {
     emitError(res, state, error.message, 500);
@@ -8436,6 +8464,84 @@ function recordOrganizationUsage(config, req, kind, details = {}) {
   }
 }
 
+function recordLocalHostedToolUsage(config, req, request = {}, contexts = {}, details = {}) {
+  const endpoint = details.endpoint || "/v1/responses";
+  const createdAt = details.created_at || nowSeconds();
+  const model = details.model ?? request?.model;
+  const fileSearch = contexts?.file_search || contexts?.localFileSearch || null;
+  for (const call of fileSearch?.calls || []) {
+    const vectorStoreId = Array.isArray(call.vector_store_ids) && call.vector_store_ids.length
+      ? call.vector_store_ids[0]
+      : call.vector_store_id;
+    recordOrganizationUsage(config, req, "file_search_calls", {
+      endpoint,
+      request,
+      created_at: createdAt,
+      vector_store_id: vectorStoreId,
+      num_requests: 1,
+    });
+  }
+
+  const webSearch = contexts?.web_search || contexts?.localWebSearch || null;
+  const webSearchCalls = Array.isArray(webSearch?.calls) ? webSearch.calls.length : 0;
+  if (webSearchCalls > 0) {
+    recordOrganizationUsage(config, req, "web_search_calls", {
+      endpoint,
+      request,
+      created_at: createdAt,
+      model,
+      context_level: localWebSearchContextLevel(request, webSearch),
+      num_model_requests: 1,
+      num_requests: webSearchCalls,
+    });
+  }
+
+  const shell = contexts?.shell || contexts?.localShell || null;
+  const codeInterpreterContainerIds = uniqStrings((shell?.calls || [])
+    .filter((call) => call?.type === "code_interpreter_call")
+    .map((call) => call.container_id)
+    .filter(Boolean));
+  if (codeInterpreterContainerIds.length > 0) {
+    recordOrganizationUsage(config, req, "code_interpreter_sessions", {
+      endpoint,
+      request,
+      created_at: createdAt,
+      num_sessions: codeInterpreterContainerIds.length,
+    });
+  }
+}
+
+function recordVectorStoreUsage(config, req, request = {}, vectorStoreFile = null, details = {}) {
+  if (!vectorStoreFile) return null;
+  return recordOrganizationUsage(config, req, "vector_stores", {
+    endpoint: details.endpoint || "/v1/vector_stores",
+    request,
+    created_at: vectorStoreFile.created_at || details.created_at || nowSeconds(),
+    usage_bytes: vectorStoreFile.usage_bytes ?? vectorStoreFile.bytes,
+  });
+}
+
+function localWebSearchContextLevel(request = {}, context = {}) {
+  const candidates = [
+    context.context_level,
+    context.search_context_size,
+    request.web_search_options?.search_context_size,
+    request.web_search_options?.context_level,
+    ...(Array.isArray(request.tools)
+      ? request.tools.flatMap((tool) => [
+        tool?.search_context_size,
+        tool?.context_level,
+        tool?.web_search_options?.search_context_size,
+        tool?.web_search_options?.context_level,
+      ])
+      : []),
+  ];
+  const value = candidates
+    .map((item) => String(item || "").trim().toLowerCase())
+    .find((item) => ["low", "medium", "high"].includes(item));
+  return value || null;
+}
+
 function usageMetricsForKind(kind, details = {}, usage = {}) {
   if (kind === "completions") {
     return {
@@ -11592,6 +11698,20 @@ async function runAssistantChatTurn({
   const usage = assistantRunUsage(upstreamJson?.usage);
   const aggregateUsage = aggregateAssistantRunUsage(run.usage, usage);
   const budgetState = assistantRunTokenBudgetState(run, aggregateUsage, upstreamJson);
+  const organizationUsageRequest = assistantOrganizationUsageRequest(run, config);
+  recordOrganizationUsage(config, { headers: incomingHeaders }, "completions", {
+    endpoint: "/v1/threads/runs",
+    request: organizationUsageRequest,
+    created_at: upstreamJson?.created,
+    model: upstreamJson?.model || upstreamBody.model || run.model || config.defaultModel,
+    service_tier: upstreamJson?.service_tier || upstreamBody.service_tier,
+    usage: upstreamJson?.usage,
+  });
+  recordLocalHostedToolUsage(config, { headers: incomingHeaders }, organizationUsageRequest, preparedChat.contexts, {
+    endpoint: "/v1/threads/runs",
+    created_at: upstreamJson?.created || nowSeconds(),
+    model: upstreamJson?.model || upstreamBody.model || run.model || config.defaultModel,
+  });
   const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
   if (toolCalls.length) {
     const step = assistantStore.createToolCallsStep(run, toolCalls, usage);
@@ -11782,6 +11902,20 @@ async function streamAssistantChatTurn({
     const usage = assistantRunUsage(upstreamJson?.usage);
     const aggregateUsage = aggregateAssistantRunUsage(run.usage, usage);
     const budgetState = assistantRunTokenBudgetState(run, aggregateUsage, upstreamJson);
+    const organizationUsageRequest = assistantOrganizationUsageRequest(run, config);
+    recordOrganizationUsage(config, { headers: incomingHeaders }, "completions", {
+      endpoint: "/v1/threads/runs",
+      request: organizationUsageRequest,
+      created_at: upstreamJson?.created,
+      model: upstreamJson?.model || upstreamBody.model || run.model || config.defaultModel,
+      service_tier: upstreamJson?.service_tier || upstreamBody.service_tier,
+      usage: upstreamJson?.usage,
+    });
+    recordLocalHostedToolUsage(config, { headers: incomingHeaders }, organizationUsageRequest, preparedChat.contexts, {
+      endpoint: "/v1/threads/runs",
+      created_at: upstreamJson?.created || nowSeconds(),
+      model: upstreamJson?.model || upstreamBody.model || run.model || config.defaultModel,
+    });
     const toolCalls = assistantChatToolCallsFromCompletion(upstreamJson);
     if (toolCalls.length) {
       completeAssistantTextStreamContext(res, assistantStore, run, streamState);
@@ -12606,6 +12740,15 @@ function assistantRunCompatibility(run, upstreamJson, chatPassthrough, extra = {
     streaming_supported: "event_shape_only",
     ...(chatPassthrough ? { chat_passthrough: chatPassthrough } : {}),
     ...extra,
+  };
+}
+
+function assistantOrganizationUsageRequest(run, config) {
+  const metadata = isPlainObject(run?.metadata) ? run.metadata : {};
+  return {
+    model: run?.model || config?.defaultModel,
+    project_id: run?.project_id || metadata.project_id,
+    user: run?.user || metadata.user || metadata.user_id,
   };
 }
 
@@ -13961,7 +14104,7 @@ function createServer(config = loadConfig()) {
         const batchId = vectorStoreFileBatchesRoute[2] ? decodeURIComponent(vectorStoreFileBatchesRoute[2]) : "";
         const action = vectorStoreFileBatchesRoute[3] || "";
         if (!batchId && req.method === "POST") {
-          await handleVectorStoreFileBatchCreate(req, res, fileSearchStore, storeId);
+          await handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId);
           return;
         }
         if (batchId && !action && req.method === "GET") {
@@ -13988,7 +14131,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!fileId && req.method === "POST") {
-          await handleVectorStoreFileCreate(req, res, fileSearchStore, storeId);
+          await handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId);
           return;
         }
         if (fileId && !action && req.method === "GET") {

@@ -139,6 +139,7 @@ const COST_LINE_ITEMS = Object.freeze({
 
 const IMAGE_SOURCES = Object.freeze(["image.generation", "image.edit", "image.variation"]);
 const IMAGE_SIZES = Object.freeze(["256x256", "512x512", "1024x1024", "1792x1792", "1024x1792"]);
+const WEB_SEARCH_CONTEXT_LEVELS = Object.freeze(["low", "medium", "high"]);
 
 const BUCKET_WIDTH_SECONDS = Object.freeze({
   "1m": 60,
@@ -372,6 +373,8 @@ function parseUsageQuery(kind, url, { bucketWidth, limits }) {
     batch: parseOptionalBoolean(url.searchParams.get("batch")),
     sources: validateEnumFilter(queryArray(url, "sources"), IMAGE_SOURCES, "sources"),
     sizes: validateEnumFilter(queryArray(url, "sizes"), IMAGE_SIZES, "sizes"),
+    vector_store_ids: queryArray(url, "vector_store_ids"),
+    context_levels: validateEnumFilter(queryArray(url, "context_levels"), WEB_SEARCH_CONTEXT_LEVELS, "context_levels"),
   };
   return { ...time, groupBy, filters };
 }
@@ -512,7 +515,9 @@ function usageEventMatchesFilters(kind, event, filters = {}) {
     && (kind !== "images" || (
       matchesListFilter(event.source, filters.sources)
       && matchesListFilter(event.size, filters.sizes)
-    ));
+    ))
+    && (kind !== "file_search_calls" || matchesListFilter(event.vector_store_id, filters.vector_store_ids))
+    && (kind !== "web_search_calls" || matchesListFilter(event.context_level, filters.context_levels));
 }
 
 function costEventMatchesFilters(event, filters = {}) {

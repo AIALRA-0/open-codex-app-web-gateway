@@ -373,11 +373,30 @@ function buildSuites(defaultModel) {
       {
         id: "organization-usage-costs",
         mode: "organization-usage-costs",
-        check: ({ marker, chat, costs, completions, embeddings, images, fileSearch, webSearch, invalidBucket, missingStart }) => chat?.object === "chat.completion"
+        check: ({
+          marker,
+          hostedLeakMarker,
+          chat,
+          costs,
+          completions,
+          embeddings,
+          images,
+          fileSearch,
+          webSearch,
+          codeInterpreter,
+          vectorStores,
+          hostedResponse,
+          invalidBucket,
+          missingStart,
+        }) => chat?.object === "chat.completion"
           && costs?.object === "page"
           && costs.data?.[0]?.results?.[0]?.object === "organization.costs.result"
           && costs.data[0].results[0].amount?.value === 0
           && costs.data[0].results.some((result) => result.line_item === "Completions" && result.quantity > 0)
+          && costs.data[0].results.some((result) => result.line_item === "File search calls" && result.quantity > 0)
+          && costs.data[0].results.some((result) => result.line_item === "Web search calls" && result.quantity > 0)
+          && costs.data[0].results.some((result) => result.line_item === "Code interpreter sessions" && result.quantity > 0)
+          && costs.data[0].results.some((result) => result.line_item === "Vector stores" && result.quantity > 0)
           && costs.compatibility?.actual_openai_admin_data === false
           && completions?.data?.[0]?.results?.[0]?.object === "organization.usage.completions.result"
           && completions.data[0].results.some((result) => result.user_id === marker
@@ -389,9 +408,25 @@ function buildSuites(defaultModel) {
           && images?.data?.[0]?.results?.[0]?.object === "organization.usage.images.result"
           && images.data[0].results.some((result) => result.images >= 1 && result.source === "image.generation")
           && fileSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.file_searches.result"
-          && fileSearch.data[0].results[0].num_requests === 0
+          && fileSearch.data[0].results.some((result) => result.user_id === marker && result.num_requests >= 1)
           && webSearch?.data?.[0]?.results?.[0]?.object === "organization.usage.web_searches.result"
-          && webSearch.data[0].results[0].num_model_requests === 0
+          && webSearch.data[0].results.some((result) => result.user_id === marker
+            && result.context_level === "high"
+            && result.num_model_requests >= 1
+            && result.num_requests >= 1)
+          && codeInterpreter?.data?.[0]?.results?.[0]?.object === "organization.usage.code_interpreter_sessions.result"
+          && codeInterpreter.data[0].results.some((result) => result.project_id === marker && result.num_sessions >= 1)
+          && vectorStores?.data?.[0]?.results?.[0]?.object === "organization.usage.vector_stores.result"
+          && vectorStores.data[0].results.some((result) => result.project_id === marker && result.usage_bytes > 0)
+          && hostedResponse?.object === "response"
+          && hostedResponse.output?.some((item) => item.type === "file_search_call")
+          && hostedResponse.output?.some((item) => item.type === "web_search_call")
+          && hostedResponse.output?.some((item) => item.type === "code_interpreter_call")
+          && !jsonIncludes(costs, hostedLeakMarker)
+          && !jsonIncludes(fileSearch, hostedLeakMarker)
+          && !jsonIncludes(webSearch, hostedLeakMarker)
+          && !jsonIncludes(codeInterpreter, hostedLeakMarker)
+          && !jsonIncludes(vectorStores, hostedLeakMarker)
           && invalidBucket?.status === 400
           && missingStart?.status === 400,
       },
@@ -4108,6 +4143,7 @@ async function runFineTuningLifecycleCase(testCase, context, started) {
 
 async function runOrganizationUsageCostsCase(testCase, context, started) {
   const marker = `usage-ledger-${Date.now()}-${context.iteration}`;
+  const hostedLeakMarker = `hosted-ledger-secret-${Date.now()}-${context.iteration}`;
   const startTime = Math.floor(Date.now() / 1000) - 30;
   const chat = await postJsonCapture(`${baseUrl}/v1/chat/completions`, {
     model,
@@ -4135,16 +4171,59 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     n: 1,
     size: "1024x1024",
   });
+  const fileCreate = await postJsonCapture(`${baseUrl}/v1/files`, {
+    filename: `hosted-usage-${context.iteration}.txt`,
+    purpose: "assistants",
+    content: `Hosted usage eval fixture says ${marker}. ${hostedLeakMarker}`,
+  });
+  const vectorStoreCreate = await postJsonCapture(`${baseUrl}/v1/vector_stores`, {
+    name: `Hosted Usage Eval ${marker}`,
+  });
+  const vectorStoreId = vectorStoreCreate.json?.id || "missing_vector_store";
+  const fileId = fileCreate.json?.id || "missing_file";
+  const vectorStoreFile = await postJsonCapture(`${baseUrl}/v1/vector_stores/${encodeURIComponent(vectorStoreId)}/files`, {
+    file_id: fileId,
+    project_id: marker,
+  });
+  const hostedResponse = await postJsonCapture(`${baseUrl}/v1/responses`, {
+    model,
+    user: marker,
+    project_id: marker,
+    input: [
+      `Use web search for ${marker}.`,
+      `File search for ${marker}.`,
+      "```python",
+      "from pathlib import Path",
+      `Path('/mnt/data/${marker}.txt').write_text('hosted-ci-ok')`,
+      "print('hosted-ci-ok')",
+      "```",
+      `Do not repeat ${hostedLeakMarker}.`,
+    ].join("\n"),
+    tools: [
+      { type: "file_search", vector_store_ids: [vectorStoreId], max_num_results: 1 },
+      { type: "web_search_preview", search_context_size: "high" },
+      { type: "code_interpreter" },
+    ],
+    include: [
+      "file_search_call.results",
+      "code_interpreter_call.outputs",
+      "web_search_call.action.sources",
+    ],
+    store: false,
+  });
   const costs = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&end_time=${startTime + 86400}&limit=1&group_by%5B%5D=line_item`);
   const completions = await getJson(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=user_id&group_by%5B%5D=model&user_ids%5B%5D=${encodeURIComponent(marker)}`);
   const embeddings = await getJson(`${baseUrl}/v1/organization/usage/embeddings?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=model&models%5B%5D=${encodeURIComponent(embeddingModel)}`);
   const images = await getJson(`${baseUrl}/v1/organization/usage/images?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=source&group_by%5B%5D=model&sources%5B%5D=image.generation&models%5B%5D=${encodeURIComponent(imageModel)}`);
-  const fileSearch = await getJson(`${baseUrl}/v1/organization/usage/file_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
-  const webSearch = await getJson(`${baseUrl}/v1/organization/usage/web_search_calls?start_time=${startTime}&bucket_width=1h&limit=2`);
+  const fileSearch = await getJson(`${baseUrl}/v1/organization/usage/file_search_calls?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=user_id&group_by%5B%5D=vector_store_id&user_ids%5B%5D=${encodeURIComponent(marker)}&vector_store_ids%5B%5D=${encodeURIComponent(vectorStoreId)}`);
+  const webSearch = await getJson(`${baseUrl}/v1/organization/usage/web_search_calls?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=user_id&group_by%5B%5D=context_level&user_ids%5B%5D=${encodeURIComponent(marker)}&context_levels%5B%5D=high`);
+  const codeInterpreter = await getJson(`${baseUrl}/v1/organization/usage/code_interpreter_sessions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=project_id&project_ids%5B%5D=${encodeURIComponent(marker)}`);
+  const vectorStores = await getJson(`${baseUrl}/v1/organization/usage/vector_stores?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=project_id&project_ids%5B%5D=${encodeURIComponent(marker)}`);
   const invalidBucket = await getJson(`${baseUrl}/v1/organization/costs?start_time=${startTime}&bucket_width=1h`);
   const missingStart = await getJson(`${baseUrl}/v1/organization/usage/completions`);
   const ok = !!testCase.check({
     marker,
+    hostedLeakMarker,
     chat: chat.json,
     costs: costs.json,
     completions: completions.json,
@@ -4154,6 +4233,9 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     imageCreate: imageCreate.json,
     fileSearch: fileSearch.json,
     webSearch: webSearch.json,
+    codeInterpreter: codeInterpreter.json,
+    vectorStores: vectorStores.json,
+    hostedResponse: hostedResponse.json,
     invalidBucket,
     missingStart,
   });
@@ -4162,8 +4244,13 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     status: costs.status,
     costs_bucket_count: costs.json?.data?.length || 0,
     usage_bucket_count: completions.json?.data?.length || 0,
+    vector_store_id: vectorStoreId,
+    file_id: fileId,
+    hosted_status: hostedResponse.status,
+    vector_store_file_status: vectorStoreFile.status,
     usage: sumUsage([
       chatUsage(chat.json),
+      responseUsage(hostedResponse.json),
       embeddingUsage(embeddingCreate.json),
       imagesGenerationUsage(imageCreate.json),
     ]),
@@ -8814,6 +8901,15 @@ function parseJsonl(text) {
 function jsonHas(text, key, expected) {
   const parsed = parseJsonish(text);
   return parsed?.[key] === expected;
+}
+
+function jsonIncludes(value, needle) {
+  if (!needle) return false;
+  try {
+    return JSON.stringify(value ?? null).includes(String(needle));
+  } catch {
+    return String(value || "").includes(String(needle));
+  }
 }
 
 function parseJsonish(value) {

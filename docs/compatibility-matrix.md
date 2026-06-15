@@ -49,6 +49,8 @@ Primary sources:
 - OpenAI Organization images usage OpenAPI operation `usage-images`: https://api.openai.com/v1/organization/usage/images
 - OpenAI Organization file-search usage OpenAPI operation `usage-file-search-calls`: https://api.openai.com/v1/organization/usage/file_search_calls
 - OpenAI Organization web-search usage OpenAPI operation `usage-web-search-calls`: https://api.openai.com/v1/organization/usage/web_search_calls
+- OpenAI Organization code-interpreter usage OpenAPI operation `usage-code-interpreter-sessions`: https://api.openai.com/v1/organization/usage/code_interpreter_sessions
+- OpenAI Organization vector-store usage OpenAPI operation `usage-vector-stores`: https://api.openai.com/v1/organization/usage/vector_stores
 - OpenAI Organization users OpenAPI operation `list-users`: https://api.openai.com/v1/organization/users
 - OpenAI Organization invites OpenAPI operation `list-invites`: https://api.openai.com/v1/organization/invites
 - OpenAI Organization admin API keys OpenAPI operation `admin-api-keys-list`: https://api.openai.com/v1/organization/admin_api_keys
@@ -552,17 +554,20 @@ payloads, Authorization headers, or provider secrets.
 | `GET /v1/organization/usage/images` | Implemented locally | Aggregates direct `/v1/images/generations`, `/v1/images/edits`, and `/v1/images/variations` image counts with source/size/model/project/user/hashed-API-key dimensions |
 | `GET /v1/organization/usage/audio_speeches` | Implemented locally | Aggregates local `/v1/audio/speech` input character/request usage with project/user/hashed-API-key/model dimensions |
 | `GET /v1/organization/usage/audio_transcriptions` | Implemented locally | Aggregates local `/v1/audio/transcriptions` and `/v1/audio/translations` duration/request usage with project/user/hashed-API-key/model dimensions |
-| `GET /v1/organization/usage/vector_stores` | Implemented locally | Returns zero `organization.usage.vector_stores.result` buckets with `usage_bytes` and `project_id` |
-| `GET /v1/organization/usage/file_search_calls` | Implemented locally | Returns zero `organization.usage.file_searches.result` buckets with request count and vector-store grouping fields |
-| `GET /v1/organization/usage/web_search_calls` | Implemented locally | Returns zero `organization.usage.web_searches.result` buckets with request counts, model, and context-level fields |
-| `GET /v1/organization/usage/code_interpreter_sessions` | Implemented locally | Returns zero `organization.usage.code_interpreter_sessions.result` buckets with `num_sessions` and `project_id` |
+| `GET /v1/organization/usage/vector_stores` | Implemented locally | Aggregates local vector-store file attachments into `usage_bytes` buckets with project filtering/grouping. Local quantity is attached file bytes, not OpenAI-hosted storage duration billing |
+| `GET /v1/organization/usage/file_search_calls` | Implemented locally | Aggregates local Responses/background/Assistants `file_search` executions into request-count buckets with project/user/hashed-API-key/vector-store filters and grouping |
+| `GET /v1/organization/usage/web_search_calls` | Implemented locally | Aggregates local Responses/background `web_search_preview` executions into model-request and local action-count buckets with project/user/hashed-API-key/model/context-level filters and grouping |
+| `GET /v1/organization/usage/code_interpreter_sessions` | Implemented locally | Aggregates local Responses/background/Assistants `code_interpreter` executions by unique local container session per request into `num_sessions` buckets with project filtering/grouping |
 
 This compatibility surface writes bounded runtime ledger files under
 `CODEXCOMPAT_ORGANIZATION_USAGE_STATE_DIR`. It does not expose real OpenAI
 admin data, meter provider bills, calculate paid invoices, or replace
 provider-specific billing exports. It exists so SDKs, diagnostics, and
 dashboards can query the documented endpoint family without breaking on 404
-while the deployment remains backed by a Chat Completions provider.
+while the deployment remains backed by a Chat Completions provider. Hosted-tool
+metrics are local compatibility approximations for dashboard shape, regression
+tests, and capacity auditing; prompts, code blocks, file contents, web result
+text, and provider credentials are intentionally excluded from ledger records.
 
 ## Organization Admin Coverage
 

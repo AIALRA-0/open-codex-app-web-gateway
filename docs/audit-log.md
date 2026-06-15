@@ -1,5 +1,27 @@
 # Audit Log
 
+## 2026-06-15 Local Hosted-Tool Usage Ledger
+
+- Extended the local Organization Usage ledger to meter local hosted-tool
+  compatibility paths:
+  - vector-store file attachments record `vector_stores.usage_bytes`
+  - Responses/background/Assistants `file_search` records
+    `file_search_calls.num_requests`
+  - Responses/background `web_search_preview` records
+    `web_search_calls.num_model_requests`, `num_requests`, and context level
+  - Responses/background/Assistants `code_interpreter` records unique local
+    container sessions as `code_interpreter_sessions.num_sessions`
+- Added `vector_store_ids[]` and `context_levels[]` usage filters.
+- Updated the bridge regression `organization-usage-costs` case to create
+  non-zero hosted-tool usage and verify usage/cost line items.
+- Expanded mock-provider tests to assert hosted-tool usage aggregation,
+  hashed API-key dimensions, project/user filters, vector-store/context-level
+  filters, and that prompt/file/code content markers are absent from usage
+  responses.
+- Security boundary: ledger events store only endpoint/time/dimension IDs and
+  numeric metrics. Prompts, code blocks, file contents, web result text,
+  Authorization headers, and provider secrets remain excluded.
+
 ## 2026-06-10 Initial Open Gateway Track
 
 - Created `/srv/aialra/apps/open-codex-app-web-gateway` from tracked files in

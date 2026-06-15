@@ -11761,6 +11761,71 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     });
     assert.equal(imageResponse.status, 200);
 
+    const hostedLeakMarker = "ledger-sensitive-marker-never-in-usage";
+    const hostedFileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        filename: "hosted-usage-ledger.txt",
+        purpose: "assistants",
+        content: `Hosted Usage Ledger fixture says hosted-ledger-ok. ${hostedLeakMarker}`,
+      }),
+    });
+    assert.equal(hostedFileResponse.status, 200);
+    const hostedFile = await hostedFileResponse.json();
+
+    const vectorStoreResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "hosted-usage-ledger-store" }),
+    });
+    assert.equal(vectorStoreResponse.status, 200);
+    const vectorStore = await vectorStoreResponse.json();
+
+    const attachedResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ file_id: hostedFile.id }),
+    });
+    assert.equal(attachedResponse.status, 200);
+    const attachedFile = await attachedResponse.json();
+    assert.ok(attachedFile.usage_bytes > 0);
+
+    const hostedToolsResponse = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "mock-model",
+        user: "user_hosted_usage_ledger",
+        input: [
+          "Use web search for the bridge hosted usage result.",
+          "File search for hosted-ledger-ok.",
+          "```python",
+          "from pathlib import Path",
+          "Path('/mnt/data/hosted-ledger.txt').write_text('hosted-ci-ok')",
+          "print('hosted-ci-ok')",
+          "```",
+          `Do not repeat ${hostedLeakMarker}.`,
+        ].join("\n"),
+        tools: [
+          { type: "file_search", vector_store_ids: [vectorStore.id], max_num_results: 1 },
+          { type: "web_search_preview", search_context_size: "high" },
+          { type: "code_interpreter" },
+        ],
+        include: [
+          "file_search_call.results",
+          "code_interpreter_call.outputs",
+          "web_search_call.action.sources",
+        ],
+        store: false,
+      }),
+    });
+    assert.equal(hostedToolsResponse.status, 200);
+    const hostedToolsJson = await hostedToolsResponse.json();
+    assert.ok(hostedToolsJson.output.some((item) => item.type === "file_search_call"));
+    assert.ok(hostedToolsJson.output.some((item) => item.type === "web_search_call"));
+    assert.ok(hostedToolsJson.output.some((item) => item.type === "code_interpreter_call"));
+
     const completions = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=project_id&group_by%5B%5D=user_id&group_by%5B%5D=api_key_id&group_by%5B%5D=model&project_ids%5B%5D=proj_usage_ledger&user_ids%5B%5D=user_usage_ledger&models%5B%5D=mock-model`);
     assert.equal(completions.status, 200);
     const completionsJson = await completions.json();
@@ -11818,16 +11883,67 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     assert.equal(imageResult.size, "1024x1024");
     assert.equal(imageResult.model, "image-ledger");
 
+    const fileSearchUsage = await fetch(`${baseUrl}/v1/organization/usage/file_search_calls?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=project_id&group_by%5B%5D=user_id&group_by%5B%5D=api_key_id&group_by%5B%5D=vector_store_id&project_ids%5B%5D=proj_usage_ledger&user_ids%5B%5D=user_hosted_usage_ledger&vector_store_ids%5B%5D=${encodeURIComponent(vectorStore.id)}`);
+    assert.equal(fileSearchUsage.status, 200);
+    const fileSearchUsageJson = await fileSearchUsage.json();
+    const fileSearchResult = fileSearchUsageJson.data[0].results[0];
+    assert.equal(fileSearchResult.object, "organization.usage.file_searches.result");
+    assert.equal(fileSearchResult.num_requests, 1);
+    assert.equal(fileSearchResult.project_id, "proj_usage_ledger");
+    assert.equal(fileSearchResult.user_id, "user_hosted_usage_ledger");
+    assert.equal(fileSearchResult.vector_store_id, vectorStore.id);
+    assert.match(fileSearchResult.api_key_id, /^key_sha256_[a-f0-9]{16}$/);
+    assert.equal(JSON.stringify(fileSearchUsageJson).includes(hostedLeakMarker), false);
+
+    const webSearchUsage = await fetch(`${baseUrl}/v1/organization/usage/web_search_calls?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=project_id&group_by%5B%5D=user_id&group_by%5B%5D=model&group_by%5B%5D=context_level&project_ids%5B%5D=proj_usage_ledger&user_ids%5B%5D=user_hosted_usage_ledger&models%5B%5D=mock-model&context_levels%5B%5D=high`);
+    assert.equal(webSearchUsage.status, 200);
+    const webSearchUsageJson = await webSearchUsage.json();
+    const webSearchResult = webSearchUsageJson.data[0].results[0];
+    assert.equal(webSearchResult.object, "organization.usage.web_searches.result");
+    assert.equal(webSearchResult.num_model_requests, 1);
+    assert.equal(webSearchResult.num_requests, 1);
+    assert.equal(webSearchResult.project_id, "proj_usage_ledger");
+    assert.equal(webSearchResult.user_id, "user_hosted_usage_ledger");
+    assert.equal(webSearchResult.model, "mock-model");
+    assert.equal(webSearchResult.context_level, "high");
+    assert.equal(JSON.stringify(webSearchUsageJson).includes(hostedLeakMarker), false);
+
+    const codeInterpreterUsage = await fetch(`${baseUrl}/v1/organization/usage/code_interpreter_sessions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=project_id&project_ids=proj_usage_ledger`);
+    assert.equal(codeInterpreterUsage.status, 200);
+    const codeInterpreterUsageJson = await codeInterpreterUsage.json();
+    const codeInterpreterResult = codeInterpreterUsageJson.data[0].results[0];
+    assert.equal(codeInterpreterResult.object, "organization.usage.code_interpreter_sessions.result");
+    assert.equal(codeInterpreterResult.num_sessions, 1);
+    assert.equal(codeInterpreterResult.project_id, "proj_usage_ledger");
+    assert.equal(JSON.stringify(codeInterpreterUsageJson).includes(hostedLeakMarker), false);
+
+    const vectorStoreUsage = await fetch(`${baseUrl}/v1/organization/usage/vector_stores?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by=project_id&project_ids=proj_usage_ledger`);
+    assert.equal(vectorStoreUsage.status, 200);
+    const vectorStoreUsageJson = await vectorStoreUsage.json();
+    const vectorStoreResult = vectorStoreUsageJson.data[0].results[0];
+    assert.equal(vectorStoreResult.object, "organization.usage.vector_stores.result");
+    assert.equal(vectorStoreResult.usage_bytes, attachedFile.usage_bytes);
+    assert.equal(vectorStoreResult.project_id, "proj_usage_ledger");
+    assert.equal(JSON.stringify(vectorStoreUsageJson).includes(hostedLeakMarker), false);
+
     const costs = await fetch(`${baseUrl}/v1/organization/costs?start_time=${startTime}&end_time=${startTime + 86400}&limit=1&group_by%5B%5D=line_item&group_by%5B%5D=project_id`);
     assert.equal(costs.status, 200);
     const costResults = (await costs.json()).data[0].results;
     const completionsCost = costResults.find((result) => result.line_item === "Completions");
     const imagesCost = costResults.find((result) => result.line_item === "Images");
+    const fileSearchCost = costResults.find((result) => result.line_item === "File search calls");
+    const webSearchCost = costResults.find((result) => result.line_item === "Web search calls");
+    const codeInterpreterCost = costResults.find((result) => result.line_item === "Code interpreter sessions");
+    const vectorStoresCost = costResults.find((result) => result.line_item === "Vector stores");
     assert.equal(completionsCost.amount.value, 0);
     assert.equal(completionsCost.amount.currency, "usd");
-    assert.equal(completionsCost.quantity, 17);
+    assert.equal(completionsCost.quantity, 34);
     assert.equal(completionsCost.project_id, "proj_usage_ledger");
     assert.equal(imagesCost.quantity, 2);
+    assert.equal(fileSearchCost.quantity, 1);
+    assert.equal(webSearchCost.quantity, 1);
+    assert.equal(codeInterpreterCost.quantity, 1);
+    assert.equal(vectorStoresCost.quantity, attachedFile.usage_bytes);
 
     const pageOne = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 7200}&bucket_width=1h&limit=1`);
     assert.equal(pageOne.status, 200);
@@ -11838,7 +11954,14 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     assert.equal(pageTwo.status, 200);
     assert.equal((await pageTwo.json()).data[0].start_time, startTime + 3600);
 
-    assert.equal(requests.length, 1);
+    assert.equal(requests.length, 2);
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Hosted Usage Bridge Result",
+      url: "https://example.test/hosted-usage-bridge",
+      snippet: "Static hosted usage web search fixture.",
+    }],
   });
 });
 
