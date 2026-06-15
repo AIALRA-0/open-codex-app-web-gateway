@@ -4369,6 +4369,69 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Streaming legacy function-call compatibility
+
+- Closed another Responses streaming compatibility gap for Chat Completions
+  providers:
+  - streaming `choices[].delta.function_call` fragments are now accumulated into
+    a Responses `function_call` output item;
+  - the bridge emits `response.function_call_arguments.delta`,
+    `response.function_call_arguments.done`, `response.output_item.done`, and a
+    completed final response item with the accumulated name and arguments;
+  - legacy streamed calls receive a stable generated call id such as
+    `call_chatcmpl_stream_legacy_fc_0`;
+  - stored replay converts the legacy call back to Chat `tool_calls`, so later
+    `function_call_output` turns are sent upstream as matching Chat `tool`
+    messages.
+- Added coverage for both modern and legacy stream shapes:
+  - mock-provider unit coverage validates exact legacy
+    `delta.function_call` fragments, final Responses events, completed output,
+    usage mapping, and follow-up replay;
+  - live `bridge-regression` now includes `responses-function-tool-stream`,
+    covering the modern `delta.tool_calls` stream shape returned by DeepSeek.
+- Updated compatibility and evaluation docs to describe streaming
+  `tool_calls` and legacy `function_call` mapping, argument event emission, and
+  follow-up replay behavior.
+- Verification:
+  - `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - Focused legacy/function-call streaming unit tests passed 3/3.
+  - `npm test`: passed 197/197.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `responses-function-tool-stream`: passed 1/1 against
+    `deepseek-v4-pro`, latency 1751 ms, 24 SSE events, and 371 total tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 94/94,
+    pass rate 1.0, average latency 1475 ms, P95 latency 3913 ms, and total
+    usage 24959 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1127 ms, P95 latency 1173 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering sidebar navigation, core
+    pages, project dialog/upload, prompt submission, completed-turn controls,
+    reload persistence, generated image artifact display, saved project
+    reopen/cleanup, and console error/warning checks; screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T14-46-35-732Z.png`.
+  - `npm run prune:runtime -- --dry-run`: after UI smoke, scanned 1665
+    runtime candidates, selected 2 old UI-smoke screenshots, selected 318673
+    bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted those 2 artifacts, freed
+    318673 bytes, and reported 0 errors.
+  - Final `node --check` passed for `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, and `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 33 GB available; `state/` was 24 MB,
+    `output/` was 4.6 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 27 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-15 - Assistants token budgets and MCP tool choice hardening
 
 - Used the official OpenAI Assistants create-run/create-thread-and-run

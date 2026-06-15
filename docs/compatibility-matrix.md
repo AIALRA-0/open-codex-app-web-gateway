@@ -152,8 +152,8 @@ behavior.
 | --- | --- | --- |
 | `choices[].message.content` / streaming `choices[].delta.content` | output `message.content[].output_text` | Direct for each Chat choice returned by the provider |
 | `choices[].message.refusal` / streaming `choices[].delta.refusal` | output refusal content part | Direct when present |
-| `choices[].message.tool_calls[]` | output `function_call` items | Direct |
-| `choices[].message.function_call` | output `function_call` item | Legacy Chat function-call compatibility |
+| `choices[].message.tool_calls[]` / streaming `choices[].delta.tool_calls[]` | output `function_call` items plus `response.function_call_arguments.*` events | Direct |
+| `choices[].message.function_call` / streaming `choices[].delta.function_call` | output `function_call` item plus `response.function_call_arguments.*` events | Legacy Chat function-call compatibility; streaming chunks are accumulated and replayed as Chat `tool_calls` for follow-up `function_call_output` turns |
 | `choices[].logprobs.content[]` | `message.content[].output_text.logprobs[]` | Direct for non-streaming and streaming Responses when provider returns Chat logprobs |
 | `choices[].logprobs.refusal[]` | `metadata.compatibility.chat_refusal_logprobs[]` | Preserved in compatibility metadata because Responses refusal content parts do not expose a logprobs field |
 | `choices[].message.annotations[]` / streaming `choices[].delta.annotations[]` | `message.content[].output_text.annotations[]` | Direct when a Chat provider returns citation annotations |

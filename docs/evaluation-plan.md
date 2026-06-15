@@ -156,6 +156,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-rem
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-denial --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case completions-legacy --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case chat-stream-lifecycle --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool-stream --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-max-tool-calls --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer --timeout-ms 90000 --verbose
@@ -346,6 +347,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   filtering those unsupported upstream fields, mapping stable user identity into `user_id`, and
   recording the compatibility action in returned/stored metadata.
 - Tool-call replay works across multi-turn tasks.
+- Streaming Responses function-tool coverage includes modern Chat
+  `delta.tool_calls` in live provider tests and legacy Chat
+  `delta.function_call` in mock-provider regression tests, including stored
+  replay as Chat `tool_calls` for follow-up `function_call_output` turns.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.

@@ -2754,6 +2754,44 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-function-tool-stream",
+        mode: "responses-stream",
+        request: {
+          model: defaultModel,
+          input: "Stream by calling record_result with ok=true and label=\"tool-stream-ok\". Do not answer in prose.",
+          tools: [{
+            type: "function",
+            name: "record_result",
+            description: "Record a benchmark result.",
+            parameters: {
+              type: "object",
+              properties: {
+                ok: { type: "boolean" },
+                label: { type: "string" },
+              },
+              required: ["ok", "label"],
+              additionalProperties: false,
+            },
+          }],
+          tool_choice: { type: "function", name: "record_result" },
+          stream: true,
+          max_output_tokens: 128,
+          store: false,
+        },
+        check: ({ events, json }) => {
+          const call = (json.output || []).find((item) => item.type === "function_call");
+          const parsed = parseJsonish(call?.arguments);
+          return !!call
+            && call.name === "record_result"
+            && parsed?.ok === true
+            && parsed?.label === "tool-stream-ok"
+            && events.some((event) => event.event === "response.output_item.added" && event.data?.item?.type === "function_call")
+            && events.some((event) => event.event === "response.function_call_arguments.delta")
+            && events.some((event) => event.event === "response.function_call_arguments.done")
+            && events.some((event) => event.event === "response.output_item.done" && event.data?.item?.type === "function_call");
+        },
+      },
+      {
         id: "responses-previous-response-replay",
         mode: "responses-sequence",
         steps: [

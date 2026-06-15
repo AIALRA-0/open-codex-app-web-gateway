@@ -3453,6 +3453,135 @@ test("POST /v1/responses replays legacy Chat function_call outputs with stable c
   });
 });
 
+test("POST /v1/responses streams and replays legacy Chat function_call outputs", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": call.body.stream ? "text/event-stream" : "application/json" });
+    if (call.body.messages.some((message) => message.role === "tool")) {
+      res.end(JSON.stringify({
+        id: "chatcmpl_stream_legacy_followup",
+        object: "chat.completion",
+        created: 102,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "stream-legacy-tool-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 9, completion_tokens: 4, total_tokens: 13 },
+      }));
+      return;
+    }
+
+    assert.equal(call.body.stream, true);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_legacy_fc",
+      object: "chat.completion.chunk",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          function_call: {
+            name: "legacy_stream_lookup",
+            arguments: "{\"query\"",
+          },
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_legacy_fc",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          function_call: {
+            arguments: ":\"stream\"}",
+          },
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_legacy_fc",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "function_call" }],
+      usage: { prompt_tokens: 6, completion_tokens: 3, total_tokens: 9 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress, requests }) => {
+    const firstResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Stream the legacy lookup call.",
+        tools: [{
+          type: "function",
+          name: "legacy_stream_lookup",
+          parameters: { type: "object", properties: { query: { type: "string" } } },
+        }],
+        stream: true,
+        store: true,
+      }),
+    });
+    assert.equal(firstResponse.status, 200);
+    const events = parseSseEvents(await firstResponse.text());
+    const callAdded = events.find((event) => (
+      event.event === "response.output_item.added"
+      && event.data?.item?.type === "function_call"
+    ));
+    assert.ok(callAdded);
+    assert.equal(callAdded.data.item.call_id, "call_chatcmpl_stream_legacy_fc_0");
+    assert.equal(callAdded.data.item.name, "");
+
+    const argumentDeltas = events
+      .filter((event) => event.event === "response.function_call_arguments.delta")
+      .map((event) => event.data.delta)
+      .join("");
+    assert.equal(argumentDeltas, "{\"query\":\"stream\"}");
+    const argumentDone = events.find((event) => event.event === "response.function_call_arguments.done");
+    assert.equal(argumentDone.data.arguments, "{\"query\":\"stream\"}");
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    const streamCall = completed.output.find((item) => item.type === "function_call");
+    assert.equal(streamCall.call_id, "call_chatcmpl_stream_legacy_fc_0");
+    assert.equal(streamCall.name, "legacy_stream_lookup");
+    assert.equal(streamCall.arguments, "{\"query\":\"stream\"}");
+    assert.equal(streamCall.status, "completed");
+    assert.equal(completed.metadata.compatibility.chat_choices[0].finish_reason, "function_call");
+    assert.equal(completed.usage.input_tokens, 6);
+    assert.equal(completed.usage.output_tokens, 3);
+
+    const followResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        previous_response_id: completed.id,
+        input: [{
+          type: "function_call_output",
+          call_id: streamCall.call_id,
+          output: "{\"result\":\"stream-ok\"}",
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(followResponse.status, 200);
+    const follow = await followResponse.json();
+    assert.equal(follow.output[0].content[0].text, "stream-legacy-tool-ok");
+
+    const replay = requests[1].body.messages;
+    const assistantReplay = replay.find((message) => message.role === "assistant" && message.tool_calls);
+    const toolReplay = replay.find((message) => message.role === "tool");
+    assert.equal(assistantReplay.tool_calls[0].id, streamCall.call_id);
+    assert.equal(assistantReplay.tool_calls[0].function.name, "legacy_stream_lookup");
+    assert.equal(assistantReplay.tool_calls[0].function.arguments, "{\"query\":\"stream\"}");
+    assert.equal(toolReplay.tool_call_id, streamCall.call_id);
+  });
+});
+
 test("POST /v1/responses executes local web_search_preview compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

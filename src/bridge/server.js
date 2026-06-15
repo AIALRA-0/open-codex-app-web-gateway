@@ -3666,9 +3666,39 @@ function applyChatStreamChunk(state, chunk) {
         });
       }
     }
+
+    if (isPlainObject(delta.function_call)) {
+      const index = "__legacy_function_call";
+      const legacyToolCall = {
+        id: legacyStreamFunctionCallId(chunk, choice),
+        type: "function",
+        function: delta.function_call,
+      };
+      events.push(...ensureToolCallItem(state, choiceState, index, legacyToolCall));
+      const item = choiceState.toolCalls.get(index);
+      const outputIndex = state.response.output.indexOf(item);
+      item.call_id = legacyToolCall.id;
+      if (delta.function_call.name) item.name += delta.function_call.name;
+      if (delta.function_call.arguments) {
+        item.arguments += stringifyContent(delta.function_call.arguments);
+        events.push({
+          type: "response.function_call_arguments.delta",
+          response_id: state.response.id,
+          item_id: item.id,
+          output_index: outputIndex,
+          delta: stringifyContent(delta.function_call.arguments),
+        });
+      }
+    }
   }
 
   return events;
+}
+
+function legacyStreamFunctionCallId(chunk = {}, choice = {}) {
+  const raw = stringifyContent(chunk.id || "compat");
+  const safe = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 48) || "compat";
+  return `call_${safe}_${choice.index ?? 0}`;
 }
 
 function finishStreamState(state) {
