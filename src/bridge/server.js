@@ -8283,6 +8283,40 @@ function handleOrganizationAdminApiKeyDelete(res, organizationAdminStore, apiKey
   sendJson(res, 200, organizationAdminStore.deleteOrganizationAdminApiKey(apiKeyId));
 }
 
+async function handleOrganizationSpendAlertCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization spend alert request body must be a JSON object", {
+      code: "invalid_organization_spend_alert_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createOrganizationSpendAlert(body));
+}
+
+async function handleOrganizationSpendAlertUpdate(req, res, organizationAdminStore, alertId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization spend alert update body must be a JSON object", {
+      code: "invalid_organization_spend_alert_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationSpendAlert(alertId, body));
+}
+
+function handleOrganizationSpendAlertsList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    organizationAdminStore.listOrganizationSpendAlerts(),
+    url,
+    "asc",
+    20,
+    100,
+  ));
+}
+
+function handleOrganizationSpendAlertDelete(res, organizationAdminStore, alertId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationSpendAlert(alertId));
+}
+
 async function handleOrganizationRoleCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -8627,6 +8661,35 @@ function handleOrganizationProjectGroupGet(res, organizationAdminStore, projectI
 
 function handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId) {
   sendJson(res, 200, organizationAdminStore.deleteProjectGroup(projectId, groupId));
+}
+
+async function handleOrganizationProjectSpendAlertCreate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project spend alert request body must be a JSON object", {
+      code: "invalid_project_spend_alert_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createProjectSpendAlert(projectId, body));
+}
+
+async function handleOrganizationProjectSpendAlertUpdate(req, res, organizationAdminStore, projectId, alertId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project spend alert update body must be a JSON object", {
+      code: "invalid_project_spend_alert_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectSpendAlert(projectId, alertId, body));
+}
+
+function handleOrganizationProjectSpendAlertsList(res, organizationAdminStore, projectId, url) {
+  const alerts = organizationAdminStore.listProjectSpendAlerts(projectId);
+  sendJson(res, 200, paginateListWithDefaultOrder(alerts, url, "asc", 20, 100));
+}
+
+function handleOrganizationProjectSpendAlertDelete(res, organizationAdminStore, projectId, alertId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectSpendAlert(projectId, alertId));
 }
 
 function handleOrganizationProjectRateLimitsList(res, organizationAdminStore, projectId, url) {
@@ -12222,6 +12285,30 @@ function createServer(config = loadConfig()) {
         }
       }
 
+      if (url.pathname === "/v1/organization/spend_alerts") {
+        if (req.method === "GET") {
+          handleOrganizationSpendAlertsList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationSpendAlertCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationSpendAlertRoute = url.pathname.match(/^\/v1\/organization\/spend_alerts\/([^/]+)$/);
+      if (organizationSpendAlertRoute) {
+        const alertId = decodeURIComponent(organizationSpendAlertRoute[1]);
+        if (req.method === "POST") {
+          await handleOrganizationSpendAlertUpdate(req, res, organizationAdminStore, alertId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationSpendAlertDelete(res, organizationAdminStore, alertId);
+          return;
+        }
+      }
+
       if (url.pathname === "/v1/organization/roles") {
         if (req.method === "GET") {
           handleOrganizationRolesList(res, organizationAdminStore, url);
@@ -12465,6 +12552,28 @@ function createServer(config = loadConfig()) {
         }
         if (groupId && req.method === "DELETE") {
           handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId);
+          return;
+        }
+      }
+
+      const organizationProjectSpendAlertRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/spend_alerts(?:\/([^/]+))?$/);
+      if (organizationProjectSpendAlertRoute) {
+        const projectId = decodeURIComponent(organizationProjectSpendAlertRoute[1]);
+        const alertId = organizationProjectSpendAlertRoute[2] ? decodeURIComponent(organizationProjectSpendAlertRoute[2]) : "";
+        if (!alertId && req.method === "GET") {
+          handleOrganizationProjectSpendAlertsList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (!alertId && req.method === "POST") {
+          await handleOrganizationProjectSpendAlertCreate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (alertId && req.method === "POST") {
+          await handleOrganizationProjectSpendAlertUpdate(req, res, organizationAdminStore, projectId, alertId);
+          return;
+        }
+        if (alertId && req.method === "DELETE") {
+          handleOrganizationProjectSpendAlertDelete(res, organizationAdminStore, projectId, alertId);
           return;
         }
       }

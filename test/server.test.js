@@ -12223,6 +12223,208 @@ test("Organization admin API keys are local, redacted, and audited", async () =>
   }
 });
 
+test("Organization spend alerts manage local organization and project thresholds", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization spend alerts compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const spendAlertBody = (threshold, recipients = ["finance@example.com"]) => ({
+      threshold_amount: threshold,
+      currency: "USD",
+      interval: "month",
+      notification_channel: {
+        type: "email",
+        recipients,
+        subject_prefix: "Open Codex spend",
+      },
+    });
+
+    const emptyOrganizationAlerts = await fetch(`${baseUrl}/v1/organization/spend_alerts`);
+    assert.equal(emptyOrganizationAlerts.status, 200);
+    assert.deepEqual(await emptyOrganizationAlerts.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: false,
+    });
+
+    const missingThreshold = await fetch(`${baseUrl}/v1/organization/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        currency: "USD",
+        interval: "month",
+        notification_channel: { type: "email", recipients: ["finance@example.com"] },
+      }),
+    });
+    assert.equal(missingThreshold.status, 400);
+    assert.equal((await missingThreshold.json()).error.param, "threshold_amount");
+
+    const invalidCurrency = await fetch(`${baseUrl}/v1/organization/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ ...spendAlertBody(1000), currency: "EUR" }),
+    });
+    assert.equal(invalidCurrency.status, 400);
+    assert.equal((await invalidCurrency.json()).error.code, "invalid_spend_alert_currency");
+
+    const invalidRecipients = await fetch(`${baseUrl}/v1/organization/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        ...spendAlertBody(1000),
+        notification_channel: { type: "email", recipients: [] },
+      }),
+    });
+    assert.equal(invalidRecipients.status, 400);
+    assert.equal((await invalidRecipients.json()).error.code, "invalid_spend_alert_notification_channel");
+
+    const organizationAlertResponse = await fetch(`${baseUrl}/v1/organization/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(100000, ["finance@example.com", "finance@example.com", "ops@example.com"])),
+    });
+    assert.equal(organizationAlertResponse.status, 200);
+    const organizationAlert = await organizationAlertResponse.json();
+    assert.equal(organizationAlert.object, "organization.spend_alert");
+    assert.match(organizationAlert.id, /^alert_/);
+    assert.equal(organizationAlert.threshold_amount, 100000);
+    assert.equal(organizationAlert.currency, "USD");
+    assert.equal(organizationAlert.interval, "month");
+    assert.deepEqual(organizationAlert.notification_channel.recipients, ["finance@example.com", "ops@example.com"]);
+    assert.equal(organizationAlert.compatibility.actual_openai_admin_data, false);
+
+    const secondOrganizationAlertResponse = await fetch(`${baseUrl}/v1/organization/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(250000, ["owner@example.com"])),
+    });
+    assert.equal(secondOrganizationAlertResponse.status, 200);
+    const secondOrganizationAlert = await secondOrganizationAlertResponse.json();
+
+    const organizationAlerts = await fetch(`${baseUrl}/v1/organization/spend_alerts?limit=20`);
+    assert.equal(organizationAlerts.status, 200);
+    const organizationAlertsJson = await organizationAlerts.json();
+    assert.equal(organizationAlertsJson.object, "list");
+    assert.deepEqual(new Set(organizationAlertsJson.data.map((entry) => entry.id)), new Set([
+      organizationAlert.id,
+      secondOrganizationAlert.id,
+    ]));
+
+    const organizationDesc = await fetch(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1`);
+    assert.equal(organizationDesc.status, 200);
+    const organizationDescJson = await organizationDesc.json();
+    assert.equal(organizationDescJson.data.length, 1);
+    assert.equal(organizationDescJson.has_more, true);
+    const organizationNext = await fetch(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1&after=${encodeURIComponent(organizationDescJson.last_id)}`);
+    assert.equal(organizationNext.status, 200);
+    assert.equal((await organizationNext.json()).data.length, 1);
+
+    const updatedOrganizationAlert = await fetch(`${baseUrl}/v1/organization/spend_alerts/${organizationAlert.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(150000, ["billing@example.com"])),
+    });
+    assert.equal(updatedOrganizationAlert.status, 200);
+    const updatedOrganizationAlertJson = await updatedOrganizationAlert.json();
+    assert.equal(updatedOrganizationAlertJson.id, organizationAlert.id);
+    assert.equal(updatedOrganizationAlertJson.threshold_amount, 150000);
+    assert.deepEqual(updatedOrganizationAlertJson.notification_channel.recipients, ["billing@example.com"]);
+
+    const organizationCreateLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=spend_alert.created&resource_ids%5B%5D=${organizationAlert.id}`);
+    assert.equal(organizationCreateLogs.status, 200);
+    assert.equal((await organizationCreateLogs.json()).data[0]["spend_alert.created"].id, organizationAlert.id);
+    const organizationUpdateLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=spend_alert.updated&resource_ids%5B%5D=${organizationAlert.id}`);
+    assert.equal(organizationUpdateLogs.status, 200);
+    assert.equal((await organizationUpdateLogs.json()).data[0]["spend_alert.updated"].changes_requested.threshold_amount, 150000);
+
+    const deletedOrganizationAlert = await fetch(`${baseUrl}/v1/organization/spend_alerts/${organizationAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedOrganizationAlert.status, 200);
+    assert.deepEqual(await deletedOrganizationAlert.json(), {
+      object: "organization.spend_alert.deleted",
+      id: organizationAlert.id,
+      deleted: true,
+    });
+
+    const missingOrganizationDelete = await fetch(`${baseUrl}/v1/organization/spend_alerts/${organizationAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(missingOrganizationDelete.status, 404);
+    assert.equal((await missingOrganizationDelete.json()).error.code, "organization_spend_alert_not_found");
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Spend Alerts Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const emptyProjectAlerts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts`);
+    assert.equal(emptyProjectAlerts.status, 200);
+    assert.deepEqual((await emptyProjectAlerts.json()).data, []);
+
+    const projectAlertResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(50000, ["project-finance@example.com"])),
+    });
+    assert.equal(projectAlertResponse.status, 200);
+    const projectAlert = await projectAlertResponse.json();
+    assert.equal(projectAlert.object, "project.spend_alert");
+    assert.match(projectAlert.id, /^alert_/);
+    assert.equal(projectAlert.threshold_amount, 50000);
+    assert.equal(projectAlert.compatibility.project_id, project.id);
+
+    const projectAlerts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?limit=20`);
+    assert.equal(projectAlerts.status, 200);
+    const projectAlertsJson = await projectAlerts.json();
+    assert.equal(projectAlertsJson.object, "list");
+    assert.equal(projectAlertsJson.data[0].id, projectAlert.id);
+
+    const updatedProjectAlert = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts/${projectAlert.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(75000, ["project-owner@example.com"])),
+    });
+    assert.equal(updatedProjectAlert.status, 200);
+    assert.equal((await updatedProjectAlert.json()).threshold_amount, 75000);
+
+    const projectUpdateLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=spend_alert.updated&project_ids%5B%5D=${project.id}&resource_ids%5B%5D=${projectAlert.id}`);
+    assert.equal(projectUpdateLogs.status, 200);
+    assert.equal((await projectUpdateLogs.json()).data[0]["spend_alert.updated"].project_id, project.id);
+
+    const deletedProjectAlert = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts/${projectAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedProjectAlert.status, 200);
+    assert.deepEqual(await deletedProjectAlert.json(), {
+      object: "project.spend_alert.deleted",
+      id: projectAlert.id,
+      deleted: true,
+    });
+
+    const missingProjectAlert = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts/${projectAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(missingProjectAlert.status, 404);
+    assert.equal((await missingProjectAlert.json()).error.code, "project_spend_alert_not_found");
+
+    const archivedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedResponse.status, 200);
+    const archivedProjectAlerts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts`);
+    assert.equal(archivedProjectAlerts.status, 400);
+    assert.equal((await archivedProjectAlerts.json()).error.code, "project_archived");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization audit logs list local admin lifecycle events and filters", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization audit logs compatibility should not call upstream provider");

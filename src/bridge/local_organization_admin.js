@@ -160,6 +160,7 @@ class LocalOrganizationAdminStore {
     fs.mkdirSync(this.organizationUserRolesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationGroupResourcesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationAdminApiKeysDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationSpendAlertsDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.auditLogsDir(), { recursive: true, mode: 0o700 });
   }
 
@@ -193,6 +194,10 @@ class LocalOrganizationAdminStore {
 
   organizationAdminApiKeysDir() {
     return path.join(this.dir, "organization_admin_api_keys");
+  }
+
+  organizationSpendAlertsDir() {
+    return path.join(this.dir, "organization_spend_alerts");
   }
 
   auditLogsDir() {
@@ -272,6 +277,12 @@ class LocalOrganizationAdminStore {
     return path.join(this.organizationAdminApiKeysDir(), `${clean}.json`);
   }
 
+  organizationSpendAlertPath(alertId) {
+    const clean = safeId(alertId);
+    if (!clean) return null;
+    return path.join(this.organizationSpendAlertsDir(), `${clean}.json`);
+  }
+
   auditLogPath(auditLogId) {
     const clean = safeId(auditLogId);
     if (!clean) return null;
@@ -308,6 +319,13 @@ class LocalOrganizationAdminStore {
   projectGroupPath(projectId, groupId) {
     const clean = safeId(groupId);
     const dir = this.projectResourceDir(projectId, "groups");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  projectSpendAlertPath(projectId, alertId) {
+    const clean = safeId(alertId);
+    const dir = this.projectResourceDir(projectId, "spend_alerts");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
   }
@@ -456,6 +474,77 @@ class LocalOrganizationAdminStore {
     return {
       object: "organization.admin_api_key.deleted",
       id: apiKey.id,
+      deleted: true,
+    };
+  }
+
+  createOrganizationSpendAlert(body = {}) {
+    const alert = this.spendAlertFromRequest(body, {
+      object: "organization.spend_alert",
+      compatibilityReason: "organization_spend_alert_protocol_compatibility",
+    });
+    this.writeJson(this.organizationSpendAlertPath(alert.id), alert);
+    this.recordAuditLog("spend_alert.created", {
+      id: alert.id,
+      data: this.spendAlertAuditData(alert),
+    }, {
+      resourceId: alert.id,
+    });
+    this.cleanup();
+    return this.spendAlertProjection(alert);
+  }
+
+  updateOrganizationSpendAlert(alertId, body = {}) {
+    const existing = this.readJson(this.organizationSpendAlertPath(alertId));
+    if (!existing) {
+      throw organizationAdminError(`organization spend alert not found: ${alertId}`, {
+        status: 404,
+        code: "organization_spend_alert_not_found",
+        param: "alert_id",
+      });
+    }
+    const alert = this.spendAlertFromRequest(body, {
+      id: existing.id,
+      object: "organization.spend_alert",
+      compatibilityReason: "organization_spend_alert_protocol_compatibility",
+      createdAt: existing.created_at,
+      lastLifecycleAction: "update",
+    });
+    this.writeJson(this.organizationSpendAlertPath(alert.id), alert);
+    this.recordAuditLog("spend_alert.updated", {
+      id: alert.id,
+      changes_requested: this.spendAlertAuditData(alert),
+    }, {
+      resourceId: alert.id,
+    });
+    return this.spendAlertProjection(alert);
+  }
+
+  listOrganizationSpendAlerts() {
+    return this.listJsonFiles(this.organizationSpendAlertsDir())
+      .sort(compareCreatedThenIdAsc)
+      .map((alert) => this.spendAlertProjection(alert));
+  }
+
+  deleteOrganizationSpendAlert(alertId) {
+    const alert = this.readJson(this.organizationSpendAlertPath(alertId));
+    if (!alert) {
+      throw organizationAdminError(`organization spend alert not found: ${alertId}`, {
+        status: 404,
+        code: "organization_spend_alert_not_found",
+        param: "alert_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationSpendAlertPath(alert.id)); } catch {}
+    this.recordAuditLog("spend_alert.deleted", {
+      id: alert.id,
+      data: this.spendAlertAuditData(alert),
+    }, {
+      resourceId: alert.id,
+    });
+    return {
+      object: "organization.spend_alert.deleted",
+      id: alert.id,
       deleted: true,
     };
   }
@@ -1719,6 +1808,93 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  createProjectSpendAlert(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const alert = this.spendAlertFromRequest(body, {
+      object: "project.spend_alert",
+      projectId: project.id,
+      compatibilityReason: "project_spend_alert_protocol_compatibility",
+    });
+    this.writeJson(this.projectSpendAlertPath(project.id, alert.id), alert);
+    this.recordAuditLog("spend_alert.created", {
+      id: alert.id,
+      project_id: project.id,
+      data: this.spendAlertAuditData(alert),
+    }, {
+      projectId: project.id,
+      resourceId: alert.id,
+    });
+    this.cleanup();
+    return this.spendAlertProjection(alert);
+  }
+
+  updateProjectSpendAlert(projectId, alertId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const existing = this.readJson(this.projectSpendAlertPath(project.id, alertId));
+    if (!existing) {
+      throw organizationAdminError(`project spend alert not found: ${alertId}`, {
+        status: 404,
+        code: "project_spend_alert_not_found",
+        param: "alert_id",
+      });
+    }
+    const alert = this.spendAlertFromRequest(body, {
+      id: existing.id,
+      object: "project.spend_alert",
+      projectId: project.id,
+      compatibilityReason: "project_spend_alert_protocol_compatibility",
+      createdAt: existing.created_at,
+      lastLifecycleAction: "update",
+    });
+    this.writeJson(this.projectSpendAlertPath(project.id, alert.id), alert);
+    this.recordAuditLog("spend_alert.updated", {
+      id: alert.id,
+      project_id: project.id,
+      changes_requested: this.spendAlertAuditData(alert),
+    }, {
+      projectId: project.id,
+      resourceId: alert.id,
+    });
+    return this.spendAlertProjection(alert);
+  }
+
+  listProjectSpendAlerts(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    return this.listJsonFiles(this.projectResourceDir(project.id, "spend_alerts"))
+      .sort(compareCreatedThenIdAsc)
+      .map((alert) => this.spendAlertProjection(alert));
+  }
+
+  deleteProjectSpendAlert(projectId, alertId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const alert = this.readJson(this.projectSpendAlertPath(project.id, alertId));
+    if (!alert) {
+      throw organizationAdminError(`project spend alert not found: ${alertId}`, {
+        status: 404,
+        code: "project_spend_alert_not_found",
+        param: "alert_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectSpendAlertPath(project.id, alert.id)); } catch {}
+    this.recordAuditLog("spend_alert.deleted", {
+      id: alert.id,
+      project_id: project.id,
+      data: this.spendAlertAuditData(alert),
+    }, {
+      projectId: project.id,
+      resourceId: alert.id,
+    });
+    return {
+      object: "project.spend_alert.deleted",
+      id: alert.id,
+      deleted: true,
+    };
+  }
+
   listProjectRateLimits(projectId) {
     const project = this.getRequiredProject(projectId);
     this.assertProjectActive(project);
@@ -1919,6 +2095,148 @@ class LocalOrganizationAdminStore {
       group_type: membership.group_type || "group",
       created_at: membership.created_at ?? null,
       compatibility: isPlainObject(membership.compatibility) ? clone(membership.compatibility) : undefined,
+    };
+  }
+
+  spendAlertFromRequest(body = {}, options = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const thresholdAmount = this.requiredSpendAlertThresholdAmount(request.threshold_amount);
+    const currency = optionalString(request.currency);
+    if (!currency) {
+      throw organizationAdminError("currency is required", {
+        code: "missing_required_parameter",
+        param: "currency",
+      });
+    }
+    if (currency !== "USD") {
+      throw organizationAdminError("currency must be USD", {
+        code: "invalid_spend_alert_currency",
+        param: "currency",
+      });
+    }
+    const interval = optionalString(request.interval);
+    if (!interval) {
+      throw organizationAdminError("interval is required", {
+        code: "missing_required_parameter",
+        param: "interval",
+      });
+    }
+    if (interval !== "month") {
+      throw organizationAdminError("interval must be month", {
+        code: "invalid_spend_alert_interval",
+        param: "interval",
+      });
+    }
+    const notificationChannel = this.normalizeSpendAlertNotificationChannel(request.notification_channel);
+    return {
+      id: options.id || `alert_${randomToken(14)}`,
+      object: options.object,
+      threshold_amount: thresholdAmount,
+      currency,
+      interval,
+      notification_channel: notificationChannel,
+      created_at: options.createdAt || nowSeconds(),
+      ...(options.projectId ? { project_id: options.projectId } : {}),
+      compatibility: localCompatibility(options.compatibilityReason || "spend_alert_protocol_compatibility", {
+        locally_persisted: true,
+        ...(options.projectId ? { project_id: options.projectId } : {}),
+        ...(options.lastLifecycleAction ? { last_lifecycle_action: options.lastLifecycleAction } : {}),
+      }),
+    };
+  }
+
+  requiredSpendAlertThresholdAmount(value) {
+    if (value === undefined || value === null || value === "") {
+      throw organizationAdminError("threshold_amount is required", {
+        code: "missing_required_parameter",
+        param: "threshold_amount",
+      });
+    }
+    const number = Number(value);
+    if (!Number.isFinite(number) || number < 0) {
+      throw organizationAdminError("threshold_amount must be a non-negative number of cents", {
+        code: "invalid_spend_alert_threshold_amount",
+        param: "threshold_amount",
+      });
+    }
+    return Math.trunc(number);
+  }
+
+  normalizeSpendAlertNotificationChannel(value) {
+    if (value === undefined || value === null) {
+      throw organizationAdminError("notification_channel is required", {
+        code: "missing_required_parameter",
+        param: "notification_channel",
+      });
+    }
+    if (!isPlainObject(value)) {
+      throw organizationAdminError("notification_channel must be an object", {
+        code: "invalid_spend_alert_notification_channel",
+        param: "notification_channel",
+      });
+    }
+    const type = optionalString(value.type);
+    if (!type) {
+      throw organizationAdminError("notification_channel.type is required", {
+        code: "missing_required_parameter",
+        param: "notification_channel.type",
+      });
+    }
+    if (type !== "email") {
+      throw organizationAdminError("notification_channel.type must be email", {
+        code: "invalid_spend_alert_notification_channel",
+        param: "notification_channel.type",
+      });
+    }
+    if (!Array.isArray(value.recipients)) {
+      throw organizationAdminError("notification_channel.recipients must be an array", {
+        code: "invalid_spend_alert_notification_channel",
+        param: "notification_channel.recipients",
+      });
+    }
+    const recipients = uniqueStrings(value.recipients);
+    if (!recipients.length) {
+      throw organizationAdminError("notification_channel.recipients must contain at least one recipient", {
+        code: "invalid_spend_alert_notification_channel",
+        param: "notification_channel.recipients",
+      });
+    }
+    const channel = {
+      type: "email",
+      recipients,
+    };
+    if (value.subject_prefix !== undefined) {
+      channel.subject_prefix = optionalNullableString(value.subject_prefix);
+    }
+    return channel;
+  }
+
+  spendAlertProjection(alert) {
+    return {
+      id: alert.id,
+      object: alert.object,
+      threshold_amount: alert.threshold_amount,
+      currency: alert.currency,
+      interval: alert.interval,
+      notification_channel: clone(alert.notification_channel),
+      compatibility: isPlainObject(alert.compatibility) ? clone(alert.compatibility) : undefined,
+    };
+  }
+
+  spendAlertAuditData(alert) {
+    return {
+      threshold_amount: alert.threshold_amount,
+      currency: alert.currency,
+      interval: alert.interval,
+      notification_channel: {
+        type: alert.notification_channel?.type ?? null,
+        recipients: Array.isArray(alert.notification_channel?.recipients)
+          ? [...alert.notification_channel.recipients]
+          : [],
+        ...(Object.prototype.hasOwnProperty.call(alert.notification_channel || {}, "subject_prefix")
+          ? { subject_prefix: alert.notification_channel.subject_prefix ?? null }
+          : {}),
+      },
     };
   }
 
@@ -2187,6 +2505,7 @@ class LocalOrganizationAdminStore {
       this.organizationRolesDir(),
       this.organizationGroupsDir(),
       this.organizationAdminApiKeysDir(),
+      this.organizationSpendAlertsDir(),
       this.auditLogsDir(),
     ]) {
       const files = this.listCleanupEntries(dir);
@@ -2209,7 +2528,7 @@ class LocalOrganizationAdminStore {
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
-      for (const resource of ["api_keys", "service_accounts", "users", "groups", "rate_limits"]) {
+      for (const resource of ["api_keys", "service_accounts", "users", "groups", "spend_alerts", "rate_limits"]) {
         const files = this.listCleanupEntries(path.join(projectDir, resource));
         for (const entry of files.slice(this.maxRecords)) {
           try { fs.unlinkSync(entry.filePath); } catch {}

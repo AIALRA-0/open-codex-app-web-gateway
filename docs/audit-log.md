@@ -4463,6 +4463,91 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization spend alerts compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - OpenAI OpenAPI operation `list-organization-spend-alerts` documents
+    `GET /organization/spend_alerts`, `limit`, `order`, `after`, `before`, and
+    list-page response fields;
+  - OpenAI OpenAPI operation `create-organization-spend-alert` documents
+    `POST /organization/spend_alerts`, `threshold_amount`, `currency:"USD"`,
+    `interval:"month"`, and email notification channels;
+  - OpenAI Node SDK generated Organization spend-alerts resource documents
+    create, update, list, delete, `organization.spend_alert`, and
+    `organization.spend_alert.deleted`;
+  - OpenAI Node SDK generated project spend-alerts resource documents the
+    project-scoped create, update, list, delete flow and
+    `project.spend_alert.deleted`.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added local Organization spend-alert records under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/organization_spend_alerts`;
+  - added local project spend-alert records under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/project_resources/<project>/spend_alerts`;
+  - added `GET`, `POST`, `POST /{alert_id}`, and `DELETE /{alert_id}` for
+    `/v1/organization/spend_alerts`;
+  - added `GET`, `POST`, `POST /{alert_id}`, and `DELETE /{alert_id}` for
+    `/v1/organization/projects/{project_id}/spend_alerts`;
+  - normalizes required `threshold_amount`, `currency:"USD"`,
+    `interval:"month"`, `notification_channel.type:"email"`, unique
+    recipients, and optional `subject_prefix`;
+  - records local `spend_alert.created`, `spend_alert.updated`, and
+    `spend_alert.deleted` audit events, with `project_id` filters for
+    project-scoped alerts.
+- Current boundary: this closes another class of Organization admin SDK and UI
+  404s for Chat Completions-backed deployments. These records are local
+  protocol metadata only; the bridge does not meter real provider spend,
+  aggregate actual invoices, send alert email, or enforce provider billing
+  controls.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies organization and project alert
+    create/list/update/delete, OpenAI-style list pagination, missing parameter
+    and invalid notification-channel errors, archived-project rejection, audit
+    log filters, and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-spend-alerts`, covering
+    the same lifecycle against the deployed DeepSeek-backed bridge with zero
+    provider token usage.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `test/server.test.js`, and
+    `scripts/eval-harness.mjs`.
+  - Focused Organization spend-alert unit test passed 1/1.
+  - Focused Organization unit tests passed 9/9.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-spend-alerts`: passed 1/1 against
+    `deepseek-v4-pro`, latency 1550 ms, output
+    `organization_spend_alerts:alert_...:alert_...`, and zero provider token
+    usage.
+  - `npm test`: passed 209/209.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1089 ms, P95 latency 1423 ms, and total usage 99
+    tokens.
+  - `npm run smoke:bridge`: passed with `output_text:"bridge-ok"`.
+  - Full live `bridge-regression`: passed 106/106 against `deepseek-v4-pro`,
+    pass rate 1.0, average latency 1305 ms, P95 latency 3830 ms, and total
+    usage 24905 tokens. The suite now includes `organization-spend-alerts`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online`, exercised sidebar/page navigation,
+    project dialog, host upload verification, prompt send, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project create/reopen/cleanup, and reported no browser console errors or
+    warnings.
+  - Service check: app-server, bridge, and web services were all `active`;
+    `https://opencodexapp.aialra.online` returned HTTP 200.
+  - Space check after the run: `/` was 168G used of 193G, 25G available, 88%
+    used; repo `state` was 33M, `output` was 4.7M,
+    `/srv/aialra/data/opencodexapp` was 136K, and
+    `/srv/aialra/logs/opencodexapp` was 29M.
+  - Runtime prune dry-run selected three old UI screenshots; apply deleted
+    three files, 264209 bytes, with zero errors.
+- Updated compatibility/evaluation/deployment docs to list the new
+  Organization and project spend-alert endpoints, source references, focused
+  live eval command, and local state-directory boundaries.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, or alert notification test recipients containing real
+  secrets were added to the repository.
+
 ## 2026-06-15 - Local Organization project groups compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

@@ -722,6 +722,80 @@ function buildSuites(defaultModel) {
           && missingOrgGroupCreate.json?.error?.code === "organization_group_not_found",
       },
       {
+        id: "organization-spend-alerts",
+        mode: "organization-spend-alerts",
+        check: ({
+          emptyOrganizationAlerts,
+          missingThreshold,
+          invalidCurrency,
+          organizationAlert,
+          secondOrganizationAlert,
+          organizationAlerts,
+          organizationDesc,
+          organizationNext,
+          updatedOrganizationAlert,
+          organizationCreateLogs,
+          deletedOrganizationAlert,
+          missingOrganizationDelete,
+          project,
+          emptyProjectAlerts,
+          projectAlert,
+          projectAlerts,
+          updatedProjectAlert,
+          projectUpdateLogs,
+          deletedProjectAlert,
+          missingProjectAlert,
+          archivedProject,
+          archivedProjectAlerts,
+        }) => emptyOrganizationAlerts?.object === "list"
+          && emptyOrganizationAlerts.data?.length === 0
+          && missingThreshold?.status === 400
+          && missingThreshold.json?.error?.param === "threshold_amount"
+          && invalidCurrency?.status === 400
+          && invalidCurrency.json?.error?.code === "invalid_spend_alert_currency"
+          && organizationAlert?.object === "organization.spend_alert"
+          && organizationAlert.id?.startsWith("alert_")
+          && organizationAlert.threshold_amount === 100000
+          && organizationAlert.currency === "USD"
+          && organizationAlert.interval === "month"
+          && organizationAlert.notification_channel?.type === "email"
+          && organizationAlert.notification_channel?.recipients?.includes("finance@example.com")
+          && organizationAlert.compatibility?.actual_openai_admin_data === false
+          && secondOrganizationAlert?.object === "organization.spend_alert"
+          && organizationAlerts?.data?.some((entry) => entry.id === organizationAlert.id)
+          && organizationAlerts?.data?.some((entry) => entry.id === secondOrganizationAlert?.id)
+          && organizationDesc?.data?.length === 1
+          && organizationDesc.has_more === true
+          && organizationNext?.data?.length === 1
+          && updatedOrganizationAlert?.id === organizationAlert.id
+          && updatedOrganizationAlert.threshold_amount === 150000
+          && updatedOrganizationAlert.notification_channel?.recipients?.includes("billing@example.com")
+          && organizationCreateLogs?.data?.some((entry) => entry.type === "spend_alert.created"
+            && entry["spend_alert.created"]?.id === organizationAlert.id)
+          && deletedOrganizationAlert?.object === "organization.spend_alert.deleted"
+          && deletedOrganizationAlert.deleted === true
+          && missingOrganizationDelete?.status === 404
+          && missingOrganizationDelete.json?.error?.code === "organization_spend_alert_not_found"
+          && project?.object === "organization.project"
+          && emptyProjectAlerts?.data?.length === 0
+          && projectAlert?.object === "project.spend_alert"
+          && projectAlert.id?.startsWith("alert_")
+          && projectAlert.threshold_amount === 50000
+          && projectAlert.compatibility?.project_id === project?.id
+          && projectAlerts?.data?.some((entry) => entry.id === projectAlert.id)
+          && updatedProjectAlert?.threshold_amount === 75000
+          && projectUpdateLogs?.data?.some((entry) => entry.type === "spend_alert.updated"
+            && entry["spend_alert.updated"]?.project_id === project?.id
+            && entry["spend_alert.updated"]?.id === projectAlert?.id)
+          && deletedProjectAlert?.object === "project.spend_alert.deleted"
+          && deletedProjectAlert.deleted === true
+          && missingProjectAlert?.status === 404
+          && missingProjectAlert.json?.error?.code === "project_spend_alert_not_found"
+          && archivedProject?.status === "archived"
+          && archivedProjectAlerts?.status === 400
+          && archivedProjectAlerts.json?.error?.code === "project_archived",
+      },
+      {
         id: "organization-project-users-rate-limits",
         mode: "organization-project-users-rate-limits",
         check: ({
@@ -3401,6 +3475,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-project-groups") {
       return await runOrganizationProjectGroupsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-spend-alerts") {
+      return await runOrganizationSpendAlertsCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-users-rate-limits") {
       return await runOrganizationProjectUsersRateLimitsCase(testCase, context, started);
     }
@@ -4345,6 +4422,127 @@ async function runOrganizationProjectGroupsCase(testCase, context, started) {
     group_id: group.json.id,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_project_groups:${project.json.id}:${group.json.id}`,
+  });
+}
+
+async function runOrganizationSpendAlertsCase(testCase, context, started) {
+  const marker = `bridge-spend-${Date.now()}-${context.iteration}`;
+  const spendAlertBody = (threshold, recipients = ["finance@example.com"]) => ({
+    threshold_amount: threshold,
+    currency: "USD",
+    interval: "month",
+    notification_channel: {
+      type: "email",
+      recipients,
+      subject_prefix: "Open Codex spend",
+    },
+  });
+
+  const emptyOrganizationAlerts = await getJson(`${baseUrl}/v1/organization/spend_alerts?limit=20`);
+  const missingThreshold = await postJsonCapture(`${baseUrl}/v1/organization/spend_alerts`, {
+    currency: "USD",
+    interval: "month",
+    notification_channel: { type: "email", recipients: [`finance-${marker}@example.com`] },
+  });
+  const invalidCurrency = await postJsonCapture(`${baseUrl}/v1/organization/spend_alerts`, {
+    ...spendAlertBody(1000, [`finance-${marker}@example.com`]),
+    currency: "EUR",
+  });
+  const organizationAlert = await postJsonCapture(`${baseUrl}/v1/organization/spend_alerts`, {
+    ...spendAlertBody(100000, [`finance-${marker}@example.com`, "finance@example.com"]),
+  });
+  if (!organizationAlert.ok || !organizationAlert.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: organizationAlert.status,
+      error: truncate(organizationAlert.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const organizationAlertId = encodeURIComponent(organizationAlert.json.id);
+  const secondOrganizationAlert = await postJsonCapture(`${baseUrl}/v1/organization/spend_alerts`, {
+    ...spendAlertBody(250000, [`owner-${marker}@example.com`]),
+  });
+  const secondOrganizationAlertId = encodeURIComponent(secondOrganizationAlert.json?.id || "missing_alert");
+  const organizationAlerts = await getJson(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=100`);
+  const organizationDesc = await getJson(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1`);
+  const organizationNextCursor = organizationDesc.json?.last_id ? encodeURIComponent(organizationDesc.json.last_id) : "";
+  const organizationNext = await getJson(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1&after=${organizationNextCursor}`);
+  const updatedOrganizationAlert = await postJsonCapture(`${baseUrl}/v1/organization/spend_alerts/${organizationAlertId}`, {
+    ...spendAlertBody(150000, ["billing@example.com"]),
+  });
+  const organizationCreateLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=spend_alert.created&resource_ids%5B%5D=${organizationAlertId}&limit=20`);
+  const deletedOrganizationAlertRaw = await deleteJson(`${baseUrl}/v1/organization/spend_alerts/${organizationAlertId}`);
+  const deletedOrganizationAlert = parseJsonish(deletedOrganizationAlertRaw.body);
+  const missingOrganizationDelete = await deleteJson(`${baseUrl}/v1/organization/spend_alerts/${organizationAlertId}`);
+  await deleteJson(`${baseUrl}/v1/organization/spend_alerts/${secondOrganizationAlertId}`);
+
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Spend Alerts ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const emptyProjectAlerts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts?limit=20`);
+  const projectAlert = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts`, {
+    ...spendAlertBody(50000, [`project-finance-${marker}@example.com`]),
+  });
+  const projectAlertId = encodeURIComponent(projectAlert.json?.id || "missing_alert");
+  const projectAlerts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts?limit=20`);
+  const updatedProjectAlert = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts/${projectAlertId}`, {
+    ...spendAlertBody(75000, ["project-owner@example.com"]),
+  });
+  const projectUpdateLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=spend_alert.updated&project_ids%5B%5D=${projectId}&resource_ids%5B%5D=${projectAlertId}&limit=20`);
+  const deletedProjectAlertRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts/${projectAlertId}`);
+  const deletedProjectAlert = parseJsonish(deletedProjectAlertRaw.body);
+  const missingProjectAlert = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts/${projectAlertId}`);
+  const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
+  const archivedProjectAlerts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/spend_alerts?limit=20`);
+
+  const ok = !!testCase.check({
+    emptyOrganizationAlerts: emptyOrganizationAlerts.json,
+    missingThreshold,
+    invalidCurrency,
+    organizationAlert: organizationAlert.json,
+    secondOrganizationAlert: secondOrganizationAlert.json,
+    organizationAlerts: organizationAlerts.json,
+    organizationDesc: organizationDesc.json,
+    organizationNext: organizationNext.json,
+    updatedOrganizationAlert: updatedOrganizationAlert.json,
+    organizationCreateLogs: organizationCreateLogs.json,
+    deletedOrganizationAlert,
+    missingOrganizationDelete: {
+      ...missingOrganizationDelete,
+      json: parseJsonish(missingOrganizationDelete.body),
+    },
+    project: project.json,
+    emptyProjectAlerts: emptyProjectAlerts.json,
+    projectAlert: projectAlert.json,
+    projectAlerts: projectAlerts.json,
+    updatedProjectAlert: updatedProjectAlert.json,
+    projectUpdateLogs: projectUpdateLogs.json,
+    deletedProjectAlert,
+    missingProjectAlert: {
+      ...missingProjectAlert,
+      json: parseJsonish(missingProjectAlert.body),
+    },
+    archivedProject: archivedProject.json,
+    archivedProjectAlerts,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: organizationAlert.status,
+    organization_alert_id: organizationAlert.json.id,
+    project_id: project.json.id,
+    project_alert_id: projectAlert.json?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_spend_alerts:${organizationAlert.json.id}:${projectAlert.json?.id || "missing"}`,
   });
 }
 
