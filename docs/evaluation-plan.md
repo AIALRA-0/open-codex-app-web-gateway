@@ -148,7 +148,9 @@ force `tool_choice:{type:"computer"}` and validate that the public response
 contains a `computer_call`, not the bridge-internal function call or function
 call stream events. Mock-provider coverage also validates that returned
 `acknowledged_safety_checks` are preserved as bounded Chat-visible summaries and
-counted in `metadata.compatibility.local_computer`.
+counted in `metadata.compatibility.local_computer`, and that common action
+aliases such as `scroll_x` / `scrollX`, `scroll_y` / `scrollY`, and `key` /
+`keys[]` are normalized before the public `computer_call` is returned.
 
 Useful commands:
 

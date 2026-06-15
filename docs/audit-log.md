@@ -1,5 +1,34 @@
 # Audit Log
 
+## 2026-06-16 Computer Use Action Alias Normalization
+
+- Continued tightening the local Computer Use action-loop adapter against the
+  official Computer Use guide's action runner examples. The bridge already
+  accepted model-returned action objects with `additionalProperties:true`, but
+  clients could receive only the model's original spelling for common runtime
+  fields.
+- Added conservative alias normalization for model-requested `computer_call`
+  actions:
+  - `scroll_x` and `scrollX` are both populated when either spelling is present;
+  - `scroll_y` and `scrollY` are both populated when either spelling is present;
+  - a single `key` value is normalized into `keys:[...]` for `keypress`;
+  - `drag` path entries supplied as `[x,y]` pairs are normalized to `{x,y}`
+    point objects.
+- Kept the generated Chat function schema provider-friendly by adding explicit
+  `scrollX`, `scrollY`, and `key` fields while avoiding complex `oneOf` shapes
+  that some Chat-compatible providers reject.
+- Added a mock-provider regression proving a returned scroll action carries
+  both snake_case and camelCase deltas, that `key` becomes `keys[]`, and that a
+  two-action `actions[]` batch is counted in local compatibility metadata.
+- Boundary unchanged: the bridge still preserves and normalizes action objects;
+  it does not execute them or capture screenshots by itself.
+- Validation:
+  - `node --check src/bridge/local_computer.js test/server.test.js scripts/eval-harness.mjs`:
+    passed.
+  - Focused Computer Use server regression command passed the server suite
+    (188/188 tests), including the new `computer action aliases` case.
+  - Full `npm test`: passed 228/228 tests.
+
 ## 2026-06-16 Computer Use Safety Acknowledgement Preservation
 
 - Used the official OpenAI Computer Use guide to re-check the local adapter

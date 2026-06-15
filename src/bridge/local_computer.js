@@ -348,7 +348,10 @@ function computerActionToolParameters() {
       button: { type: "string" },
       scroll_x: { type: "number" },
       scroll_y: { type: "number" },
+      scrollX: { type: "number" },
+      scrollY: { type: "number" },
       text: { type: "string" },
+      key: { type: "string" },
       keys: { type: "array", items: { type: "string" } },
       path: {
         type: "array",
@@ -429,10 +432,30 @@ function normalizeComputerAction(action) {
   if (!isPlainObject(action)) return null;
   const type = stringifyOptional(action.type)?.toLowerCase();
   if (!COMPUTER_ACTION_TYPES.has(type)) return null;
-  return {
+  const normalized = {
     ...clone(action),
     type,
   };
+  if (normalized.scrollX == null && normalized.scroll_x != null) normalized.scrollX = normalized.scroll_x;
+  if (normalized.scrollY == null && normalized.scroll_y != null) normalized.scrollY = normalized.scroll_y;
+  if (normalized.scroll_x == null && normalized.scrollX != null) normalized.scroll_x = normalized.scrollX;
+  if (normalized.scroll_y == null && normalized.scrollY != null) normalized.scroll_y = normalized.scrollY;
+  if (normalized.keys == null && normalized.key != null) normalized.keys = [stringifyContent(normalized.key)];
+  if (typeof normalized.keys === "string") normalized.keys = [normalized.keys];
+  if (type === "drag" && Array.isArray(normalized.path)) {
+    normalized.path = normalizeComputerDragPath(normalized.path);
+  }
+  return normalized;
+}
+
+function normalizeComputerDragPath(path) {
+  return path.map((point) => {
+    if (Array.isArray(point) && point.length >= 2) {
+      return { x: point[0], y: point[1] };
+    }
+    if (isPlainObject(point)) return clone(point);
+    return point;
+  });
 }
 
 function normalizePendingSafetyChecks(value) {

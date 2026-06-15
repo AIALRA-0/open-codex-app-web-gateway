@@ -5254,6 +5254,90 @@ test("POST /v1/responses maps model-requested computer actions to computer_call"
   });
 });
 
+test("POST /v1/responses normalizes computer action aliases", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const toolName = call.body.tools[0].function.name;
+    const actionProperties = call.body.tools[0].function.parameters.properties.action.properties;
+    assert.ok(actionProperties.scroll_x);
+    assert.ok(actionProperties.scroll_y);
+    assert.ok(actionProperties.scrollX);
+    assert.ok(actionProperties.scrollY);
+    assert.ok(actionProperties.key);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_computer_action_aliases",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_scroll_and_key",
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: JSON.stringify({
+                actions: [{
+                  type: "scroll",
+                  x: 10,
+                  y: 20,
+                  scroll_x: 0,
+                  scrollY: 240,
+                }, {
+                  type: "keypress",
+                  key: "ENTER",
+                }],
+              }),
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_alias_screen",
+          output: {
+            type: "input_image",
+            image_url: "https://example.test/alias-screen.png",
+            detail: "low",
+          },
+        }],
+        tools: [{ type: "computer", environment: "browser" }],
+        tool_choice: { type: "computer" },
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output.length, 1);
+    const call = json.output[0];
+    assert.equal(call.type, "computer_call");
+    assert.equal(call.actions.length, 2);
+    assert.deepEqual(call.action, call.actions[0]);
+    assert.equal(call.actions[0].type, "scroll");
+    assert.equal(call.actions[0].scroll_x, 0);
+    assert.equal(call.actions[0].scrollX, 0);
+    assert.equal(call.actions[0].scroll_y, 240);
+    assert.equal(call.actions[0].scrollY, 240);
+    assert.equal(call.actions[1].type, "keypress");
+    assert.deepEqual(call.actions[1].keys, ["ENTER"]);
+    assert.equal(json.metadata.compatibility.local_computer.requested_action_count, 2);
+  });
+});
+
 test("POST /v1/responses imports remote MCP tools/list over Streamable HTTP", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-list";
   const mcpRequests = [];
