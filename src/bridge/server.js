@@ -8283,6 +8283,75 @@ function handleOrganizationAdminApiKeyDelete(res, organizationAdminStore, apiKey
   sendJson(res, 200, organizationAdminStore.deleteOrganizationAdminApiKey(apiKeyId));
 }
 
+async function handleOrganizationCertificateCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization certificate request body must be a JSON object", {
+      code: "invalid_organization_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createOrganizationCertificate(body));
+}
+
+function handleOrganizationCertificatesList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    organizationAdminStore.listOrganizationCertificates(),
+    url,
+    "desc",
+    20,
+    100,
+  ));
+}
+
+function certificateIncludeValues(url) {
+  return [
+    ...url.searchParams.getAll("include"),
+    ...url.searchParams.getAll("include[]"),
+  ].flatMap((value) => String(value || "").split(","))
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+function handleOrganizationCertificateGet(res, organizationAdminStore, certificateId, url) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationCertificate(certificateId, {
+    include: certificateIncludeValues(url),
+  }));
+}
+
+async function handleOrganizationCertificateUpdate(req, res, organizationAdminStore, certificateId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization certificate update body must be a JSON object", {
+      code: "invalid_organization_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationCertificate(certificateId, body));
+}
+
+function handleOrganizationCertificateDelete(res, organizationAdminStore, certificateId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationCertificate(certificateId));
+}
+
+async function handleOrganizationCertificatesActivate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization certificate activation body must be a JSON object", {
+      code: "invalid_organization_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.activateOrganizationCertificates(body));
+}
+
+async function handleOrganizationCertificatesDeactivate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization certificate deactivation body must be a JSON object", {
+      code: "invalid_organization_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.deactivateOrganizationCertificates(body));
+}
+
 function handleOrganizationDataRetentionGet(res, organizationAdminStore) {
   sendJson(res, 200, organizationAdminStore.getOrganizationDataRetention());
 }
@@ -8675,6 +8744,36 @@ function handleOrganizationProjectGroupGet(res, organizationAdminStore, projectI
 
 function handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId) {
   sendJson(res, 200, organizationAdminStore.deleteProjectGroup(projectId, groupId));
+}
+
+function handleOrganizationProjectCertificatesList(res, organizationAdminStore, projectId, url) {
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    organizationAdminStore.listProjectCertificates(projectId),
+    url,
+    "desc",
+    20,
+    100,
+  ));
+}
+
+async function handleOrganizationProjectCertificatesActivate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project certificate activation body must be a JSON object", {
+      code: "invalid_project_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.activateProjectCertificates(projectId, body));
+}
+
+async function handleOrganizationProjectCertificatesDeactivate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project certificate deactivation body must be a JSON object", {
+      code: "invalid_project_certificate_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.deactivateProjectCertificates(projectId, body));
 }
 
 function handleOrganizationProjectDataRetentionGet(res, organizationAdminStore, projectId) {
@@ -12345,6 +12444,44 @@ function createServer(config = loadConfig()) {
         }
       }
 
+      if (url.pathname === "/v1/organization/certificates") {
+        if (req.method === "GET") {
+          handleOrganizationCertificatesList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationCertificateCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      if (url.pathname === "/v1/organization/certificates/activate" && req.method === "POST") {
+        await handleOrganizationCertificatesActivate(req, res, organizationAdminStore);
+        return;
+      }
+
+      if (url.pathname === "/v1/organization/certificates/deactivate" && req.method === "POST") {
+        await handleOrganizationCertificatesDeactivate(req, res, organizationAdminStore);
+        return;
+      }
+
+      const organizationCertificateRoute = url.pathname.match(/^\/v1\/organization\/certificates\/([^/]+)$/);
+      if (organizationCertificateRoute) {
+        const certificateId = decodeURIComponent(organizationCertificateRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationCertificateGet(res, organizationAdminStore, certificateId, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationCertificateUpdate(req, res, organizationAdminStore, certificateId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationCertificateDelete(res, organizationAdminStore, certificateId);
+          return;
+        }
+      }
+
       if (url.pathname === "/v1/organization/data_retention") {
         if (req.method === "GET") {
           handleOrganizationDataRetentionGet(res, organizationAdminStore);
@@ -12623,6 +12760,24 @@ function createServer(config = loadConfig()) {
         }
         if (groupId && req.method === "DELETE") {
           handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId);
+          return;
+        }
+      }
+
+      const organizationProjectCertificatesRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/certificates(?:\/(activate|deactivate))?$/);
+      if (organizationProjectCertificatesRoute) {
+        const projectId = decodeURIComponent(organizationProjectCertificatesRoute[1]);
+        const action = organizationProjectCertificatesRoute[2] || "";
+        if (!action && req.method === "GET") {
+          handleOrganizationProjectCertificatesList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (action === "activate" && req.method === "POST") {
+          await handleOrganizationProjectCertificatesActivate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (action === "deactivate" && req.method === "POST") {
+          await handleOrganizationProjectCertificatesDeactivate(req, res, organizationAdminStore, projectId);
           return;
         }
       }

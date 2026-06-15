@@ -568,6 +568,95 @@ function buildSuites(defaultModel) {
           && missing.json?.error?.code === "organization_admin_api_key_not_found",
       },
       {
+        id: "organization-certificates",
+        mode: "organization-certificates",
+        check: ({
+          missingCertificate,
+          invalidCertificate,
+          privateKeyRejected,
+          created,
+          fetched,
+          fetchedWithContent,
+          updated,
+          certificates,
+          invalidActivate,
+          activated,
+          deleteWhileOrganizationActive,
+          deactivated,
+          project,
+          emptyProjectCertificates,
+          projectActivated,
+          projectCertificates,
+          deleteWhileProjectActive,
+          projectDeactivated,
+          inactiveProjectCertificates,
+          createdLogs,
+          projectActivationLogs,
+          deleted,
+          missing,
+          projectCertificatesAfterDelete,
+          archivedProject,
+          archivedList,
+          archivedActivate,
+          archivedDeactivate,
+        }) => missingCertificate?.status === 400
+          && missingCertificate.json?.error?.param === "certificate"
+          && invalidCertificate?.status === 400
+          && invalidCertificate.json?.error?.code === "invalid_certificate"
+          && privateKeyRejected?.status === 400
+          && privateKeyRejected.json?.error?.code === "invalid_certificate"
+          && created?.object === "certificate"
+          && created.id?.startsWith("cert_")
+          && created.name?.startsWith("Bridge Eval Certificate")
+          && created.certificate_details?.content === undefined
+          && created.compatibility?.actual_openai_admin_data === false
+          && fetched?.id === created.id
+          && fetched.certificate_details?.content === undefined
+          && fetchedWithContent?.certificate_details?.content?.includes("BEGIN CERTIFICATE")
+          && updated?.name?.startsWith("Bridge Eval Certificate Updated")
+          && certificates?.data?.some((entry) => entry.id === created.id
+            && entry.object === "organization.certificate"
+            && entry.active === false
+            && entry.certificate_details?.content === undefined)
+          && invalidActivate?.status === 400
+          && invalidActivate.json?.error?.code === "invalid_certificate_ids"
+          && activated?.object === "organization.certificate.activation"
+          && activated.data?.[0]?.id === created.id
+          && activated.data[0].active === true
+          && deleteWhileOrganizationActive?.status === 400
+          && deleteWhileOrganizationActive.json?.error?.code === "organization_certificate_active"
+          && deactivated?.object === "organization.certificate.deactivation"
+          && deactivated.data?.[0]?.active === false
+          && project?.object === "organization.project"
+          && emptyProjectCertificates?.data?.length === 0
+          && projectActivated?.object === "organization.project.certificate.activation"
+          && projectActivated.data?.[0]?.id === created.id
+          && projectActivated.data[0].object === "organization.project.certificate"
+          && projectActivated.data[0].active === true
+          && projectCertificates?.data?.some((entry) => entry.id === created.id && entry.active === true)
+          && deleteWhileProjectActive?.status === 400
+          && deleteWhileProjectActive.json?.error?.code === "project_certificate_active"
+          && projectDeactivated?.object === "organization.project.certificate.deactivation"
+          && projectDeactivated.data?.[0]?.active === false
+          && inactiveProjectCertificates?.data?.some((entry) => entry.id === created.id && entry.active === false)
+          && createdLogs?.data?.some((entry) => entry.type === "certificate.created"
+            && entry["certificate.created"]?.id === created.id)
+          && projectActivationLogs?.data?.some((entry) => entry.type === "certificate.activated"
+            && entry["certificate.activated"]?.project_id === project?.id)
+          && deleted?.object === "certificate.deleted"
+          && deleted.id === created.id
+          && missing?.status === 404
+          && missing.json?.error?.code === "organization_certificate_not_found"
+          && projectCertificatesAfterDelete?.data?.every((entry) => entry.id !== created.id)
+          && archivedProject?.status === "archived"
+          && archivedList?.status === 400
+          && archivedList.json?.error?.code === "project_archived"
+          && archivedActivate?.status === 400
+          && archivedActivate.json?.error?.code === "project_archived"
+          && archivedDeactivate?.status === 400
+          && archivedDeactivate.json?.error?.code === "project_archived",
+      },
+      {
         id: "organization-audit-logs",
         mode: "organization-audit-logs",
         check: ({
@@ -3553,6 +3642,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-admin-api-keys") {
       return await runOrganizationAdminApiKeysCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-certificates") {
+      return await runOrganizationCertificatesCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-audit-logs") {
       return await runOrganizationAuditLogsCase(testCase, context, started);
     }
@@ -4274,6 +4366,143 @@ async function runOrganizationAdminApiKeysCase(testCase, context, started) {
     second_admin_api_key_id: second.json?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_admin_api_keys:${created.json.id}:${second.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationCertificatesCase(testCase, context, started) {
+  const marker = `bridge-cert-${Date.now()}-${context.iteration}`;
+  const certificatePem = [
+    "-----BEGIN CERTIFICATE-----",
+    `MIIB${marker.replace(/[^A-Za-z0-9]/g, "")}`,
+    "-----END CERTIFICATE-----",
+  ].join("\n");
+  const missingCertificate = await postJsonCapture(`${baseUrl}/v1/organization/certificates`, {
+    name: `Bridge Eval Certificate Missing ${marker}`,
+  });
+  const invalidCertificate = await postJsonCapture(`${baseUrl}/v1/organization/certificates`, {
+    name: `Bridge Eval Certificate Invalid ${marker}`,
+    certificate: "not a pem certificate",
+  });
+  const privateKeyRejected = await postJsonCapture(`${baseUrl}/v1/organization/certificates`, {
+    certificate: [
+      "-----BEGIN PRIVATE KEY-----",
+      "secret",
+      "-----END PRIVATE KEY-----",
+    ].join("\n"),
+  });
+  const created = await postJsonCapture(`${baseUrl}/v1/organization/certificates`, {
+    name: `Bridge Eval Certificate ${marker}`,
+    certificate: certificatePem,
+  });
+  if (!created.ok || !created.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: created.status,
+      error: truncate(created.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const certificateId = encodeURIComponent(created.json.id);
+  const fetched = await getJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+  const fetchedWithContent = await getJson(`${baseUrl}/v1/organization/certificates/${certificateId}?include%5B%5D=content`);
+  const updated = await postJsonCapture(`${baseUrl}/v1/organization/certificates/${certificateId}`, {
+    name: `Bridge Eval Certificate Updated ${marker}`,
+  });
+  const certificates = await getJson(`${baseUrl}/v1/organization/certificates?limit=50`);
+  const invalidActivate = await postJsonCapture(`${baseUrl}/v1/organization/certificates/activate`, {
+    certificate_ids: [],
+  });
+  const activated = await postJsonCapture(`${baseUrl}/v1/organization/certificates/activate`, {
+    certificate_ids: [created.json.id],
+  });
+  const deleteWhileOrganizationActiveRaw = await deleteJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+  const deleteWhileOrganizationActive = {
+    ...deleteWhileOrganizationActiveRaw,
+    json: parseJsonish(deleteWhileOrganizationActiveRaw.body),
+  };
+  const deactivated = await postJsonCapture(`${baseUrl}/v1/organization/certificates/deactivate`, {
+    certificate_ids: [created.json.id],
+  });
+
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Certificate Project ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    await deleteJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const emptyProjectCertificates = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/certificates`);
+  const projectActivated = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/certificates/activate`, {
+    certificate_ids: [created.json.id],
+  });
+  const projectCertificates = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/certificates?limit=20`);
+  const deleteWhileProjectActiveRaw = await deleteJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+  const deleteWhileProjectActive = {
+    ...deleteWhileProjectActiveRaw,
+    json: parseJsonish(deleteWhileProjectActiveRaw.body),
+  };
+  const projectDeactivated = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/certificates/deactivate`, {
+    certificate_ids: [created.json.id],
+  });
+  const inactiveProjectCertificates = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/certificates?limit=20`);
+  const createdLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.created&resource_ids%5B%5D=${certificateId}&limit=20`);
+  const projectActivationLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.activated&project_ids%5B%5D=${projectId}&limit=20`);
+  const deletedRaw = await deleteJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+  const deleted = parseJsonish(deletedRaw.body);
+  const missing = await getJson(`${baseUrl}/v1/organization/certificates/${certificateId}`);
+  const projectCertificatesAfterDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/certificates?limit=20`);
+  const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
+  const archivedList = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/certificates`);
+  const archivedActivate = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/certificates/activate`, {
+    certificate_ids: ["cert_missing"],
+  });
+  const archivedDeactivate = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/certificates/deactivate`, {
+    certificate_ids: ["cert_missing"],
+  });
+
+  const ok = !!testCase.check({
+    missingCertificate,
+    invalidCertificate,
+    privateKeyRejected,
+    created: created.json,
+    fetched: fetched.json,
+    fetchedWithContent: fetchedWithContent.json,
+    updated: updated.json,
+    certificates: certificates.json,
+    invalidActivate,
+    activated: activated.json,
+    deleteWhileOrganizationActive,
+    deactivated: deactivated.json,
+    project: project.json,
+    emptyProjectCertificates: emptyProjectCertificates.json,
+    projectActivated: projectActivated.json,
+    projectCertificates: projectCertificates.json,
+    deleteWhileProjectActive,
+    projectDeactivated: projectDeactivated.json,
+    inactiveProjectCertificates: inactiveProjectCertificates.json,
+    createdLogs: createdLogs.json,
+    projectActivationLogs: projectActivationLogs.json,
+    deleted,
+    missing,
+    projectCertificatesAfterDelete: projectCertificatesAfterDelete.json,
+    archivedProject: archivedProject.json,
+    archivedList,
+    archivedActivate,
+    archivedDeactivate,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: created.status,
+    certificate_id: created.json.id,
+    project_id: project.json.id,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_certificates:${created.json.id}:${project.json.id}`,
   });
 }
 

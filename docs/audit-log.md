@@ -4463,6 +4463,106 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization certificates compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - OpenAI OpenAPI endpoint list and `listOrganizationCertificates` /
+    `uploadCertificate` operation specs document
+    `GET/POST /organization/certificates`, `organization.certificate` list
+    projections, `certificate` detail objects, `limit`, `after`, `order`, and
+    upload body fields `certificate` and optional `name`;
+  - OpenAI OpenAPI `activateOrganizationCertificates` and
+    `deactivateOrganizationCertificates` specs document
+    `POST /organization/certificates/activate|deactivate`,
+    `certificate_ids[]`, the 1-10 item toggle bound, and
+    `organization.certificate.activation/deactivation` wrapper objects;
+  - OpenAI OpenAPI source schemas document `certificate.deleted`, certificate
+    details with optional `content`, and project activation wrapper objects
+    `organization.project.certificate.activation/deactivation`;
+  - OpenAI Node SDK generated organization certificates resource documents
+    create/retrieve/update/list/delete/activate/deactivate, retrieve
+    `include:["content"]`, update-name-only behavior, and delete requiring the
+    certificate to be inactive for organization and all projects;
+  - OpenAI Node SDK generated project certificates resource documents
+    `GET /organization/projects/{project_id}/certificates` and project
+    activate/deactivate with `certificate_ids[]`.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added local uploaded certificate records under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/organization_certificates`;
+  - added local project certificate activation records under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/project_resources/<project>/certificates`;
+  - added `GET/POST /v1/organization/certificates`;
+  - added `GET/POST/DELETE /v1/organization/certificates/{certificate_id}`;
+  - added `POST /v1/organization/certificates/activate`;
+  - added `POST /v1/organization/certificates/deactivate`;
+  - added `GET /v1/organization/projects/{project_id}/certificates`;
+  - added `POST /v1/organization/projects/{project_id}/certificates/activate`;
+  - added `POST /v1/organization/projects/{project_id}/certificates/deactivate`;
+  - validates `certificate_ids[]` as 1-10 non-empty IDs, rejects PEM payloads
+    containing private keys, stores certificate content only in local runtime
+    state, omits PEM content from list/create/update/get by default, and
+    returns it only for `include[]=content`;
+  - prevents certificate deletion while active at organization scope or any
+    project scope, and removes inactive project certificate state when the
+    uploaded certificate is deleted;
+  - records local `certificate.created`, `certificate.updated`,
+    `certificate.deleted`, `certificate.activated`, and
+    `certificate.deactivated` audit events.
+- Current boundary: these endpoints close the remaining documented
+  Organization certificate SDK/admin 404s for Chat Completions-backed
+  deployments. They persist local certificate protocol metadata only; the
+  bridge does not change provider TLS trust, upload certificates to DeepSeek or
+  OpenAI, or enforce certificate policy in outbound provider calls.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies upload, invalid/missing/private-key
+    rejection, retrieve with and without content, update, organization
+    activate/deactivate, deletion protection, project activate/deactivate,
+    project list, audit-log filters, delete cleanup, archived-project
+    rejection, and zero upstream provider calls;
+  - live `bridge-regression` now includes `organization-certificates`, covering
+    the same lifecycle against the deployed DeepSeek-backed bridge with zero
+    provider token usage.
+- Verification:
+  - `node --check` passed for
+    `src/bridge/local_organization_admin.js`, `src/bridge/server.js`,
+    `test/server.test.js`, and `scripts/eval-harness.mjs`;
+  - focused Organization certificates unit test passed 1/1;
+  - focused Organization admin regression passed 11/11;
+  - `npm test` passed 211/211;
+  - restarted `aialra-opencodexapp-bridge.service`; health check returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - focused live `organization-certificates` eval passed 1/1 in 1831 ms with
+    zero provider token usage;
+  - `npm run eval:protocol` passed 2/2, average latency 1106 ms, P95 latency
+    1180 ms, total usage 99 tokens;
+  - `npm run smoke:bridge` returned `bridge-ok`;
+  - full live `bridge-regression` passed 108/108, pass rate 1.0, average
+    latency 1214 ms, P95 latency 3309 ms, total usage 24783 tokens;
+  - `npm run smoke:ui -- --timeout-ms 180000` passed against
+    `https://opencodexapp.aialra.online`, covering load/auth, sidebar controls,
+    core page navigation, project dialog and host upload services, new
+    conversation submission, completed turn actions, reload persistence,
+    generated image artifact display, saved project reopen, and cleanup with
+    zero console errors or warnings;
+  - `aialra-opencodexapp-app-server.service`,
+    `aialra-opencodexapp-bridge.service`, and
+    `aialra-opencodexapp-web.service` were active;
+  - HTTPS `HEAD https://opencodexapp.aialra.online` returned HTTP/2 200 and
+    `cache-control: no-store`;
+  - storage check showed `/srv/aialra/apps` on `/dev/sda1` at 170G used,
+    24G available, 88% utilization; local repo runtime state was 36M,
+    `output/` was 4.4M, app data was 136K, and app logs were 30M;
+  - `npm run prune:runtime -- --dry-run` scanned 3213 files across 13 runtime
+    targets and selected 0 files / 0 bytes for deletion.
+- Updated compatibility/evaluation/deployment docs to list the new
+  organization/project certificate endpoints, source references, focused live
+  eval command, and local state-directory boundaries.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, private keys, or provider certificate secrets were
+  added to the repository. The certificate upload compatibility path explicitly
+  rejects private-key PEM blocks.
+
 ## 2026-06-15 - Local Organization policy controls compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

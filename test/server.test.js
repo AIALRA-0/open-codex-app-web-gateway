@@ -12223,6 +12223,222 @@ test("Organization admin API keys are local, redacted, and audited", async () =>
   }
 });
 
+test("Organization certificates manage local organization and project activation", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization certificate compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const certificatePem = [
+      "-----BEGIN CERTIFICATE-----",
+      "MIIBlocalcompatcertificate",
+      "-----END CERTIFICATE-----",
+    ].join("\n");
+
+    const emptyList = await fetch(`${baseUrl}/v1/organization/certificates`);
+    assert.equal(emptyList.status, 200);
+    assert.deepEqual(await emptyList.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: false,
+    });
+
+    const missingCertificate = await fetch(`${baseUrl}/v1/organization/certificates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Missing PEM" }),
+    });
+    assert.equal(missingCertificate.status, 400);
+    assert.equal((await missingCertificate.json()).error.param, "certificate");
+
+    const privateKeyRejected = await fetch(`${baseUrl}/v1/organization/certificates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        certificate: [
+          "-----BEGIN PRIVATE KEY-----",
+          "secret",
+          "-----END PRIVATE KEY-----",
+        ].join("\n"),
+      }),
+    });
+    assert.equal(privateKeyRejected.status, 400);
+    assert.equal((await privateKeyRejected.json()).error.code, "invalid_certificate");
+
+    const createdResponse = await fetch(`${baseUrl}/v1/organization/certificates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Certificate", certificate: certificatePem }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const created = await createdResponse.json();
+    assert.equal(created.object, "certificate");
+    assert.match(created.id, /^cert_/);
+    assert.equal(created.name, "Bridge Certificate");
+    assert.equal(created.active, undefined);
+    assert.equal(created.certificate_details.content, undefined);
+    assert.ok(Number.isFinite(created.certificate_details.valid_at));
+    assert.ok(Number.isFinite(created.certificate_details.expires_at));
+    assert.equal(created.compatibility.actual_openai_admin_data, false);
+
+    const fetched = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.object, "certificate");
+    assert.equal(fetchedJson.certificate_details.content, undefined);
+
+    const fetchedWithContent = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}?include%5B%5D=content`);
+    assert.equal(fetchedWithContent.status, 200);
+    assert.equal((await fetchedWithContent.json()).certificate_details.content, certificatePem);
+
+    const updated = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Certificate Updated" }),
+    });
+    assert.equal(updated.status, 200);
+    assert.equal((await updated.json()).name, "Bridge Certificate Updated");
+
+    const listed = await fetch(`${baseUrl}/v1/organization/certificates?limit=10`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.object, "list");
+    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.data[0].object, "organization.certificate");
+    assert.equal(listedJson.data[0].active, false);
+    assert.equal(listedJson.data[0].certificate_details.content, undefined);
+
+    const invalidActivate = await fetch(`${baseUrl}/v1/organization/certificates/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: [] }),
+    });
+    assert.equal(invalidActivate.status, 400);
+    assert.equal((await invalidActivate.json()).error.code, "invalid_certificate_ids");
+
+    const activated = await fetch(`${baseUrl}/v1/organization/certificates/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: [created.id] }),
+    });
+    assert.equal(activated.status, 200);
+    const activatedJson = await activated.json();
+    assert.equal(activatedJson.object, "organization.certificate.activation");
+    assert.equal(activatedJson.data[0].object, "organization.certificate");
+    assert.equal(activatedJson.data[0].active, true);
+
+    const deleteWhileOrganizationActive = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleteWhileOrganizationActive.status, 400);
+    assert.equal((await deleteWhileOrganizationActive.json()).error.code, "organization_certificate_active");
+
+    const deactivated = await fetch(`${baseUrl}/v1/organization/certificates/deactivate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: [created.id] }),
+    });
+    assert.equal(deactivated.status, 200);
+    assert.equal((await deactivated.json()).data[0].active, false);
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Certificate Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const emptyProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    assert.equal(emptyProjectCertificates.status, 200);
+    assert.equal((await emptyProjectCertificates.json()).data.length, 0);
+
+    const projectActivated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: [created.id] }),
+    });
+    assert.equal(projectActivated.status, 200);
+    const projectActivatedJson = await projectActivated.json();
+    assert.equal(projectActivatedJson.object, "organization.project.certificate.activation");
+    assert.equal(projectActivatedJson.data[0].object, "organization.project.certificate");
+    assert.equal(projectActivatedJson.data[0].active, true);
+
+    const listedProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    assert.equal(listedProjectCertificates.status, 200);
+    const listedProjectCertificatesJson = await listedProjectCertificates.json();
+    assert.equal(listedProjectCertificatesJson.data.length, 1);
+    assert.equal(listedProjectCertificatesJson.data[0].id, created.id);
+    assert.equal(listedProjectCertificatesJson.data[0].active, true);
+
+    const deleteWhileProjectActive = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleteWhileProjectActive.status, 400);
+    assert.equal((await deleteWhileProjectActive.json()).error.code, "project_certificate_active");
+
+    const projectDeactivated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/deactivate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: [created.id] }),
+    });
+    assert.equal(projectDeactivated.status, 200);
+    assert.equal((await projectDeactivated.json()).data[0].active, false);
+
+    const listedInactiveProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    assert.equal(listedInactiveProjectCertificates.status, 200);
+    assert.equal((await listedInactiveProjectCertificates.json()).data[0].active, false);
+
+    const createdLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.created&resource_ids%5B%5D=${created.id}`);
+    assert.equal(createdLogs.status, 200);
+    assert.equal((await createdLogs.json()).data[0]["certificate.created"].id, created.id);
+
+    const projectCertificateLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.activated&project_ids%5B%5D=${project.id}`);
+    assert.equal(projectCertificateLogs.status, 200);
+    const projectCertificateLogsJson = await projectCertificateLogs.json();
+    assert.ok(projectCertificateLogsJson.data.some((entry) => entry["certificate.activated"]?.project_id === project.id));
+
+    const deleted = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      object: "certificate.deleted",
+      id: created.id,
+    });
+
+    const missing = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`);
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "organization_certificate_not_found");
+
+    const projectCertificatesAfterDelete = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    assert.equal(projectCertificatesAfterDelete.status, 200);
+    assert.equal((await projectCertificatesAfterDelete.json()).data.length, 0);
+
+    await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, { method: "POST" });
+    const archivedList = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    assert.equal(archivedList.status, 400);
+    assert.equal((await archivedList.json()).error.code, "project_archived");
+    const archivedActivate = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/activate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: ["cert_missing"] }),
+    });
+    assert.equal(archivedActivate.status, 400);
+    assert.equal((await archivedActivate.json()).error.code, "project_archived");
+    const archivedDeactivate = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/deactivate`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ certificate_ids: ["cert_missing"] }),
+    });
+    assert.equal(archivedDeactivate.status, 400);
+    assert.equal((await archivedDeactivate.json()).error.code, "project_archived");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization spend alerts manage local organization and project thresholds", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization spend alerts compatibility should not call upstream provider");

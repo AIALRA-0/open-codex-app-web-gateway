@@ -167,6 +167,9 @@ const HOSTED_TOOL_PERMISSION_TYPES = Object.freeze([
   "web_search",
 ]);
 
+const MAX_ORGANIZATION_CERTIFICATES = 50;
+const MAX_TOGGLE_CERTIFICATES = 10;
+
 class LocalOrganizationAdminStore {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-organization-admin"));
@@ -183,6 +186,7 @@ class LocalOrganizationAdminStore {
     fs.mkdirSync(this.organizationUserRolesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationGroupResourcesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationAdminApiKeysDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationCertificatesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationSpendAlertsDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.auditLogsDir(), { recursive: true, mode: 0o700 });
   }
@@ -217,6 +221,10 @@ class LocalOrganizationAdminStore {
 
   organizationAdminApiKeysDir() {
     return path.join(this.dir, "organization_admin_api_keys");
+  }
+
+  organizationCertificatesDir() {
+    return path.join(this.dir, "organization_certificates");
   }
 
   organizationDataRetentionPath() {
@@ -304,6 +312,12 @@ class LocalOrganizationAdminStore {
     return path.join(this.organizationAdminApiKeysDir(), `${clean}.json`);
   }
 
+  organizationCertificatePath(certificateId) {
+    const clean = safeId(certificateId);
+    if (!clean) return null;
+    return path.join(this.organizationCertificatesDir(), `${clean}.json`);
+  }
+
   organizationSpendAlertPath(alertId) {
     const clean = safeId(alertId);
     if (!clean) return null;
@@ -373,6 +387,13 @@ class LocalOrganizationAdminStore {
     const dir = this.projectResourceDir(projectId, "hosted_tool_permissions");
     if (!dir) return null;
     return path.join(dir, "settings.json");
+  }
+
+  projectCertificatePath(projectId, certificateId) {
+    const clean = safeId(certificateId);
+    const dir = this.projectResourceDir(projectId, "certificates");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
   }
 
   rateLimitPath(projectId, rateLimitId) {
@@ -520,6 +541,220 @@ class LocalOrganizationAdminStore {
       object: "organization.admin_api_key.deleted",
       id: apiKey.id,
       deleted: true,
+    };
+  }
+
+  createOrganizationCertificate(body = {}) {
+    const currentCount = this.listJsonFiles(this.organizationCertificatesDir()).length;
+    if (currentCount >= MAX_ORGANIZATION_CERTIFICATES) {
+      throw organizationAdminError("organization certificate limit exceeded", {
+        code: "organization_certificate_limit_exceeded",
+      });
+    }
+    const certificate = this.certificateFromRequest(body);
+    this.writeJson(this.organizationCertificatePath(certificate.id), certificate);
+    this.recordAuditLog("certificate.created", {
+      id: certificate.id,
+      data: this.certificateAuditData(certificate),
+    }, {
+      resourceId: certificate.id,
+    });
+    this.cleanup();
+    return this.certificateProjection(certificate, { scope: "detail" });
+  }
+
+  listOrganizationCertificates() {
+    return this.listJsonFiles(this.organizationCertificatesDir())
+      .sort(compareCreatedThenIdAsc)
+      .map((certificate) => this.certificateProjection(certificate, {
+        scope: "organization",
+        active: !!certificate.organization_active,
+      }));
+  }
+
+  getOrganizationCertificate(certificateId, options = {}) {
+    const certificate = this.getRequiredOrganizationCertificate(certificateId);
+    return this.certificateProjection(certificate, {
+      scope: "detail",
+      includeContent: uniqueStrings(options.include).includes("content"),
+    });
+  }
+
+  updateOrganizationCertificate(certificateId, body = {}) {
+    const certificate = this.getRequiredOrganizationCertificate(certificateId);
+    const request = isPlainObject(body) ? body : {};
+    if (request.name !== undefined) certificate.name = optionalNullableString(request.name) ?? null;
+    certificate.updated_at = nowSeconds();
+    certificate.compatibility = {
+      ...(isPlainObject(certificate.compatibility) ? certificate.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.organizationCertificatePath(certificate.id), certificate);
+    this.recordAuditLog("certificate.updated", {
+      id: certificate.id,
+      changes_requested: {
+        ...(request.name !== undefined ? { name: certificate.name } : {}),
+      },
+    }, {
+      resourceId: certificate.id,
+    });
+    return this.certificateProjection(certificate, { scope: "detail" });
+  }
+
+  deleteOrganizationCertificate(certificateId) {
+    const certificate = this.getRequiredOrganizationCertificate(certificateId);
+    if (certificate.organization_active) {
+      throw organizationAdminError("certificate must be inactive before deletion", {
+        code: "organization_certificate_active",
+        param: "certificate_id",
+      });
+    }
+    const activeProject = this.projectCertificateStatesForCertificate(certificate.id)
+      .find((state) => state.active);
+    if (activeProject) {
+      throw organizationAdminError("certificate must be inactive for all projects before deletion", {
+        code: "project_certificate_active",
+        param: "certificate_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationCertificatePath(certificate.id)); } catch {}
+    for (const state of this.projectCertificateStatesForCertificate(certificate.id)) {
+      try { fs.unlinkSync(this.projectCertificatePath(state.project_id, certificate.id)); } catch {}
+    }
+    this.recordAuditLog("certificate.deleted", {
+      id: certificate.id,
+      data: this.certificateAuditData(certificate),
+    }, {
+      resourceId: certificate.id,
+    });
+    return {
+      object: "certificate.deleted",
+      id: certificate.id,
+    };
+  }
+
+  activateOrganizationCertificates(body = {}) {
+    return this.toggleOrganizationCertificates(body, {
+      active: true,
+      object: "organization.certificate.activation",
+      eventType: "certificate.activated",
+    });
+  }
+
+  deactivateOrganizationCertificates(body = {}) {
+    return this.toggleOrganizationCertificates(body, {
+      active: false,
+      object: "organization.certificate.deactivation",
+      eventType: "certificate.deactivated",
+    });
+  }
+
+  toggleOrganizationCertificates(body = {}, options = {}) {
+    const ids = this.normalizeCertificateIds(body);
+    const certificates = ids.map((id) => this.getRequiredOrganizationCertificate(id));
+    for (const certificate of certificates) {
+      certificate.organization_active = !!options.active;
+      certificate.updated_at = nowSeconds();
+      certificate.compatibility = {
+        ...(isPlainObject(certificate.compatibility) ? certificate.compatibility : {}),
+        last_lifecycle_action: options.active ? "activate" : "deactivate",
+      };
+      this.writeJson(this.organizationCertificatePath(certificate.id), certificate);
+      this.recordAuditLog(options.eventType, {
+        id: certificate.id,
+        data: {
+          active: !!options.active,
+          scope: "organization",
+        },
+      }, {
+        resourceId: certificate.id,
+      });
+    }
+    return {
+      object: options.object,
+      data: certificates.map((certificate) => this.certificateProjection(certificate, {
+        scope: "organization",
+        active: !!options.active,
+      })),
+    };
+  }
+
+  listProjectCertificates(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    return this.listJsonFiles(this.projectResourceDir(project.id, "certificates"))
+      .map((state) => {
+        const certificate = this.readJson(this.organizationCertificatePath(state.certificate_id || state.id));
+        if (!certificate) return null;
+        return this.certificateProjection(certificate, {
+          scope: "project",
+          active: !!state.active,
+          projectId: project.id,
+        });
+      })
+      .filter(Boolean)
+      .sort(compareCreatedThenIdAsc);
+  }
+
+  activateProjectCertificates(projectId, body = {}) {
+    return this.toggleProjectCertificates(projectId, body, {
+      active: true,
+      object: "organization.project.certificate.activation",
+      eventType: "certificate.activated",
+    });
+  }
+
+  deactivateProjectCertificates(projectId, body = {}) {
+    return this.toggleProjectCertificates(projectId, body, {
+      active: false,
+      object: "organization.project.certificate.deactivation",
+      eventType: "certificate.deactivated",
+    });
+  }
+
+  toggleProjectCertificates(projectId, body = {}, options = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const ids = this.normalizeCertificateIds(body);
+    const certificates = ids.map((id) => this.getRequiredOrganizationCertificate(id));
+    const now = nowSeconds();
+    const data = [];
+    for (const certificate of certificates) {
+      const existing = this.readJson(this.projectCertificatePath(project.id, certificate.id));
+      const state = {
+        id: certificate.id,
+        certificate_id: certificate.id,
+        project_id: project.id,
+        active: !!options.active,
+        created_at: existing?.created_at || now,
+        updated_at: now,
+        compatibility: localCompatibility("project_certificate_protocol_compatibility", {
+          project_id: project.id,
+          locally_persisted: true,
+          last_lifecycle_action: options.active ? "activate" : "deactivate",
+        }),
+      };
+      this.writeJson(this.projectCertificatePath(project.id, certificate.id), state);
+      this.recordAuditLog(options.eventType, {
+        id: certificate.id,
+        project_id: project.id,
+        data: {
+          active: !!options.active,
+          scope: "project",
+        },
+      }, {
+        projectId: project.id,
+        resourceId: certificate.id,
+      });
+      data.push(this.certificateProjection(certificate, {
+        scope: "project",
+        active: !!options.active,
+        projectId: project.id,
+      }));
+    }
+    return {
+      object: options.object,
+      data,
     };
   }
 
@@ -2163,6 +2398,136 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  certificateFromRequest(body = {}, options = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const content = optionalString(request.certificate);
+    if (!content) {
+      throw organizationAdminError("certificate is required", {
+        code: "missing_required_parameter",
+        param: "certificate",
+      });
+    }
+    if (/-----BEGIN [A-Z ]*PRIVATE KEY-----/i.test(content)) {
+      throw organizationAdminError("certificate must not include a private key", {
+        code: "invalid_certificate",
+        param: "certificate",
+      });
+    }
+    if (!/-----BEGIN CERTIFICATE-----[\s\S]+-----END CERTIFICATE-----/i.test(content)) {
+      throw organizationAdminError("certificate must be PEM encoded", {
+        code: "invalid_certificate",
+        param: "certificate",
+      });
+    }
+    const now = nowSeconds();
+    const certificate = {
+      object: "certificate",
+      id: options.id || `cert_${randomToken(14)}`,
+      name: optionalNullableString(request.name) ?? null,
+      created_at: Number.isFinite(Number(options.createdAt)) ? Math.trunc(Number(options.createdAt)) : now,
+      updated_at: now,
+      organization_active: !!options.organizationActive,
+      certificate_details: this.certificateDetailsFromContent(content, now),
+      compatibility: localCompatibility("organization_certificate_protocol_compatibility", {
+        locally_persisted: true,
+        locally_generated_id: !options.id,
+      }),
+    };
+    certificate.certificate_details.content = content;
+    return certificate;
+  }
+
+  certificateDetailsFromContent(content, fallbackNow) {
+    const now = Number.isFinite(Number(fallbackNow)) ? Math.trunc(Number(fallbackNow)) : nowSeconds();
+    try {
+      const cert = new crypto.X509Certificate(content);
+      const validAt = Math.floor(Date.parse(cert.validFrom) / 1000);
+      const expiresAt = Math.floor(Date.parse(cert.validTo) / 1000);
+      return {
+        ...(Number.isFinite(validAt) ? { valid_at: validAt } : { valid_at: now }),
+        ...(Number.isFinite(expiresAt) ? { expires_at: expiresAt } : { expires_at: now + 31536000 }),
+      };
+    } catch {
+      return {
+        valid_at: now,
+        expires_at: now + 31536000,
+      };
+    }
+  }
+
+  normalizeCertificateIds(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    if (request.certificate_ids === undefined) {
+      throw organizationAdminError("certificate_ids is required", {
+        code: "missing_required_parameter",
+        param: "certificate_ids",
+      });
+    }
+    if (!Array.isArray(request.certificate_ids)) {
+      throw organizationAdminError("certificate_ids must be an array", {
+        code: "invalid_certificate_ids",
+        param: "certificate_ids",
+      });
+    }
+    if (request.certificate_ids.length < 1 || request.certificate_ids.length > MAX_TOGGLE_CERTIFICATES) {
+      throw organizationAdminError(`certificate_ids must contain between 1 and ${MAX_TOGGLE_CERTIFICATES} ids`, {
+        code: "invalid_certificate_ids",
+        param: "certificate_ids",
+      });
+    }
+    const ids = request.certificate_ids.map((id) => optionalString(id));
+    if (ids.some((id) => !id)) {
+      throw organizationAdminError("certificate_ids must contain non-empty strings", {
+        code: "invalid_certificate_ids",
+        param: "certificate_ids",
+      });
+    }
+    return uniqueStrings(ids);
+  }
+
+  certificateProjection(certificate, options = {}) {
+    const scope = options.scope || "detail";
+    const object = scope === "organization"
+      ? "organization.certificate"
+      : scope === "project"
+      ? "organization.project.certificate"
+      : "certificate";
+    const details = {
+      ...(certificate.certificate_details?.valid_at !== undefined ? { valid_at: certificate.certificate_details.valid_at } : {}),
+      ...(certificate.certificate_details?.expires_at !== undefined ? { expires_at: certificate.certificate_details.expires_at } : {}),
+    };
+    if (options.includeContent && certificate.certificate_details?.content) {
+      details.content = certificate.certificate_details.content;
+    }
+    return {
+      object,
+      id: certificate.id,
+      name: certificate.name ?? null,
+      created_at: Math.trunc(Number(certificate.created_at || 0)),
+      certificate_details: details,
+      ...(scope === "detail" ? {} : { active: !!options.active }),
+      compatibility: localCompatibility(
+        scope === "project"
+          ? "project_certificate_protocol_compatibility"
+          : "organization_certificate_protocol_compatibility",
+        {
+          locally_persisted: true,
+          ...(scope === "project" ? { project_id: options.projectId } : {}),
+          content_included: !!options.includeContent,
+        },
+      ),
+    };
+  }
+
+  certificateAuditData(certificate) {
+    return {
+      name: certificate.name ?? null,
+      valid_at: certificate.certificate_details?.valid_at ?? null,
+      expires_at: certificate.certificate_details?.expires_at ?? null,
+      organization_active: !!certificate.organization_active,
+    };
+  }
+
   listProjectRateLimits(projectId) {
     const project = this.getRequiredProject(projectId);
     this.assertProjectActive(project);
@@ -2310,6 +2675,30 @@ class LocalOrganizationAdminStore {
       apiKey.owner.service_account = clone(serviceAccount);
       this.writeJson(this.apiKeyPath(projectId, apiKey.id), apiKey);
     }
+  }
+
+  getRequiredOrganizationCertificate(certificateId) {
+    const certificate = this.readJson(this.organizationCertificatePath(certificateId));
+    if (!certificate) {
+      throw organizationAdminError(`organization certificate not found: ${certificateId}`, {
+        status: 404,
+        code: "organization_certificate_not_found",
+        param: "certificate_id",
+      });
+    }
+    return certificate;
+  }
+
+  projectCertificateStatesForCertificate(certificateId) {
+    const clean = safeId(certificateId);
+    if (!clean) return [];
+    const states = [];
+    for (const projectDir of this.listProjectResourceDirs()) {
+      const projectId = path.basename(projectDir);
+      const state = this.readJson(this.projectCertificatePath(projectId, clean));
+      if (state) states.push(state);
+    }
+    return states;
   }
 
   getRequiredOrganizationRole(roleId) {
@@ -2861,6 +3250,7 @@ class LocalOrganizationAdminStore {
       this.organizationRolesDir(),
       this.organizationGroupsDir(),
       this.organizationAdminApiKeysDir(),
+      this.organizationCertificatesDir(),
       this.organizationSpendAlertsDir(),
       this.auditLogsDir(),
     ]) {
@@ -2889,6 +3279,7 @@ class LocalOrganizationAdminStore {
         "service_accounts",
         "users",
         "groups",
+        "certificates",
         "spend_alerts",
         "data_retention",
         "model_permissions",
