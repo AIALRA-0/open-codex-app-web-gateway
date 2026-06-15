@@ -356,8 +356,13 @@ function computerCallOutputToText(item) {
   if (output.detail || item.detail) lines.push(`detail: ${stringifyContent(output.detail || item.detail)}`);
   const text = computerOutputText(item);
   if (text) lines.push(`text: ${text}`);
-  if (Array.isArray(item.acknowledged_safety_checks)) {
-    lines.push(`acknowledged_safety_checks_count: ${item.acknowledged_safety_checks.length}`);
+  const acknowledgedSafetyChecks = Array.isArray(item.acknowledged_safety_checks)
+    ? item.acknowledged_safety_checks
+    : output.acknowledged_safety_checks;
+  if (Array.isArray(acknowledgedSafetyChecks)) {
+    lines.push(`acknowledged_safety_checks_count: ${acknowledgedSafetyChecks.length}`);
+    const summary = safetyChecksToText(acknowledgedSafetyChecks);
+    if (summary) lines.push(`acknowledged_safety_checks: ${summary}`);
   }
   return lines.join("\n");
 }
@@ -379,6 +384,28 @@ function computerOutputText(item) {
   if (typeof output.text === "string") return output.text;
   if (typeof output.content === "string") return output.content;
   return "";
+}
+
+function safetyChecksToText(checks = []) {
+  return checks
+    .filter(isPlainObject)
+    .slice(0, 8)
+    .map((check) => {
+      const parts = [];
+      if (check.id != null) parts.push(`id=${truncateText(check.id, 120)}`);
+      if (check.type != null) parts.push(`type=${truncateText(check.type, 80)}`);
+      if (check.code != null) parts.push(`code=${truncateText(check.code, 120)}`);
+      if (check.message != null) parts.push(`message=${truncateText(check.message, 240)}`);
+      return parts.length ? parts.join(", ") : truncateText(check, 500);
+    })
+    .filter(Boolean)
+    .join("; ");
+}
+
+function truncateText(value, maxChars) {
+  const text = stringifyContent(value);
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, maxChars)}...`;
 }
 
 function decodeReasoningItem(item, options = {}) {

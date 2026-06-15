@@ -5141,6 +5141,8 @@ test("POST /v1/responses maps model-requested computer actions to computer_call"
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
     assert.match(prompt, /Received computer_call_output items/);
     assert.match(prompt, /image_url: https:\/\/example\.test\/screen\.png/);
+    assert.match(prompt, /acknowledged_safety_checks_count: 1/);
+    assert.match(prompt, /acknowledged_safety_checks: id=safe_initial/);
     assert.match(prompt, /Supported action types: click/);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -5227,6 +5229,9 @@ test("POST /v1/responses maps model-requested computer actions to computer_call"
     assert.equal(json.output.some((item) => item.type === "function_call"), false);
     assert.equal(json.metadata.compatibility.local_computer.status, "action_requested");
     assert.equal(json.metadata.compatibility.local_computer.returned_output_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.returned_output_with_safety_ack_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.acknowledged_safety_check_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.pending_safety_check_count, 1);
     assert.equal(json.metadata.compatibility.local_computer.call_count, 1);
     assert.equal(json.metadata.compatibility.local_computer.model_action_tool_call_count, 1);
     assert.equal(json.metadata.compatibility.local_computer.model_action_call_count, 1);

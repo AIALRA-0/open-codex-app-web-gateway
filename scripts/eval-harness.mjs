@@ -2949,6 +2949,8 @@ function buildSuites(defaultModel) {
             && !(json.output || []).some((item) => item.type === "function_call")
             && computer.status === "action_requested"
             && computer.returned_output_count === 1
+            && computer.returned_output_with_safety_ack_count === 1
+            && computer.acknowledged_safety_check_count === 1
             && computer.model_action_tool_call_count === 1
             && computer.model_action_call_count === 1
             && computer.tool_choice?.reason === "computer_tool_choice_mapped"
@@ -2999,6 +3001,8 @@ function buildSuites(defaultModel) {
             && !events.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
             && computer.status === "action_requested"
             && computer.returned_output_count === 1
+            && computer.returned_output_with_safety_ack_count === 1
+            && computer.acknowledged_safety_check_count === 1
             && computer.model_action_tool_call_count === 1
             && computer.model_action_call_count === 1
             && computer.tool_choice?.reason === "computer_tool_choice_mapped"

@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Computer Use Safety Acknowledgement Preservation
+
+- Used the official OpenAI Computer Use guide to re-check the local adapter
+  boundary: the first-party loop sends `tools:[{type:"computer"}]`, receives
+  `computer_call.actions[]`, requires the client harness to execute actions in
+  order, and sends the updated screen or result back as `computer_call_output`.
+- Tightened the Chat-only Computer Use protocol adapter without introducing a
+  real browser/desktop executor:
+  - returned `computer_call_output.acknowledged_safety_checks` are now preserved
+    as bounded summaries, whether supplied at the item top level or under
+    `output`;
+  - Chat-visible computer context now includes acknowledged safety-check IDs /
+    codes / messages, while still bounding prompt size;
+  - compatibility metadata now records returned-output safety acknowledgements,
+    pending safety checks on model-requested `computer_call` items, and outputs
+    that carried safety acknowledgements;
+  - generic Responses-input-to-Chat mapping now emits the same acknowledged
+    safety-check summary instead of only a count.
+- Updated mock-provider tests, live harness checks, compatibility docs, and the
+  evaluation plan so follow-up Computer Use loops catch regressions in safety
+  acknowledgement preservation.
+- Boundary unchanged: the bridge still does not click, type, scroll, capture a
+  real screenshot, run a VM/browser, or apply a product-level consent policy.
+  Full hosted parity still requires Playwright/VNC execution, per-session
+  isolation, cleanup, and explicit safety-confirmation policy.
+- Validation:
+  - `node --check src/bridge/local_computer.js src/bridge/translator.js test/server.test.js test/translator.test.js scripts/eval-harness.mjs`:
+    passed.
+  - Focused translator and server Computer Use regression tests passed,
+    including the `computer_call_output` acknowledgement mapping test and the
+    server suite coverage for local computer actions.
+  - Full `npm test`: passed 227/227 tests.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key in tracked files all passed with no tracked secret
+    matches.
+  - `npm run eval:protocol` reached the deployed bridge but both live DeepSeek
+    cases returned HTTP 402 `Insufficient Balance`; no live model-quality
+    assertion was possible on this run.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`, local `/healthz` returned `ok:true`, and public
+    HTTPS returned HTTP 200.
+  - Storage check: repo path 114 MB, `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 5.1 GB
+    available at 98% usage.
+
 ## 2026-06-16 Vector Store PDF File Search Indexing
 
 - Closed a local `file_search` document-ingestion gap for Chat-only providers.

@@ -146,7 +146,9 @@ Chat-only model request the next action through a generated function tool. The
 live `responses-computer-action` and `responses-computer-action-stream` cases
 force `tool_choice:{type:"computer"}` and validate that the public response
 contains a `computer_call`, not the bridge-internal function call or function
-call stream events.
+call stream events. Mock-provider coverage also validates that returned
+`acknowledged_safety_checks` are preserved as bounded Chat-visible summaries and
+counted in `metadata.compatibility.local_computer`.
 
 Useful commands:
 
@@ -569,7 +571,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Hosted-tool emulation returns auditable screenshot-first `computer_call`
   items for computer-use requests and maps returned `computer_call_output`
   screenshot/result context into follow-up Chat requests, including streaming
-  follow-up action requests through a generated Chat function tool.
+  follow-up action requests through a generated Chat function tool and
+  compatibility metadata for pending and acknowledged safety checks.
 - Local Skills API can create, version, retrieve zip content, delete, and mount
   `skill_reference` bundles into local shell/code-interpreter containers.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.

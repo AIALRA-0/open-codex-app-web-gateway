@@ -315,6 +315,11 @@ test("maps computer_call_output input to readable chat context", () => {
       image_url: "https://example.test/screen.png",
       detail: "high",
     },
+    acknowledged_safety_checks: [{
+      id: "safe_123",
+      code: "user_confirmed",
+      message: "User approved the click.",
+    }],
   }]);
 
   assert.equal(messages.length, 1);
@@ -322,6 +327,9 @@ test("maps computer_call_output input to readable chat context", () => {
   assert.match(messages[0].content, /Computer call output/);
   assert.match(messages[0].content, /call_123/);
   assert.match(messages[0].content, /https:\/\/example\.test\/screen\.png/);
+  assert.match(messages[0].content, /acknowledged_safety_checks_count: 1/);
+  assert.match(messages[0].content, /id=safe_123/);
+  assert.match(messages[0].content, /code=user_confirmed/);
 });
 
 test("can disable DeepSeek thinking mode when tool_choice is forced", () => {

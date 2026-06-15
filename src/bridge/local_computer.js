@@ -5,6 +5,7 @@ const { prefixedId, stringifyContent } = require("./translator");
 
 const COMPUTER_TOOL_TYPES = new Set(["computer", "computer_use_preview"]);
 const COMPUTER_ACTION_TOOL_NAME = "local_computer_action";
+const MAX_COMPUTER_SAFETY_CHECKS = 8;
 const COMPUTER_ACTION_TYPES = new Set([
   "click",
   "double_click",
@@ -224,6 +225,9 @@ function computerCompatibility(context) {
       call_count: context.calls?.length || 0,
       requested_action_count: countComputerActions(context.calls),
       returned_output_count: context.received_outputs?.length || 0,
+      returned_output_with_safety_ack_count: countComputerOutputsWithSafetyAcknowledgements(context.received_outputs),
+      pending_safety_check_count: countComputerPendingSafetyChecks(context.calls),
+      acknowledged_safety_check_count: countComputerAcknowledgedSafetyChecks(context.received_outputs),
       skipped_count: context.skipped_calls?.length || 0,
       model_action_tool_call_count: context.model_action_tool_call_count || 0,
       model_action_call_count: context.model_action_call_count || 0,
@@ -263,6 +267,9 @@ function computerPrompt(context) {
         `  actions: ${call.actions?.map((action) => action.type).join(", ") || call.action?.type || "unknown"}`,
         call.display_width ? `  display_width: ${call.display_width}` : null,
         call.display_height ? `  display_height: ${call.display_height}` : null,
+        call.pending_safety_checks?.length
+          ? `  pending_safety_checks: ${formatSafetyChecksForPrompt(call.pending_safety_checks)}`
+          : null,
       ].filter(Boolean).join("\n")),
       "Clients should execute these action(s), then send computer_call_output in a follow-up Responses request.",
     ].join("\n"));
@@ -279,6 +286,9 @@ function computerPrompt(context) {
         output.text ? `  text: ${truncateForPrompt(output.text, 2000)}` : null,
         Number.isFinite(output.acknowledged_safety_checks_count)
           ? `  acknowledged_safety_checks_count: ${output.acknowledged_safety_checks_count}`
+          : null,
+        output.acknowledged_safety_checks?.length
+          ? `  acknowledged_safety_checks: ${formatSafetyChecksForPrompt(output.acknowledged_safety_checks)}`
           : null,
       ].filter(Boolean).join("\n")),
     ].join("\n"));
@@ -430,7 +440,7 @@ function normalizePendingSafetyChecks(value) {
   return value
     .filter(isPlainObject)
     .map((item) => clone(item))
-    .slice(0, 8);
+    .slice(0, MAX_COMPUTER_SAFETY_CHECKS);
 }
 
 function computerCallFromActionToolCall(toolCall, parsed, context) {
@@ -471,6 +481,11 @@ function extractComputerCallOutputs(input) {
 
 function normalizeComputerCallOutput(item) {
   const output = isPlainObject(item.output) ? item.output : {};
+  const rawAcknowledgements = Array.isArray(item.acknowledged_safety_checks)
+    ? item.acknowledged_safety_checks
+    : output.acknowledged_safety_checks;
+  const acknowledgedSafetyChecks = normalizePendingSafetyChecks(rawAcknowledgements);
+  const hasAcknowledgements = Array.isArray(rawAcknowledgements);
   return {
     id: stringifyOptional(item.id),
     call_id: stringifyOptional(item.call_id || item.computer_call_id),
@@ -479,9 +494,10 @@ function normalizeComputerCallOutput(item) {
     image_url: computerOutputImageUrl(output),
     detail: stringifyOptional(output.detail || item.detail),
     text: computerOutputText(item),
-    acknowledged_safety_checks_count: Array.isArray(item.acknowledged_safety_checks)
-      ? item.acknowledged_safety_checks.length
-      : undefined,
+    ...(hasAcknowledgements ? {
+      acknowledged_safety_checks: acknowledgedSafetyChecks,
+      acknowledged_safety_checks_count: acknowledgedSafetyChecks.length,
+    } : {}),
   };
 }
 
@@ -530,6 +546,47 @@ function countComputerActions(calls = []) {
   return (calls || []).reduce((sum, call) => (
     sum + (Array.isArray(call.actions) ? call.actions.length : (call.action ? 1 : 0))
   ), 0);
+}
+
+function countComputerPendingSafetyChecks(calls = []) {
+  return (calls || []).reduce((sum, call) => (
+    sum + (Array.isArray(call?.pending_safety_checks) ? call.pending_safety_checks.length : 0)
+  ), 0);
+}
+
+function countComputerAcknowledgedSafetyChecks(outputs = []) {
+  return (outputs || []).reduce((sum, output) => (
+    sum + (Number.isFinite(output?.acknowledged_safety_checks_count)
+      ? output.acknowledged_safety_checks_count
+      : (Array.isArray(output?.acknowledged_safety_checks) ? output.acknowledged_safety_checks.length : 0))
+  ), 0);
+}
+
+function countComputerOutputsWithSafetyAcknowledgements(outputs = []) {
+  return (outputs || []).filter((output) => (
+    (Number.isFinite(output?.acknowledged_safety_checks_count)
+      ? output.acknowledged_safety_checks_count
+      : (Array.isArray(output?.acknowledged_safety_checks) ? output.acknowledged_safety_checks.length : 0)) > 0
+  )).length;
+}
+
+function formatSafetyChecksForPrompt(checks = []) {
+  return checks
+    .filter(isPlainObject)
+    .slice(0, MAX_COMPUTER_SAFETY_CHECKS)
+    .map(formatSafetyCheckForPrompt)
+    .filter(Boolean)
+    .join("; ");
+}
+
+function formatSafetyCheckForPrompt(check) {
+  const parts = [];
+  if (check.id != null) parts.push(`id=${truncateForPrompt(check.id, 120)}`);
+  if (check.type != null) parts.push(`type=${truncateForPrompt(check.type, 80)}`);
+  if (check.code != null) parts.push(`code=${truncateForPrompt(check.code, 120)}`);
+  if (check.message != null) parts.push(`message=${truncateForPrompt(check.message, 240)}`);
+  if (parts.length) return parts.join(", ");
+  return truncateForPrompt(check, 500);
 }
 
 function stringifyOptional(value) {
