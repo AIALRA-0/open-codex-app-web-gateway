@@ -63,9 +63,12 @@ const {
   attachComputerOutput,
   computerCompatibility,
   computerOutputItems,
+  executeComputerChatToolCalls,
+  injectComputerActionTool,
   injectComputerMessages,
   localComputerToolTypes,
   prepareComputerContext,
+  suppressComputerChatToolCalls,
 } = require("./local_computer");
 const {
   attachMcpOutput,
@@ -714,7 +717,12 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendJson(res, providerResult.status, providerResult.json || { error: { message: providerResult.text } });
     return;
   }
-  const upstreamJson = providerResult.json;
+  let upstreamJson = providerResult.json;
+  const computerExecution = executeComputerChatToolCalls(localComputer, upstreamJson, config, { toolBudget });
+  if (computerExecution.executed) {
+    upstreamJson = suppressComputerChatToolCalls(upstreamJson, localComputer);
+  }
+  mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
   mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
   Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
 
@@ -755,6 +763,21 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   appendResponseToConversation(conversationStore, conversation, request, publicResponse);
 
   sendJson(res, 200, publicResponse);
+}
+
+function mergeLocalComputerCompatibility(target, source) {
+  if (!isPlainObject(source?.local_computer)) {
+    Object.assign(target, source || {});
+    return target;
+  }
+  target.local_computer = {
+    ...(isPlainObject(target.local_computer) ? target.local_computer : {}),
+    ...source.local_computer,
+  };
+  for (const [key, value] of Object.entries(source)) {
+    if (key !== "local_computer") target[key] = value;
+  }
+  return target;
 }
 
 function mergeLocalMcpCompatibility(target, source) {
@@ -1153,9 +1176,16 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     return;
   }
 
-  const upstreamJson = providerResult.json;
+  let upstreamJson = providerResult.json;
+  if (contexts?.computer) {
+    const computerExecution = executeComputerChatToolCalls(contexts.computer, upstreamJson, config, { toolBudget });
+    if (computerExecution.executed) {
+      upstreamJson = suppressComputerChatToolCalls(upstreamJson, contexts.computer);
+    }
+  }
   const finalLocalOutputItems = contexts ? backgroundPreparationOutputItems(contexts) : localOutputItems;
   const finalCompatibility = { ...(compatibility || {}) };
+  if (contexts?.computer) mergeLocalComputerCompatibility(finalCompatibility, computerCompatibility(contexts.computer));
   if (contexts?.mcp) mergeLocalMcpCompatibility(finalCompatibility, mcpCompatibility(contexts.mcp));
   Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
 
@@ -1800,7 +1830,8 @@ function applyLocalShellToChat(chat, compatibility, localShell, config) {
 
 function applyLocalComputerToChat(chat, compatibility, localComputer, config) {
   injectComputerMessages(chat, localComputer);
-  Object.assign(compatibility, computerCompatibility(localComputer));
+  injectComputerActionTool(chat, localComputer);
+  mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
   if (config.deepseekDisableThinkingForLocalComputer && !config.deepseekThinkingMode) {
     chat.thinking = { type: "disabled" };
     compatibility.local_computer = {

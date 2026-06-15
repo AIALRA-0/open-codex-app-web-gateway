@@ -105,6 +105,12 @@ remote `tools/call` execution through generated Chat function tools. The
 background call case also forces the original MCP tool name through
 `tool_choice` so the harness catches regressions in generated-function-name
 mapping.
+Computer Use coverage verifies both the screenshot-first local `computer_call`
+shape and the follow-up loop where a returned `computer_call_output` lets a
+Chat-only model request the next action through a generated function tool. The
+live `responses-computer-action` case forces `tool_choice:{type:"computer"}`
+and validates that the public response contains a `computer_call`, not the
+bridge-internal function call.
 
 Useful commands:
 
@@ -152,6 +158,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case chat-stream-lifec
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-max-tool-calls --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer-action --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell-skill --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose

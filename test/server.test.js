@@ -4548,6 +4548,126 @@ test("POST /v1/responses emits local computer_call for computer tools", async ()
   });
 });
 
+test("POST /v1/responses maps model-requested computer actions to computer_call", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools.length, 1);
+    const toolName = call.body.tools[0].function.name;
+    assert.match(toolName, /^local_computer_action/);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: toolName },
+    });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Received computer_call_output items/);
+    assert.match(prompt, /image_url: https:\/\/example\.test\/screen\.png/);
+    assert.match(prompt, /Supported action types: click/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_computer_action",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_next_click",
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: JSON.stringify({
+                action: {
+                  type: "click",
+                  x: 42,
+                  y: 55,
+                  button: "left",
+                  keys: ["CTRL"],
+                },
+                pending_safety_checks: [{
+                  id: "safe_click",
+                  code: "browser_interaction",
+                  message: "Click requires client execution.",
+                }],
+              }),
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_initial_screenshot",
+          output: {
+            type: "input_image",
+            image_url: "https://example.test/screen.png",
+            detail: "high",
+          },
+          acknowledged_safety_checks: [{ id: "safe_initial" }],
+        }],
+        tools: [{
+          type: "computer",
+          environment: "browser",
+          display_width: 1200,
+          display_height: 900,
+        }],
+        tool_choice: { type: "computer" },
+        max_tool_calls: 1,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output.length, 1);
+    assert.equal(json.output[0].type, "computer_call");
+    assert.equal(json.output[0].call_id, "call_next_click");
+    assert.equal(json.output[0].environment, "browser");
+    assert.equal(json.output[0].display_width, 1200);
+    assert.equal(json.output[0].display_height, 900);
+    assert.deepEqual(json.output[0].action, {
+      type: "click",
+      x: 42,
+      y: 55,
+      button: "left",
+      keys: ["CTRL"],
+    });
+    assert.equal(json.output[0].actions.length, 1);
+    assert.equal(json.output[0].pending_safety_checks[0].id, "safe_click");
+    assert.equal(json.output.some((item) => item.type === "function_call"), false);
+    assert.equal(json.metadata.compatibility.local_computer.status, "action_requested");
+    assert.equal(json.metadata.compatibility.local_computer.returned_output_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.call_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.model_action_tool_call_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.model_action_call_count, 1);
+    assert.equal(json.metadata.compatibility.local_computer.model_action_failed_count, 0);
+    assert.equal(json.metadata.compatibility.local_computer.deepseek_thinking, "disabled_for_local_computer");
+    assert.deepEqual(json.metadata.compatibility.local_computer.tool_choice, {
+      source: "tool_choice",
+      requested_type: "computer",
+      forwarded: true,
+      target: "function",
+      chat_name: json.metadata.compatibility.local_computer.chat_action_tool_name,
+      reason: "computer_tool_choice_mapped",
+    });
+    assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 0,
+      exhausted: true,
+    });
+  });
+});
+
 test("POST /v1/responses imports remote MCP tools/list over Streamable HTTP", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-list";
   const mcpRequests = [];
