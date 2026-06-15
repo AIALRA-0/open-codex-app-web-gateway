@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const { extractInputFileText } = require("./input_files");
 const { reserveToolCall } = require("./local_tool_budget");
 const { prefixedId, stringifyContent } = require("./translator");
 
@@ -114,6 +115,7 @@ class LocalFileSearchStore {
   constructor(config = {}) {
     this.dir = path.resolve(config.fileSearchStateDir || path.join(config.stateDir || process.cwd(), "local-file-search"));
     this.maxFileBytes = config.fileSearchMaxFileBytes || 4 * 1024 * 1024;
+    this.config = config;
   }
 
   createFile({ filename, purpose = "assistants", content = "", metadata = {}, mime_type, mimeType }) {
@@ -268,7 +270,10 @@ class LocalFileSearchStore {
       attributes: isPlainObject(body.attributes) ? body.attributes : {},
       ...(isPlainObject(body.chunking_strategy) ? { chunking_strategy: normalizeChunkingStrategy(body.chunking_strategy) } : {}),
     };
-    this.writeJson(this.vectorStoreFilePath(storeId, file.id), { vector_store_file: attached });
+    this.writeJson(this.vectorStoreFilePath(storeId, file.id), {
+      vector_store_file: attached,
+      indexed_content: indexedContentForFileRecord(this.getFileRecord(file.id), this.config),
+    });
     return attached;
   }
 
@@ -372,11 +377,13 @@ class LocalFileSearchStore {
   }
 
   getVectorStoreFileContent(storeId, fileId) {
-    const attached = this.getVectorStoreFile(storeId, fileId);
+    const vectorFileRecord = this.readJson(this.vectorStoreFilePath(storeId, fileId));
+    const attached = vectorFileRecord?.vector_store_file;
     if (!attached) return null;
     const record = this.getFileRecord(fileId);
-    const text = recordTextContent(record);
-    if (!record?.file || typeof text !== "string") return null;
+    const indexed = searchableContentForVectorFile(record, vectorFileRecord, this.config);
+    if (!record?.file || !indexed?.text) return null;
+    const text = indexed.text;
     const chunks = chunkText(text, attached.chunking_strategy);
     const content = chunks.map((chunk) => ({ type: "text", text: chunk.text }));
     return {
@@ -384,6 +391,9 @@ class LocalFileSearchStore {
       file_id: fileId,
       filename: record.file.filename,
       attributes: attached.attributes || {},
+      ...(indexed.extraction_method ? { extraction_method: indexed.extraction_method } : {}),
+      ...(indexed.ocr_pages ? { ocr_pages: indexed.ocr_pages } : {}),
+      ...(indexed.truncated ? { truncated: true } : {}),
       chunking_strategy: effectiveChunkingStrategy(attached.chunking_strategy),
       content,
       data: content,
@@ -412,9 +422,10 @@ class LocalFileSearchStore {
     const results = [];
 
     for (const item of attached) {
+      const vectorFileRecord = this.readJson(this.vectorStoreFilePath(storeId, item.id));
       const record = this.getFileRecord(item.id);
-      const text = recordTextContent(record);
-      if (!record?.file || typeof text !== "string") continue;
+      const indexed = searchableContentForVectorFile(record, vectorFileRecord, this.config);
+      if (!record?.file || !indexed?.text) continue;
       const attributes = {
         ...(record.file.metadata || {}),
         ...(item.attributes || {}),
@@ -423,7 +434,7 @@ class LocalFileSearchStore {
         purpose: record.file.purpose,
       };
       if (!matchesMetadataFilter(filters, attributes)) continue;
-      for (const chunk of chunkText(text, item.chunking_strategy)) {
+      for (const chunk of chunkText(indexed.text, item.chunking_strategy)) {
         const scoredQueries = scoreQueries(queries, chunk.text, record.file.filename, rankingOptions);
         const score = scoredQueries[0]?.score || 0;
         if (score <= 0 || score < rankingOptions.score_threshold) continue;
@@ -442,6 +453,9 @@ class LocalFileSearchStore {
           },
           matched_queries: scoredQueries.map((item) => item.query),
           attributes: item.attributes || {},
+          ...(indexed.extraction_method ? { extraction_method: indexed.extraction_method } : {}),
+          ...(indexed.ocr_pages ? { ocr_pages: indexed.ocr_pages } : {}),
+          ...(indexed.truncated ? { truncated: true } : {}),
           ...chunkMetadata(chunk),
           chunking_strategy: effectiveChunkingStrategy(item.chunking_strategy),
           content: [{ type: "text", text: chunk.text }],
@@ -707,6 +721,7 @@ function fileSearchOutputItems(context, options = {}) {
 
 function fileSearchCompatibility(context) {
   if (!context) return {};
+  const results = Array.isArray(context.results) ? context.results : [];
   return {
     local_file_search: {
       provider: context.provider || "local",
@@ -718,6 +733,8 @@ function fileSearchCompatibility(context) {
       skipped_count: context.skipped_calls?.length || 0,
       tool_types: context.tool_types || [],
       ranking_options: context.ranking_options || normalizeRankingOptions(null),
+      pdf_extracted_count: countUniqueResultFiles(results, isPdfExtractionMethod),
+      pdf_ocr_extracted_count: countUniqueResultFiles(results, isPdfOcrExtractionMethod),
     },
   };
 }
@@ -1473,6 +1490,74 @@ function recordContentBuffer(record) {
 function recordTextContent(record) {
   if (typeof record?.content === "string") return record.content;
   return null;
+}
+
+function indexedContentForFileRecord(record, config = {}) {
+  if (!record?.file) return { status: "failed", error: "file record is missing" };
+  const storedText = recordTextContent(record);
+  if (typeof storedText === "string") {
+    return {
+      status: storedText.trim() ? "completed" : "failed",
+      text: storedText,
+      extraction_method: "stored_text",
+      bytes: record.file.bytes || 0,
+    };
+  }
+
+  const buffer = recordContentBuffer(record);
+  if (!buffer) {
+    return {
+      status: "failed",
+      bytes: record.file.bytes || 0,
+      error: "file bytes are missing",
+    };
+  }
+
+  const mediaType = record.file.mime_type || record.file.metadata?.mime_type || "";
+  const extracted = extractInputFileText(buffer, record.file.filename, mediaType, config);
+  return {
+    status: extracted.content ? "completed" : "failed",
+    text: extracted.content || "",
+    bytes: buffer.length,
+    ...(extracted.method ? { extraction_method: extracted.method } : {}),
+    ...(extracted.ocr_pages ? { ocr_pages: extracted.ocr_pages } : {}),
+    ...(extracted.truncated ? { truncated: true } : {}),
+    ...(extracted.error ? { error: extracted.error } : {}),
+  };
+}
+
+function searchableContentForVectorFile(fileRecord, vectorFileRecord, config = {}) {
+  const indexed = vectorFileRecord?.indexed_content;
+  if (indexed && typeof indexed === "object") {
+    if (indexed.status === "completed" && typeof indexed.text === "string" && indexed.text.trim()) return indexed;
+    return indexed;
+  }
+  if (typeof fileRecord?.content === "string" && fileRecord.content.trim()) {
+    return {
+      status: "completed",
+      text: fileRecord.content,
+      extraction_method: "stored_text",
+      bytes: fileRecord.file?.bytes || 0,
+    };
+  }
+  return indexedContentForFileRecord(fileRecord, config);
+}
+
+function isPdfExtractionMethod(result) {
+  const method = String(result?.extraction_method || "");
+  return method === "pdftotext" || method === "pdftoppm_tesseract_ocr";
+}
+
+function isPdfOcrExtractionMethod(result) {
+  return String(result?.extraction_method || "") === "pdftoppm_tesseract_ocr";
+}
+
+function countUniqueResultFiles(results, predicate) {
+  const fileIds = new Set();
+  for (const result of results) {
+    if (predicate(result) && result.file_id) fileIds.add(result.file_id);
+  }
+  return fileIds.size;
 }
 
 function textContentForStorage(buffer, filename, mediaType) {

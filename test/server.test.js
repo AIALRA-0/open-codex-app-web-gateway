@@ -8850,6 +8850,224 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
   });
 });
 
+test("local Vector Stores index PDF text for Responses file_search compatibility", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses file_search compatibility results follow/);
+    assert.match(prompt, /PDF Vector Search Fixture says pdf-vector-search-ok/);
+    assert.doesNotMatch(prompt, /%PDF-1\.4/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_vector_pdf_file_search",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "pdf-vector-search-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const pdf = tinyPdfBuffer("PDF Vector Search Fixture says pdf-vector-search-ok.");
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "vector-pdf.pdf",
+        purpose: "assistants",
+        mime_type: "application/pdf",
+        content_base64: pdf.toString("base64"),
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const storeResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "vector-pdf-store" }),
+    });
+    assert.equal(storeResponse.status, 200);
+    const vectorStore = await storeResponse.json();
+
+    const attachResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: file.id, attributes: { suite: "vector-pdf" } }),
+    });
+    assert.equal(attachResponse.status, 200);
+    const attached = await attachResponse.json();
+    assert.equal(attached.status, "completed");
+
+    const contentResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${file.id}/content`);
+    assert.equal(contentResponse.status, 200);
+    const content = await contentResponse.json();
+    assert.equal(content.extraction_method, "pdftotext");
+    assert.match(content.content[0].text, /pdf-vector-search-ok/);
+
+    const searchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        query: "pdf-vector-search-ok",
+        filters: { type: "eq", key: "suite", value: "vector-pdf" },
+      }),
+    });
+    assert.equal(searchResponse.status, 200);
+    const search = await searchResponse.json();
+    assert.equal(search.data[0].file_id, file.id);
+    assert.equal(search.data[0].extraction_method, "pdftotext");
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "File search for pdf-vector-search-ok. Return pdf-vector-search-ok [1].",
+        tools: [{
+          type: "file_search",
+          vector_store_ids: [vectorStore.id],
+          filters: { type: "eq", key: "suite", value: "vector-pdf" },
+        }],
+        include: ["file_search_call.results"],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].results[0].file_id, file.id);
+    assert.equal(json.output[0].results[0].extraction_method, "pdftotext");
+    assert.equal(json.metadata.compatibility.local_file_search.pdf_extracted_count, 1);
+    assert.equal(json.metadata.compatibility.local_file_search.pdf_ocr_extracted_count, 0);
+  });
+});
+
+test("local Vector Stores OCR scanned PDFs for Responses file_search compatibility", async () => {
+  await withTemporaryExecutableBin({
+    pdftotext: [
+      "#!/bin/sh",
+      "exit 0",
+      "",
+    ].join("\n"),
+    pdftoppm: [
+      "#!/bin/sh",
+      "prefix=\"\"",
+      "for arg do prefix=\"$arg\"; done",
+      "printf 'fake png bytes' > \"${prefix}-1.png\"",
+      "exit 0",
+      "",
+    ].join("\n"),
+    tesseract: [
+      "#!/bin/sh",
+      "printf 'Vector OCR says vector-scanned-pdf-ok.\\n'",
+      "exit 0",
+      "",
+    ].join("\n"),
+  }, async () => {
+    await withMockProvider(async (_req, res, call) => {
+      assert.deepEqual(call.body.thinking, { type: "disabled" });
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      assert.match(prompt, /Local Responses file_search compatibility results follow/);
+      assert.match(prompt, /Vector OCR says vector-scanned-pdf-ok/);
+      assert.doesNotMatch(prompt, /%PDF-1\.4/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_vector_pdf_ocr_file_search",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "vector-scanned-pdf-ok [1]" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+      }));
+    }, async ({ bridgeAddress }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const pdf = tinyPdfBuffer("");
+      const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename: "vector-scanned.pdf",
+          purpose: "assistants",
+          mime_type: "application/pdf",
+          content_base64: pdf.toString("base64"),
+        }),
+      });
+      assert.equal(fileResponse.status, 200);
+      const file = await fileResponse.json();
+
+      const storeResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "vector-pdf-ocr-store" }),
+      });
+      assert.equal(storeResponse.status, 200);
+      const vectorStore = await storeResponse.json();
+
+      const attachResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ file_id: file.id, attributes: { suite: "vector-pdf-ocr" } }),
+      });
+      assert.equal(attachResponse.status, 200);
+
+      const contentResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${file.id}/content`);
+      assert.equal(contentResponse.status, 200);
+      const content = await contentResponse.json();
+      assert.equal(content.extraction_method, "pdftoppm_tesseract_ocr");
+      assert.equal(content.ocr_pages, 1);
+      assert.match(content.content[0].text, /vector-scanned-pdf-ok/);
+
+      const searchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          query: "vector-scanned-pdf-ok",
+          filters: { type: "eq", key: "suite", value: "vector-pdf-ocr" },
+        }),
+      });
+      assert.equal(searchResponse.status, 200);
+      const search = await searchResponse.json();
+      assert.equal(search.data[0].file_id, file.id);
+      assert.equal(search.data[0].extraction_method, "pdftoppm_tesseract_ocr");
+      assert.equal(search.data[0].ocr_pages, 1);
+
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "File search for vector-scanned-pdf-ok. Return vector-scanned-pdf-ok [1].",
+          tools: [{
+            type: "file_search",
+            vector_store_ids: [vectorStore.id],
+            filters: { type: "eq", key: "suite", value: "vector-pdf-ocr" },
+          }],
+          include: ["file_search_call.results"],
+          store: false,
+        }),
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.output[0].results[0].file_id, file.id);
+      assert.equal(json.output[0].results[0].extraction_method, "pdftoppm_tesseract_ocr");
+      assert.equal(json.metadata.compatibility.local_file_search.pdf_extracted_count, 1);
+      assert.equal(json.metadata.compatibility.local_file_search.pdf_ocr_extracted_count, 1);
+    }, {
+      inputFilePdfOcr: "tesseract",
+      inputFilePdfOcrMaxPages: 1,
+      inputFilePdfOcrDpi: 72,
+    });
+  });
+});
+
 test("local Uploads API assembles ordered parts into Files and Responses input_file", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.thinking, { type: "disabled" });

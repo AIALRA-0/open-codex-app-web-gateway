@@ -1035,6 +1035,7 @@ function guessMediaType(filename = "") {
 }
 
 module.exports = {
+  extractInputFileText: extractText,
   hasInputFiles,
   injectInputFileMessages,
   inputFileCompatibility,

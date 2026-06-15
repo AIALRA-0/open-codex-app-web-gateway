@@ -76,11 +76,15 @@ larger agent evaluations.
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 | `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
-PDF `input_file` OCR is covered in mock-provider regression tests for both
-Responses translation and direct Chat passthrough text fallback. These tests
-force empty PDF text-layer extraction and verify the bounded
+PDF extraction is covered in mock-provider regression tests for both Responses
+`input_file` translation and direct Chat passthrough text fallback, and local
+`file_search` adds vector-store PDF text-layer and OCR tests. These tests force
+empty PDF text-layer extraction where needed and verify the bounded
 `pdftoppm`/`tesseract` path plus `pdf_ocr_extracted_count` metadata before
-larger live or SWE-bench style evaluations are run.
+larger live or SWE-bench style evaluations are run. The live
+`bridge-regression` suite also includes `responses-file-search-pdf`, which
+attaches a PDF to a local vector store and requires retrieved file-search
+content to include the PDF marker through `file_search_call.results`.
 
 The `assistants-lifecycle` bridge-regression case also checks that
 create-and-run streaming produces `thread.message.delta` text fragments before
@@ -212,6 +216,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-compute
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell-skill --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search-pdf --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search-batch --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case vector-store-lifecycle --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case video-lifecycle --timeout-ms 90000 --verbose

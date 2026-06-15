@@ -1244,7 +1244,8 @@ prefer the local `file_search` adapter.
 
 The bridge can emulate the Responses `file_search` hosted tool for Chat-only
 providers by keeping a local Files/Vector Stores state tree and running bounded
-hybrid keyword plus hashed-semantic search over uploaded text. The adapter:
+hybrid keyword plus hashed-semantic search over uploaded text and locally
+extractable document text. The adapter:
 
 - reserves `file_search` so it is not forwarded as an unsupported Chat tool;
 - searches `vector_store_ids` from the tool or `tool_resources.file_search`;
@@ -1279,7 +1280,13 @@ hybrid keyword plus hashed-semantic search over uploaded text. The adapter:
   stores. Missing or `auto` strategies use the documented default static
   behavior: 800-token chunks with 400-token overlap. Static strategies are
   validated with `max_chunk_size_tokens` from 100 to 4096 and
-  `chunk_overlap_tokens` no more than half the chunk size.
+  `chunk_overlap_tokens` no more than half the chunk size;
+- uses the shared local file extractor when a vector-store file is not plain
+  text, including PDF text-layer extraction through Poppler `pdftotext`,
+  bounded PDF OCR fallback through `pdftoppm` plus `tesseract`, and basic
+  `.docx` / `.xlsx` / `.pptx` / CSV / TSV text extraction. Extracted text is
+  cached as bounded `indexed_content` on the local vector-store file record so
+  later searches do not rerun OCR unless the record predates indexing.
 
 Configuration:
 
@@ -1288,7 +1295,7 @@ Configuration:
 | `CODEXCOMPAT_FILE_SEARCH_PROVIDER` | `local` | Use `disabled` to leave `file_search` as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local file/vector-store state path; keep outside Git |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum retrieved chunks injected into Chat context; direct vector-store search defaults to 10 and accepts up to 50 via `max_num_results` |
-| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local text files |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Upload size limit for local Files API bytes that can be attached to vector stores |
 | `CODEXCOMPAT_EMBEDDINGS_MODEL` | `hashed-semantic-256` | Model id returned by local `/v1/embeddings` when the request omits `model` |
 | `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` | `256` | Default local `/v1/embeddings` vector dimensions; requests may override `dimensions` from 1 to 3072 |
 | `CODEXCOMPAT_MODERATIONS_MODEL` | `omni-moderation-latest` | Model id returned by local `/v1/moderations` when the request omits `model` |
@@ -1302,9 +1309,13 @@ This is a bridge compatibility layer, not native OpenAI file search. The current
 retriever is intentionally local, auditable, and disk-bounded; it supports
 overlapping static chunks and deterministic 256-dimensional hashed semantic
 features but is not yet backed by a managed embedding model, ANN vector index,
-or OpenAI's hosted reranker. It also does not process binary PDFs, OCR, image
-files, asynchronous batch indexing, or OpenAI's managed semantic ranking
-behavior. Local `hybrid_search` metadata reports modes such as
+or OpenAI's hosted reranker. PDF/OCR and document extraction use the same
+`CODEXCOMPAT_INPUT_FILE_*` caps and Poppler/Tesseract knobs as Responses
+`input_file` handling, but this is local extracted text rather than OpenAI's
+managed file-ingestion pipeline: it does not inspect image pixels outside the
+bounded OCR fallback, schedule asynchronous hosted indexing jobs, or reproduce
+OpenAI's managed semantic ranking behavior. Local `hybrid_search` metadata
+reports modes such as
 `text_only`, `hashed_semantic`, or `hybrid_hashed_semantic`. Multi-query
 decomposition is deterministic and bounded; it is not equivalent to OpenAI's
 hosted query rewriting.
@@ -1733,7 +1744,7 @@ Configuration:
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, optional bounded local Tesseract OCR fallback for scanned PDFs, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not OpenAI hosted PDF page-image/vision context, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context for vision-capable providers, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |
 | OpenAI Uploads full parity | The local adapter covers create, add Parts, ordered completion, byte-count validation, optional local SHA-256 checksum validation, expiration persistence, cancellation, binary-safe File creation, completed File checksum metadata, default pruning of intermediate Part bytes after terminal states, runtime pruning for Upload workdirs, and PDF `input_file` extraction after completion, but local disk caps are intentionally much smaller than OpenAI hosted limits by default and resumability semantics are not yet modeled | Add resumable upload sessions if an official-compatible surface is documented, async/parallel stress tests, and larger disk-governed staging profiles |
-| OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |
+| OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files plus shared local extraction for PDF text layers, bounded PDF OCR, basic OOXML documents, and spreadsheet text, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, hosted asynchronous ingestion worker, or reranker | Add provider/model-backed embeddings, ANN vector indexing, async batches, managed-style query rewriting/reranking, richer binary-document/media extraction, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, non-streaming/streaming/background model-requested follow-up action mapping for `click`, `double_click`, `scroll`, `type`, `wait`, `keypress`, `drag`, `move`, and `screenshot`, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet physically perform UI actions or run server-side multi-step UI loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement policy, per-session isolation, cleanup policies, and richer multi-round action-loop control |

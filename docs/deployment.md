@@ -173,7 +173,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_FILE_SEARCH_PROVIDER` | `local` | Local Responses `file_search` adapter provider. Use `disabled` to leave it unsupported |
 | `CODEXCOMPAT_FILE_SEARCH_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-file-search` | Local Files/Vector Stores state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_FILE_SEARCH_MAX_RESULTS` | `5` | Maximum local file-search chunks injected into Chat context and citation output; configurable up to 50 |
-| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local Files API content; bytes are preserved and text-like files are indexed for local file search |
+| `CODEXCOMPAT_FILE_SEARCH_MAX_FILE_BYTES` | `4194304` | Maximum upload size for local Files API content; bytes are preserved and text/document extraction for local file search shares the `CODEXCOMPAT_INPUT_FILE_*` PDF/OCR/OOXML/spreadsheet settings |
 | `CODEXCOMPAT_EMBEDDINGS_MODEL` | `hashed-semantic-256` | Model id returned by local `/v1/embeddings` when the request omits `model` |
 | `CODEXCOMPAT_EMBEDDINGS_DIMENSIONS` | `256` | Default local `/v1/embeddings` vector dimensions; requests may override `dimensions` from 1 to 3072 |
 | `CODEXCOMPAT_MODERATIONS_MODEL` | `omni-moderation-latest` | Model id returned by local `/v1/moderations` when the request omits `model` |

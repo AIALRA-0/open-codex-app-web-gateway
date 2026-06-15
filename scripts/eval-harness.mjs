@@ -3479,6 +3479,43 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-file-search-pdf",
+        mode: "responses-file-search",
+        file: {
+          filename: "bridge-file-search.pdf",
+          purpose: "assistants",
+          mime_type: "application/pdf",
+          content_base64: tinyPdfBase64("Bridge PDF file search fixture. The exact PDF search answer is file-search-pdf-ok."),
+        },
+        vectorStore: { name: "bridge-file-search-pdf-eval" },
+        vectorFile: { attributes: { suite: "bridge-regression-pdf" } },
+        request: ({ vectorStoreId }) => ({
+          model: defaultModel,
+          input: "File search for file-search-pdf-ok. Using the PDF file search result, return exactly this text and nothing else: file-search-pdf-ok [1]",
+          tools: [{
+            type: "file_search",
+            vector_store_ids: [vectorStoreId],
+            max_num_results: 3,
+            filters: { type: "eq", key: "suite", value: "bridge-regression-pdf" },
+          }],
+          include: ["file_search_call.results"],
+          max_output_tokens: 128,
+          store: false,
+        }),
+        check: ({ json, text, fileId, vectorStoreId }) => {
+          const call = (json.output || []).find((item) => item.type === "file_search_call");
+          const result = (call?.results || []).find((item) => item.file_id === fileId);
+          return !!call
+            && call.status === "completed"
+            && call.vector_store_ids?.includes(vectorStoreId)
+            && result?.extraction_method === "pdftotext"
+            && result.content?.some((part) => /file-search-pdf-ok/i.test(part.text || ""))
+            && json.metadata?.compatibility?.local_file_search?.pdf_extracted_count === 1
+            && json.metadata?.compatibility?.local_file_search?.pdf_ocr_extracted_count === 0
+            && /file-search-pdf-ok/i.test(text);
+        },
+      },
+      {
         id: "responses-file-search-batch",
         mode: "responses-file-search",
         file: {

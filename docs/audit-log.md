@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-16 Vector Store PDF File Search Indexing
+
+- Closed a local `file_search` document-ingestion gap for Chat-only providers.
+  OpenAI's current file-search/vector-store docs describe vector-store file
+  ingestion and list PDFs among supported file-search formats; the bridge now
+  maps that surface to local, bounded extracted text instead of OpenAI hosted
+  indexing.
+- Local vector-store file attachment now caches bounded `indexed_content` for
+  non-plain-text Files API records by reusing the shared input-file extractor:
+  PDF text layers go through Poppler `pdftotext`, scanned/empty text-layer PDFs
+  can fall back to bounded `pdftoppm` plus `tesseract`, and basic OOXML /
+  spreadsheet text extraction is available through the same path.
+- `GET /v1/vector_stores/{id}/files/{file_id}/content`, direct vector-store
+  search, and Responses `file_search` results expose local audit metadata such
+  as `extraction_method`, `ocr_pages`, and `truncated` when present. Responses
+  compatibility metadata now counts retrieved PDF extraction results with
+  `pdf_extracted_count` and `pdf_ocr_extracted_count`.
+- Updated the live `bridge-regression` harness with
+  `responses-file-search-pdf`, plus compatibility, deployment, and evaluation
+  docs to state the new PDF/OCR/document indexing behavior and the remaining
+  hosted-boundary gaps: no OpenAI managed embedding model, ANN index, hosted
+  asynchronous ingestion worker, or hosted reranker.
+- Storage/security boundary: uploaded file bytes and vector-store state remain
+  under ignored runtime state, extracted text is bounded by existing local file
+  caps, OCR temporary images are not committed, and provider/API credentials are
+  not written to Git-tracked files.
+- Validation:
+  - Official OpenAI docs MCP check confirmed vector-store file ingestion and
+    that file-search supports document formats including PDF; this change is a
+    local compatibility implementation for Chat Completions providers.
+  - `node --check src/bridge/local_file_search.js src/bridge/input_files.js src/bridge/server.js test/server.test.js scripts/eval-harness.mjs`:
+    passed.
+  - `node --test test/server.test.js --test-name-pattern "Vector Stores.*PDF|file_search compatibility|input_file PDF|loadConfig reads input_file PDF OCR"`:
+    passed through the server suite (187/187 tests), including PDF text-layer
+    indexing and mocked OCR vector-store indexing.
+  - Full `npm test` passed 227/227 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; local `/healthz` returned
+    `ok:true` with DeepSeek provider base `https://api.deepseek.com` and default
+    model `deepseek-v4-pro`.
+  - Live `responses-file-search-pdf` bridge-regression reached the deployed
+    bridge but upstream DeepSeek returned HTTP 402 `Insufficient Balance`, so no
+    model-quality assertion was possible on this run.
+  - Deployed no-provider PDF vector-store validation passed: uploaded a PDF,
+    attached it to a vector store, confirmed content extraction used
+    `pdftotext`, searched the vector store for the marker, received one result,
+    and deleted the temporary File/vector store.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were all `active`; public HTTPS
+    returned HTTP 200.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors.
+  - Storage check: repo path 113 MB, `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 5.6 GB
+    available at 98% usage.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+
 ## 2026-06-16 Direct Chat PDF OCR Regression Coverage
 
 - Extended mock-provider regression coverage from Responses `input_file` OCR to
