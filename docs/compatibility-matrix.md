@@ -19,6 +19,8 @@ Primary sources:
 - OpenAI Threads OpenAPI operation `createRun`: https://api.openai.com/v1/threads/{thread_id}/runs
 - OpenAI Threads OpenAPI operation `createThreadAndRun`: https://api.openai.com/v1/threads/runs
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
+- OpenAI ChatKit session OpenAPI operation `CreateChatSessionMethod`: https://api.openai.com/v1/chatkit/sessions
+- OpenAI ChatKit threads OpenAPI operation `ListThreadsMethod`: https://api.openai.com/v1/chatkit/threads
 - OpenAI audio guide: https://developers.openai.com/api/docs/guides/audio
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
@@ -384,6 +386,31 @@ are filtered instead of being sent to the provider. Non-streaming JSON
 responses and stored reconstructed streaming responses record these actions under
 `metadata.compatibility.chat_passthrough`, while stored Chat messages preserve
 the original client request shape for `/messages` retrieval.
+
+## ChatKit Endpoint Coverage
+
+OpenAI's current endpoint list includes beta ChatKit paths for sessions,
+threads, and thread items. The bridge implements a local file-backed
+compatibility layer so SDKs and ChatKit-style UI flows can create a bounded
+client session token, manage local thread metadata, and persist thread items
+without calling a Chat Completions provider.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/chatkit/sessions` | Implemented locally | Requires `user` and `workflow.id`, returns `object:"chatkit.session"`, a local `client_secret`, `expires_at`, workflow/scope, request caps, `status:"active"`, and local compatibility metadata |
+| `POST /v1/chatkit/sessions/{session_id}/cancel` | Implemented locally | Marks a local session `status:"cancelled"` with `cancelled_at` and returns the session resource |
+| `GET /v1/chatkit/threads` | Implemented locally | Lists local `chatkit.thread` records with `limit`, `after`, `before`, `order`, and `user` filtering; default order is `desc`, matching the official list operation |
+| `POST /v1/chatkit/threads` | Local compatibility extension | Creates a local thread so SDK/UI smoke tests can exercise the thread lifecycle before a hosted ChatKit workflow executor exists; `session_id` copies session user/workflow/scope when present |
+| `GET /v1/chatkit/threads/{thread_id}` | Implemented locally | Retrieves a stored local ChatKit thread |
+| `POST /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Updates local thread `title`, `user`, and `metadata` |
+| `DELETE /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Deletes local thread state and its items |
+| `GET /v1/chatkit/threads/{thread_id}/items` | Implemented locally | Lists local thread items with stable creation order and standard pagination |
+| `POST /v1/chatkit/threads/{thread_id}/items` | Local compatibility extension | Appends one `{item}` or an `items[]` batch to the local thread and returns the created item or list |
+
+Local ChatKit state lives under
+`CODEXCOMPAT_CHATKIT_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-chatkit` by
+default. `scripts/prune-runtime-state.mjs` prunes ChatKit session files and
+thread directories with separate file-count, age, and byte caps.
 
 ## Conversations Endpoint Coverage
 
@@ -1390,6 +1417,7 @@ Configuration:
 | OpenAI hosted `web_search` full parity | The local adapter can search, cite, open bounded top-result pages, and run local `find_in_page` scans over extracted text, but the default no-key provider is Wikipedia-only and does not match OpenAI's hosted ranking/policy behavior | Add production web-search provider support, stronger citation ranking, and richer search policy controls |
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
+| OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
 | OpenAI Assistants full parity | The local adapter covers Assistants CRUD, Threads CRUD, Messages CRUD, synchronous Chat-backed Runs, run `additional_messages` / `additional_instructions` / `reasoning_effort` / `truncation_strategy.last_messages` / best-effort `max_prompt_tokens`, observed `max_prompt_tokens` / `max_completion_tokens` incomplete terminal mapping, function-tool `requires_action` / `submit_tool_outputs` loops through Chat `tool_calls`, local active-run thread locks, elapsed `expires_at` expiration to `expired`, local Assistants `file_search` over bridge vector stores with include-gated Run Step result content, local Assistants `code_interpreter` over explicit Python blocks with file-id mounts, message-attachment resource materialization for `file_search` and `code_interpreter`, Run Step listing/retrieval, terminal cancel no-op, create-thread-and-run, streamed Chat text/refusal deltas as Assistants `thread.message.delta`, streamed token-budget terminal events as `thread.run.incomplete`, and streamed Chat tool-call/function-call arguments as `thread.run.step.delta`, but it is not OpenAI hosted Assistants and does not yet implement exact hosted tokenizer accounting ahead of provider calls, model-driven hosted code loops, non-text hosted-tool delta details, or hosted async worker scheduling | Add async run workers with hosted-style scheduling/lock timing, exact provider/model token accounting where available, broader non-text delta parity, and stronger hosted-tool loop orchestration |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |

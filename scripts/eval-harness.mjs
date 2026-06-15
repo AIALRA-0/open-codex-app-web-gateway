@@ -315,6 +315,29 @@ function buildSuites(defaultModel) {
           && json.compatibility?.provider === "local",
       },
       {
+        id: "chatkit-lifecycle",
+        mode: "chatkit-lifecycle",
+        request: {
+          workflow: { id: "workflow_bridge_regression", version: "2026-06-15" },
+          scope: { project: "open-codex", environment: "bridge-regression" },
+        },
+        check: ({ session, cancelled, thread, updatedThread, item, items, threads, deleted, missingThread }) => session?.id?.startsWith("csess_")
+          && session.object === "chatkit.session"
+          && /^chatkit_token_/.test(session.client_secret || "")
+          && session.workflow?.id === "workflow_bridge_regression"
+          && cancelled?.status === "cancelled"
+          && thread?.id?.startsWith("cthr_")
+          && thread.object === "chatkit.thread"
+          && thread.user === session.user
+          && updatedThread?.title === "ChatKit lifecycle updated"
+          && item?.id?.startsWith("citm_")
+          && item.thread_id === thread.id
+          && items?.data?.some((entry) => entry.id === item.id)
+          && threads?.data?.some((entry) => entry.id === thread.id)
+          && deleted?.deleted === true
+          && missingThread?.status === 404,
+      },
+      {
         id: "audio-speech",
         mode: "audio-speech",
         request: {
@@ -2889,6 +2912,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "moderations") {
       return await runJsonCase(testCase, context, started, "/v1/moderations", moderationOutputText, moderationUsage);
     }
+    if (testCase.mode === "chatkit-lifecycle") {
+      return await runChatKitLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "audio-speech") {
       return await runAudioSpeechCase(testCase, context, started);
     }
@@ -3091,6 +3117,84 @@ async function runAudioSpeechCase(testCase, context, started) {
     usage: audioUsage(null),
     output_text: `audio_speech:${contentType}:${buffer.length}`,
   });
+}
+
+async function runChatKitLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const marker = `${testCase.id}-${context.iteration}-${Date.now().toString(36)}`;
+  let threadId = null;
+  try {
+    const session = await postJsonCapture(`${baseUrl}/v1/chatkit/sessions`, {
+      user: `eval-chatkit-${context.iteration}`,
+      workflow: request.workflow || { id: "workflow_bridge_regression" },
+      scope: request.scope || {},
+      expires_after: 1800,
+      max_requests_per_1_minute: 60,
+      max_requests_per_session: 500,
+      metadata: { suite: "bridge-regression", marker },
+    });
+    if (!session.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: session.status,
+        error: truncate(session.body),
+      });
+    }
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/chatkit/threads`, {
+      session_id: session.json.id,
+      title: "ChatKit lifecycle",
+      metadata: { suite: "bridge-regression", marker },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const updatedThread = await postJsonCapture(`${baseUrl}/v1/chatkit/threads/${threadId}`, {
+      title: "ChatKit lifecycle updated",
+      metadata: { suite: "bridge-regression", marker, updated: true },
+    });
+    const item = await postJsonCapture(`${baseUrl}/v1/chatkit/threads/${threadId}/items`, {
+      type: "message",
+      role: "user",
+      content: [{ type: "input_text", text: marker }],
+      metadata: { marker },
+    });
+    const items = await getJson(`${baseUrl}/v1/chatkit/threads/${threadId}/items?limit=10`);
+    const threads = await getJson(`${baseUrl}/v1/chatkit/threads?user=${encodeURIComponent(session.json.user)}&limit=10`);
+    const cancelled = await postJsonCapture(`${baseUrl}/v1/chatkit/sessions/${session.json.id}/cancel`, {});
+    const deleted = await deleteJson(`${baseUrl}/v1/chatkit/threads/${threadId}`);
+    threadId = null;
+    const missingThread = await getJson(`${baseUrl}/v1/chatkit/threads/${thread.json.id}`);
+    const deletedJson = parseJsonish(deleted.body);
+    const ok = !!testCase.check({
+      session: session.json,
+      cancelled: cancelled.json,
+      thread: thread.json,
+      updatedThread: updatedThread.json,
+      item: item.json,
+      items: items.json,
+      threads: threads.json,
+      deleted: deletedJson,
+      missingThread,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: item.status,
+      session_id: session.json.id,
+      thread_id: thread.json.id,
+      item_id: item.json?.id,
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+      output_text: `chatkit:${session.json.id}:${thread.json.id}`,
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/chatkit/threads/${threadId}`);
+  }
 }
 
 async function runAudioVoiceLifecycleCase(testCase, context, started) {

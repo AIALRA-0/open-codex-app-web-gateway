@@ -4369,6 +4369,95 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local ChatKit lifecycle compatibility
+
+- Used the official OpenAI endpoint inventory from the developer-docs MCP to
+  identify the current beta ChatKit surface:
+  - `POST /v1/chatkit/sessions`
+  - `POST /v1/chatkit/sessions/{session_id}/cancel`
+  - `GET /v1/chatkit/threads`
+  - `GET /v1/chatkit/threads/{thread_id}`
+  - `GET /v1/chatkit/threads/{thread_id}/items`
+- Added a local file-backed ChatKit compatibility layer for Chat
+  Completions-only deployments:
+  - `FileChatKitStore` persists generated session and thread/item resources
+    under `CODEXCOMPAT_CHATKIT_STATE_DIR`, defaulting to
+    `$CODEXCOMPAT_STATE_DIR/local-chatkit`;
+  - `POST /v1/chatkit/sessions` validates `user` and `workflow.id`, returns a
+    beta-style `chatkit.session`, local generated `client_secret`,
+    `expires_at`, request caps, workflow/scope/user fields, and compatibility
+    metadata;
+  - `POST /v1/chatkit/sessions/{session_id}/cancel` marks sessions
+    `status:"cancelled"` locally;
+  - `GET /v1/chatkit/threads` lists local `chatkit.thread` records with
+    OpenAI-style pagination, default descending order, and `user` filtering;
+  - local extension routes create, retrieve, update, and delete threads so UI
+    and SDK smoke tests can exercise a full lifecycle before a hosted ChatKit
+    workflow executor exists;
+  - local item routes append one item or an `items[]` batch and list items with
+    stable creation order, preserving metadata and role/type/status fields.
+- Added storage controls:
+  - ChatKit session files and thread directories are now part of
+    `scripts/prune-runtime-state.mjs`;
+  - runtime files are written with restricted file/directory permissions and
+    remain outside git.
+- Added regression coverage:
+  - unit/mock-provider coverage proves ChatKit lifecycle calls do not contact
+    the upstream model provider;
+  - live `bridge-regression` now includes `chatkit-lifecycle`;
+  - compatibility and evaluation docs now describe covered endpoints,
+    extension routes, storage, prune policy, and remaining parity gaps.
+- Current boundary: this is a local protocol compatibility layer, not OpenAI's
+  hosted ChatKit workflow runtime, hosted authentication broker, UI transport,
+  or workflow execution service. Remaining work includes workflow execution
+  over Responses/Chat, session request accounting, token validation middleware,
+  richer item subtype coverage, and ChatKit UI smoke coverage when the
+  frontend adopts these endpoints.
+- Verification:
+  - `node --check` passed for `src/bridge/store.js`, `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, `scripts/prune-runtime-state.mjs`, and
+    `test/server.test.js`.
+  - Focused ChatKit unit test passed 1/1.
+  - `npm test`: passed 198/198.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `chatkit-lifecycle`: passed 1/1 against
+    `deepseek-v4-pro`, latency 323 ms.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 95/95,
+    pass rate 1.0, average latency 1467 ms, P95 latency 4031 ms, and total
+    usage 24792 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1242 ms, P95 latency 1280 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T15-09-10-438Z.png`.
+  - `npm run prune:runtime -- --dry-run`: scanned 1692 runtime candidates,
+    selected 1 old UI-smoke screenshot, selected 104086 bytes, and reported
+    0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 artifact, freed
+    104086 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 30 GB available; `state/` was 24 MB,
+    `output/` was 4.5 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 27 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+  - Final `node --check` passed again for `src/bridge/store.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`,
+    `scripts/prune-runtime-state.mjs`, and `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. ChatKit `client_secret`
+  values are local generated compatibility tokens stored only in ignored
+  runtime state.
+
 ## 2026-06-15 - Streaming legacy function-call compatibility
 
 - Closed another Responses streaming compatibility gap for Chat Completions

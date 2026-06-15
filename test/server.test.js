@@ -11573,6 +11573,171 @@ test("POST /v1/moderations returns local OpenAI-compatible category results", as
   });
 });
 
+test("ChatKit API manages local sessions, threads, and items", async () => {
+  await withMockProvider(async () => {
+    assert.fail("ChatKit compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const missingWorkflow = await fetch(`${baseUrl}/v1/chatkit/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user: "chatkit-user" }),
+    });
+    assert.equal(missingWorkflow.status, 400);
+    assert.equal((await missingWorkflow.json()).error.param, "workflow.id");
+
+    const sessionResponse = await fetch(`${baseUrl}/v1/chatkit/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "OpenAI-Beta": "chatkit_beta=v1" },
+      body: JSON.stringify({
+        user: "chatkit-user",
+        workflow: { id: "workflow_alpha", version: "2026-06-15" },
+        scope: { project: "open-codex", environment: "test" },
+        expires_after: 1800,
+        max_requests_per_1_minute: 60,
+        max_requests_per_session: 500,
+        metadata: { suite: "chatkit-local" },
+      }),
+    });
+    assert.equal(sessionResponse.status, 200);
+    const session = await sessionResponse.json();
+    assert.match(session.id, /^csess_/);
+    assert.equal(session.object, "chatkit.session");
+    assert.match(session.client_secret, /^chatkit_token_/);
+    assert.equal(session.status, "active");
+    assert.equal(session.user, "chatkit-user");
+    assert.equal(session.workflow.id, "workflow_alpha");
+    assert.equal(session.scope.project, "open-codex");
+    assert.equal(session.max_requests_per_1_minute, 60);
+    assert.equal(session.max_requests_per_session, 500);
+    assert.equal(session.compatibility.provider, "local");
+
+    const threadResponse = await fetch(`${baseUrl}/v1/chatkit/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        session_id: session.id,
+        title: "Customer escalation",
+        metadata: { suite: "chatkit-local", owner: "initial" },
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+    assert.match(thread.id, /^cthr_/);
+    assert.equal(thread.object, "chatkit.thread");
+    assert.equal(thread.user, "chatkit-user");
+    assert.equal(thread.session_id, session.id);
+    assert.equal(thread.workflow.id, "workflow_alpha");
+    assert.equal(thread.title, "Customer escalation");
+
+    const otherThreadResponse = await fetch(`${baseUrl}/v1/chatkit/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user: "other-user", title: "Other user thread" }),
+    });
+    assert.equal(otherThreadResponse.status, 200);
+    const otherThread = await otherThreadResponse.json();
+
+    const fetchedThread = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`);
+    assert.equal(fetchedThread.status, 200);
+    assert.equal((await fetchedThread.json()).id, thread.id);
+
+    const updatedThread = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        title: "Updated escalation",
+        metadata: { suite: "chatkit-local", owner: "updated" },
+      }),
+    });
+    assert.equal(updatedThread.status, 200);
+    const updatedThreadJson = await updatedThread.json();
+    assert.equal(updatedThreadJson.title, "Updated escalation");
+    assert.equal(updatedThreadJson.metadata.owner, "updated");
+    assert.ok(updatedThreadJson.updated_at >= thread.updated_at);
+
+    const itemResponse = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "Hello ChatKit" }],
+        metadata: { index: 1 },
+      }),
+    });
+    assert.equal(itemResponse.status, 200);
+    const item = await itemResponse.json();
+    assert.match(item.id, /^citm_/);
+    assert.equal(item.object, "chatkit.thread.item");
+    assert.equal(item.thread_id, thread.id);
+    assert.equal(item.role, "user");
+    assert.equal(item.metadata.index, 1);
+
+    const multiItemResponse = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          { type: "message", role: "assistant", content: "Hi there", metadata: { index: 2 } },
+          { type: "tool_call", name: "lookup", arguments: "{\"id\":1}", metadata: { index: 3 } },
+        ],
+      }),
+    });
+    assert.equal(multiItemResponse.status, 200);
+    const multiItems = await multiItemResponse.json();
+    assert.equal(multiItems.object, "list");
+    assert.equal(multiItems.data.length, 2);
+    assert.equal(multiItems.data[0].metadata.index, 2);
+
+    const itemsList = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=10`);
+    assert.equal(itemsList.status, 200);
+    const itemsListJson = await itemsList.json();
+    assert.equal(itemsListJson.object, "list");
+    assert.equal(itemsListJson.data.length, 3);
+    assert.deepEqual(itemsListJson.data.map((entry) => entry.metadata.index), [1, 2, 3]);
+
+    const threadList = await fetch(`${baseUrl}/v1/chatkit/threads?limit=10&user=chatkit-user`);
+    assert.equal(threadList.status, 200);
+    const threadListJson = await threadList.json();
+    assert.equal(threadListJson.object, "list");
+    assert.equal(threadListJson.data.length, 1);
+    assert.equal(threadListJson.data[0].id, thread.id);
+    assert.equal(threadListJson.data[0].title, "Updated escalation");
+
+    const allThreadsDesc = await fetch(`${baseUrl}/v1/chatkit/threads?limit=2`);
+    assert.equal(allThreadsDesc.status, 200);
+    const allThreadsDescJson = await allThreadsDesc.json();
+    assert.equal(allThreadsDescJson.data[0].id, otherThread.id);
+    assert.equal(allThreadsDescJson.data.some((entry) => entry.id === thread.id), true);
+
+    const cancelled = await fetch(`${baseUrl}/v1/chatkit/sessions/${session.id}/cancel`, {
+      method: "POST",
+    });
+    assert.equal(cancelled.status, 200);
+    const cancelledJson = await cancelled.json();
+    assert.equal(cancelledJson.id, session.id);
+    assert.equal(cancelledJson.status, "cancelled");
+    assert.equal(cancelledJson.compatibility.cancelled_locally, true);
+
+    const deleted = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      id: thread.id,
+      object: "chatkit.thread.deleted",
+      deleted: true,
+    });
+
+    const missingThread = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`);
+    assert.equal(missingThread.status, 404);
+    const missingItems = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items`);
+    assert.equal(missingItems.status, 404);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Videos API creates, lists, retrieves, downloads, remixes, and deletes local jobs", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

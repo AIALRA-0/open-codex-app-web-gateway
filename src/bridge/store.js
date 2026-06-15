@@ -812,6 +812,326 @@ class FileAssistantStore {
   }
 }
 
+class FileChatKitStore {
+  constructor(options = {}) {
+    this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-chatkit"));
+    this.maxRecords = options.maxRecords || 5000;
+  }
+
+  ensureDir() {
+    fs.mkdirSync(this.sessionsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.threadsDir(), { recursive: true, mode: 0o700 });
+  }
+
+  sessionsDir() {
+    return path.join(this.dir, "sessions");
+  }
+
+  sessionPath(id) {
+    const clean = safeId(id);
+    if (!clean) return null;
+    return path.join(this.sessionsDir(), `${clean}.json`);
+  }
+
+  threadsDir() {
+    return path.join(this.dir, "threads");
+  }
+
+  threadDir(threadId) {
+    const clean = safeId(threadId);
+    if (!clean) return null;
+    return path.join(this.threadsDir(), clean);
+  }
+
+  threadPath(threadId) {
+    const dir = this.threadDir(threadId);
+    return dir ? path.join(dir, "thread.json") : null;
+  }
+
+  itemsDir(threadId) {
+    const dir = this.threadDir(threadId);
+    return dir ? path.join(dir, "items") : null;
+  }
+
+  itemPath(threadId, itemId) {
+    const dir = this.itemsDir(threadId);
+    const clean = safeId(itemId);
+    if (!dir || !clean) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  createSession(body = {}) {
+    const now = nowSeconds();
+    const expiresAfter = boundedPositiveInteger(body.expires_after, 3600, 60, 24 * 60 * 60);
+    const session = {
+      id: `csess_${randomToken(18)}`,
+      object: "chatkit.session",
+      created_at: now,
+      client_secret: `chatkit_token_${randomToken(32)}`,
+      expires_at: now + expiresAfter,
+      workflow: isPlainObject(body.workflow) ? cloneJson(body.workflow) : {},
+      scope: isPlainObject(body.scope) ? cloneJson(body.scope) : {},
+      user: nullableString(body.user),
+      max_requests_per_1_minute: nullablePositiveInteger(body.max_requests_per_1_minute),
+      max_requests_per_session: nullablePositiveInteger(body.max_requests_per_session),
+      status: "active",
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      compatibility: {
+        provider: "local",
+        beta: "chatkit_beta=v1",
+        reason: "chatkit_session_protocol_compatibility",
+      },
+    };
+    this.writeJson(this.sessionPath(session.id), { session });
+    this.cleanup();
+    return cloneJson(session);
+  }
+
+  getSession(sessionId) {
+    return cloneOrNull(this.readJson(this.sessionPath(sessionId))?.session || null);
+  }
+
+  cancelSession(sessionId) {
+    const record = this.readJson(this.sessionPath(sessionId));
+    const session = record?.session;
+    if (!session) return null;
+    const now = nowSeconds();
+    const updated = {
+      ...session,
+      status: "cancelled",
+      cancelled_at: session.cancelled_at || now,
+      compatibility: {
+        ...(isPlainObject(session.compatibility) ? session.compatibility : {}),
+        cancelled_locally: true,
+      },
+    };
+    this.writeJson(this.sessionPath(sessionId), { session: updated });
+    return cloneJson(updated);
+  }
+
+  createThread(body = {}) {
+    const now = nowSeconds();
+    const position = this.listDirs(this.threadsDir()).length;
+    const session = body.session_id ? this.getSession(body.session_id) : null;
+    const thread = {
+      id: `cthr_${randomToken(18)}`,
+      object: "chatkit.thread",
+      created_at: now,
+      updated_at: now,
+      title: nullableString(body.title),
+      user: nullableString(body.user ?? session?.user),
+      session_id: nullableString(body.session_id),
+      workflow: isPlainObject(body.workflow)
+        ? cloneJson(body.workflow)
+        : (isPlainObject(session?.workflow) ? cloneJson(session.workflow) : {}),
+      scope: isPlainObject(body.scope)
+        ? cloneJson(body.scope)
+        : (isPlainObject(session?.scope) ? cloneJson(session.scope) : {}),
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      position,
+      compatibility: {
+        provider: "local",
+        beta: "chatkit_beta=v1",
+        reason: "chatkit_thread_protocol_compatibility",
+      },
+    };
+    this.writeJson(this.threadPath(thread.id), { thread });
+    const items = Array.isArray(body.items) ? body.items : Array.isArray(body.initial_items) ? body.initial_items : [];
+    for (const item of items) this.createItem(thread.id, item);
+    this.cleanup();
+    return cloneJson(thread);
+  }
+
+  listThreads() {
+    return this.listDirs(this.threadsDir())
+      .map((dir) => this.readJson(path.join(dir, "thread.json"))?.thread)
+      .filter(Boolean)
+      .sort((a, b) => {
+        const created = Number(a.created_at || 0) - Number(b.created_at || 0);
+        if (created) return created;
+        const position = Number(a.position || 0) - Number(b.position || 0);
+        if (position) return position;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      })
+      .map(cloneJson);
+  }
+
+  getThread(threadId) {
+    return cloneOrNull(this.readJson(this.threadPath(threadId))?.thread || null);
+  }
+
+  updateThread(threadId, body = {}) {
+    const record = this.readJson(this.threadPath(threadId));
+    const thread = record?.thread;
+    if (!thread) return null;
+    const updated = { ...thread, updated_at: nowSeconds() };
+    if (Object.prototype.hasOwnProperty.call(body, "title")) updated.title = nullableString(body.title);
+    if (Object.prototype.hasOwnProperty.call(body, "user")) updated.user = nullableString(body.user);
+    if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
+      updated.metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    }
+    this.writeJson(this.threadPath(threadId), { thread: updated });
+    return cloneJson(updated);
+  }
+
+  deleteThread(threadId) {
+    const thread = this.getThread(threadId);
+    if (!thread) return null;
+    this.deletePath(this.threadDir(threadId));
+    return {
+      id: threadId,
+      object: "chatkit.thread.deleted",
+      deleted: true,
+    };
+  }
+
+  createItem(threadId, body = {}) {
+    if (!this.getThread(threadId)) return null;
+    const now = nowSeconds();
+    const position = this.listJson(this.itemsDir(threadId)).length;
+    const source = isPlainObject(body?.item) ? body.item : body;
+    const base = isPlainObject(source)
+      ? cloneJson(source)
+      : { type: "message", role: "user", content: String(source ?? "") };
+    const item = {
+      ...base,
+      id: stringOrDefault(base.id, `citm_${randomToken(18)}`),
+      object: stringOrDefault(base.object, "chatkit.thread.item"),
+      created_at: base.created_at || now,
+      thread_id: threadId,
+      type: stringOrDefault(base.type || (base.role ? "message" : ""), "message"),
+      status: stringOrDefault(base.status, "completed"),
+      position: Number.isInteger(base.position) && base.position >= 0 ? base.position : position,
+      metadata: isPlainObject(base.metadata) ? cloneJson(base.metadata) : {},
+    };
+    this.writeJson(this.itemPath(threadId, item.id), { item });
+    this.touchThread(threadId);
+    return cloneJson(item);
+  }
+
+  createItems(threadId, body = {}) {
+    const values = Array.isArray(body?.items) ? body.items : [body?.item ?? body];
+    const created = [];
+    for (const value of values) {
+      const item = this.createItem(threadId, value);
+      if (!item) return null;
+      created.push(item);
+    }
+    return created;
+  }
+
+  listItems(threadId) {
+    if (!this.getThread(threadId)) return null;
+    return this.listJson(this.itemsDir(threadId))
+      .map((record) => record.item)
+      .filter(Boolean)
+      .sort((a, b) => {
+        const created = Number(a.created_at || 0) - Number(b.created_at || 0);
+        if (created) return created;
+        const position = Number(a.position || 0) - Number(b.position || 0);
+        if (position) return position;
+        return String(a.id || "").localeCompare(String(b.id || ""));
+      })
+      .map(cloneJson);
+  }
+
+  touchThread(threadId) {
+    const record = this.readJson(this.threadPath(threadId));
+    const thread = record?.thread;
+    if (!thread) return null;
+    const updated = { ...thread, updated_at: nowSeconds() };
+    this.writeJson(this.threadPath(threadId), { thread: updated });
+    return updated;
+  }
+
+  readJson(filePath) {
+    if (!filePath) return null;
+    try {
+      const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return isPlainObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  writeJson(filePath, value) {
+    if (!filePath) return;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+  }
+
+  listJson(dir) {
+    if (!dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => this.readJson(path.join(dir, name)))
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  listDirs(dir) {
+    if (!dir) return [];
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+      return fs.readdirSync(dir)
+        .map((name) => path.join(dir, name))
+        .filter((entry) => {
+          try {
+            return fs.statSync(entry).isDirectory();
+          } catch {
+            return false;
+          }
+        });
+    } catch {
+      return [];
+    }
+  }
+
+  deletePath(targetPath) {
+    if (!targetPath) return;
+    try {
+      fs.rmSync(targetPath, { recursive: true, force: true });
+    } catch {}
+  }
+
+  cleanup() {
+    this.ensureDir();
+    const sessionFiles = fs.readdirSync(this.sessionsDir())
+      .filter((name) => name.endsWith(".json"))
+      .map((name) => {
+        const filePath = path.join(this.sessionsDir(), name);
+        return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of sessionFiles.slice(this.maxRecords)) this.deletePath(entry.filePath);
+
+    const threadDirs = fs.readdirSync(this.threadsDir())
+      .map((name) => path.join(this.threadsDir(), name))
+      .filter((dir) => {
+        try {
+          return fs.statSync(dir).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .map((dir) => ({ dir, mtimeMs: fs.statSync(dir).mtimeMs }))
+      .sort((a, b) => b.mtimeMs - a.mtimeMs);
+    for (const entry of threadDirs.slice(this.maxRecords)) this.deletePath(entry.dir);
+  }
+}
+
 class FileImageGenerationStore {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-image-generations"));
@@ -1101,6 +1421,19 @@ function stringOrDefault(value, fallback) {
   return text || fallback;
 }
 
+function nullablePositiveInteger(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return null;
+  return Math.trunc(parsed);
+}
+
+function boundedPositiveInteger(value, fallback, min, max) {
+  const parsed = nullablePositiveInteger(value);
+  if (parsed == null) return fallback;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 function normalizeAssistantMessageContent(content) {
   if (Array.isArray(content)) return cloneJson(content);
   if (isPlainObject(content)) return [cloneJson(content)];
@@ -1152,6 +1485,7 @@ function normalizeAssistantToolCallsForStep(toolCalls = []) {
 module.exports = {
   FileAssistantStore,
   FileAudioVoiceStore,
+  FileChatKitStore,
   FileResponseStore,
   FileConversationStore,
   FileImageGenerationStore,

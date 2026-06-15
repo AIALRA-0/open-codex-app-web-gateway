@@ -7,6 +7,7 @@ const path = require("node:path");
 const {
   FileAssistantStore,
   FileAudioVoiceStore,
+  FileChatKitStore,
   FileConversationStore,
   FileImageGenerationStore,
   FileResponseStore,
@@ -268,6 +269,7 @@ function loadConfig(overrides = {}) {
     jsonSchemaMode: process.env.CODEXCOMPAT_JSON_SCHEMA_MODE || "json_object",
     localPromptTemplates: loadLocalPromptTemplates(),
     stateDir,
+    chatKitStateDir: process.env.CODEXCOMPAT_CHATKIT_STATE_DIR || path.join(stateDir, "local-chatkit"),
     conversationStateDir: process.env.CODEXCOMPAT_CONVERSATION_STATE_DIR || path.join(stateDir, "local-conversations"),
     assistantStateDir: process.env.CODEXCOMPAT_ASSISTANT_STATE_DIR || path.join(stateDir, "local-assistants"),
     requestTimeoutMs,
@@ -8222,6 +8224,140 @@ async function handleGraderRun(req, res, config) {
   sendJson(res, 200, response);
 }
 
+async function handleChatKitSessionCreate(req, res, chatKitStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("ChatKit session request body must be a JSON object", {
+      code: "invalid_chatkit_session_request",
+    });
+  }
+  if (!body.user) {
+    throw requestError("user is required", {
+      code: "missing_required_parameter",
+      param: "user",
+    });
+  }
+  if (!isPlainObject(body.workflow) || !body.workflow.id) {
+    throw requestError("workflow.id is required", {
+      code: "missing_required_parameter",
+      param: "workflow.id",
+    });
+  }
+  sendJson(res, 200, chatKitStore.createSession(body));
+}
+
+function handleChatKitSessionCancel(res, chatKitStore, sessionId) {
+  const session = chatKitStore.cancelSession(sessionId);
+  if (!session) {
+    sendError(res, 404, `ChatKit session not found: ${sessionId}`, {
+      code: "chatkit_session_not_found",
+      param: "session_id",
+    });
+    return;
+  }
+  sendJson(res, 200, session);
+}
+
+function handleChatKitThreadsList(res, chatKitStore, url) {
+  const user = url.searchParams.get("user");
+  const threads = chatKitStore.listThreads()
+    .filter((thread) => !user || thread.user === user);
+  sendJson(res, 200, paginateChatKitThreads(threads, url));
+}
+
+async function handleChatKitThreadCreate(req, res, chatKitStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("ChatKit thread request body must be a JSON object", {
+      code: "invalid_chatkit_thread_request",
+    });
+  }
+  if (body.session_id && !chatKitStore.getSession(body.session_id)) {
+    throw requestError(`ChatKit session not found: ${body.session_id}`, {
+      status: 404,
+      code: "chatkit_session_not_found",
+      param: "session_id",
+    });
+  }
+  sendJson(res, 200, chatKitStore.createThread(body));
+}
+
+function handleChatKitThreadGet(res, chatKitStore, threadId) {
+  const thread = chatKitStore.getThread(threadId);
+  if (!thread) {
+    sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
+      code: "chatkit_thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, thread);
+}
+
+async function handleChatKitThreadUpdate(req, res, chatKitStore, threadId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("ChatKit thread update body must be a JSON object", {
+      code: "invalid_chatkit_thread_request",
+    });
+  }
+  const thread = chatKitStore.updateThread(threadId, body);
+  if (!thread) {
+    sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
+      code: "chatkit_thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, thread);
+}
+
+function handleChatKitThreadDelete(res, chatKitStore, threadId) {
+  const deleted = chatKitStore.deleteThread(threadId);
+  if (!deleted) {
+    sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
+      code: "chatkit_thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
+}
+
+function handleChatKitThreadItemsList(res, chatKitStore, threadId, url) {
+  const items = chatKitStore.listItems(threadId);
+  if (!items) {
+    sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
+      code: "chatkit_thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  sendJson(res, 200, paginateList(items, url));
+}
+
+async function handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("ChatKit thread item request body must be a JSON object", {
+      code: "invalid_chatkit_thread_item_request",
+    });
+  }
+  const created = chatKitStore.createItems(threadId, body);
+  if (!created) {
+    sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
+      code: "chatkit_thread_not_found",
+      param: "thread_id",
+    });
+    return;
+  }
+  if (Array.isArray(body.items)) {
+    sendJson(res, 200, paginateList(created, new URL("http://local/?limit=100")));
+    return;
+  }
+  sendJson(res, 200, created[0]);
+}
+
 function pythonGraderOptions(config) {
   return {
     provider: config.pythonGraderProvider,
@@ -8949,6 +9085,12 @@ function isInputImageItem(value) {
 
 function paginateInputItems(items, url) {
   return paginateList(items, url);
+}
+
+function paginateChatKitThreads(items, url) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", "desc");
+  return paginateList(items, localUrl);
 }
 
 function paginateList(items, url) {
@@ -11217,6 +11359,10 @@ function createServer(config = loadConfig()) {
     dir: config.assistantStateDir || path.join(config.stateDir || process.cwd(), "local-assistants"),
     maxRecords: config.assistantMaxRecords,
   });
+  const chatKitStore = config.chatKitStore || new FileChatKitStore({
+    dir: config.chatKitStateDir || path.join(config.stateDir || process.cwd(), "local-chatkit"),
+    maxRecords: config.chatKitMaxRecords,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -11273,6 +11419,58 @@ function createServer(config = loadConfig()) {
       if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/run") {
         await handleGraderRun(req, res, config);
         return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/chatkit/sessions") {
+        await handleChatKitSessionCreate(req, res, chatKitStore);
+        return;
+      }
+
+      const chatKitSessionCancelRoute = url.pathname.match(/^\/v1\/chatkit\/sessions\/([^/]+)\/cancel$/);
+      if (chatKitSessionCancelRoute && req.method === "POST") {
+        handleChatKitSessionCancel(res, chatKitStore, decodeURIComponent(chatKitSessionCancelRoute[1]));
+        return;
+      }
+
+      if (url.pathname === "/v1/chatkit/threads") {
+        if (req.method === "GET") {
+          handleChatKitThreadsList(res, chatKitStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleChatKitThreadCreate(req, res, chatKitStore);
+          return;
+        }
+      }
+
+      const chatKitThreadItemsRoute = url.pathname.match(/^\/v1\/chatkit\/threads\/([^/]+)\/items$/);
+      if (chatKitThreadItemsRoute) {
+        const threadId = decodeURIComponent(chatKitThreadItemsRoute[1]);
+        if (req.method === "GET") {
+          handleChatKitThreadItemsList(res, chatKitStore, threadId, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId);
+          return;
+        }
+      }
+
+      const chatKitThreadRoute = url.pathname.match(/^\/v1\/chatkit\/threads\/([^/]+)$/);
+      if (chatKitThreadRoute) {
+        const threadId = decodeURIComponent(chatKitThreadRoute[1]);
+        if (req.method === "GET") {
+          handleChatKitThreadGet(res, chatKitStore, threadId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleChatKitThreadUpdate(req, res, chatKitStore, threadId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleChatKitThreadDelete(res, chatKitStore, threadId);
+          return;
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/v1/audio/speech") {
