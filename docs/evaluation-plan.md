@@ -42,8 +42,8 @@ Codex/OpenAI Responses behavior.
   unit and mock-provider tests must map Responses `input_audio` into Chat
   `input_audio` content parts, preserve `message.audio` and streaming
   `delta.audio` into Responses output, metadata, and replay, while live
-  DeepSeek runs only verify that text-only providers remain stable when audio
-  request fields are filtered.
+  DeepSeek runs verify that text-only providers remain stable when audio
+  request fields are filtered or rewritten to safe text markers.
 - Treat request-based Audio APIs as bridge-owned protocol coverage: unit tests
   must exercise direct speech bytes, multipart and JSON/base64 transcription
   and translation, transcription SSE, custom voice consent/voice metadata
@@ -87,6 +87,12 @@ safe text markers for text-only providers such as DeepSeek, that data URLs are
 not copied into the upstream prompt, and that
 `metadata.compatibility.chat_passthrough.chat_image_inputs` records the
 provider mode and aggregate image-part counts.
+Direct Chat audio-content coverage verifies that `/v1/chat/completions`
+requests with `messages[].content[]` Chat `input_audio` parts are rewritten to
+safe text markers for text-only providers such as DeepSeek, that base64 audio
+bytes are not copied into the upstream prompt, and that
+`metadata.compatibility.chat_passthrough.chat_audio_inputs` records the
+provider mode and aggregate audio-part counts.
 Bridge-regression live cases and unit/mock-provider coverage also check local
 Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
 vector-store resources, injects local retrieval evidence, persists a

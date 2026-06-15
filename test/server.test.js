@@ -15045,6 +15045,86 @@ test("POST /v1/chat/completions falls back to text markers for direct Chat image
   }, { chatImageInputMode: "text" });
 });
 
+test("POST /v1/chat/completions falls back to text markers for direct Chat audio inputs", async () => {
+  const audioBase64 = "UklGRg==";
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.store, true);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user"]);
+    assert.equal(typeof call.body.messages[0].content, "string");
+    assert.match(call.body.messages[0].content, /Inspect direct Chat audio markers\./);
+    assert.match(call.body.messages[0].content, /\[audio:wav:tone\.wav\]/);
+    assert.match(call.body.messages[0].content, /spoken transcript/);
+    assert.match(call.body.messages[0].content, /\[audio:mp3:clip\.mp3\]/);
+    assert.doesNotMatch(call.body.messages[0].content, new RegExp(audioBase64));
+    assert.doesNotMatch(call.body.messages[0].content, /input_audio/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_direct_audio_text_fallback",
+      object: "chat.completion",
+      created: 1700000412,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-audio-fallback-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 13, completion_tokens: 4, total_tokens: 17 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-audio-fallback" },
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Inspect direct Chat audio markers." },
+            {
+              type: "input_audio",
+              input_audio: {
+                data: audioBase64,
+                format: "wav",
+                filename: "tone.wav",
+                transcript: "spoken transcript",
+              },
+            },
+            {
+              type: "audio",
+              data: audioBase64,
+              format: "mp3",
+              filename: "clip.mp3",
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-audio-fallback-ok");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_audio_inputs.provider, "text_fallback");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_audio_inputs.mode, "text");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_audio_inputs.audio_part_count, 2);
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_audio_inputs.inline_audio_count, 2);
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_audio_inputs.transcript_count, 1);
+    assert.equal(requests.length, 1);
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/${json.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.chat_audio_inputs.audio_part_count, 2);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+    assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "input_audio", "audio"]);
+  }, { chatAudioInputMode: "text" });
+});
+
 test("POST /v1/chat/completions streams with direct Chat image text fallback", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, true);
@@ -17128,12 +17208,14 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousChatCustomTools = process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   const previousStreamOptionFields = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   const previousChatImageInputMode = process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
+  const previousChatAudioInputMode = process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
+  delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
@@ -17142,6 +17224,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(deepseekConfig.forwardChatCustomTools, false);
     assert.deepEqual(deepseekConfig.streamOptionFields, ["include_usage"]);
     assert.equal(deepseekConfig.chatImageInputMode, "text");
+    assert.equal(deepseekConfig.chatAudioInputMode, "text");
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
@@ -17150,12 +17233,19 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(openaiCompatibleConfig.forwardChatCustomTools, true);
     assert.equal(openaiCompatibleConfig.streamOptionFields, null);
     assert.equal(openaiCompatibleConfig.chatImageInputMode, "vision");
+    assert.equal(openaiCompatibleConfig.chatAudioInputMode, "audio");
 
     process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = "vision";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatImageInputMode, "vision");
 
     process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = "text";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatImageInputMode, "text");
+
+    process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = "audio";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatAudioInputMode, "audio");
+
+    process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = "text";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatAudioInputMode, "text");
 
     process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields, null);
@@ -17178,6 +17268,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = previousStreamOptionFields;
     if (previousChatImageInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
     else process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = previousChatImageInputMode;
+    if (previousChatAudioInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
+    else process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = previousChatAudioInputMode;
   }
 });
 

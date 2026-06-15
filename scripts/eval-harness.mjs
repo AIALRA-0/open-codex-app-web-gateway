@@ -2122,6 +2122,36 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.chat_image_inputs?.data_url_image_count >= 1,
       },
       {
+        id: "chat-audio-content",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          store: true,
+          metadata: { suite: "chat-audio-content" },
+          thinking: { type: "disabled" },
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Return the exact marker chat-audio-live-ok and no extra words." },
+              {
+                type: "input_audio",
+                input_audio: {
+                  data: tinyAudioBase64,
+                  format: "wav",
+                  filename: "eval-audio.wav",
+                  transcript: "synthetic test audio",
+                },
+              },
+            ],
+          }],
+          max_tokens: 128,
+        },
+        check: ({ json, text }) => /chat-audio-live-ok/i.test(text)
+          && json.metadata?.compatibility?.chat_passthrough?.chat_audio_inputs?.provider === "text_fallback"
+          && json.metadata?.compatibility?.chat_passthrough?.chat_audio_inputs?.audio_part_count >= 1
+          && json.metadata?.compatibility?.chat_passthrough?.chat_audio_inputs?.inline_audio_count >= 1,
+      },
+      {
         id: "chat-developer-compat",
         mode: "chat",
         request: {

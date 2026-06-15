@@ -1,5 +1,28 @@
 # Audit Log
 
+## 2026-06-15 Direct Chat Audio Input Fallback
+
+- Extended provider-aware audio input handling to direct
+  `POST /v1/chat/completions` passthrough requests. OpenAI's Chat create
+  reference notes that `messages` can include text, image, and audio
+  modalities, with model-dependent support.
+- Added `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE=auto|audio|text`:
+  - DeepSeek defaults to `text`, converting Chat `input_audio` / compatible
+    `audio` content parts to safe `[audio:format:hint]` markers before the
+    upstream provider call;
+  - OpenAI-compatible audio providers default to `audio`, preserving native
+    Chat audio content parts.
+- Direct Chat compatibility metadata now records
+  `metadata.compatibility.chat_passthrough.chat_audio_inputs` with provider
+  mode, message count, audio part count, inline-audio count, transcript count,
+  and text part count.
+- Stored Chat completion messages continue to preserve the caller's original
+  content parts for local lifecycle retrieval; the transformed text prompt is
+  only used for the upstream provider request.
+- Security boundary: base64 audio payloads are not embedded into text fallback
+  prompts or compatibility metadata, and no provider credentials were written
+  to docs, tests, or committed files.
+
 ## 2026-06-15 Direct Chat Image Input Fallback
 
 - Extended provider-aware image input handling to direct

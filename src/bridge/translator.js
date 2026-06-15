@@ -54,6 +54,8 @@ function normalizeContentParts(content, role = "user", options = {}) {
   const parts = [];
   const textFallback = [];
   const imageInputMode = normalizeChatImageInputModeOption(options);
+  const audioInputMode = normalizeChatAudioInputModeOption(options);
+  const nativeTextParts = role === "user" && imageInputMode !== "text" && audioInputMode !== "text";
 
   for (const part of content) {
     if (!isPlainObject(part)) {
@@ -63,7 +65,7 @@ function normalizeContentParts(content, role = "user", options = {}) {
 
     if (part.type === "input_text" || part.type === "output_text" || part.type === "text") {
       const text = stringifyContent(part.text ?? part.content ?? "");
-      if (role === "user" && imageInputMode !== "text") parts.push({ type: "text", text });
+      if (nativeTextParts) parts.push({ type: "text", text });
       else textFallback.push(text);
       continue;
     }
@@ -80,7 +82,7 @@ function normalizeContentParts(content, role = "user", options = {}) {
 
     if (part.type === "input_audio" || part.type === "audio") {
       const audio = normalizeInputAudioContentPart(part);
-      if (role === "user" && audio) {
+      if (role === "user" && audio && audioInputMode !== "text") {
         parts.push(audio);
       } else {
         textFallback.push(inputAudioFallbackText(part, audio));
@@ -115,6 +117,12 @@ function normalizeChatImageInputModeOption(options = {}) {
   const value = options.chatImageInputMode ?? options.imageInputMode;
   const normalized = String(value || "vision").trim().toLowerCase();
   return normalized === "text" ? "text" : "vision";
+}
+
+function normalizeChatAudioInputModeOption(options = {}) {
+  const value = options.chatAudioInputMode ?? options.audioInputMode;
+  const normalized = String(value || "audio").trim().toLowerCase();
+  return normalized === "text" ? "text" : "audio";
 }
 
 function normalizeInputImageContentPart(part) {
@@ -510,6 +518,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const streamOptionsCompatibility = mapStreamOptions(request, chat, options);
   const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
   const chatImageInputCompatibility = mapChatImageInputCompatibility(request, options);
+  const chatAudioInputCompatibility = mapChatAudioInputCompatibility(request, options);
 
   const logprobsRequested = shouldRequestChatLogprobs(request);
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
@@ -557,6 +566,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
       ...(chatImageInputCompatibility ? { chat_image_inputs: chatImageInputCompatibility } : {}),
+      ...(chatAudioInputCompatibility ? { chat_audio_inputs: chatAudioInputCompatibility } : {}),
       ...(promptCompatibility ? { prompt_template: promptCompatibility } : {}),
       ...(maxTokensCompatibility || {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
@@ -583,6 +593,28 @@ function countInputImageParts(value) {
   if (!isPlainObject(value)) return 0;
   let count = value.type === "input_image" || value.type === "image_url" ? 1 : 0;
   if (Array.isArray(value.content)) count += countInputImageParts(value.content);
+  return count;
+}
+
+function mapChatAudioInputCompatibility(request, options = {}) {
+  const audioPartCount = countInputAudioParts(request?.input);
+  if (!audioPartCount) return null;
+  const mode = normalizeChatAudioInputModeOption(options);
+  return {
+    provider: mode === "text" ? "text_fallback" : "chat_content_parts",
+    mode,
+    audio_part_count: audioPartCount,
+    reason: mode === "text"
+      ? "provider_without_chat_audio_content_parts"
+      : "provider_accepts_chat_audio_content_parts",
+  };
+}
+
+function countInputAudioParts(value) {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countInputAudioParts(item), 0);
+  if (!isPlainObject(value)) return 0;
+  let count = value.type === "input_audio" || value.type === "audio" ? 1 : 0;
+  if (Array.isArray(value.content)) count += countInputAudioParts(value.content);
   return count;
 }
 

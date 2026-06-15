@@ -111,6 +111,40 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
   }]);
 });
 
+test("falls back to text markers for user audio input when Chat audio is disabled", () => {
+  const audioBase64 = "UklGRg==";
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-chat",
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: "Describe the attached sound." },
+        {
+          type: "input_audio",
+          input_audio: {
+            data: audioBase64,
+            format: "wav",
+            filename: "tone.wav",
+            transcript: "short tone",
+          },
+        },
+      ],
+    }],
+  }, [], { chatAudioInputMode: "text" });
+
+  assert.equal(typeof chat.messages[0].content, "string");
+  assert.match(chat.messages[0].content, /Describe the attached sound\./);
+  assert.match(chat.messages[0].content, /\[audio:wav:tone\.wav\]/);
+  assert.match(chat.messages[0].content, /short tone/);
+  assert.doesNotMatch(chat.messages[0].content, new RegExp(audioBase64));
+  assert.deepEqual(compatibility.chat_audio_inputs, {
+    provider: "text_fallback",
+    mode: "text",
+    audio_part_count: 1,
+    reason: "provider_without_chat_audio_content_parts",
+  });
+});
+
 test("maps image detail and base64 image data to Chat image content parts", () => {
   const messages = responseInputToChatMessages([
     {

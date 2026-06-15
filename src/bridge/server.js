@@ -238,6 +238,15 @@ function normalizeChatImageInputMode(value, deepseekProvider = false) {
   return fallback;
 }
 
+function normalizeChatAudioInputMode(value, deepseekProvider = false) {
+  const fallback = deepseekProvider ? "text" : "audio";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return fallback;
+  if (["text", "fallback", "marker", "markers", "disabled"].includes(normalized)) return "text";
+  if (["audio", "native", "content_parts", "content-parts", "multimodal"].includes(normalized)) return "audio";
+  return fallback;
+}
+
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
   const imageGenerationApiKeyEnv = process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV || "OPENAI_API_KEY";
@@ -248,6 +257,12 @@ function loadConfig(overrides = {}) {
   if (Object.prototype.hasOwnProperty.call(normalizedOverrides, "chatImageInputMode")) {
     normalizedOverrides.chatImageInputMode = normalizeChatImageInputMode(
       normalizedOverrides.chatImageInputMode,
+      deepseekProvider,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(normalizedOverrides, "chatAudioInputMode")) {
+    normalizedOverrides.chatAudioInputMode = normalizeChatAudioInputMode(
+      normalizedOverrides.chatAudioInputMode,
       deepseekProvider,
     );
   }
@@ -326,6 +341,7 @@ function loadConfig(overrides = {}) {
     inputImageMaxImages: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES", 32, 1, 1500),
     inputImageMaxBytes: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES", 4 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     chatImageInputMode: normalizeChatImageInputMode(process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE, deepseekProvider),
+    chatAudioInputMode: normalizeChatAudioInputMode(process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE, deepseekProvider),
     webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -4061,8 +4077,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
   if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
 
-  const imageInputs = normalizeChatPassthroughImageInputs(upstreamBody, config);
-  if (imageInputs) compatibility.chat_image_inputs = imageInputs;
+  const contentInputs = normalizeChatPassthroughContentInputs(upstreamBody, config);
+  if (contentInputs?.image) compatibility.chat_image_inputs = contentInputs.image;
+  if (contentInputs?.audio) compatibility.chat_audio_inputs = contentInputs.audio;
 
   const storedChatFields = filterChatPassthroughStoredFields(upstreamBody, config);
   if (storedChatFields) compatibility.stored_chat_fields = storedChatFields;
@@ -4082,13 +4099,17 @@ function chatPassthroughUpstreamBody(body, config) {
   };
 }
 
-function normalizeChatPassthroughImageInputs(upstreamBody, config = {}) {
+function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {
   if (!Array.isArray(upstreamBody.messages)) return null;
-  const stats = chatPassthroughImageInputStats(upstreamBody.messages);
-  if (!stats.image_part_count) return null;
+  const imageStats = chatPassthroughImageInputStats(upstreamBody.messages);
+  const audioStats = chatPassthroughAudioInputStats(upstreamBody.messages);
+  if (!imageStats.image_part_count && !audioStats.audio_part_count) return null;
 
-  const mode = String(config.chatImageInputMode || "vision").toLowerCase() === "text" ? "text" : "vision";
-  if (mode !== "text") return null;
+  const imageMode = String(config.chatImageInputMode || "vision").toLowerCase() === "text" ? "text" : "vision";
+  const audioMode = String(config.chatAudioInputMode || "audio").toLowerCase() === "text" ? "text" : "audio";
+  const shouldNormalize = (imageStats.image_part_count && imageMode === "text")
+    || (audioStats.audio_part_count && audioMode === "text");
+  if (!shouldNormalize) return null;
 
   upstreamBody.messages = upstreamBody.messages.map((message) => {
     if (!isPlainObject(message) || !Array.isArray(message.content)) return message;
@@ -4099,10 +4120,22 @@ function normalizeChatPassthroughImageInputs(upstreamBody, config = {}) {
   });
 
   return {
-    provider: "text_fallback",
-    mode,
-    ...stats,
-    reason: "provider_without_chat_vision_content_parts",
+    ...(imageStats.image_part_count && imageMode === "text" ? {
+      image: {
+        provider: "text_fallback",
+        mode: imageMode,
+        ...imageStats,
+        reason: "provider_without_chat_vision_content_parts",
+      },
+    } : {}),
+    ...(audioStats.audio_part_count && audioMode === "text" ? {
+      audio: {
+        provider: "text_fallback",
+        mode: audioMode,
+        ...audioStats,
+        reason: "provider_without_chat_audio_content_parts",
+      },
+    } : {}),
   };
 }
 
@@ -4126,6 +4159,36 @@ function chatPassthroughImageInputStats(messages = []) {
       if (String(imageUrl).startsWith("data:")) stats.data_url_image_count += 1;
     }
     if (messageHasImage) stats.message_count += 1;
+  }
+  return {
+    ...stats,
+  };
+}
+
+function chatPassthroughAudioInputStats(messages = []) {
+  const stats = {
+    message_count: 0,
+    audio_part_count: 0,
+    inline_audio_count: 0,
+    transcript_count: 0,
+    text_part_count: 0,
+  };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const parts = Array.isArray(message?.content) ? message.content : [];
+    let messageHasAudio = false;
+    for (const part of parts) {
+      if (!isPlainObject(part)) continue;
+      if (part.type === "text" || part.type === "input_text") stats.text_part_count += 1;
+      if (part.type !== "input_audio" && part.type !== "audio") continue;
+      stats.audio_part_count += 1;
+      messageHasAudio = true;
+      const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+      if (source.data != null || source.audio_data != null || source.file_data != null) {
+        stats.inline_audio_count += 1;
+      }
+      if (source.transcript || part.transcript) stats.transcript_count += 1;
+    }
+    if (messageHasAudio) stats.message_count += 1;
   }
   return stats;
 }
