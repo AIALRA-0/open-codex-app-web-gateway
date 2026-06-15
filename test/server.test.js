@@ -7,6 +7,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const zlib = require("node:zlib");
+const crypto = require("node:crypto");
 const { createServer, loadConfig } = require("../src/bridge/server");
 const { FileResponseStore } = require("../src/bridge/store");
 const { unzipFiles } = require("../src/bridge/local_skills");
@@ -24,6 +25,10 @@ function close(server) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sha256Hex(value) {
+  return crypto.createHash("sha256").update(Buffer.isBuffer(value) ? value : Buffer.from(String(value), "utf8")).digest("hex");
 }
 
 function updateVectorStoreTimestampsForTest(stateDir, storeId, { lastActiveAt, expiresAt }) {
@@ -8834,6 +8839,9 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     const partAContent = "Upload fixture says ";
     const partBContent = "upload-input-ok.";
     const fullContent = `${partAContent}${partBContent}`;
+    const partASha256 = sha256Hex(partAContent);
+    const partBSha256 = sha256Hex(partBContent);
+    const fullSha256 = sha256Hex(fullContent);
 
     const createdUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
       method: "POST",
@@ -8857,6 +8865,7 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         data_base64: Buffer.from(partBContent, "utf8").toString("base64"),
+        sha256: partBSha256,
       }),
     });
     assert.equal(partBResponse.status, 200);
@@ -8866,7 +8875,7 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
 
     const partAResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
       method: "POST",
-      headers: { "content-type": "text/plain" },
+      headers: { "content-type": "text/plain", "x-content-sha256": partASha256 },
       body: partAContent,
     });
     assert.equal(partAResponse.status, 200);
@@ -8875,7 +8884,7 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     const completedResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ part_ids: [partA.id, partB.id] }),
+      body: JSON.stringify({ part_ids: [partA.id, partB.id], sha256: fullSha256 }),
     });
     assert.equal(completedResponse.status, 200);
     const completed = await completedResponse.json();
@@ -8883,6 +8892,9 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     assert.equal(completed.file.object, "file");
     assert.equal(completed.file.filename, "upload-fixture.txt");
     assert.equal(completed.file.purpose, "user_data");
+    assert.equal(completed.file.metadata.upload_checksum_algorithm, "sha256");
+    assert.equal(completed.file.metadata.upload_sha256, fullSha256);
+    assert.equal(completed.file.metadata.upload_part_count, "2");
 
     const contentResponse = await fetch(`${baseUrl}/v1/files/${completed.file.id}/content`);
     assert.equal(contentResponse.status, 200);
@@ -8907,6 +8919,14 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     const json = await response.json();
     assert.equal(json.output[0].content[0].text, "upload-input-ok");
     assert.equal(json.metadata.compatibility.local_input_files.resolved_count, 1);
+
+    const afterCompletePart = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "late",
+    });
+    assert.equal(afterCompletePart.status, 400);
+    assert.equal((await afterCompletePart.json()).error.code, "upload_already_completed");
 
     const cancelUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
       method: "POST",
@@ -8956,6 +8976,53 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     });
     assert.equal(mismatchComplete.status, 400);
     assert.equal((await mismatchComplete.json()).error.code, "upload_bytes_mismatch");
+
+    const checksumMismatchUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "checksum-mismatch.txt",
+        purpose: "assistants",
+        bytes: 1,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(checksumMismatchUploadResponse.status, 200);
+    const checksumMismatchUpload = await checksumMismatchUploadResponse.json();
+    const checksumMismatchPart = await fetch(`${baseUrl}/v1/uploads/${checksumMismatchUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ data: "x", sha256: "0".repeat(64) }),
+    });
+    assert.equal(checksumMismatchPart.status, 400);
+    assert.equal((await checksumMismatchPart.json()).error.code, "upload_part_checksum_mismatch");
+
+    const completeChecksumUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "complete-checksum-mismatch.txt",
+        purpose: "assistants",
+        bytes: 1,
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(completeChecksumUploadResponse.status, 200);
+    const completeChecksumUpload = await completeChecksumUploadResponse.json();
+    const completeChecksumPartResponse = await fetch(`${baseUrl}/v1/uploads/${completeChecksumUpload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: "x",
+    });
+    assert.equal(completeChecksumPartResponse.status, 200);
+    const completeChecksumPart = await completeChecksumPartResponse.json();
+    const completeChecksumMismatch = await fetch(`${baseUrl}/v1/uploads/${completeChecksumUpload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [completeChecksumPart.id], sha256: "0".repeat(64) }),
+    });
+    assert.equal(completeChecksumMismatch.status, 400);
+    assert.equal((await completeChecksumMismatch.json()).error.code, "upload_checksum_mismatch");
   });
 });
 

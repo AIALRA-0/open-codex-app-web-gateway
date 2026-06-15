@@ -2409,8 +2409,10 @@ async function handleUploadCreate(req, res, uploadStore) {
 }
 
 async function handleUploadPartCreate(req, res, config, uploadStore, uploadId) {
-  const content = await readUploadPartRequest(req, config);
-  sendJson(res, 200, uploadStore.addPart(uploadId, content));
+  const part = await readUploadPartRequest(req, config);
+  sendJson(res, 200, uploadStore.addPart(uploadId, part.content, {
+    sha256: part.sha256,
+  }));
 }
 
 async function handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId) {
@@ -2829,24 +2831,47 @@ async function readUploadPartRequest(req, config) {
   const contentType = req.headers["content-type"] || "";
   const maxPartBytes = config.uploadMaxPartBytes || OFFICIAL_UPLOAD_PART_MAX_BYTES;
   const maxBodyBytes = Math.ceil(maxPartBytes * 4 / 3) + 1024 * 1024;
+  const headerSha256 = uploadPartSha256FromHeaders(req.headers);
   if (contentType.includes("application/json")) {
     const raw = await readRawBody(req, maxBodyBytes);
     const body = raw.length ? JSON.parse(raw.toString("utf8")) : {};
-    if (typeof body.data_base64 === "string") return decodeBase64Payload(body.data_base64);
-    if (typeof body.data === "string") return Buffer.from(body.data, "utf8");
-    if (typeof body.content === "string") return Buffer.from(body.content, "utf8");
-    return Buffer.alloc(0);
+    const sha256 = uploadPartSha256FromBody(body) || headerSha256;
+    if (typeof body.data_base64 === "string") return { content: decodeBase64Payload(body.data_base64), sha256 };
+    if (typeof body.data === "string") return { content: Buffer.from(body.data, "utf8"), sha256 };
+    if (typeof body.content === "string") return { content: Buffer.from(body.content, "utf8"), sha256 };
+    return { content: Buffer.alloc(0), sha256 };
   }
 
   if (contentType.includes("multipart/form-data")) {
     const form = parseMultipartFormBinary(await readRawBody(req, maxBodyBytes), contentType);
+    const sha256 = form.fields.sha256
+      || form.fields.checksum_sha256
+      || form.fields.checksum
+      || headerSha256;
     const file = form.files.find((item) => item.name === "data") || form.files[0];
-    if (file) return file.content;
-    if (typeof form.fields.data === "string") return Buffer.from(form.fields.data, "utf8");
-    return Buffer.alloc(0);
+    if (file) return { content: file.content, sha256 };
+    if (typeof form.fields.data === "string") return { content: Buffer.from(form.fields.data, "utf8"), sha256 };
+    return { content: Buffer.alloc(0), sha256 };
   }
 
-  return readRawBody(req, maxPartBytes);
+  return { content: await readRawBody(req, maxPartBytes), sha256: headerSha256 };
+}
+
+function uploadPartSha256FromBody(body) {
+  if (!isPlainObject(body)) return "";
+  if (body.sha256 != null) return body.sha256;
+  if (body.checksum_sha256 != null) return body.checksum_sha256;
+  if (body.checksumSha256 != null) return body.checksumSha256;
+  if (isPlainObject(body.checksum)) return body.checksum.sha256 || body.checksum.value || "";
+  if (body.checksum != null) return body.checksum;
+  return "";
+}
+
+function uploadPartSha256FromHeaders(headers = {}) {
+  return headers["x-upload-part-sha256"]
+    || headers["x-content-sha256"]
+    || headers["content-sha256"]
+    || "";
 }
 
 function decodeBase64Payload(value) {

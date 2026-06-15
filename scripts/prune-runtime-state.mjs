@@ -124,6 +124,15 @@ function runtimeTargets({ root, maxAgeHoursOverride, maxFilesOverride, maxBytesO
       maxBytes: 1024 * 1024 * 1024,
     }),
     common({
+      id: "local-upload-workdirs",
+      path: path.join(stateDir, "local-uploads", "uploads"),
+      mode: "children",
+      include: (entry) => entry.isDirectory(),
+      maxAgeHours: 72,
+      maxFiles: 500,
+      maxBytes: 512 * 1024 * 1024,
+    }),
+    common({
       id: "local-chatkit-sessions",
       path: path.join(stateDir, "local-chatkit", "sessions"),
       mode: "children",

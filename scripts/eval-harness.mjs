@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from "node:fs";
 import http from "node:http";
+import crypto from "node:crypto";
 import { performance } from "node:perf_hooks";
 
 const args = parseArgs(process.argv.slice(2));
@@ -2436,6 +2437,9 @@ function buildSuites(defaultModel) {
         check: ({ json, text, upload, fileId }) => /upload-input-ok/i.test(text)
           && upload?.status === "completed"
           && upload?.file?.id === fileId
+          && upload?.file?.metadata?.upload_checksum_algorithm === "sha256"
+          && upload?.file?.metadata?.upload_sha256 === upload?.expected_sha256
+          && upload?.file?.metadata?.upload_part_count === "2"
           && json.metadata?.compatibility?.local_input_files?.resolved_count === 1
           && json.metadata?.compatibility?.local_input_files?.failed_count === 0,
       },
@@ -8436,6 +8440,7 @@ async function runUploadInputFileCase(testCase, context, started) {
     const splitAt = Math.max(1, Math.floor(contentBuffer.length / 2));
     const firstChunk = contentBuffer.subarray(0, splitAt);
     const secondChunk = contentBuffer.subarray(splitAt);
+    const contentSha256 = sha256Hex(contentBuffer);
     const uploadResponse = await postJson(`${baseUrl}/v1/uploads`, {
       filename: fixture.filename || "bridge-upload.txt",
       purpose: fixture.purpose || "user_data",
@@ -8455,6 +8460,7 @@ async function runUploadInputFileCase(testCase, context, started) {
 
     const secondPartResponse = await postJson(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
       data_base64: secondChunk.toString("base64"),
+      sha256: sha256Hex(secondChunk),
     });
     const secondPartBody = await secondPartResponse.text();
     if (!secondPartResponse.ok) {
@@ -8471,6 +8477,7 @@ async function runUploadInputFileCase(testCase, context, started) {
       `${baseUrl}/v1/uploads/${upload.id}/parts`,
       firstChunk,
       fixture.mime_type || "application/octet-stream",
+      { "x-content-sha256": sha256Hex(firstChunk) },
     );
     const firstPartBody = await firstPartResponse.text();
     if (!firstPartResponse.ok) {
@@ -8485,6 +8492,7 @@ async function runUploadInputFileCase(testCase, context, started) {
 
     const completeResponse = await postJson(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
       part_ids: [firstPart.id, secondPart.id],
+      sha256: contentSha256,
     });
     const completeBody = await completeResponse.text();
     if (!completeResponse.ok) {
@@ -8496,6 +8504,7 @@ async function runUploadInputFileCase(testCase, context, started) {
       });
     }
     const completed = JSON.parse(completeBody);
+    completed.expected_sha256 = contentSha256;
     file = completed.file || null;
 
     const request = resolveRequest(testCase.request, { ...context, fileId: file?.id, upload: completed });
@@ -8526,6 +8535,10 @@ async function runUploadInputFileCase(testCase, context, started) {
   } finally {
     if (file?.id) await deleteJson(`${baseUrl}/v1/files/${file.id}`);
   }
+}
+
+function sha256Hex(content) {
+  return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 async function runInputFileUrlCase(testCase, context, started) {
@@ -8806,13 +8819,13 @@ async function postJsonCapture(url, body) {
   };
 }
 
-async function postRaw(url, body, contentType = "application/octet-stream") {
+async function postRaw(url, body, contentType = "application/octet-stream", extraHeaders = {}) {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
   try {
     return await fetch(url, {
       method: "POST",
-      headers: { "content-type": contentType },
+      headers: { "content-type": contentType, ...extraHeaders },
       body,
       signal: controller.signal,
     });

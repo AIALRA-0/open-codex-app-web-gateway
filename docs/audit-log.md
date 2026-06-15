@@ -1,5 +1,71 @@
 # Audit Log
 
+## 2026-06-16 Uploads Checksum And Runtime Prune Coverage
+
+- Tightened local Uploads API compatibility around the official Uploads
+  lifecycle. OpenAI's Uploads reference states that Uploads are intermediate
+  objects, accept Parts, are capped at 8 GB, expire after one hour, complete
+  into regular Files, use ordered `part_ids`, require final uploaded bytes to
+  match the original `bytes`, and disallow new Parts after completion.
+- Added local SHA-256 integrity handling without changing the OpenAI-style
+  public Upload object shape:
+  - Upload Part creation computes and stores an internal SHA-256 for each
+    chunk.
+  - JSON, multipart, and raw Part requests can optionally provide
+    `sha256`, `checksum_sha256`, `checksum`, `x-content-sha256`, or
+    `x-upload-part-sha256`; mismatches fail with
+    `upload_part_checksum_mismatch`.
+  - Upload completion computes the final ordered content SHA-256, can validate
+    a caller-provided checksum, and writes `upload_checksum_algorithm`,
+    `upload_sha256`, and `upload_part_count` into the nested File metadata for
+    local auditability.
+- Completed Uploads now have explicit regression coverage that no new Parts may
+  be added after completion, complementing the existing cancelled-upload block.
+- Added `local-upload-workdirs` to the runtime prune target list so temporary
+  Upload workdirs under `$CODEXCOMPAT_STATE_DIR/local-uploads/uploads` are
+  bounded by age, count, and byte caps.
+- Security/storage boundary: checksum data is derived from uploaded content and
+  no uploaded bytes, Authorization headers, provider credentials, or API keys
+  are written to Git-tracked files.
+- Validation:
+  - `node --check` passed for `src/bridge/local_uploads.js`,
+    `src/bridge/server.js`, `scripts/prune-runtime-state.mjs`,
+    `scripts/eval-harness.mjs`, `test/server.test.js`, and
+    `test/prune_runtime_state.test.js`.
+  - Uploads-targeted Node tests passed through the server suite (181/181 tests
+    in `test/server.test.js`), including checksum mismatch failures, completion
+    checksum validation, completed File checksum metadata, and the post-complete
+    Part rejection path.
+  - `node --test test/prune_runtime_state.test.js` passed 1/1 and verifies old
+    local Upload workdirs are pruned while fresh workdirs are preserved.
+  - Full `npm test` passed 221/221 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`; it returned `active`, and
+    local `/healthz` returned `ok:true` with DeepSeek provider base
+    `https://api.deepseek.com` and default model `deepseek-v4-pro`.
+  - Deployed direct Uploads runtime validation passed without a model call:
+    created an Upload, added two checksum-verified Parts, completed with a
+    final checksum, retrieved the resulting File content, verified
+    `upload_sha256`, `upload_checksum_algorithm`, and `upload_part_count`
+    metadata, and confirmed a later Part request returns
+    `upload_already_completed`.
+  - Live model-gated checks were attempted but are currently blocked by the
+    upstream DeepSeek account returning HTTP 402 `Insufficient Balance` after
+    local Upload/File creation. This affected `responses-upload-input-file`,
+    `npm run smoke:bridge`, and `npm run eval:protocol`; rerun these after
+    replenishing the provider balance or rotating to a funded key.
+  - `npm run prune:runtime -- --dry-run` reported 15 runtime targets, 204
+    selected entries, 346,498 bytes selected, and no errors; the new
+    `local-upload-workdirs` target selected 203 old upload dirs totaling
+    262,600 bytes.
+  - Public HTTPS entrypoint returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - Storage check: repo path 111 MB,
+    `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, and root filesystem had 7.4 GB
+    available.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+
 ## 2026-06-16 Direct Chat File Input Fallback
 
 - Extended provider-aware file input handling to direct

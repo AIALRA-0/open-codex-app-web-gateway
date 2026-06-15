@@ -2,6 +2,7 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
+const crypto = require("node:crypto");
 const { prefixedId } = require("./translator");
 
 const OFFICIAL_UPLOAD_MAX_BYTES = 8 * 1024 * 1024 * 1024;
@@ -45,13 +46,18 @@ class LocalUploadStore {
     return publicUpload(upload);
   }
 
-  addPart(uploadId, data) {
+  addPart(uploadId, data, options = {}) {
     const record = this.requireUploadRecord(uploadId);
     const upload = this.requirePendingUpload(record.upload);
     const content = Buffer.isBuffer(data) ? data : Buffer.from(String(data || ""), "utf8");
     if (!content.length) throw httpError("part data is required", 400, "missing_part_data", "data");
     if (content.length > OFFICIAL_UPLOAD_PART_MAX_BYTES || content.length > this.maxPartBytes) {
       throw httpError(`part exceeds local limit of ${this.maxPartBytes} bytes`, 413, "upload_part_too_large", "data");
+    }
+    const checksum = sha256Hex(content);
+    const expectedSha256 = expectedSha256FromOptions(options);
+    if (expectedSha256 && expectedSha256 !== checksum) {
+      throw httpError("upload part checksum does not match content", 400, "upload_part_checksum_mismatch", "sha256");
     }
     const totalPartBytes = Number(record.total_part_bytes || 0);
     if (totalPartBytes + content.length > upload.bytes) {
@@ -66,11 +72,21 @@ class LocalUploadStore {
       bytes: content.length,
     };
     this.writeBuffer(this.partDataPath(upload.id, part.id), content);
-    this.writeJson(this.partJsonPath(upload.id, part.id), { part });
+    this.writeJson(this.partJsonPath(upload.id, part.id), {
+      part,
+      checksum: {
+        type: "sha256",
+        value: checksum,
+      },
+    });
     this.writeJson(this.uploadJsonPath(upload.id), {
       ...record,
       upload,
       part_ids: [...(record.part_ids || []), part.id],
+      part_checksums: {
+        ...(record.part_checksums || {}),
+        [part.id]: checksum,
+      },
       total_part_bytes: totalPartBytes + content.length,
     });
     return part;
@@ -88,13 +104,20 @@ class LocalUploadStore {
 
     const seen = new Set();
     const buffers = [];
+    const orderedPartChecksums = [];
     for (const rawPartId of body.part_ids) {
       const partId = safeId(rawPartId);
       if (seen.has(partId)) throw httpError(`duplicate part_id: ${partId}`, 400, "duplicate_part_id", "part_ids");
       seen.add(partId);
-      const part = this.readJson(this.partJsonPath(upload.id, partId))?.part;
+      const partRecord = this.readJson(this.partJsonPath(upload.id, partId));
+      const part = partRecord?.part;
       if (!part) throw httpError(`upload part not found: ${partId}`, 404, "upload_part_not_found", "part_ids");
-      buffers.push(this.readBuffer(this.partDataPath(upload.id, partId)));
+      const partContent = this.readBuffer(this.partDataPath(upload.id, partId));
+      buffers.push(partContent);
+      orderedPartChecksums.push({
+        id: partId,
+        sha256: partRecord?.checksum?.value || sha256Hex(partContent),
+      });
     }
 
     const content = Buffer.concat(buffers);
@@ -106,6 +129,11 @@ class LocalUploadStore {
         "part_ids",
       );
     }
+    const checksum = sha256Hex(content);
+    const expectedSha256 = expectedSha256FromOptions(body);
+    if (expectedSha256 && expectedSha256 !== checksum) {
+      throw httpError("upload checksum does not match completed content", 400, "upload_checksum_mismatch", "sha256");
+    }
 
     const file = fileSearchStore.createFile({
       filename: upload.filename,
@@ -115,6 +143,9 @@ class LocalUploadStore {
       metadata: {
         upload_id: upload.id,
         mime_type: upload.mime_type,
+        upload_checksum_algorithm: "sha256",
+        upload_sha256: checksum,
+        upload_part_count: String(body.part_ids.length),
       },
     });
     const completed = {
@@ -126,6 +157,11 @@ class LocalUploadStore {
       ...record,
       upload: completed,
       file_id: file.id,
+      checksum: {
+        type: "sha256",
+        value: checksum,
+      },
+      completed_part_checksums: orderedPartChecksums,
     });
     return publicUpload(completed, file);
   }
@@ -276,6 +312,27 @@ function requireInteger(value, param) {
     throw httpError(`${param} must be an integer`, 400, "invalid_upload", param);
   }
   return parsed;
+}
+
+function expectedSha256FromOptions(options = {}) {
+  if (!isPlainObject(options)) return "";
+  const checksum = options.sha256
+    || options.checksum_sha256
+    || options.checksumSha256
+    || (isPlainObject(options.checksum) ? options.checksum.sha256 || options.checksum.value : options.checksum);
+  return normalizeSha256(checksum);
+}
+
+function normalizeSha256(value) {
+  if (value == null || value === "") return "";
+  const normalized = String(value).trim().toLowerCase();
+  const match = normalized.match(/^(?:sha256[:=])?([a-f0-9]{64})$/);
+  if (!match) throw httpError("sha256 checksum must be a 64 character hex string", 400, "invalid_upload_checksum", "sha256");
+  return match[1];
+}
+
+function sha256Hex(content) {
+  return crypto.createHash("sha256").update(content).digest("hex");
 }
 
 function httpError(message, status = 400, code = null, param = null) {
