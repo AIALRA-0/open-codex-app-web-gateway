@@ -10,6 +10,7 @@ const {
   FileChatKitStore,
   FileConversationStore,
   FileImageGenerationStore,
+  FileRealtimeStore,
   FileResponseStore,
 } = require("./store");
 const {
@@ -366,6 +367,8 @@ function loadConfig(overrides = {}) {
     videoGenerationDefaultSeconds: process.env.CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_SECONDS || "4",
     videoGenerationDefaultQuality: process.env.CODEXCOMPAT_VIDEO_GENERATION_DEFAULT_QUALITY || "standard",
     videoGenerationMaxInputBytes: numberFromEnv("CODEXCOMPAT_VIDEO_GENERATION_MAX_INPUT_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    realtimeStateDir: process.env.CODEXCOMPAT_REALTIME_STATE_DIR || path.join(stateDir, "local-realtime"),
+    realtimeMaxRecords: numberFromEnv("CODEXCOMPAT_REALTIME_MAX_RECORDS", 5000, 1, 100000),
     skillStateDir: process.env.CODEXCOMPAT_SKILL_STATE_DIR || path.join(stateDir, "local-skills"),
     skillMaxUploadBytes: numberFromEnv("CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES", 50 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     skillMaxFileCount: numberFromEnv("CODEXCOMPAT_SKILL_MAX_FILE_COUNT", 500, 1, 500),
@@ -8224,6 +8227,115 @@ async function handleGraderRun(req, res, config) {
   sendJson(res, 200, response);
 }
 
+async function handleRealtimeSessionCreate(req, res, realtimeStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Realtime session request body must be a JSON object", {
+      code: "invalid_realtime_session_request",
+    });
+  }
+  sendJson(res, 200, realtimeStore.createSession(body));
+}
+
+async function handleRealtimeClientSecretCreate(req, res, realtimeStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Realtime client secret request body must be a JSON object", {
+      code: "invalid_realtime_client_secret_request",
+    });
+  }
+  sendJson(res, 200, realtimeStore.createClientSecret(body));
+}
+
+async function handleRealtimeTranscriptionSessionCreate(req, res, realtimeStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Realtime transcription session request body must be a JSON object", {
+      code: "invalid_realtime_transcription_session_request",
+    });
+  }
+  sendJson(res, 200, realtimeStore.createTranscriptionSession(body));
+}
+
+async function handleRealtimeTranslationClientSecretCreate(req, res, realtimeStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Realtime translation client secret request body must be a JSON object", {
+      code: "invalid_realtime_translation_client_secret_request",
+    });
+  }
+  sendJson(res, 200, realtimeStore.createTranslationClientSecret(body));
+}
+
+async function handleRealtimeCallCreate(req, res, realtimeStore) {
+  const request = await readRealtimeCallRequest(req);
+  const call = realtimeStore.createCall(request);
+  res.writeHead(201, {
+    "content-type": "application/sdp",
+    "cache-control": "no-store",
+    location: `/v1/realtime/calls/${encodeURIComponent(call.id)}`,
+    "x-open-codex-realtime-call-id": call.id,
+  });
+  res.end(call.sdp_answer || "");
+}
+
+async function handleRealtimeCallAction(req, res, realtimeStore, callId, action) {
+  const body = await readOptionalJsonObject(req, `Realtime call ${action} request body must be a JSON object`);
+  const call = realtimeStore.updateCall(callId, action, body);
+  if (!call) {
+    sendError(res, 404, `Realtime call not found: ${callId}`, {
+      code: "realtime_call_not_found",
+      param: "call_id",
+    });
+    return;
+  }
+  sendJson(res, 200, call);
+}
+
+async function readOptionalJsonObject(req, message) {
+  const raw = await readBody(req);
+  if (!raw.trim()) return {};
+  const body = JSON.parse(raw);
+  if (!isPlainObject(body)) {
+    throw requestError(message, {
+      code: "invalid_realtime_call_request",
+    });
+  }
+  return body;
+}
+
+async function readRealtimeCallRequest(req) {
+  const contentType = String(req.headers["content-type"] || "");
+  if (/^multipart\/form-data\b/i.test(contentType)) {
+    const form = parseMultipartFormBinary(await readRawBody(req, 4 * 1024 * 1024), contentType);
+    const sdpFile = form.files.find((file) => file.name === "sdp") || form.files[0];
+    const session = parseRealtimeSessionField(form.fields.session);
+    return {
+      sdp: sdpFile ? sdpFile.content.toString("utf8") : String(form.fields.sdp || ""),
+      session,
+      client_secret: form.fields.client_secret,
+      metadata: parseRealtimeSessionField(form.fields.metadata),
+    };
+  }
+  if (/^application\/sdp\b/i.test(contentType)) {
+    return { sdp: await readBody(req, 4 * 1024 * 1024) };
+  }
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("Realtime call request body must be JSON, SDP, or multipart form data", {
+      code: "invalid_realtime_call_request",
+    });
+  }
+  return body;
+}
+
+function parseRealtimeSessionField(value) {
+  if (isPlainObject(value)) return value;
+  if (value == null || value === "") return {};
+  const parsed = parseJsonOrNull(String(value));
+  return isPlainObject(parsed) ? parsed : {};
+}
+
 async function handleChatKitSessionCreate(req, res, chatKitStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -11363,6 +11475,10 @@ function createServer(config = loadConfig()) {
     dir: config.chatKitStateDir || path.join(config.stateDir || process.cwd(), "local-chatkit"),
     maxRecords: config.chatKitMaxRecords,
   });
+  const realtimeStore = config.realtimeStore || new FileRealtimeStore({
+    dir: config.realtimeStateDir || path.join(config.stateDir || process.cwd(), "local-realtime"),
+    maxRecords: config.realtimeMaxRecords,
+  });
   const uploadStore = config.uploadStore || new LocalUploadStore(config);
   const containerStore = config.containerStore || new LocalContainerStore(config);
   const skillStore = config.skillStore || new LocalSkillStore(config);
@@ -11418,6 +11534,37 @@ function createServer(config = loadConfig()) {
 
       if (req.method === "POST" && url.pathname === "/v1/fine_tuning/alpha/graders/run") {
         await handleGraderRun(req, res, config);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/realtime/sessions") {
+        await handleRealtimeSessionCreate(req, res, realtimeStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/realtime/client_secrets") {
+        await handleRealtimeClientSecretCreate(req, res, realtimeStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/realtime/transcription_sessions") {
+        await handleRealtimeTranscriptionSessionCreate(req, res, realtimeStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/realtime/translations/client_secrets") {
+        await handleRealtimeTranslationClientSecretCreate(req, res, realtimeStore);
+        return;
+      }
+
+      if (req.method === "POST" && url.pathname === "/v1/realtime/calls") {
+        await handleRealtimeCallCreate(req, res, realtimeStore);
+        return;
+      }
+
+      const realtimeCallActionRoute = url.pathname.match(/^\/v1\/realtime\/calls\/([^/]+)\/(accept|reject|hangup|refer)$/);
+      if (realtimeCallActionRoute && req.method === "POST") {
+        await handleRealtimeCallAction(req, res, realtimeStore, decodeURIComponent(realtimeCallActionRoute[1]), realtimeCallActionRoute[2]);
         return;
       }
 

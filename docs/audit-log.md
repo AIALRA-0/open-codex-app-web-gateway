@@ -4369,6 +4369,98 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Realtime REST handshake compatibility
+
+- Used the official OpenAI Realtime guide, Realtime OpenAPI operations, and SIP
+  guide through the developer-docs MCP:
+  - `POST /v1/realtime/sessions`
+  - `POST /v1/realtime/client_secrets`
+  - `POST /v1/realtime/transcription_sessions`
+  - `POST /v1/realtime/translations/client_secrets`
+  - `POST /v1/realtime/calls`
+  - call control actions from the endpoint inventory and SIP guide:
+    `accept`, `reject`, `refer`, and `hangup`.
+- Added a local file-backed Realtime REST compatibility layer for Chat
+  Completions-only deployments:
+  - `FileRealtimeStore` persists generated sessions, client secrets, and call
+    records under `CODEXCOMPAT_REALTIME_STATE_DIR`, defaulting to
+    `$CODEXCOMPAT_STATE_DIR/local-realtime`;
+  - Realtime session creation returns a `realtime.session` object with model,
+    modalities, instructions, audio config, tools, metadata, compatibility
+    metadata, and a local `client_secret:{value,expires_at}`;
+  - Realtime client-secret creation returns `value:"ek_..."`, `expires_at`,
+    and the effective local session without exposing the deployment provider
+    key;
+  - transcription-session creation returns
+    `object:"realtime.transcription_session"` with transcription defaults and
+    a local ephemeral secret;
+  - translation client-secret creation returns a local `type:"translation"`
+    session and preserves translation model/output language fields;
+  - WebRTC call creation accepts official `application/sdp`, JSON, or
+    multipart `sdp` + `session` request shapes and returns
+    `201 application/sdp` with `Location:/v1/realtime/calls/{call_id}`;
+  - call control actions locally transition calls through accepted, rejected,
+    referred, and completed states.
+- Added storage controls:
+  - Realtime session files, client-secret files, and call files are now part of
+    `scripts/prune-runtime-state.mjs`;
+  - runtime files are written with restricted permissions and remain outside
+    git.
+- Added regression coverage:
+  - unit/mock-provider coverage proves Realtime lifecycle calls do not contact
+    the upstream model provider;
+  - live `bridge-regression` now includes `realtime-lifecycle`;
+  - compatibility and evaluation docs now describe covered endpoints, storage,
+    prune policy, generated local token handling, and remaining parity gaps.
+- Current boundary: this is REST handshake and lifecycle compatibility, not a
+  real low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket
+  event runtime, speech-to-speech model loop, or hosted tracing backend.
+- Verification:
+  - `node --check` passed for `src/bridge/store.js`, `src/bridge/server.js`,
+    `scripts/eval-harness.mjs`, `scripts/prune-runtime-state.mjs`, and
+    `test/server.test.js`.
+  - Focused Realtime unit test passed 1/1.
+  - `npm test`: passed 199/199.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `realtime-lifecycle`: passed 1/1 against
+    `deepseek-v4-pro`, latency 801 ms, zero provider token usage.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 96/96,
+    pass rate 1.0, average latency 1308 ms, P95 latency 3406 ms, and total
+    usage 24962 tokens.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1095 ms, P95 latency 1122 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T15-28-36-959Z.png`.
+  - `npm run prune:runtime -- --dry-run`: scanned 1741 runtime candidates
+    across 10 targets, including the new Realtime session/client-secret/call
+    targets; selected 1 old UI-smoke screenshot, selected 112429 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 artifact, freed
+    112429 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 30 GB available; `state/` was 25 MB,
+    `output/` was 4.5 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 27 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+  - Final `node --check` passed again for `src/bridge/store.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`,
+    `scripts/prune-runtime-state.mjs`, and `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed with exit code 0.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. Realtime `ek_...` values
+  are local generated compatibility tokens stored only in ignored runtime
+  state.
+
 ## 2026-06-15 - Local ChatKit lifecycle compatibility
 
 - Used the official OpenAI endpoint inventory from the developer-docs MCP to

@@ -141,6 +141,33 @@ function runtimeTargets({ root, maxAgeHoursOverride, maxFilesOverride, maxBytesO
       maxFiles: 5000,
       maxBytes: 256 * 1024 * 1024,
     }),
+    common({
+      id: "local-realtime-sessions",
+      path: path.join(stateDir, "local-realtime", "sessions"),
+      mode: "children",
+      include: (entry) => entry.isFile() && entry.name.endsWith(".json"),
+      maxAgeHours: 336,
+      maxFiles: 5000,
+      maxBytes: 64 * 1024 * 1024,
+    }),
+    common({
+      id: "local-realtime-client-secrets",
+      path: path.join(stateDir, "local-realtime", "client_secrets"),
+      mode: "children",
+      include: (entry) => entry.isFile() && entry.name.endsWith(".json"),
+      maxAgeHours: 72,
+      maxFiles: 5000,
+      maxBytes: 64 * 1024 * 1024,
+    }),
+    common({
+      id: "local-realtime-calls",
+      path: path.join(stateDir, "local-realtime", "calls"),
+      mode: "children",
+      include: (entry) => entry.isFile() && entry.name.endsWith(".json"),
+      maxAgeHours: 168,
+      maxFiles: 5000,
+      maxBytes: 64 * 1024 * 1024,
+    }),
   ];
 }
 

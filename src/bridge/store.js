@@ -1132,6 +1132,272 @@ class FileChatKitStore {
   }
 }
 
+class FileRealtimeStore {
+  constructor(options = {}) {
+    this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-realtime"));
+    this.maxRecords = options.maxRecords || 5000;
+  }
+
+  ensureDir() {
+    fs.mkdirSync(this.sessionsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.clientSecretsDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.callsDir(), { recursive: true, mode: 0o700 });
+  }
+
+  sessionsDir() {
+    return path.join(this.dir, "sessions");
+  }
+
+  clientSecretsDir() {
+    return path.join(this.dir, "client_secrets");
+  }
+
+  callsDir() {
+    return path.join(this.dir, "calls");
+  }
+
+  sessionPath(id) {
+    const clean = safeId(id);
+    if (!clean) return null;
+    return path.join(this.sessionsDir(), `${clean}.json`);
+  }
+
+  clientSecretPath(value) {
+    const clean = safeId(value);
+    if (!clean) return null;
+    return path.join(this.clientSecretsDir(), `${clean}.json`);
+  }
+
+  callPath(id) {
+    const clean = safeId(id);
+    if (!clean) return null;
+    return path.join(this.callsDir(), `${clean}.json`);
+  }
+
+  createSession(body = {}, options = {}) {
+    const session = this.buildSession(body, options);
+    this.writeJson(this.sessionPath(session.id), { session });
+    this.cleanup();
+    return cloneJson(session);
+  }
+
+  createClientSecret(body = {}, options = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const sessionBody = isPlainObject(request.session) ? request.session : {};
+    const now = nowSeconds();
+    const expiresAt = realtimeExpiresAt(request.expires_after, now);
+    const session = this.createSession(sessionBody, {
+      type: options.type || sessionBody.type || "realtime",
+      object: options.object || "realtime.session",
+      expiresAt,
+      includeClientSecret: false,
+    });
+    const clientSecret = {
+      value: `ek_${randomToken(24)}`,
+      expires_at: expiresAt,
+      session,
+      compatibility: {
+        provider: "local",
+        reason: `${options.type || "realtime"}_client_secret_protocol_compatibility`,
+      },
+    };
+    this.writeJson(this.clientSecretPath(clientSecret.value), { client_secret: clientSecret });
+    this.cleanup();
+    return cloneJson(clientSecret);
+  }
+
+  createTranscriptionSession(body = {}) {
+    return this.createSession(body, {
+      type: "transcription",
+      object: "realtime.transcription_session",
+      defaultModel: "gpt-4o-transcribe",
+      includeClientSecret: true,
+      compatibilityReason: "realtime_transcription_session_protocol_compatibility",
+    });
+  }
+
+  createTranslationClientSecret(body = {}) {
+    return this.createClientSecret(body, {
+      type: "translation",
+      object: "realtime.translation_session",
+    });
+  }
+
+  getSession(id) {
+    return cloneOrNull(this.readJson(this.sessionPath(id))?.session || null);
+  }
+
+  getClientSecret(value) {
+    return cloneOrNull(this.readJson(this.clientSecretPath(value))?.client_secret || null);
+  }
+
+  createCall(body = {}) {
+    const now = nowSeconds();
+    const sessionSource = isPlainObject(body.session) ? body.session : {};
+    const clientSecret = typeof body.client_secret === "string" ? this.getClientSecret(body.client_secret) : null;
+    const session = clientSecret?.session || this.createSession(sessionSource, {
+      type: sessionSource.type || "realtime",
+      includeClientSecret: false,
+    });
+    const call = {
+      id: `call_${randomToken(18)}`,
+      object: "realtime.call",
+      created_at: now,
+      updated_at: now,
+      status: "active",
+      session_id: session.id,
+      session,
+      sdp_offer_hash: body.sdp ? crypto.createHash("sha256").update(String(body.sdp)).digest("hex") : null,
+      sdp_answer: realtimeSdpAnswer(),
+      metadata: isPlainObject(body.metadata) ? cloneJson(body.metadata) : {},
+      compatibility: {
+        provider: "local",
+        reason: "realtime_webrtc_call_protocol_compatibility",
+        media_transport: "placeholder_sdp_answer",
+      },
+    };
+    this.writeJson(this.callPath(call.id), { call });
+    this.cleanup();
+    return cloneJson(call);
+  }
+
+  updateCall(callId, action, body = {}) {
+    const record = this.readJson(this.callPath(callId));
+    const call = record?.call;
+    if (!call) return null;
+    const now = nowSeconds();
+    const status = action === "accept"
+      ? "accepted"
+      : action === "reject"
+        ? "rejected"
+        : action === "hangup"
+          ? "completed"
+          : action === "refer"
+            ? "referred"
+            : call.status;
+    const updated = {
+      ...call,
+      status,
+      updated_at: now,
+      [`${action}_at`]: call[`${action}_at`] || now,
+      compatibility: {
+        ...(isPlainObject(call.compatibility) ? call.compatibility : {}),
+        last_action: action,
+      },
+    };
+    if (action === "accept" && isPlainObject(body.session)) {
+      updated.session = this.createSession(body.session, {
+        type: body.session.type || "realtime",
+        includeClientSecret: false,
+      });
+      updated.session_id = updated.session.id;
+    }
+    if (action === "refer") {
+      updated.refer_to = nullableString(body.target_uri ?? body.refer_to ?? body.to);
+      updated.refer_metadata = isPlainObject(body.metadata) ? cloneJson(body.metadata) : {};
+    }
+    if (action === "reject") {
+      updated.reject_reason = nullableString(body.reason);
+    }
+    this.writeJson(this.callPath(callId), { call: updated });
+    return cloneJson(updated);
+  }
+
+  buildSession(body = {}, options = {}) {
+    const source = isPlainObject(body) ? body : {};
+    const now = nowSeconds();
+    const type = options.type || source.type || "realtime";
+    const object = options.object || (type === "translation"
+      ? "realtime.translation_session"
+      : type === "transcription"
+        ? "realtime.transcription_session"
+        : "realtime.session");
+    const expiresAt = options.expiresAt || now + boundedPositiveInteger(source.expires_after, 3600, 60, 24 * 60 * 60);
+    const session = {
+      id: `sess_${randomToken(18)}`,
+      object,
+      type,
+      created_at: now,
+      expires_at: expiresAt,
+      model: stringOrDefault(source.model, options.defaultModel || (type === "translation" ? "gpt-realtime-translate" : "gpt-realtime")),
+      output_modalities: normalizeStringArray(source.output_modalities ?? source.modalities, type === "transcription" ? ["text"] : ["audio"]),
+      modalities: normalizeStringArray(source.modalities ?? source.output_modalities, type === "transcription" ? ["audio", "text"] : ["audio"]),
+      instructions: nullableString(source.instructions),
+      tools: Array.isArray(source.tools) ? cloneJson(source.tools) : [],
+      tool_choice: source.tool_choice ?? (type === "transcription" ? null : "auto"),
+      max_output_tokens: source.max_output_tokens ?? source.max_response_output_tokens ?? "inf",
+      max_response_output_tokens: source.max_response_output_tokens ?? source.max_output_tokens ?? "inf",
+      tracing: source.tracing ?? null,
+      truncation: source.truncation ?? "auto",
+      prompt: isPlainObject(source.prompt) ? cloneJson(source.prompt) : null,
+      include: Array.isArray(source.include) ? cloneJson(source.include) : null,
+      audio: normalizeRealtimeAudio(source.audio, source),
+      input_audio_format: source.input_audio_format || "pcm16",
+      output_audio_format: source.output_audio_format || "pcm16",
+      input_audio_transcription: isPlainObject(source.input_audio_transcription)
+        ? cloneJson(source.input_audio_transcription)
+        : (type === "transcription" ? { model: options.defaultModel || "gpt-4o-transcribe", language: null, prompt: "" } : null),
+      turn_detection: source.turn_detection === undefined ? { type: "server_vad" } : cloneJson(source.turn_detection),
+      temperature: source.temperature ?? null,
+      voice: source.voice || source.audio?.output?.voice || "alloy",
+      speed: source.speed ?? source.audio?.output?.speed ?? 1,
+      metadata: isPlainObject(source.metadata) ? cloneJson(source.metadata) : {},
+      compatibility: {
+        provider: "local",
+        reason: options.compatibilityReason || `${type}_session_protocol_compatibility`,
+        transport: "rest_handshake_only",
+      },
+    };
+    if (options.includeClientSecret !== false) {
+      session.client_secret = {
+        value: `ek_${randomToken(24)}`,
+        expires_at: expiresAt,
+      };
+    }
+    return session;
+  }
+
+  readJson(filePath) {
+    if (!filePath) return null;
+    try {
+      const value = JSON.parse(fs.readFileSync(filePath, "utf8"));
+      return isPlainObject(value) ? value : null;
+    } catch {
+      return null;
+    }
+  }
+
+  writeJson(filePath, value) {
+    if (!filePath) return;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
+    const tmp = `${filePath}.${process.pid}.${Date.now()}.tmp`;
+    const fd = fs.openSync(tmp, "w", 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(value, null, 2)}\n`);
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, filePath);
+  }
+
+  cleanup() {
+    this.ensureDir();
+    for (const dir of [this.sessionsDir(), this.clientSecretsDir(), this.callsDir()]) {
+      const files = fs.readdirSync(dir)
+        .filter((name) => name.endsWith(".json"))
+        .map((name) => {
+          const filePath = path.join(dir, name);
+          return { filePath, mtimeMs: fs.statSync(filePath).mtimeMs };
+        })
+        .sort((a, b) => b.mtimeMs - a.mtimeMs);
+      for (const entry of files.slice(this.maxRecords)) {
+        try { fs.unlinkSync(entry.filePath); } catch {}
+      }
+    }
+  }
+}
+
 class FileImageGenerationStore {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-image-generations"));
@@ -1434,6 +1700,67 @@ function boundedPositiveInteger(value, fallback, min, max) {
   return Math.max(min, Math.min(max, parsed));
 }
 
+function normalizeStringArray(value, fallback = []) {
+  const source = Array.isArray(value) ? value : fallback;
+  return source
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+}
+
+function realtimeExpiresAt(expiresAfter, now = nowSeconds()) {
+  if (!isPlainObject(expiresAfter)) return now + 30 * 60;
+  const seconds = boundedPositiveInteger(expiresAfter.seconds, 30 * 60, 60, 24 * 60 * 60);
+  return now + seconds;
+}
+
+function normalizeRealtimeAudio(audio, source = {}) {
+  const input = isPlainObject(audio?.input) ? audio.input : {};
+  const output = isPlainObject(audio?.output) ? audio.output : {};
+  return {
+    input: {
+      format: isPlainObject(input.format) ? cloneJson(input.format) : { type: "audio/pcm", rate: 24000 },
+      transcription: input.transcription === undefined
+        ? (isPlainObject(source.input_audio_transcription) ? cloneJson(source.input_audio_transcription) : null)
+        : cloneJson(input.transcription),
+      noise_reduction: input.noise_reduction === undefined ? null : cloneJson(input.noise_reduction),
+      turn_detection: input.turn_detection === undefined
+        ? (source.turn_detection === undefined ? { type: "server_vad" } : cloneJson(source.turn_detection))
+        : cloneJson(input.turn_detection),
+    },
+    output: {
+      format: isPlainObject(output.format) ? cloneJson(output.format) : { type: "audio/pcm", rate: 24000 },
+      voice: output.voice || source.voice || "alloy",
+      speed: output.speed ?? source.speed ?? 1,
+      ...(output.language ? { language: String(output.language) } : {}),
+    },
+  };
+}
+
+function realtimeSdpAnswer() {
+  const ufrag = randomToken(8).replace(/[-_]/g, "");
+  const pwd = randomToken(24).replace(/[-_]/g, "");
+  return [
+    "v=0",
+    `o=- ${Date.now()} 1 IN IP4 127.0.0.1`,
+    "s=-",
+    "c=IN IP4 0.0.0.0",
+    "t=0 0",
+    "a=group:BUNDLE 0 1",
+    "a=msid-semantic:WMS *",
+    "m=audio 9 UDP/TLS/RTP/SAVPF 111",
+    "a=mid:0",
+    `a=ice-ufrag:${ufrag}`,
+    `a=ice-pwd:${pwd}`,
+    "a=setup:active",
+    "a=rtcp-mux",
+    "a=rtpmap:111 opus/48000/2",
+    "m=application 9 UDP/DTLS/SCTP webrtc-datachannel",
+    "a=mid:1",
+    "a=sctp-port:5000",
+    "",
+  ].join("\r\n");
+}
+
 function normalizeAssistantMessageContent(content) {
   if (Array.isArray(content)) return cloneJson(content);
   if (isPlainObject(content)) return [cloneJson(content)];
@@ -1487,6 +1814,7 @@ module.exports = {
   FileAudioVoiceStore,
   FileChatKitStore,
   FileResponseStore,
+  FileRealtimeStore,
   FileConversationStore,
   FileImageGenerationStore,
 };

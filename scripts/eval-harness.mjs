@@ -315,6 +315,32 @@ function buildSuites(defaultModel) {
           && json.compatibility?.provider === "local",
       },
       {
+        id: "realtime-lifecycle",
+        mode: "realtime-lifecycle",
+        request: {
+          session: {
+            type: "realtime",
+            model: "gpt-realtime",
+            instructions: "Keep responses short for bridge regression.",
+            output_modalities: ["text"],
+          },
+        },
+        check: ({ session, clientSecret, transcription, translationSecret, accepted, referred, hungup, rejected }) => session?.id?.startsWith("sess_")
+          && session.object === "realtime.session"
+          && /^ek_/.test(session.client_secret?.value || "")
+          && session.compatibility?.provider === "local"
+          && clientSecret?.value?.startsWith("ek_")
+          && clientSecret.session?.object === "realtime.session"
+          && transcription?.object === "realtime.transcription_session"
+          && /^ek_/.test(transcription.client_secret?.value || "")
+          && translationSecret?.session?.type === "translation"
+          && accepted?.status === "accepted"
+          && referred?.status === "referred"
+          && referred?.refer_to === "sip:+12025550123@sip.example.com"
+          && hungup?.status === "completed"
+          && rejected?.status === "rejected",
+      },
+      {
         id: "chatkit-lifecycle",
         mode: "chatkit-lifecycle",
         request: {
@@ -2912,6 +2938,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "moderations") {
       return await runJsonCase(testCase, context, started, "/v1/moderations", moderationOutputText, moderationUsage);
     }
+    if (testCase.mode === "realtime-lifecycle") {
+      return await runRealtimeLifecycleCase(testCase, context, started);
+    }
     if (testCase.mode === "chatkit-lifecycle") {
       return await runChatKitLifecycleCase(testCase, context, started);
     }
@@ -3195,6 +3224,85 @@ async function runChatKitLifecycleCase(testCase, context, started) {
   } finally {
     if (threadId) await deleteJson(`${baseUrl}/v1/chatkit/threads/${threadId}`);
   }
+}
+
+async function runRealtimeLifecycleCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const marker = `${testCase.id}-${context.iteration}-${Date.now().toString(36)}`;
+  const session = await postJsonCapture(`${baseUrl}/v1/realtime/sessions`, {
+    ...(request.session || {}),
+    metadata: { suite: "bridge-regression", marker },
+  });
+  if (!session.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: session.status,
+      error: truncate(session.body),
+    });
+  }
+
+  const clientSecret = await postJsonCapture(`${baseUrl}/v1/realtime/client_secrets`, {
+    expires_after: { anchor: "created_at", seconds: 600 },
+    session: {
+      type: "realtime",
+      model: "gpt-realtime-2",
+      instructions: `Realtime client secret ${marker}`,
+      output_modalities: ["text"],
+    },
+  });
+  const transcription = await postJsonCapture(`${baseUrl}/v1/realtime/transcription_sessions`, {
+    input_audio_transcription: { model: "gpt-4o-transcribe", language: "en", prompt: marker },
+  });
+  const translationSecret = await postJsonCapture(`${baseUrl}/v1/realtime/translations/client_secrets`, {
+    expires_after: { anchor: "created_at", seconds: 900 },
+    session: {
+      model: "gpt-realtime-translate",
+      audio: { output: { language: "es" } },
+    },
+  });
+
+  const createdCall = await postSdpCapture(`${baseUrl}/v1/realtime/calls`, "v=0\r\ns=open-codex-realtime-eval\r\n");
+  const callId = createdCall.headers.location?.split("/").pop() || createdCall.headers["x-open-codex-realtime-call-id"];
+  const accepted = callId
+    ? await postJsonCapture(`${baseUrl}/v1/realtime/calls/${callId}/accept`, {
+      session: { type: "realtime", model: "gpt-realtime-2", instructions: `Accepted ${marker}` },
+    })
+    : { ok: false, json: null };
+  const referred = callId
+    ? await postJsonCapture(`${baseUrl}/v1/realtime/calls/${callId}/refer`, {
+      target_uri: "sip:+12025550123@sip.example.com",
+      metadata: { marker },
+    })
+    : { ok: false, json: null };
+  const hungup = callId
+    ? await postJsonCapture(`${baseUrl}/v1/realtime/calls/${callId}/hangup`, {})
+    : { ok: false, json: null };
+
+  const rejectCall = await postSdpCapture(`${baseUrl}/v1/realtime/calls`, "v=0\r\ns=open-codex-realtime-reject\r\n");
+  const rejectCallId = rejectCall.headers.location?.split("/").pop() || rejectCall.headers["x-open-codex-realtime-call-id"];
+  const rejected = rejectCallId
+    ? await postJsonCapture(`${baseUrl}/v1/realtime/calls/${rejectCallId}/reject`, { reason: "bridge regression" })
+    : { ok: false, json: null };
+
+  const ok = !!testCase.check({
+    session: session.json,
+    clientSecret: clientSecret.json,
+    transcription: transcription.json,
+    translationSecret: translationSecret.json,
+    accepted: accepted.json,
+    referred: referred.json,
+    hungup: hungup.json,
+    rejected: rejected.json,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: session.status,
+    session_id: session.json?.id,
+    call_id: callId,
+    rejected_call_id: rejectCallId,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `realtime:${session.json?.id || "missing"}:${callId || "missing"}`,
+  });
 }
 
 async function runAudioVoiceLifecycleCase(testCase, context, started) {
@@ -6598,6 +6706,17 @@ async function postRaw(url, body, contentType = "application/octet-stream") {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function postSdpCapture(url, body) {
+  const response = await postRaw(url, body, "application/sdp");
+  const responseBody = await response.text();
+  return {
+    status: response.status,
+    ok: response.ok,
+    body: responseBody,
+    headers: Object.fromEntries(response.headers.entries()),
+  };
 }
 
 async function getJson(url) {

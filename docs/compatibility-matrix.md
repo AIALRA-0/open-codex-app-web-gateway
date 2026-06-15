@@ -21,6 +21,12 @@ Primary sources:
 - OpenAI Chat Completions reference: https://developers.openai.com/api/reference/chat/create
 - OpenAI ChatKit session OpenAPI operation `CreateChatSessionMethod`: https://api.openai.com/v1/chatkit/sessions
 - OpenAI ChatKit threads OpenAPI operation `ListThreadsMethod`: https://api.openai.com/v1/chatkit/threads
+- OpenAI Realtime overview: https://developers.openai.com/api/docs/guides/realtime
+- OpenAI Realtime session OpenAPI operation `create-realtime-session`: https://api.openai.com/v1/realtime/sessions
+- OpenAI Realtime client secret OpenAPI operation `create-realtime-client-secret`: https://api.openai.com/v1/realtime/client_secrets
+- OpenAI Realtime transcription session OpenAPI operation `create-realtime-transcription-session`: https://api.openai.com/v1/realtime/transcription_sessions
+- OpenAI Realtime WebRTC call OpenAPI operation `create-realtime-call`: https://api.openai.com/v1/realtime/calls
+- OpenAI Realtime SIP guide: https://developers.openai.com/api/docs/guides/realtime-sip#overview
 - OpenAI audio guide: https://developers.openai.com/api/docs/guides/audio
 - OpenAI legacy Completions OpenAPI operation `createCompletion`: https://api.openai.com/v1/completions
 - OpenAI Embeddings OpenAPI operation `createEmbedding`: https://api.openai.com/v1/embeddings
@@ -411,6 +417,34 @@ Local ChatKit state lives under
 `CODEXCOMPAT_CHATKIT_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-chatkit` by
 default. `scripts/prune-runtime-state.mjs` prunes ChatKit session files and
 thread directories with separate file-count, age, and byte caps.
+
+## Realtime REST Endpoint Coverage
+
+OpenAI's current endpoint list includes Realtime REST endpoints for creating
+short-lived browser/mobile credentials, transcription sessions, translation
+credentials, and WebRTC/SIP call controls. Chat Completions-only providers
+cannot provide native low-latency media streams, so the bridge implements the
+REST handshake and local lifecycle state while marking the media transport as a
+local compatibility placeholder.
+
+| Endpoint | Status | Notes |
+| --- | --- | --- |
+| `POST /v1/realtime/sessions` | Implemented locally | Creates `object:"realtime.session"` with `type`, model, modalities, instructions, audio config, tools, tracing/truncation fields, metadata, local compatibility metadata, and a short-lived `client_secret:{value,expires_at}` |
+| `POST /v1/realtime/client_secrets` | Implemented locally | Accepts optional `expires_after` and `session`; returns `value:"ek_..."`, `expires_at`, and the effective local session without exposing the deployment provider key |
+| `POST /v1/realtime/transcription_sessions` | Implemented locally | Creates `object:"realtime.transcription_session"` with transcription defaults, audio format, VAD config, and an ephemeral `client_secret` |
+| `POST /v1/realtime/translations/client_secrets` | Implemented locally | Creates `value:"ek_..."` plus a local `type:"translation"` session, preserving translation model and output language fields |
+| `POST /v1/realtime/calls` | Implemented locally for REST/WebRTC setup | Accepts official `application/sdp`, JSON, or multipart `sdp` + `session` request shapes; returns `201 application/sdp` with a local placeholder SDP answer and `Location:/v1/realtime/calls/{call_id}` |
+| `POST /v1/realtime/calls/{call_id}/accept` | Implemented locally | Marks a local call `accepted` and can replace the effective session with the supplied accept-time session config |
+| `POST /v1/realtime/calls/{call_id}/reject` | Implemented locally | Marks a local call `rejected` and preserves an optional rejection reason |
+| `POST /v1/realtime/calls/{call_id}/refer` | Implemented locally | Marks a local call `referred` and preserves `target_uri` / `refer_to` plus metadata |
+| `POST /v1/realtime/calls/{call_id}/hangup` | Implemented locally | Marks a local call `completed` |
+
+Local Realtime state lives under
+`CODEXCOMPAT_REALTIME_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-realtime` by
+default. `scripts/prune-runtime-state.mjs` prunes Realtime session files,
+client-secret files, and call files with separate age, count, and byte caps.
+The generated `ek_...` values are local compatibility tokens, not upstream
+provider credentials.
 
 ## Conversations Endpoint Coverage
 
@@ -1418,6 +1452,7 @@ Configuration:
 | OpenAI Batch full parity | The local adapter covers synchronous JSONL execution for implemented text/embedding/moderation endpoints, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, direct `/v1/videos`, plus `/v1/responses` requests that use local `image_generation`, and stores output/error JSONL through the Files API, but it is not an async distributed 24h job service or hosted media-render queue | Add async workers, resumable/persisted queues, larger disk-governed staging profiles, multipart-to-Batch staging if OpenAI documents it, and provider-backed media generation |
 | OpenAI Evals and Graders full parity | The local adapter covers eval create/list/get/update/delete, synchronous run create/list/get, output item list/get, `purpose:"evals"` Files, Responses-template sample generation, deterministic `string_check`, `text_similarity`, local subprocess `python`, provider-backed `score_model`, and non-nested `multi` grading, standalone Graders validate/run endpoints for those supported graders, judge token usage accounting, and result aggregation. It is not the hosted OpenAI Evals dashboard, async large-run scheduler, exact NLP metric implementation, OpenAI hosted judge runtime, OpenAI hosted Python execution image, or replacement for SWE-bench/scored agent benchmarks | Add async workers, exact optional grader dependencies, hardened container/microVM Python isolation, provider selection policies for judge models, dataset sharding, dashboard/report export, and larger quality/stability eval suites |
 | OpenAI ChatKit full parity | The local adapter covers beta session creation/cancellation, thread listing/filtering, local thread lifecycle, and item append/list persistence, but it is not OpenAI's hosted ChatKit workflow runtime, hosted authentication broker, UI transport, or workflow execution service | Add hosted-style workflow execution over Responses/Chat, session request accounting, auth-token validation middleware, richer thread item subtype coverage, and ChatKit UI smoke tests when the frontend adopts these endpoints |
+| OpenAI Realtime full parity | The local adapter covers REST creation of Realtime sessions, client secrets, transcription sessions, translation client secrets, WebRTC call setup response shape, and local call accept/reject/refer/hangup lifecycle state. It is not a low-latency Realtime media service, WebRTC/SIP media bridge, WebSocket event runtime, speech-to-speech model loop, or hosted tracing backend | Add a real WebRTC/WebSocket relay backed by an audio-capable provider or OpenAI Realtime, server-side event translation, media/session isolation, call monitoring streams, token validation/accounting, and audio latency/quality evals |
 | OpenAI Assistants full parity | The local adapter covers Assistants CRUD, Threads CRUD, Messages CRUD, synchronous Chat-backed Runs, run `additional_messages` / `additional_instructions` / `reasoning_effort` / `truncation_strategy.last_messages` / best-effort `max_prompt_tokens`, observed `max_prompt_tokens` / `max_completion_tokens` incomplete terminal mapping, function-tool `requires_action` / `submit_tool_outputs` loops through Chat `tool_calls`, local active-run thread locks, elapsed `expires_at` expiration to `expired`, local Assistants `file_search` over bridge vector stores with include-gated Run Step result content, local Assistants `code_interpreter` over explicit Python blocks with file-id mounts, message-attachment resource materialization for `file_search` and `code_interpreter`, Run Step listing/retrieval, terminal cancel no-op, create-thread-and-run, streamed Chat text/refusal deltas as Assistants `thread.message.delta`, streamed token-budget terminal events as `thread.run.incomplete`, and streamed Chat tool-call/function-call arguments as `thread.run.step.delta`, but it is not OpenAI hosted Assistants and does not yet implement exact hosted tokenizer accounting ahead of provider calls, model-driven hosted code loops, non-text hosted-tool delta details, or hosted async worker scheduling | Add async run workers with hosted-style scheduling/lock timing, exact provider/model token accounting where available, broader non-text delta parity, and stronger hosted-tool loop orchestration |
 | OpenAI hosted Moderations full parity | The local adapter covers response shape and deterministic text/category rules for Chat-only provider compatibility, but it is not OpenAI's hosted moderation classifier and does not inspect image pixels | Add provider-backed or specialized moderation models, image inspection, multilingual policy evals, and larger safety benchmark suites |
 | OpenAI `input_file` full parity | The local adapter covers text/code/base64/local file IDs/completed Uploads/HTTP(S) URLs, PDF text-layer extraction, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML text extraction, but not PDF page images/OCR, OpenAI's model-generated spreadsheet summaries, legacy binary Office formats, embedded media, or complex workbook semantics | Add optional rendered-page context, OCR, richer spreadsheet summarization, legacy Office parsers, embedded media handling, and stronger file-type detection |

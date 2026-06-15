@@ -11573,6 +11573,166 @@ test("POST /v1/moderations returns local OpenAI-compatible category results", as
   });
 });
 
+test("Realtime API creates local sessions, client secrets, and call lifecycle state", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Realtime compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const sessionResponse = await fetch(`${baseUrl}/v1/realtime/sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "realtime",
+        model: "gpt-realtime",
+        instructions: "Be brief.",
+        modalities: ["audio"],
+        audio: {
+          output: { voice: "ash", speed: 1.25 },
+        },
+        tools: [{ type: "function", name: "lookup", description: "Lookup a record" }],
+        tool_choice: "auto",
+        metadata: { suite: "realtime-local" },
+      }),
+    });
+    assert.equal(sessionResponse.status, 200);
+    const session = await sessionResponse.json();
+    assert.match(session.id, /^sess_/);
+    assert.equal(session.object, "realtime.session");
+    assert.equal(session.type, "realtime");
+    assert.equal(session.model, "gpt-realtime");
+    assert.equal(session.instructions, "Be brief.");
+    assert.deepEqual(session.output_modalities, ["audio"]);
+    assert.equal(session.audio.output.voice, "ash");
+    assert.equal(session.audio.output.speed, 1.25);
+    assert.equal(session.tools[0].name, "lookup");
+    assert.match(session.client_secret.value, /^ek_/);
+    assert.ok(session.client_secret.expires_at > session.created_at);
+    assert.equal(session.compatibility.provider, "local");
+    assert.equal(session.compatibility.transport, "rest_handshake_only");
+
+    const clientSecretResponse = await fetch(`${baseUrl}/v1/realtime/client_secrets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expires_after: { anchor: "created_at", seconds: 600 },
+        session: {
+          type: "realtime",
+          model: "gpt-realtime-2",
+          instructions: "Use text only.",
+          output_modalities: ["text"],
+        },
+      }),
+    });
+    assert.equal(clientSecretResponse.status, 200);
+    const clientSecret = await clientSecretResponse.json();
+    assert.match(clientSecret.value, /^ek_/);
+    assert.equal(clientSecret.expires_at - clientSecret.session.created_at, 600);
+    assert.equal(clientSecret.session.object, "realtime.session");
+    assert.equal(clientSecret.session.model, "gpt-realtime-2");
+    assert.deepEqual(clientSecret.session.output_modalities, ["text"]);
+    assert.equal(clientSecret.compatibility.provider, "local");
+
+    const transcriptionResponse = await fetch(`${baseUrl}/v1/realtime/transcription_sessions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_audio_format: "pcm16",
+        input_audio_transcription: { model: "gpt-4o-transcribe", language: "en", prompt: "Names matter" },
+      }),
+    });
+    assert.equal(transcriptionResponse.status, 200);
+    const transcription = await transcriptionResponse.json();
+    assert.equal(transcription.object, "realtime.transcription_session");
+    assert.equal(transcription.type, "transcription");
+    assert.deepEqual(transcription.modalities, ["audio", "text"]);
+    assert.equal(transcription.input_audio_transcription.language, "en");
+    assert.match(transcription.client_secret.value, /^ek_/);
+
+    const translationSecretResponse = await fetch(`${baseUrl}/v1/realtime/translations/client_secrets`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        expires_after: { anchor: "created_at", seconds: 900 },
+        session: {
+          model: "gpt-realtime-translate",
+          audio: {
+            output: { language: "es" },
+          },
+        },
+      }),
+    });
+    assert.equal(translationSecretResponse.status, 200);
+    const translationSecret = await translationSecretResponse.json();
+    assert.match(translationSecret.value, /^ek_/);
+    assert.equal(translationSecret.session.type, "translation");
+    assert.equal(translationSecret.session.model, "gpt-realtime-translate");
+    assert.equal(translationSecret.session.audio.output.language, "es");
+    assert.equal(translationSecret.expires_at - translationSecret.session.created_at, 900);
+
+    const callForm = new FormData();
+    callForm.append("sdp", new Blob([Buffer.from("v=0\r\ns=open-codex-test\r\n")], { type: "application/sdp" }), "offer.sdp");
+    callForm.append("session", JSON.stringify({
+      type: "realtime",
+      model: "gpt-realtime",
+      instructions: "Handle the call.",
+    }));
+    const callResponse = await fetch(`${baseUrl}/v1/realtime/calls`, {
+      method: "POST",
+      body: callForm,
+    });
+    assert.equal(callResponse.status, 201);
+    assert.match(callResponse.headers.get("content-type"), /^application\/sdp/);
+    const callId = callResponse.headers.get("x-open-codex-realtime-call-id");
+    assert.match(callId, /^call_/);
+    assert.equal(callResponse.headers.get("location"), `/v1/realtime/calls/${callId}`);
+    const sdpAnswer = await callResponse.text();
+    assert.match(sdpAnswer, /^v=0/);
+    assert.match(sdpAnswer, /m=audio/);
+    assert.match(sdpAnswer, /webrtc-datachannel/);
+
+    const accepted = await fetch(`${baseUrl}/v1/realtime/calls/${callId}/accept`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        session: {
+          type: "realtime",
+          model: "gpt-realtime-2",
+          instructions: "Accepted call instructions.",
+        },
+      }),
+    });
+    assert.equal(accepted.status, 200);
+    const acceptedJson = await accepted.json();
+    assert.equal(acceptedJson.id, callId);
+    assert.equal(acceptedJson.object, "realtime.call");
+    assert.equal(acceptedJson.status, "accepted");
+    assert.equal(acceptedJson.session.model, "gpt-realtime-2");
+    assert.equal(acceptedJson.compatibility.last_action, "accept");
+
+    const referred = await fetch(`${baseUrl}/v1/realtime/calls/${callId}/refer`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ target_uri: "sip:+12025550123@sip.example.com", metadata: { queue: "support" } }),
+    });
+    assert.equal(referred.status, 200);
+    const referredJson = await referred.json();
+    assert.equal(referredJson.status, "referred");
+    assert.equal(referredJson.refer_to, "sip:+12025550123@sip.example.com");
+    assert.equal(referredJson.refer_metadata.queue, "support");
+
+    const hungup = await fetch(`${baseUrl}/v1/realtime/calls/${callId}/hangup`, { method: "POST" });
+    assert.equal(hungup.status, 200);
+    const hungupJson = await hungup.json();
+    assert.equal(hungupJson.status, "completed");
+    assert.equal(hungupJson.compatibility.last_action, "hangup");
+
+    const missing = await fetch(`${baseUrl}/v1/realtime/calls/call_missing/reject`, { method: "POST" });
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "realtime_call_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("ChatKit API manages local sessions, threads, and items", async () => {
   await withMockProvider(async () => {
     assert.fail("ChatKit compatibility should not call upstream provider");
