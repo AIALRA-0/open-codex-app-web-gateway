@@ -24,6 +24,10 @@ function randomToken(bytes = 16) {
   return crypto.randomBytes(bytes).toString("base64url");
 }
 
+function stableToken(value, length = 16) {
+  return crypto.createHash("sha256").update(String(value || "")).digest("base64url").slice(0, length);
+}
+
 function safeId(id) {
   const value = String(id || "");
   if (!/^[A-Za-z0-9._:-]{3,240}$/.test(value)) return null;
@@ -33,6 +37,13 @@ function safeId(id) {
 function optionalString(value) {
   if (value === undefined || value === null) return undefined;
   return String(value).trim();
+}
+
+function optionalNullableString(value) {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  const text = String(value).trim();
+  return text || null;
 }
 
 function normalizeProjectRole(value, fallback = "member") {
@@ -46,6 +57,18 @@ function compareCreatedThenIdAsc(a, b) {
   return String(a.id || "").localeCompare(String(b.id || ""));
 }
 
+function compareAddedThenIdAsc(a, b) {
+  const added = Number(a.added_at || 0) - Number(b.added_at || 0);
+  if (added) return added;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
+function compareModelThenIdAsc(a, b) {
+  const model = String(a.model || "").localeCompare(String(b.model || ""));
+  if (model) return model;
+  return String(a.id || "").localeCompare(String(b.id || ""));
+}
+
 function localCompatibility(reason, extra = {}) {
   return {
     provider: "local",
@@ -54,6 +77,48 @@ function localCompatibility(reason, extra = {}) {
     ...extra,
   };
 }
+
+const RATE_LIMIT_NUMERIC_FIELDS = Object.freeze([
+  "batch_1_day_max_input_tokens",
+  "max_audio_megabytes_per_1_minute",
+  "max_images_per_1_minute",
+  "max_requests_per_1_day",
+  "max_requests_per_1_minute",
+  "max_tokens_per_1_minute",
+]);
+
+const DEFAULT_RATE_LIMITS = Object.freeze([
+  {
+    model: "deepseek-v4-pro",
+    max_requests_per_1_minute: 500,
+    max_tokens_per_1_minute: 200000,
+    max_requests_per_1_day: 10000,
+  },
+  {
+    model: "gpt-4o-mini",
+    max_requests_per_1_minute: 500,
+    max_tokens_per_1_minute: 200000,
+    max_requests_per_1_day: 10000,
+  },
+  {
+    model: "gpt-4o",
+    max_requests_per_1_minute: 500,
+    max_tokens_per_1_minute: 30000,
+    max_requests_per_1_day: 10000,
+  },
+  {
+    model: "text-embedding-3-small",
+    max_requests_per_1_minute: 1000,
+    max_tokens_per_1_minute: 1000000,
+    batch_1_day_max_input_tokens: 200000000,
+  },
+  {
+    model: "gpt-image-1",
+    max_requests_per_1_minute: 100,
+    max_tokens_per_1_minute: 100000,
+    max_images_per_1_minute: 100,
+  },
+]);
 
 class LocalOrganizationAdminStore {
   constructor(options = {}) {
@@ -96,6 +161,20 @@ class LocalOrganizationAdminStore {
   apiKeyPath(projectId, apiKeyId) {
     const clean = safeId(apiKeyId);
     const dir = this.projectResourceDir(projectId, "api_keys");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  projectUserPath(projectId, userId) {
+    const clean = safeId(userId);
+    const dir = this.projectResourceDir(projectId, "users");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  rateLimitPath(projectId, rateLimitId) {
+    const clean = safeId(rateLimitId);
+    const dir = this.projectResourceDir(projectId, "rate_limits");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
   }
@@ -344,12 +423,196 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  createProjectUser(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const request = isPlainObject(body) ? body : {};
+    const roleText = optionalString(request.role);
+    if (!roleText) {
+      throw organizationAdminError("role is required", {
+        code: "missing_required_parameter",
+        param: "role",
+      });
+    }
+    const role = normalizeProjectRole(roleText, "");
+    if (!role) {
+      throw organizationAdminError("role must be owner or member", {
+        code: "invalid_project_role",
+        param: "role",
+      });
+    }
+    const email = optionalNullableString(request.email);
+    const name = optionalNullableString(request.name);
+    const requestedUserId = optionalString(request.user_id);
+    const userId = this.localProjectUserId(requestedUserId, email);
+    const existing = this.readJson(this.projectUserPath(project.id, userId));
+    const now = nowSeconds();
+    const user = {
+      id: userId,
+      object: "organization.project.user",
+      added_at: existing?.added_at || now,
+      role,
+      email: email !== undefined ? email : existing?.email ?? null,
+      name: name !== undefined ? name : existing?.name ?? null,
+      compatibility: localCompatibility("project_user_protocol_compatibility", {
+        project_id: project.id,
+        locally_persisted: true,
+      }),
+    };
+    this.writeJson(this.projectUserPath(project.id, user.id), user);
+    this.cleanup();
+    return clone(user);
+  }
+
+  listProjectUsers(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    return this.listJsonFiles(this.projectResourceDir(projectId, "users"))
+      .sort(compareAddedThenIdAsc)
+      .map(clone);
+  }
+
+  getProjectUser(projectId, userId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const user = this.readJson(this.projectUserPath(project.id, userId));
+    if (!user) {
+      throw organizationAdminError(`project user not found: ${userId}`, {
+        status: 404,
+        code: "project_user_not_found",
+        param: "user_id",
+      });
+    }
+    return clone(user);
+  }
+
+  updateProjectUser(projectId, userId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const user = this.readJson(this.projectUserPath(project.id, userId));
+    if (!user) {
+      throw organizationAdminError(`project user not found: ${userId}`, {
+        status: 404,
+        code: "project_user_not_found",
+        param: "user_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    if (request.role !== undefined && request.role !== null) {
+      const role = normalizeProjectRole(request.role, "");
+      if (!role) {
+        throw organizationAdminError("role must be owner or member", {
+          code: "invalid_project_role",
+          param: "role",
+        });
+      }
+      user.role = role;
+    }
+    user.compatibility = {
+      ...(isPlainObject(user.compatibility) ? user.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.projectUserPath(project.id, user.id), user);
+    return clone(user);
+  }
+
+  deleteProjectUser(projectId, userId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const user = this.readJson(this.projectUserPath(project.id, userId));
+    if (!user) {
+      throw organizationAdminError(`project user not found: ${userId}`, {
+        status: 404,
+        code: "project_user_not_found",
+        param: "user_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
+    return {
+      object: "organization.project.user.deleted",
+      id: user.id,
+      deleted: true,
+    };
+  }
+
+  listProjectRateLimits(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    this.ensureDefaultProjectRateLimits(project.id);
+    return this.listJsonFiles(this.projectResourceDir(projectId, "rate_limits"))
+      .sort(compareModelThenIdAsc)
+      .map(clone);
+  }
+
+  updateProjectRateLimit(projectId, rateLimitId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    this.ensureDefaultProjectRateLimits(project.id);
+    const rateLimit = this.readJson(this.rateLimitPath(project.id, rateLimitId));
+    if (!rateLimit) {
+      throw organizationAdminError(`project rate limit not found: ${rateLimitId}`, {
+        status: 404,
+        code: "project_rate_limit_not_found",
+        param: "rate_limit_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    for (const field of RATE_LIMIT_NUMERIC_FIELDS) {
+      if (request[field] === undefined || request[field] === null) continue;
+      const value = Number(request[field]);
+      if (!Number.isFinite(value) || value < 0) {
+        throw organizationAdminError(`${field} must be a non-negative number`, {
+          code: "invalid_rate_limit_value",
+          param: field,
+        });
+      }
+      rateLimit[field] = Math.trunc(value);
+    }
+    rateLimit.compatibility = {
+      ...(isPlainObject(rateLimit.compatibility) ? rateLimit.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.rateLimitPath(project.id, rateLimit.id), rateLimit);
+    return clone(rateLimit);
+  }
+
   updateServiceAccountApiKeyOwners(projectId, serviceAccount) {
     for (const apiKey of this.listJsonFiles(this.projectResourceDir(projectId, "api_keys"))) {
       if (apiKey.owner?.type !== "service_account") continue;
       if (apiKey.owner?.service_account?.id !== serviceAccount.id) continue;
       apiKey.owner.service_account = clone(serviceAccount);
       this.writeJson(this.apiKeyPath(projectId, apiKey.id), apiKey);
+    }
+  }
+
+  localProjectUserId(userId, email) {
+    const requested = safeId(userId);
+    if (requested) return requested;
+    if (email) return `user_${stableToken(String(email).toLowerCase(), 20)}`;
+    return `user_${randomToken(14)}`;
+  }
+
+  ensureDefaultProjectRateLimits(projectId) {
+    const existing = this.listJsonFiles(this.projectResourceDir(projectId, "rate_limits"));
+    if (existing.length) return;
+    const now = nowSeconds();
+    for (const defaults of DEFAULT_RATE_LIMITS) {
+      const rateLimit = {
+        id: `rl_${stableToken(`${projectId}:${defaults.model}`, 20)}`,
+        object: "project.rate_limit",
+        model: defaults.model,
+        max_requests_per_1_minute: defaults.max_requests_per_1_minute,
+        max_tokens_per_1_minute: defaults.max_tokens_per_1_minute,
+        compatibility: localCompatibility("project_rate_limit_protocol_compatibility", {
+          project_id: projectId,
+          locally_seeded: true,
+          seeded_at: now,
+        }),
+      };
+      for (const field of RATE_LIMIT_NUMERIC_FIELDS) {
+        if (defaults[field] !== undefined) rateLimit[field] = defaults[field];
+      }
+      this.writeJson(this.rateLimitPath(projectId, rateLimit.id), rateLimit);
     }
   }
 
@@ -420,7 +683,7 @@ class LocalOrganizationAdminStore {
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
-      for (const resource of ["api_keys", "service_accounts"]) {
+      for (const resource of ["api_keys", "service_accounts", "users", "rate_limits"]) {
         const files = this.listCleanupEntries(path.join(projectDir, resource));
         for (const entry of files.slice(this.maxRecords)) {
           try { fs.unlinkSync(entry.filePath); } catch {}

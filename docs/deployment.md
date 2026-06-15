@@ -98,7 +98,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_EVAL_MAX_ROWS` | `100` | Maximum JSONL rows loaded for a local synchronous Eval run; raise only after disk/quota and runtime controls are ready |
 | `CODEXCOMPAT_FINE_TUNING_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-fine-tuning` | Local Fine-tuning Jobs/checkpoint permission compatibility state path; protocol metadata only, no real training artifacts |
 | `CODEXCOMPAT_FINE_TUNING_MAX_RECORDS` | `5000` | Maximum local Fine-tuning job and checkpoint-permission records retained before opportunistic cleanup |
-| `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-organization-admin` | Local Organization projects/service-accounts/project-API-key compatibility state path; protocol metadata only, no real provider accounts or usable provider keys |
+| `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-organization-admin` | Local Organization projects/users/service-accounts/project-API-key/rate-limit compatibility state path; protocol metadata only, no real provider accounts, usable provider keys, or enforced provider throttles |
 | `CODEXCOMPAT_ORGANIZATION_ADMIN_MAX_RECORDS` | `5000` | Maximum local Organization project admin records retained before opportunistic cleanup |
 | `CODEXCOMPAT_PYTHON_GRADER_PROVIDER` | `local` | Local Python grader execution provider; use `disabled` to reject Python grader runs |
 | `CODEXCOMPAT_PYTHON_GRADER_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-python-graders` | Temporary local Python grader workdir root; keep outside Git |

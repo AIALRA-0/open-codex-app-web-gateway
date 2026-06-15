@@ -4369,6 +4369,89 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Local Organization project users and rate limits compatibility
+
+- Used official OpenAI sources for the next Organization project admin slice:
+  - RBAC guide confirms project administrators manage project users, service
+    accounts, API keys, and project rate limits through the management API;
+  - OpenAI Node SDK generated project-users resource documents
+    `organization.project.user` records, `added_at`, `role`, optional
+    `email/name`, create bodies accepting `user_id` and/or `email`, and
+    delete responses with object `organization.project.user.deleted`;
+  - OpenAI Node SDK generated project-rate-limits resource documents
+    `project.rate_limit` records with model, request/token limits, optional
+    daily/image/audio/batch limits, and updateable numeric fields.
+- Extended the local file-backed Organization project admin compatibility
+  layer:
+  - `GET/POST /v1/organization/projects/{project_id}/users` now lists and
+    creates or upserts local project users for active projects;
+  - `GET/POST/DELETE /v1/organization/projects/{project_id}/users/{user_id}`
+    now retrieves, updates project role, and deletes local project users;
+  - project-user roles are normalized to `owner` or `member`; invalid roles
+    return OpenAI-style `400 invalid_project_role`;
+  - user IDs can come from caller-supplied `user_id`, stable email-derived IDs,
+    or generated local IDs; optional email/name metadata is preserved;
+  - `GET /v1/organization/projects/{project_id}/rate_limits` lazily seeds local
+    `project.rate_limit` records for representative text, embedding, and image
+    models including `deepseek-v4-pro`;
+  - `POST /v1/organization/projects/{project_id}/rate_limits/{rate_limit_id}`
+    updates local numeric rate-limit fields and rejects negative/non-finite
+    values with `400 invalid_rate_limit_value`;
+  - archived projects reject project-user and rate-limit reads/mutations with
+    `400 project_archived`.
+- Current boundary: this closes another admin SDK/UI 404 class for local
+  project access and limit-management flows when the gateway is backed by a
+  Chat Completions provider. These records are compatibility metadata only;
+  they do not create real provider accounts, grant real provider access,
+  modify hosted OpenAI/DeepSeek limits, or enforce traffic throttling.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies project user create/list/retrieve/
+    update/delete, invalid role errors, seeded rate-limit listing, rate-limit
+    update, invalid/missing rate-limit errors, archived project errors, and
+    zero upstream provider calls;
+  - live `bridge-regression` now includes
+    `organization-project-users-rate-limits`, covering the same lifecycle
+    against the deployed DeepSeek-backed bridge.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Organization project unit tests passed 2/2.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-project-users-rate-limits`: passed 1/1 against
+    `deepseek-v4-pro`, latency 450 ms, output
+    `organization_project_access:...`, and zero provider token usage.
+  - `npm test`: passed 203/203.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1437 ms, P95 latency 1762 ms, and total usage 99 tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 100/100,
+    pass rate 1.0, average latency 1375 ms, P95 latency 3871 ms, and total
+    usage 25023 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering load/auth, sidebar
+    controls, core page navigation, project dialog/upload, prompt submission,
+    completed-turn actions, reload persistence, generated image artifact
+    display, saved project reopen/cleanup, and console error/warning checks;
+    screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T17-09-46-014Z.png`.
+  - `npm run prune:runtime -- --dry-run`: scanned 1958 runtime candidates
+    across 13 targets, selected 1 old UI-smoke screenshot, selected 83216
+    bytes, and reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 screenshot, freed
+    83216 bytes, and reported 0 errors.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; local bridge healthz returned `ok:true`; public
+    `https://opencodexapp.aialra.online/` returned HTTP 200; the filesystem had
+    29 GB available; `state/` was 27 MB, `output/` was 4.4 MB,
+    `/srv/aialra/data/opencodexapp` was 136 KB, and
+    `/srv/aialra/logs/opencodexapp` was 28 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. Rate-limit and user
+  records contain protocol metadata only and no usable provider secrets.
+
 ## 2026-06-15 - Local Organization project admin compatibility
 
 - Used the official OpenAI OpenAPI specs through the developer-docs MCP for:

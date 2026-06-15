@@ -438,6 +438,59 @@ function buildSuites(defaultModel) {
           && missingProject.json?.error?.code === "project_not_found",
       },
       {
+        id: "organization-project-users-rate-limits",
+        mode: "organization-project-users-rate-limits",
+        check: ({
+          project,
+          user,
+          users,
+          fetchedUser,
+          updatedUser,
+          invalidUserRole,
+          rateLimits,
+          updatedRateLimit,
+          invalidRateLimit,
+          missingRateLimit,
+          deletedUser,
+          missingUser,
+          archivedProject,
+          archivedUsers,
+          archivedRateLimits,
+        }) => project?.object === "organization.project"
+          && user?.object === "organization.project.user"
+          && user.id?.startsWith("user_")
+          && user.role === "owner"
+          && user.email === "bridge-project-user@example.com"
+          && users?.object === "list"
+          && users.data?.some((entry) => entry.id === user.id)
+          && fetchedUser?.id === user.id
+          && updatedUser?.role === "member"
+          && invalidUserRole?.status === 400
+          && invalidUserRole.json?.error?.code === "invalid_project_role"
+          && rateLimits?.object === "list"
+          && rateLimits.data?.some((entry) => entry.object === "project.rate_limit"
+            && entry.id?.startsWith("rl_")
+            && entry.model
+            && Number.isFinite(entry.max_requests_per_1_minute)
+            && Number.isFinite(entry.max_tokens_per_1_minute))
+          && updatedRateLimit?.object === "project.rate_limit"
+          && updatedRateLimit.max_requests_per_1_minute === 64
+          && updatedRateLimit.max_tokens_per_1_minute === 64000
+          && invalidRateLimit?.status === 400
+          && invalidRateLimit.json?.error?.code === "invalid_rate_limit_value"
+          && missingRateLimit?.status === 404
+          && missingRateLimit.json?.error?.code === "project_rate_limit_not_found"
+          && deletedUser?.object === "organization.project.user.deleted"
+          && deletedUser.deleted === true
+          && missingUser?.status === 404
+          && missingUser.json?.error?.code === "project_user_not_found"
+          && archivedProject?.status === "archived"
+          && archivedUsers?.status === 400
+          && archivedUsers.json?.error?.code === "project_archived"
+          && archivedRateLimits?.status === 400
+          && archivedRateLimits.json?.error?.code === "project_archived",
+      },
+      {
         id: "chatkit-lifecycle",
         mode: "chatkit-lifecycle",
         request: {
@@ -3047,6 +3100,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-project-admin") {
       return await runOrganizationProjectAdminCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-project-users-rate-limits") {
+      return await runOrganizationProjectUsersRateLimitsCase(testCase, context, started);
+    }
     if (testCase.mode === "chatkit-lifecycle") {
       return await runChatKitLifecycleCase(testCase, context, started);
     }
@@ -3582,6 +3638,82 @@ async function runOrganizationProjectAdminCase(testCase, context, started) {
     api_key_id: serviceAccount.json?.api_key?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_project:${project.json.id}:${serviceAccount.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationProjectUsersRateLimitsCase(testCase, context, started) {
+  const marker = `bridge-access-${Date.now()}-${context.iteration}`;
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Access ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+  const user = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users`, {
+    user_id: `user_${marker.replace(/[^A-Za-z0-9_-]/g, "_")}`,
+    email: "bridge-project-user@example.com",
+    role: "owner",
+  });
+  const userId = encodeURIComponent(user.json?.id || "missing_user");
+  const users = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/users?limit=20`);
+  const fetchedUser = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/users/${userId}`);
+  const updatedUser = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users/${userId}`, {
+    role: "member",
+  });
+  const invalidUserRole = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/users/${userId}`, {
+    role: "viewer",
+  });
+  const rateLimits = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/rate_limits?limit=20`);
+  const selectedRateLimit = (rateLimits.json?.data || []).find((entry) => entry.model === "deepseek-v4-pro")
+    || rateLimits.json?.data?.[0];
+  const rateLimitId = encodeURIComponent(selectedRateLimit?.id || "missing_rate_limit");
+  const updatedRateLimit = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/rate_limits/${rateLimitId}`, {
+    max_requests_per_1_minute: 64,
+    max_tokens_per_1_minute: 64000,
+  });
+  const invalidRateLimit = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/rate_limits/${rateLimitId}`, {
+    max_requests_per_1_minute: -1,
+  });
+  const missingRateLimit = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/rate_limits/rl_missing_${context.iteration}`, {
+    max_requests_per_1_minute: 1,
+  });
+  const deletedUserRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/users/${userId}`);
+  const deletedUser = parseJsonish(deletedUserRaw.body);
+  const missingUser = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/users/${userId}`);
+  const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
+  const archivedUsers = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/users?limit=20`);
+  const archivedRateLimits = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/rate_limits?limit=20`);
+  const ok = !!testCase.check({
+    project: project.json,
+    user: user.json,
+    users: users.json,
+    fetchedUser: fetchedUser.json,
+    updatedUser: updatedUser.json,
+    invalidUserRole,
+    rateLimits: rateLimits.json,
+    updatedRateLimit: updatedRateLimit.json,
+    invalidRateLimit,
+    missingRateLimit,
+    deletedUser,
+    missingUser,
+    archivedProject: archivedProject.json,
+    archivedUsers,
+    archivedRateLimits,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: project.status,
+    project_id: project.json.id,
+    user_id: user.json?.id || null,
+    rate_limit_id: selectedRateLimit?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_project_access:${project.json.id}:${user.json?.id || "missing"}`,
   });
 }
 

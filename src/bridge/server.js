@@ -8325,6 +8325,54 @@ function handleOrganizationProjectServiceAccountDelete(res, organizationAdminSto
   sendJson(res, 200, organizationAdminStore.deleteProjectServiceAccount(projectId, serviceAccountId));
 }
 
+async function handleOrganizationProjectUserCreate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project user request body must be a JSON object", {
+      code: "invalid_project_user_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createProjectUser(projectId, body));
+}
+
+function handleOrganizationProjectUsersList(res, organizationAdminStore, projectId, url) {
+  const users = organizationAdminStore.listProjectUsers(projectId);
+  sendJson(res, 200, paginateListWithDefaultOrder(users, url, "asc", 20, 100));
+}
+
+function handleOrganizationProjectUserGet(res, organizationAdminStore, projectId, userId) {
+  sendJson(res, 200, organizationAdminStore.getProjectUser(projectId, userId));
+}
+
+async function handleOrganizationProjectUserUpdate(req, res, organizationAdminStore, projectId, userId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project user update body must be a JSON object", {
+      code: "invalid_project_user_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectUser(projectId, userId, body));
+}
+
+function handleOrganizationProjectUserDelete(res, organizationAdminStore, projectId, userId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectUser(projectId, userId));
+}
+
+function handleOrganizationProjectRateLimitsList(res, organizationAdminStore, projectId, url) {
+  const rateLimits = organizationAdminStore.listProjectRateLimits(projectId);
+  sendJson(res, 200, paginateListWithDefaultOrder(rateLimits, url, "asc", 20, 100));
+}
+
+async function handleOrganizationProjectRateLimitUpdate(req, res, organizationAdminStore, projectId, rateLimitId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project rate limit update body must be a JSON object", {
+      code: "invalid_project_rate_limit_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectRateLimit(projectId, rateLimitId, body));
+}
+
 async function handleFineTuningJobCreate(req, res, fineTuningStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -11785,6 +11833,46 @@ function createServer(config = loadConfig()) {
         }
         if (apiKeyId && req.method === "DELETE") {
           handleOrganizationProjectApiKeyDelete(res, organizationAdminStore, projectId, apiKeyId);
+          return;
+        }
+      }
+
+      const organizationProjectUserRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/users(?:\/([^/]+))?$/);
+      if (organizationProjectUserRoute) {
+        const projectId = decodeURIComponent(organizationProjectUserRoute[1]);
+        const userId = organizationProjectUserRoute[2] ? decodeURIComponent(organizationProjectUserRoute[2]) : "";
+        if (!userId && req.method === "GET") {
+          handleOrganizationProjectUsersList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (!userId && req.method === "POST") {
+          await handleOrganizationProjectUserCreate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (userId && req.method === "GET") {
+          handleOrganizationProjectUserGet(res, organizationAdminStore, projectId, userId);
+          return;
+        }
+        if (userId && req.method === "POST") {
+          await handleOrganizationProjectUserUpdate(req, res, organizationAdminStore, projectId, userId);
+          return;
+        }
+        if (userId && req.method === "DELETE") {
+          handleOrganizationProjectUserDelete(res, organizationAdminStore, projectId, userId);
+          return;
+        }
+      }
+
+      const organizationProjectRateLimitRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/rate_limits(?:\/([^/]+))?$/);
+      if (organizationProjectRateLimitRoute) {
+        const projectId = decodeURIComponent(organizationProjectRateLimitRoute[1]);
+        const rateLimitId = organizationProjectRateLimitRoute[2] ? decodeURIComponent(organizationProjectRateLimitRoute[2]) : "";
+        if (!rateLimitId && req.method === "GET") {
+          handleOrganizationProjectRateLimitsList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (rateLimitId && req.method === "POST") {
+          await handleOrganizationProjectRateLimitUpdate(req, res, organizationAdminStore, projectId, rateLimitId);
           return;
         }
       }

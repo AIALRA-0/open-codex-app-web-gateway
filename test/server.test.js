@@ -11824,6 +11824,147 @@ test("Organization projects manage local service accounts and redacted API keys"
   }
 });
 
+test("Organization projects manage local users and rate limits", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization project users/rate limits compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const createdResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project Access" }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const project = await createdResponse.json();
+
+    const userResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_access",
+        email: "bridge-access@example.com",
+        role: "owner",
+      }),
+    });
+    assert.equal(userResponse.status, 200);
+    const user = await userResponse.json();
+    assert.deepEqual({
+      id: user.id,
+      object: user.object,
+      role: user.role,
+      email: user.email,
+      name: user.name,
+    }, {
+      id: "user_bridge_access",
+      object: "organization.project.user",
+      role: "owner",
+      email: "bridge-access@example.com",
+      name: null,
+    });
+    assert.equal(typeof user.added_at, "number");
+    assert.equal(user.compatibility.actual_openai_admin_data, false);
+
+    const users = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=20`);
+    assert.equal(users.status, 200);
+    const usersJson = await users.json();
+    assert.equal(usersJson.object, "list");
+    assert.equal(usersJson.data.length, 1);
+    assert.equal(usersJson.data[0].id, user.id);
+
+    const fetchedUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`);
+    assert.equal(fetchedUser.status, 200);
+    assert.equal((await fetchedUser.json()).email, "bridge-access@example.com");
+
+    const updatedUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "member" }),
+    });
+    assert.equal(updatedUser.status, 200);
+    assert.equal((await updatedUser.json()).role, "member");
+
+    const invalidUserRole = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role: "viewer" }),
+    });
+    assert.equal(invalidUserRole.status, 400);
+    assert.equal((await invalidUserRole.json()).error.code, "invalid_project_role");
+
+    const rateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=20`);
+    assert.equal(rateLimits.status, 200);
+    const rateLimitsJson = await rateLimits.json();
+    assert.equal(rateLimitsJson.object, "list");
+    assert.equal(rateLimitsJson.data.length >= 3, true);
+    const deepseekLimit = rateLimitsJson.data.find((entry) => entry.model === "deepseek-v4-pro")
+      || rateLimitsJson.data[0];
+    assert.equal(deepseekLimit.object, "project.rate_limit");
+    assert.match(deepseekLimit.id, /^rl_/);
+    assert.equal(typeof deepseekLimit.max_requests_per_1_minute, "number");
+    assert.equal(typeof deepseekLimit.max_tokens_per_1_minute, "number");
+
+    const updatedRateLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits/${deepseekLimit.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        max_requests_per_1_minute: 42,
+        max_tokens_per_1_minute: 42000,
+        max_requests_per_1_day: 4200,
+      }),
+    });
+    assert.equal(updatedRateLimit.status, 200);
+    const updatedRateLimitJson = await updatedRateLimit.json();
+    assert.equal(updatedRateLimitJson.max_requests_per_1_minute, 42);
+    assert.equal(updatedRateLimitJson.max_tokens_per_1_minute, 42000);
+    assert.equal(updatedRateLimitJson.max_requests_per_1_day, 4200);
+
+    const invalidRateLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits/${deepseekLimit.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ max_requests_per_1_minute: -1 }),
+    });
+    assert.equal(invalidRateLimit.status, 400);
+    assert.equal((await invalidRateLimit.json()).error.code, "invalid_rate_limit_value");
+
+    const missingRateLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits/rl_missing`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ max_requests_per_1_minute: 1 }),
+    });
+    assert.equal(missingRateLimit.status, 404);
+    assert.equal((await missingRateLimit.json()).error.code, "project_rate_limit_not_found");
+
+    const deletedUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedUser.status, 200);
+    assert.deepEqual(await deletedUser.json(), {
+      object: "organization.project.user.deleted",
+      id: user.id,
+      deleted: true,
+    });
+
+    const missingUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`);
+    assert.equal(missingUser.status, 404);
+    assert.equal((await missingUser.json()).error.code, "project_user_not_found");
+
+    const archivedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedResponse.status, 200);
+
+    const archivedUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`);
+    assert.equal(archivedUsers.status, 400);
+    assert.equal((await archivedUsers.json()).error.code, "project_archived");
+
+    const archivedRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits`);
+    assert.equal(archivedRateLimits.status, 400);
+    assert.equal((await archivedRateLimits.json()).error.code, "project_archived");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Realtime API creates local sessions, client secrets, and call lifecycle state", async () => {
   await withMockProvider(async () => {
     assert.fail("Realtime compatibility should not call upstream provider");
