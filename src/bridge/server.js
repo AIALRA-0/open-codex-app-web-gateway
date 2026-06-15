@@ -8255,6 +8255,34 @@ function handleOrganizationAuditLogsList(res, organizationAdminStore, url) {
   ));
 }
 
+async function handleOrganizationAdminApiKeyCreate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization admin API key request body must be a JSON object", {
+      code: "invalid_organization_admin_api_key_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createOrganizationAdminApiKey(body));
+}
+
+function handleOrganizationAdminApiKeysList(res, organizationAdminStore, url) {
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    organizationAdminStore.listOrganizationAdminApiKeys(),
+    url,
+    "asc",
+    20,
+    100,
+  ));
+}
+
+function handleOrganizationAdminApiKeyGet(res, organizationAdminStore, apiKeyId) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationAdminApiKey(apiKeyId));
+}
+
+function handleOrganizationAdminApiKeyDelete(res, organizationAdminStore, apiKeyId) {
+  sendJson(res, 200, organizationAdminStore.deleteOrganizationAdminApiKey(apiKeyId));
+}
+
 async function handleOrganizationRoleCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -12116,6 +12144,30 @@ function createServer(config = loadConfig()) {
       if (req.method === "GET" && url.pathname === "/v1/organization/audit_logs") {
         handleOrganizationAuditLogsList(res, organizationAdminStore, url);
         return;
+      }
+
+      if (url.pathname === "/v1/organization/admin_api_keys") {
+        if (req.method === "GET") {
+          handleOrganizationAdminApiKeysList(res, organizationAdminStore, url);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationAdminApiKeyCreate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
+      const organizationAdminApiKeyRoute = url.pathname.match(/^\/v1\/organization\/admin_api_keys\/([^/]+)$/);
+      if (organizationAdminApiKeyRoute) {
+        const apiKeyId = decodeURIComponent(organizationAdminApiKeyRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationAdminApiKeyGet(res, organizationAdminStore, apiKeyId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationAdminApiKeyDelete(res, organizationAdminStore, apiKeyId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/organization/roles") {

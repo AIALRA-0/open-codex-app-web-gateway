@@ -159,6 +159,7 @@ class LocalOrganizationAdminStore {
     fs.mkdirSync(this.organizationGroupsDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationUserRolesDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.organizationGroupResourcesDir(), { recursive: true, mode: 0o700 });
+    fs.mkdirSync(this.organizationAdminApiKeysDir(), { recursive: true, mode: 0o700 });
     fs.mkdirSync(this.auditLogsDir(), { recursive: true, mode: 0o700 });
   }
 
@@ -188,6 +189,10 @@ class LocalOrganizationAdminStore {
 
   organizationGroupResourcesDir() {
     return path.join(this.dir, "organization_group_resources");
+  }
+
+  organizationAdminApiKeysDir() {
+    return path.join(this.dir, "organization_admin_api_keys");
   }
 
   auditLogsDir() {
@@ -259,6 +264,12 @@ class LocalOrganizationAdminStore {
     const dir = this.organizationGroupResourceDir(groupId, "roles");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
+  }
+
+  organizationAdminApiKeyPath(apiKeyId) {
+    const clean = safeId(apiKeyId);
+    if (!clean) return null;
+    return path.join(this.organizationAdminApiKeysDir(), `${clean}.json`);
   }
 
   auditLogPath(auditLogId) {
@@ -355,6 +366,91 @@ class LocalOrganizationAdminStore {
       .filter((log) => intersects(this.auditLogResourceIds(log), resourceIds))
       .sort(compareEffectiveThenIdAsc)
       .map((log) => this.auditLogProjection(log));
+  }
+
+  createOrganizationAdminApiKey(body = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.name);
+    if (!name) {
+      throw organizationAdminError("name is required", {
+        code: "missing_required_parameter",
+        param: "name",
+      });
+    }
+    const now = nowSeconds();
+    const apiKey = {
+      object: "organization.admin_api_key",
+      id: `key_${randomToken(14)}`,
+      name,
+      redacted_value: null,
+      created_at: now,
+      last_used_at: null,
+      owner: this.localOrganizationAdminApiKeyOwner(now),
+      compatibility: localCompatibility("organization_admin_api_key_protocol_compatibility", {
+        locally_persisted: true,
+        locally_generated_secret_persisted: false,
+      }),
+    };
+    apiKey.redacted_value = `oc-local-admin-${apiKey.id.slice(-8)}...redacted`;
+    this.writeJson(this.organizationAdminApiKeyPath(apiKey.id), apiKey);
+    this.recordAuditLog("api_key.created", {
+      id: apiKey.id,
+      data: {
+        name: apiKey.name,
+        scopes: ["api.organization.admin"],
+      },
+    }, {
+      resourceId: apiKey.id,
+    });
+    this.cleanup();
+    return {
+      ...this.organizationAdminApiKeyProjection(apiKey),
+      value: `oc_local_admin_key_${randomToken(24)}`,
+    };
+  }
+
+  listOrganizationAdminApiKeys() {
+    return this.listJsonFiles(this.organizationAdminApiKeysDir())
+      .sort(compareCreatedThenIdAsc)
+      .map((apiKey) => this.organizationAdminApiKeyProjection(apiKey));
+  }
+
+  getOrganizationAdminApiKey(apiKeyId) {
+    const apiKey = this.readJson(this.organizationAdminApiKeyPath(apiKeyId));
+    if (!apiKey) {
+      throw organizationAdminError(`organization admin API key not found: ${apiKeyId}`, {
+        status: 404,
+        code: "organization_admin_api_key_not_found",
+        param: "key_id",
+      });
+    }
+    return this.organizationAdminApiKeyProjection(apiKey);
+  }
+
+  deleteOrganizationAdminApiKey(apiKeyId) {
+    const apiKey = this.readJson(this.organizationAdminApiKeyPath(apiKeyId));
+    if (!apiKey) {
+      throw organizationAdminError(`organization admin API key not found: ${apiKeyId}`, {
+        status: 404,
+        code: "organization_admin_api_key_not_found",
+        param: "key_id",
+      });
+    }
+    try { fs.unlinkSync(this.organizationAdminApiKeyPath(apiKey.id)); } catch {}
+    this.recordAuditLog("api_key.deleted", {
+      id: apiKey.id,
+      data: {
+        name: apiKey.name ?? null,
+        scopes: ["api.organization.admin"],
+      },
+    }, {
+      resourceId: apiKey.id,
+    });
+    return {
+      object: "organization.admin_api_key.deleted",
+      id: apiKey.id,
+      deleted: true,
+    };
   }
 
   createOrganizationRole(body = {}) {
@@ -1694,6 +1790,32 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  localOrganizationAdminApiKeyOwner(createdAt = nowSeconds()) {
+    return {
+      type: "user",
+      object: "organization.user",
+      id: "user_local_organization_admin",
+      name: "Local Organization Admin",
+      created_at: createdAt,
+      role: "owner",
+    };
+  }
+
+  organizationAdminApiKeyProjection(apiKey) {
+    return {
+      id: apiKey.id,
+      object: "organization.admin_api_key",
+      name: apiKey.name ?? null,
+      redacted_value: apiKey.redacted_value ?? `oc-local-admin-${String(apiKey.id || "").slice(-8)}...redacted`,
+      created_at: apiKey.created_at ?? null,
+      last_used_at: apiKey.last_used_at ?? null,
+      owner: isPlainObject(apiKey.owner)
+        ? clone(apiKey.owner)
+        : this.localOrganizationAdminApiKeyOwner(apiKey.created_at),
+      compatibility: isPlainObject(apiKey.compatibility) ? clone(apiKey.compatibility) : undefined,
+    };
+  }
+
   localAuditActor() {
     return {
       type: "api_key",
@@ -1932,6 +2054,7 @@ class LocalOrganizationAdminStore {
       this.organizationInvitesDir(),
       this.organizationRolesDir(),
       this.organizationGroupsDir(),
+      this.organizationAdminApiKeysDir(),
       this.auditLogsDir(),
     ]) {
       const files = this.listCleanupEntries(dir);

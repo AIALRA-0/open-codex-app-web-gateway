@@ -12083,6 +12083,146 @@ test("Organization roles and groups manage local memberships and assignments", a
   });
 });
 
+test("Organization admin API keys are local, redacted, and audited", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization admin API key compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const emptyList = await fetch(`${baseUrl}/v1/organization/admin_api_keys`);
+    assert.equal(emptyList.status, 200);
+    const emptyListJson = await emptyList.json();
+    assert.deepEqual(emptyListJson, {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: false,
+    });
+
+    const missingName = await fetch(`${baseUrl}/v1/organization/admin_api_keys`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingName.status, 400);
+    assert.equal((await missingName.json()).error.code, "missing_required_parameter");
+
+    const createdResponse = await fetch(`${baseUrl}/v1/organization/admin_api_keys`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Admin Key" }),
+    });
+    assert.equal(createdResponse.status, 200);
+    const created = await createdResponse.json();
+    assert.equal(created.object, "organization.admin_api_key");
+    assert.match(created.id, /^key_/);
+    assert.equal(created.name, "Bridge Admin Key");
+    assert.match(created.redacted_value, /^oc-local-admin-/);
+    assert.match(created.value, /^oc_local_admin_key_/);
+    assert.equal(/^sk-/.test(created.value), false);
+    assert.equal(created.owner.type, "user");
+    assert.equal(created.owner.object, "organization.user");
+    assert.equal(created.owner.role, "owner");
+    assert.equal(created.compatibility.actual_openai_admin_data, false);
+
+    const secondResponse = await fetch(`${baseUrl}/v1/organization/admin_api_keys`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Admin Key 2" }),
+    });
+    assert.equal(secondResponse.status, 200);
+    const second = await secondResponse.json();
+    assert.match(second.value, /^oc_local_admin_key_/);
+
+    const persistedAdminState = readAllFiles(path.join(stateDir, "local-organization-admin")).join("\n");
+    assert.equal(persistedAdminState.includes(created.value), false);
+    assert.equal(persistedAdminState.includes(second.value), false);
+    assert.equal(/sk-[A-Za-z0-9_-]{16,}/.test(persistedAdminState), false);
+
+    const listed = await fetch(`${baseUrl}/v1/organization/admin_api_keys?limit=10`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.object, "list");
+    assert.equal(listedJson.data.length, 2);
+    assert.deepEqual(new Set(listedJson.data.map((entry) => entry.id)), new Set([created.id, second.id]));
+    assert.equal(listedJson.first_id, listedJson.data[0].id);
+    assert.equal(listedJson.last_id, listedJson.data.at(-1).id);
+    const listedCreated = listedJson.data.find((entry) => entry.id === created.id);
+    assert.equal(listedCreated.value, undefined);
+    assert.equal(listedCreated.redacted_value, created.redacted_value);
+
+    const descList = await fetch(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=1`);
+    assert.equal(descList.status, 200);
+    const descListJson = await descList.json();
+    const expectedDescFirstId = listedJson.data.at(-1).id;
+    assert.equal(descListJson.data.length, 1);
+    assert.equal(descListJson.data[0].id, expectedDescFirstId);
+    assert.equal(descListJson.has_more, true);
+
+    const nextPage = await fetch(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=1&after=${encodeURIComponent(expectedDescFirstId)}`);
+    assert.equal(nextPage.status, 200);
+    const nextPageJson = await nextPage.json();
+    assert.equal(nextPageJson.data.length, 1);
+    assert.equal(nextPageJson.data[0].id, listedJson.data[0].id);
+
+    const fetched = await fetch(`${baseUrl}/v1/organization/admin_api_keys/${created.id}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.id, created.id);
+    assert.equal(fetchedJson.value, undefined);
+    assert.equal(fetchedJson.redacted_value, created.redacted_value);
+
+    const auditLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=api_key.created&resource_ids%5B%5D=${created.id}`);
+    assert.equal(auditLogs.status, 200);
+    const auditLogsJson = await auditLogs.json();
+    assert.equal(auditLogsJson.data.length, 1);
+    assert.equal(auditLogsJson.data[0].type, "api_key.created");
+    assert.equal(auditLogsJson.data[0]["api_key.created"].id, created.id);
+    assert.deepEqual(auditLogsJson.data[0]["api_key.created"].data.scopes, ["api.organization.admin"]);
+
+    const deleted = await fetch(`${baseUrl}/v1/organization/admin_api_keys/${created.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      object: "organization.admin_api_key.deleted",
+      id: created.id,
+      deleted: true,
+    });
+
+    const deletedLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=api_key.deleted&resource_ids%5B%5D=${created.id}`);
+    assert.equal(deletedLogs.status, 200);
+    assert.equal((await deletedLogs.json()).data[0]["api_key.deleted"].id, created.id);
+
+    const missing = await fetch(`${baseUrl}/v1/organization/admin_api_keys/${created.id}`);
+    assert.equal(missing.status, 404);
+    assert.equal((await missing.json()).error.code, "organization_admin_api_key_not_found");
+
+    const missingDelete = await fetch(`${baseUrl}/v1/organization/admin_api_keys/${created.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(missingDelete.status, 404);
+    assert.equal((await missingDelete.json()).error.code, "organization_admin_api_key_not_found");
+
+    assert.equal(requests.length, 0);
+  });
+
+  function readAllFiles(root) {
+    const values = [];
+    const visit = (dir) => {
+      if (!fs.existsSync(dir)) return;
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const entryPath = path.join(dir, entry.name);
+        if (entry.isDirectory()) visit(entryPath);
+        else if (entry.isFile()) values.push(fs.readFileSync(entryPath, "utf8"));
+      }
+    };
+    visit(root);
+    return values;
+  }
+});
+
 test("Organization audit logs list local admin lifecycle events and filters", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization audit logs compatibility should not call upstream provider");

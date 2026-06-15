@@ -512,6 +512,56 @@ function buildSuites(defaultModel) {
           && missingGroup.json?.error?.code === "organization_group_not_found",
       },
       {
+        id: "organization-admin-api-keys",
+        mode: "organization-admin-api-keys",
+        check: ({
+          missingName,
+          created,
+          second,
+          keys,
+          fetched,
+          desc,
+          nextPage,
+          createLogs,
+          deleted,
+          deletedLogs,
+          missing,
+        }) => missingName?.status === 400
+          && missingName.json?.error?.code === "missing_required_parameter"
+          && created?.object === "organization.admin_api_key"
+          && created.id?.startsWith("key_")
+          && created.name?.startsWith("Bridge Eval Admin Key")
+          && /^oc-local-admin-/.test(created.redacted_value || "")
+          && /^oc_local_admin_key_/.test(created.value || "")
+          && !String(created.value || "").startsWith("sk-")
+          && created.owner?.type === "user"
+          && created.owner?.object === "organization.user"
+          && created.compatibility?.actual_openai_admin_data === false
+          && second?.object === "organization.admin_api_key"
+          && /^oc_local_admin_key_/.test(second.value || "")
+          && keys?.object === "list"
+          && keys.data?.some((entry) => entry.id === created.id
+            && !Object.prototype.hasOwnProperty.call(entry, "value")
+            && entry.redacted_value === created.redacted_value)
+          && keys.data?.some((entry) => entry.id === second.id
+            && !Object.prototype.hasOwnProperty.call(entry, "value"))
+          && fetched?.id === created.id
+          && !Object.prototype.hasOwnProperty.call(fetched || {}, "value")
+          && fetched.redacted_value === created.redacted_value
+          && desc?.data?.length === 1
+          && desc.has_more === true
+          && nextPage?.data?.length === 1
+          && createLogs?.data?.some((entry) => entry.type === "api_key.created"
+            && entry["api_key.created"]?.id === created.id
+            && entry["api_key.created"]?.data?.scopes?.includes("api.organization.admin"))
+          && deleted?.object === "organization.admin_api_key.deleted"
+          && deleted.deleted === true
+          && deletedLogs?.data?.some((entry) => entry.type === "api_key.deleted"
+            && entry["api_key.deleted"]?.id === created.id)
+          && missing?.status === 404
+          && missing.json?.error?.code === "organization_admin_api_key_not_found",
+      },
+      {
         id: "organization-audit-logs",
         mode: "organization-audit-logs",
         check: ({
@@ -1149,6 +1199,7 @@ function buildSuites(defaultModel) {
           instructions: "You have an MCP dice tool exposed as a function tool. First call the available tool with expression 2d4+1. After the tool result is returned, answer exactly this text and nothing else: mcp-remote-call-ok.",
           input: "Call the remote MCP roll tool with expression 2d4+1, then return mcp-remote-call-ok.",
           reasoning: { effort: "none" },
+          tool_choice: { type: "function", name: "roll" },
           max_tool_calls: 2,
           max_output_tokens: 128,
           store: false,
@@ -1163,6 +1214,7 @@ function buildSuites(defaultModel) {
           instructions: "You have an MCP dice tool exposed as a function tool. First call the available tool with expression 2d4+1. After the tool result is returned, answer exactly this text and nothing else: mcp-remote-stream-call-ok.",
           input: "Stream a remote MCP roll tool call with expression 2d4+1, then return mcp-remote-stream-call-ok.",
           reasoning: { effort: "none" },
+          tool_choice: { type: "function", name: "roll" },
           stream: true,
           max_tool_calls: 2,
           max_output_tokens: 128,
@@ -3277,6 +3329,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-roles-groups") {
       return await runOrganizationRolesGroupsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-admin-api-keys") {
+      return await runOrganizationAdminApiKeysCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-audit-logs") {
       return await runOrganizationAuditLogsCase(testCase, context, started);
     }
@@ -3938,6 +3993,60 @@ async function runOrganizationRolesGroupsCase(testCase, context, started) {
   });
 }
 
+async function runOrganizationAdminApiKeysCase(testCase, context, started) {
+  const marker = `bridge-admin-key-${Date.now()}-${context.iteration}`;
+  const missingName = await postJsonCapture(`${baseUrl}/v1/organization/admin_api_keys`, {});
+  const created = await postJsonCapture(`${baseUrl}/v1/organization/admin_api_keys`, {
+    name: `Bridge Eval Admin Key ${marker}`,
+  });
+  if (!created.ok || !created.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: created.status,
+      error: truncate(created.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const createdId = encodeURIComponent(created.json.id);
+  const second = await postJsonCapture(`${baseUrl}/v1/organization/admin_api_keys`, {
+    name: `Bridge Eval Admin Key Spare ${marker}`,
+  });
+  const secondId = encodeURIComponent(second.json?.id || "missing_key");
+  const keys = await getJson(`${baseUrl}/v1/organization/admin_api_keys?limit=20`);
+  const fetched = await getJson(`${baseUrl}/v1/organization/admin_api_keys/${createdId}`);
+  const desc = await getJson(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=1`);
+  const nextCursor = desc.json?.last_id ? encodeURIComponent(desc.json.last_id) : "";
+  const nextPage = await getJson(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=1&after=${nextCursor}`);
+  const createLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=api_key.created&resource_ids%5B%5D=${createdId}&limit=20`);
+  const deletedRaw = await deleteJson(`${baseUrl}/v1/organization/admin_api_keys/${createdId}`);
+  const deleted = parseJsonish(deletedRaw.body);
+  const deletedLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=api_key.deleted&resource_ids%5B%5D=${createdId}&limit=20`);
+  const missing = await getJson(`${baseUrl}/v1/organization/admin_api_keys/${createdId}`);
+  await deleteJson(`${baseUrl}/v1/organization/admin_api_keys/${secondId}`);
+
+  const ok = !!testCase.check({
+    missingName,
+    created: created.json,
+    second: second.json,
+    keys: keys.json,
+    fetched: fetched.json,
+    desc: desc.json,
+    nextPage: nextPage.json,
+    createLogs: createLogs.json,
+    deleted,
+    deletedLogs: deletedLogs.json,
+    missing,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: created.status,
+    admin_api_key_id: created.json.id,
+    second_admin_api_key_id: second.json?.id || null,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_admin_api_keys:${created.json.id}:${second.json?.id || "missing"}`,
+  });
+}
+
 async function runOrganizationAuditLogsCase(testCase, context, started) {
   const marker = `bridge-audit-${Date.now()}-${context.iteration}`;
   const startedAt = Math.floor(Date.now() / 1000) - 2;
@@ -4033,7 +4142,7 @@ async function runOrganizationProjectAdminCase(testCase, context, started) {
   const updatedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}`, {
     name: "Bridge Eval Project Updated",
   });
-  const projects = await getJson(`${baseUrl}/v1/organization/projects?limit=20`);
+  const projects = await getJson(`${baseUrl}/v1/organization/projects?order=desc&limit=100`);
   const serviceAccount = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts`, {
     name: "Bridge Eval Service",
     role: "owner",
@@ -4056,8 +4165,8 @@ async function runOrganizationProjectAdminCase(testCase, context, started) {
   const deletedServiceAccount = parseJsonish(deletedServiceAccountRaw.body);
   const apiKeysAfterServiceAccountDelete = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/api_keys?limit=20`);
   const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
-  const activeProjectsAfterArchive = await getJson(`${baseUrl}/v1/organization/projects?limit=20`);
-  const archivedProjects = await getJson(`${baseUrl}/v1/organization/projects?limit=20&include_archived=true`);
+  const activeProjectsAfterArchive = await getJson(`${baseUrl}/v1/organization/projects?order=desc&limit=100`);
+  const archivedProjects = await getJson(`${baseUrl}/v1/organization/projects?order=desc&limit=100&include_archived=true`);
   const archivedServiceAccounts = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/service_accounts?limit=20`);
   const missingProject = await getJson(`${baseUrl}/v1/organization/projects/proj_missing_${context.iteration}`);
 

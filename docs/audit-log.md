@@ -4463,6 +4463,86 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization admin API keys compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - Admin APIs guide lists API key management as an administrative workflow and
+    documents Admin SDK initialization with an Admin API key;
+  - OpenAPI spec for `GET`/`POST /v1/organization/admin_api_keys` documents
+    `admin-api-keys-list`, `admin-api-keys-create`, cursor pagination with
+    `after`, `order`, `limit`, create body `name`, list response
+    `object:"list"` / `data` / `first_id` / `last_id` / `has_more`, redacted
+    `organization.admin_api_key` records, and create-only `value`;
+  - OpenAI Node SDK generated Organization admin API keys resource documents
+    `client.admin.organization.adminAPIKeys.create/retrieve/list/delete()`,
+    `AdminAPIKey`, `AdminAPIKeyCreateResponse`, and
+    `organization.admin_api_key.deleted`.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added an `organization_admin_api_keys` state directory under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR`;
+  - added `GET`, `POST`, `GET /{key_id}`, and `DELETE /{key_id}` for
+    `/v1/organization/admin_api_keys`;
+  - persists only redacted local admin API-key metadata and local owner
+    metadata; create responses include a one-time compatibility value prefixed
+    `oc_local_admin_key_`, never `sk-`, and that value is not written to local
+    state or later list/retrieve responses;
+  - records local `api_key.created` and `api_key.deleted` audit events with
+    `api.organization.admin` scope metadata, so the existing audit-log filters
+    can review admin-key lifecycle changes.
+- Current boundary: this is a local protocol-compatibility admin-key registry
+  for SDK/admin UI workflows. It does not create real OpenAI Admin API keys,
+  authenticate requests, grant provider privileges, or produce a reusable
+  provider secret. It closes 404s and validates redaction semantics for
+  Chat-Completions-backed deployments.
+- Hardened adjacent live regression stability while validating:
+  - `organization-project-admin` now lists projects with
+    `order=desc&limit=100` so long-lived deployed state does not hide the
+    just-created project behind older records;
+  - remote MCP call and stream-call live cases now force
+    `tool_choice:{type:"function",name:"roll"}` to reduce model randomness
+    where the model describes a tool call instead of making one.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies empty list shape, missing-name error,
+    create/list/retrieve/delete, redaction, one-time value non-persistence,
+    pagination, missing-key errors, audit-log writes, and zero upstream
+    provider calls;
+  - live `bridge-regression` now includes `organization-admin-api-keys`,
+    covering create/list/retrieve/delete/audit-log behavior against the
+    deployed DeepSeek-backed bridge with zero provider token usage.
+- Verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused admin-key unit test passed 1/1; focused Organization unit tests
+    passed 7/7.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `organization-admin-api-keys`: passed 1/1, latency 636 ms,
+    zero provider token usage, and output only admin-key ids, not values.
+  - Focused live `organization-project-admin` passed after pagination
+    hardening; focused `responses-mcp-remote-call` and
+    `responses-mcp-remote-stream-call` passed after forced tool-choice
+    hardening.
+  - `npm test`: passed 207/207.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1613 ms, P95 latency 1720 ms, and total usage 99
+    tokens.
+  - `npm run smoke:bridge`: returned `bridge-ok`.
+  - Full live `bridge-regression` with report output passed 104/104 against
+    `deepseek-v4-pro`, pass rate 1.0, average latency 1224 ms, P95 latency
+    3221 ms, and total usage 24796 tokens. The suite now includes
+    `organization-admin-api-keys`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online`; exercised sidebar controls, page
+    navigation, project dialog/browser upload, prompt send, completed-turn
+    controls, reload persistence, generated image artifact display, saved
+    project create/reopen/cleanup, and reported zero console errors/warnings.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, real admin keys, or one-time synthetic admin-key values
+  were added to tracked files. The user-provided DeepSeek key remains absent
+  from repository content.
+
 ## 2026-06-15 - Local Organization audit logs compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:
