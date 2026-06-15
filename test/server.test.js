@@ -15125,6 +15125,96 @@ test("POST /v1/chat/completions falls back to text markers for direct Chat audio
   }, { chatAudioInputMode: "text" });
 });
 
+test("POST /v1/chat/completions extracts direct Chat file content for text providers", async () => {
+  const inlineBase64 = Buffer.from("Inline direct Chat file says chat-inline-file-ok.", "utf8").toString("base64");
+  let localFileId = "";
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.store, true);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user", "system"]);
+    assert.equal(typeof call.body.messages[0].content, "string");
+    assert.match(call.body.messages[0].content, /Use direct Chat file context\./);
+    assert.match(call.body.messages[0].content, new RegExp(`\\[file:${localFileId}\\]`));
+    assert.match(call.body.messages[0].content, /\[file:inline-chat-file\.txt\]/);
+    assert.doesNotMatch(call.body.messages[0].content, new RegExp(inlineBase64));
+    assert.doesNotMatch(call.body.messages[0].content, /data:text\/plain/);
+    assert.match(call.body.messages[1].content, /Local Responses input_file compatibility extracted file inputs follow/);
+    assert.match(call.body.messages[1].content, /File ID direct Chat fixture says chat-file-id-ok\./);
+    assert.match(call.body.messages[1].content, /Inline direct Chat file says chat-inline-file-ok\./);
+    assert.doesNotMatch(call.body.messages[1].content, new RegExp(inlineBase64));
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_direct_file_text_fallback",
+      object: "chat.completion",
+      created: 1700000413,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat-file-id-ok chat-inline-file-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 18, completion_tokens: 6, total_tokens: 24 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdFile = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "direct-chat-file.txt",
+        purpose: "user_data",
+        content: "File ID direct Chat fixture says chat-file-id-ok.",
+      }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+    localFileId = file.id;
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-file-fallback" },
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Use direct Chat file context." },
+            { type: "input_file", file_id: file.id },
+            {
+              type: "file",
+              file: {
+                filename: "inline-chat-file.txt",
+                file_data: `data:text/plain;base64,${inlineBase64}`,
+                mime_type: "text/plain",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "chat-file-id-ok chat-inline-file-ok");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.provider, "text_fallback");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.mode, "text");
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.file_part_count, 2);
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.file_id_count, 1);
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_file_inputs.inline_file_count, 1);
+    assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.resolved_count, 2);
+    assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.failed_count, 0);
+    assert.equal(json.metadata.compatibility.chat_passthrough.local_input_files.deepseek_thinking, "disabled_for_input_files");
+    assert.equal(requests.length, 1);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+    assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "input_file", "file"]);
+  }, { chatFileInputMode: "text" });
+});
+
 test("POST /v1/chat/completions streams with direct Chat image text fallback", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, true);
@@ -17209,6 +17299,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousStreamOptionFields = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   const previousChatImageInputMode = process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   const previousChatAudioInputMode = process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
+  const previousChatFileInputMode = process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
@@ -17216,6 +17307,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
   delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
+  delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
@@ -17225,6 +17317,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.deepEqual(deepseekConfig.streamOptionFields, ["include_usage"]);
     assert.equal(deepseekConfig.chatImageInputMode, "text");
     assert.equal(deepseekConfig.chatAudioInputMode, "text");
+    assert.equal(deepseekConfig.chatFileInputMode, "text");
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
@@ -17234,6 +17327,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(openaiCompatibleConfig.streamOptionFields, null);
     assert.equal(openaiCompatibleConfig.chatImageInputMode, "vision");
     assert.equal(openaiCompatibleConfig.chatAudioInputMode, "audio");
+    assert.equal(openaiCompatibleConfig.chatFileInputMode, "file");
 
     process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = "vision";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatImageInputMode, "vision");
@@ -17246,6 +17340,12 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
 
     process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = "text";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatAudioInputMode, "text");
+
+    process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = "file";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatFileInputMode, "file");
+
+    process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = "text";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatFileInputMode, "text");
 
     process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields, null);
@@ -17270,6 +17370,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = previousChatImageInputMode;
     if (previousChatAudioInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
     else process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = previousChatAudioInputMode;
+    if (previousChatFileInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
+    else process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = previousChatFileInputMode;
   }
 });
 

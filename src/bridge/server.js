@@ -247,6 +247,15 @@ function normalizeChatAudioInputMode(value, deepseekProvider = false) {
   return fallback;
 }
 
+function normalizeChatFileInputMode(value, deepseekProvider = false) {
+  const fallback = deepseekProvider ? "text" : "file";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return fallback;
+  if (["text", "fallback", "marker", "markers", "disabled"].includes(normalized)) return "text";
+  if (["file", "native", "content_parts", "content-parts", "multimodal"].includes(normalized)) return "file";
+  return fallback;
+}
+
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
   const imageGenerationApiKeyEnv = process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV || "OPENAI_API_KEY";
@@ -263,6 +272,12 @@ function loadConfig(overrides = {}) {
   if (Object.prototype.hasOwnProperty.call(normalizedOverrides, "chatAudioInputMode")) {
     normalizedOverrides.chatAudioInputMode = normalizeChatAudioInputMode(
       normalizedOverrides.chatAudioInputMode,
+      deepseekProvider,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(normalizedOverrides, "chatFileInputMode")) {
+    normalizedOverrides.chatFileInputMode = normalizeChatFileInputMode(
+      normalizedOverrides.chatFileInputMode,
       deepseekProvider,
     );
   }
@@ -342,6 +357,7 @@ function loadConfig(overrides = {}) {
     inputImageMaxBytes: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES", 4 * 1024 * 1024, 1024, 50 * 1024 * 1024),
     chatImageInputMode: normalizeChatImageInputMode(process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE, deepseekProvider),
     chatAudioInputMode: normalizeChatAudioInputMode(process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE, deepseekProvider),
+    chatFileInputMode: normalizeChatFileInputMode(process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE, deepseekProvider),
     webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -3994,9 +4010,16 @@ async function* iterateSseJson(stream) {
   }
 }
 
-async function handleChatPassthrough(req, res, config, store) {
+async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const body = await readJson(req);
-  const { upstreamBody, compatibility } = chatPassthroughUpstreamBody(body, config);
+  const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);
+  const localInputFiles = await prepareChatPassthroughInputFileContext(body, config, fileSearchStore);
+  let compatibility = passthroughCompatibility;
+  if (localInputFiles) {
+    const nextCompatibility = isPlainObject(compatibility) ? { ...compatibility } : {};
+    applyInputFilesToChat(upstreamBody, nextCompatibility, localInputFiles, config);
+    compatibility = Object.keys(nextCompatibility).length ? nextCompatibility : null;
+  }
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
   if (body.stream && upstream.ok && isEventStreamResponse(upstream)) {
@@ -4051,6 +4074,12 @@ async function handleChatPassthrough(req, res, config, store) {
   res.end();
 }
 
+async function prepareChatPassthroughInputFileContext(body, config = {}, fileSearchStore) {
+  const mode = String(config.chatFileInputMode || "file").toLowerCase() === "text" ? "text" : "file";
+  if (mode !== "text" || !Array.isArray(body?.messages)) return null;
+  return await prepareInputFileContext({ input: body.messages }, config, fileSearchStore);
+}
+
 function chatPassthroughUpstreamBody(body, config) {
   if (!isPlainObject(body)) return { upstreamBody: body, compatibility: null };
   const upstreamBody = clone(body);
@@ -4080,6 +4109,7 @@ function chatPassthroughUpstreamBody(body, config) {
   const contentInputs = normalizeChatPassthroughContentInputs(upstreamBody, config);
   if (contentInputs?.image) compatibility.chat_image_inputs = contentInputs.image;
   if (contentInputs?.audio) compatibility.chat_audio_inputs = contentInputs.audio;
+  if (contentInputs?.file) compatibility.chat_file_inputs = contentInputs.file;
 
   const storedChatFields = filterChatPassthroughStoredFields(upstreamBody, config);
   if (storedChatFields) compatibility.stored_chat_fields = storedChatFields;
@@ -4103,12 +4133,15 @@ function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {
   if (!Array.isArray(upstreamBody.messages)) return null;
   const imageStats = chatPassthroughImageInputStats(upstreamBody.messages);
   const audioStats = chatPassthroughAudioInputStats(upstreamBody.messages);
-  if (!imageStats.image_part_count && !audioStats.audio_part_count) return null;
+  const fileStats = chatPassthroughFileInputStats(upstreamBody.messages);
+  if (!imageStats.image_part_count && !audioStats.audio_part_count && !fileStats.file_part_count) return null;
 
   const imageMode = String(config.chatImageInputMode || "vision").toLowerCase() === "text" ? "text" : "vision";
   const audioMode = String(config.chatAudioInputMode || "audio").toLowerCase() === "text" ? "text" : "audio";
+  const fileMode = String(config.chatFileInputMode || "file").toLowerCase() === "text" ? "text" : "file";
   const shouldNormalize = (imageStats.image_part_count && imageMode === "text")
-    || (audioStats.audio_part_count && audioMode === "text");
+    || (audioStats.audio_part_count && audioMode === "text")
+    || (fileStats.file_part_count && fileMode === "text");
   if (!shouldNormalize) return null;
 
   upstreamBody.messages = upstreamBody.messages.map((message) => {
@@ -4134,6 +4167,14 @@ function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {
         mode: audioMode,
         ...audioStats,
         reason: "provider_without_chat_audio_content_parts",
+      },
+    } : {}),
+    ...(fileStats.file_part_count && fileMode === "text" ? {
+      file: {
+        provider: "text_fallback",
+        mode: fileMode,
+        ...fileStats,
+        reason: "provider_without_chat_file_content_parts",
       },
     } : {}),
   };
@@ -4189,6 +4230,37 @@ function chatPassthroughAudioInputStats(messages = []) {
       if (source.transcript || part.transcript) stats.transcript_count += 1;
     }
     if (messageHasAudio) stats.message_count += 1;
+  }
+  return stats;
+}
+
+function chatPassthroughFileInputStats(messages = []) {
+  const stats = {
+    message_count: 0,
+    file_part_count: 0,
+    file_id_count: 0,
+    inline_file_count: 0,
+    file_url_count: 0,
+    text_part_count: 0,
+  };
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const parts = Array.isArray(message?.content) ? message.content : [];
+    let messageHasFile = false;
+    for (const part of parts) {
+      if (!isPlainObject(part)) continue;
+      if (part.type === "text" || part.type === "input_text") stats.text_part_count += 1;
+      if (part.type !== "input_file" && part.type !== "file") continue;
+      stats.file_part_count += 1;
+      messageHasFile = true;
+      const source = isPlainObject(part.file) ? part.file : part;
+      if (source.file_id != null || source.id != null || part.file_id != null || part.id != null) stats.file_id_count += 1;
+      if (source.file_data != null || source.data != null || source.content_base64 != null
+        || part.file_data != null || part.data != null || part.content_base64 != null) {
+        stats.inline_file_count += 1;
+      }
+      if (source.file_url != null || source.url != null || part.file_url != null || part.url != null) stats.file_url_count += 1;
+    }
+    if (messageHasFile) stats.message_count += 1;
   }
   return stats;
 }
@@ -7806,7 +7878,7 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
     if (endpoint === "/v1/responses") {
       await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore);
     } else if (endpoint === "/v1/chat/completions") {
-      await handleChatPassthrough(req, res, config, store);
+      await handleChatPassthrough(req, res, config, store, fileSearchStore);
     } else if (endpoint === "/v1/completions") {
       await handleLegacyCompletions(req, res, config);
     } else if (endpoint === "/v1/embeddings") {
@@ -14520,7 +14592,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleChatPassthrough(req, res, config, store);
+          await handleChatPassthrough(req, res, config, store, fileSearchStore);
           return;
         }
       }

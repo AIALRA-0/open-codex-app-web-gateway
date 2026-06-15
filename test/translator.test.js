@@ -145,6 +145,33 @@ test("falls back to text markers for user audio input when Chat audio is disable
   });
 });
 
+test("falls back to safe text markers for file content parts", () => {
+  const inlineBase64 = Buffer.from("file marker payload", "utf8").toString("base64");
+  const messages = responseInputToChatMessages([{
+    role: "user",
+    content: [
+      { type: "input_text", text: "Inspect the file marker." },
+      {
+        type: "file",
+        file: {
+          filename: "marker.txt",
+          file_data: `data:text/plain;base64,${inlineBase64}`,
+          mime_type: "text/plain",
+        },
+      },
+    ],
+  }], { chatFileInputMode: "text" });
+
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].role, "user");
+  assert.equal(typeof messages[0].content, "string");
+  assert.match(messages[0].content, /Inspect the file marker\./);
+  assert.match(messages[0].content, /\[file:marker\.txt\]/);
+  assert.match(messages[0].content, /media_type: text\/plain/);
+  assert.doesNotMatch(messages[0].content, new RegExp(inlineBase64));
+  assert.doesNotMatch(messages[0].content, /data:text\/plain/);
+});
+
 test("maps image detail and base64 image data to Chat image content parts", () => {
   const messages = responseInputToChatMessages([
     {

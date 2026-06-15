@@ -829,11 +829,34 @@ function collectInputFileParts(input) {
       return;
     }
     if (typeof value !== "object") return;
-    if (value.type === "input_file") parts.push(value);
+    const inputFile = normalizeInputFilePart(value);
+    if (inputFile) parts.push(inputFile);
     if (Array.isArray(value.content)) visit(value.content);
   };
   visit(input);
   return parts;
+}
+
+function normalizeInputFilePart(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  if (value.type !== "input_file" && value.type !== "file") return null;
+  const source = value.file && typeof value.file === "object" && !Array.isArray(value.file)
+    ? value.file
+    : value;
+  const inputFile = {
+    type: "input_file",
+  };
+  const fileId = source.file_id || source.id || value.file_id || value.id;
+  const fileData = source.file_data ?? source.data ?? source.content_base64 ?? value.file_data ?? value.data ?? value.content_base64;
+  const fileUrl = source.file_url || source.url || value.file_url || value.url;
+  const filename = source.filename || source.name || value.filename || value.name;
+  const mediaType = source.media_type || source.mime_type || value.media_type || value.mime_type;
+  if (fileId != null) inputFile.file_id = stringifyContent(fileId);
+  if (fileData != null) inputFile.file_data = stringifyContent(fileData);
+  if (fileUrl != null) inputFile.file_url = stringifyContent(fileUrl);
+  if (filename != null) inputFile.filename = stringifyContent(filename);
+  if (mediaType != null) inputFile.media_type = stringifyContent(mediaType);
+  return inputFile;
 }
 
 function filenameFromUrl(value) {

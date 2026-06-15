@@ -55,7 +55,11 @@ function normalizeContentParts(content, role = "user", options = {}) {
   const textFallback = [];
   const imageInputMode = normalizeChatImageInputModeOption(options);
   const audioInputMode = normalizeChatAudioInputModeOption(options);
-  const nativeTextParts = role === "user" && imageInputMode !== "text" && audioInputMode !== "text";
+  const fileInputMode = normalizeChatFileInputModeOption(options);
+  const nativeTextParts = role === "user"
+    && imageInputMode !== "text"
+    && audioInputMode !== "text"
+    && fileInputMode !== "text";
 
   for (const part of content) {
     if (!isPlainObject(part)) {
@@ -90,10 +94,8 @@ function normalizeContentParts(content, role = "user", options = {}) {
       continue;
     }
 
-    if (part.type === "input_file") {
-      const fileHint = part.file_url || part.file_id || part.filename || "attached-file";
-      const text = part.text ? `\n${part.text}` : "";
-      textFallback.push(`[file:${fileHint}]${text}`);
+    if (part.type === "input_file" || part.type === "file") {
+      textFallback.push(inputFileFallbackText(part));
       continue;
     }
 
@@ -123,6 +125,12 @@ function normalizeChatAudioInputModeOption(options = {}) {
   const value = options.chatAudioInputMode ?? options.audioInputMode;
   const normalized = String(value || "audio").trim().toLowerCase();
   return normalized === "text" ? "text" : "audio";
+}
+
+function normalizeChatFileInputModeOption(options = {}) {
+  const value = options.chatFileInputMode ?? options.fileInputMode;
+  const normalized = String(value || "file").trim().toLowerCase();
+  return normalized === "text" ? "text" : "file";
 }
 
 function normalizeInputImageContentPart(part) {
@@ -203,6 +211,31 @@ function inputAudioFallbackText(part, audio) {
   const hint = source.file_id || source.filename || source.url || "inline";
   const transcript = source.transcript || part.transcript || "";
   return `[audio:${stringifyContent(format)}:${stringifyContent(hint)}]${transcript ? `\n${stringifyContent(transcript)}` : ""}`;
+}
+
+function inputFileFallbackText(part) {
+  const source = isPlainObject(part.file) ? part.file : part;
+  const fileData = source.file_data ?? source.data ?? source.content_base64 ?? part.file_data ?? part.data;
+  const rawUrl = source.file_url || source.url || part.file_url || part.url || "";
+  const hint = source.file_id
+    || source.id
+    || part.file_id
+    || part.id
+    || source.filename
+    || source.name
+    || part.filename
+    || part.name
+    || (fileData != null ? "inline-data" : rawUrl)
+    || "attached-file";
+  const mediaType = source.media_type || source.mime_type || part.media_type || part.mime_type || "";
+  const filename = source.filename || source.name || part.filename || part.name || "";
+  const text = source.text ?? part.text ?? "";
+  const lines = [`[file:${stringifyContent(hint)}]`];
+  if (filename && filename !== hint) lines.push(`filename: ${stringifyContent(filename)}`);
+  if (mediaType) lines.push(`media_type: ${stringifyContent(mediaType)}`);
+  if (rawUrl && rawUrl !== hint && fileData == null) lines.push(`file_url: ${stringifyContent(rawUrl)}`);
+  if (text) lines.push(stringifyContent(text));
+  return lines.join("\n");
 }
 
 function normalizeChatRole(role, options = {}) {

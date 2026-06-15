@@ -127,6 +127,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before conversion to a data URL for vision-capable Chat providers |
 | `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE` | `text` for DeepSeek, `vision` otherwise | `auto`, `vision`, or `text`; DeepSeek defaults to safe text markers because current DeepSeek Chat rejects `image_url` content parts |
 | `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE` | `text` for DeepSeek, `audio` otherwise | `auto`, `audio`, or `text`; DeepSeek defaults to safe text markers because current DeepSeek Chat does not accept `input_audio` content parts |
+| `CODEXCOMPAT_CHAT_FILE_INPUT_MODE` | `text` for DeepSeek, `file` otherwise | `auto`, `file`, or `text`; DeepSeek defaults to safe text markers and bounded local extraction for direct Chat `file` / `input_file` content parts |
 | `CODEXCOMPAT_AUDIO_PROVIDER` | `placeholder` | Local request-based Audio API compatibility provider for `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations`; use `disabled` to reject local Audio requests |
 | `CODEXCOMPAT_AUDIO_SPEECH_MODEL` | `gpt-4o-mini-tts` | Default model id returned/recorded by local speech synthesis compatibility when a client omits `model` |
 | `CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | Default model id for local transcription compatibility when a client omits `model` |

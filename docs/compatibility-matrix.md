@@ -144,7 +144,7 @@ implementations for those tools.
 | `input_text` | chat text content part | Direct |
 | `input_image` | chat `image_url` content part or text marker | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url` when `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE=vision`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...` for vision-capable providers. Local Files API `file_id` image inputs are resolved to bounded data URLs before upstream Chat calls and recorded in `metadata.compatibility.local_input_images` without storing the base64 payload in metadata. Text-only providers use explicit `[image:...]` markers without embedding data URLs |
 | `input_audio` | chat `input_audio` content part or text marker | Provider-dependent. Audio-capable Chat providers receive native `input_audio:{data,format}` parts when `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE=audio`; the bridge also accepts compatible top-level `data`, `audio_data`, or `file_data` shapes and preserves extra audio fields. Text-only providers such as DeepSeek default to explicit `[audio:format:hint]` markers with any transcript and do not embed base64 audio bytes in the upstream prompt. Responses and direct Chat passthrough record `metadata.compatibility.chat_audio_inputs` / `metadata.compatibility.chat_passthrough.chat_audio_inputs` when this mapping is exercised |
-| `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
+| `input_file` / compatible Chat `file` parts | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content. Direct Chat passthrough uses `CODEXCOMPAT_CHAT_FILE_INPUT_MODE`: file-capable providers may receive native file parts, while text-only providers such as DeepSeek receive safe `[file:...]` markers plus extracted local context and record `metadata.compatibility.chat_passthrough.chat_file_inputs` / `local_input_files` |
 | prior `message` output item | assistant chat message | Direct |
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
@@ -418,7 +418,7 @@ stored Chat completion records.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers; non-streaming and streaming requests with `store:true` are recorded in the local Chat completion lifecycle store. Direct Chat image content parts use `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE`: vision-capable providers receive native `image_url` parts, while text-only providers receive safe `[image:...]` markers and record `metadata.compatibility.chat_passthrough.chat_image_inputs`. Direct Chat audio content parts use `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE`: audio-capable providers receive native `input_audio` parts, while text-only providers receive safe `[audio:...]` markers and record `metadata.compatibility.chat_passthrough.chat_audio_inputs` |
+| `POST /v1/chat/completions` | Implemented | Proxies to upstream Chat Completions with bridge-safe response headers; non-streaming and streaming requests with `store:true` are recorded in the local Chat completion lifecycle store. Direct Chat image content parts use `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE`: vision-capable providers receive native `image_url` parts, while text-only providers receive safe `[image:...]` markers and record `metadata.compatibility.chat_passthrough.chat_image_inputs`. Direct Chat audio content parts use `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE`: audio-capable providers receive native `input_audio` parts, while text-only providers receive safe `[audio:...]` markers and record `metadata.compatibility.chat_passthrough.chat_audio_inputs`. Direct Chat file content parts use `CODEXCOMPAT_CHAT_FILE_INPUT_MODE`: file-capable providers can receive native file parts, while text-only providers receive safe `[file:...]` markers plus local extracted file context and record `metadata.compatibility.chat_passthrough.chat_file_inputs` |
 | `GET /v1/chat/completions` | Implemented for local `store:true` records | Lists locally stored upstream Chat completion objects with `model`, `metadata[key]`, `limit`, `after`, and `order` filters |
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
 | `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions |
@@ -1175,6 +1175,7 @@ Configuration:
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before it is converted to a data URL |
 | `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE` | `text` for DeepSeek, `vision` otherwise | Use `auto`, `vision`, or `text`. `vision` forwards Chat multimodal content parts; `text` emits safe image markers for providers that reject `image_url` content parts |
 | `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE` | `text` for DeepSeek, `audio` otherwise | Use `auto`, `audio`, or `text`. `audio` forwards Chat audio content parts; `text` emits safe audio markers for providers that reject `input_audio` content parts |
+| `CODEXCOMPAT_CHAT_FILE_INPUT_MODE` | `text` for DeepSeek, `file` otherwise | Use `auto`, `file`, or `text`. `file` forwards compatible Chat file parts unchanged; `text` emits safe file markers and, when local input-file extraction is enabled, injects bounded extracted text context |
 
 This adapter does not make a text-only model understand images. It preserves
 the protocol shape for vision-capable Chat providers and keeps DeepSeek text
@@ -1182,14 +1183,20 @@ workflows stable by avoiding live vision eval claims against text-only models.
 
 ## Local Input File Adapter
 
-The bridge can emulate Responses `input_file` items for Chat-only providers by
-extracting text from bounded file inputs and injecting that text into the
-upstream Chat prompt. It supports the three official Responses input styles:
+The bridge can emulate Responses `input_file` items and compatible direct Chat
+`file` / `input_file` content parts for Chat-only providers by extracting text
+from bounded file inputs and injecting that text into the upstream Chat prompt.
+It supports the three official Responses input styles:
 
 - `file_id` from the local Files API;
 - inline base64 `file_data`, including `data:<media>;base64,...` URLs;
 - HTTP(S) `file_url` when URL fetching is enabled; remote bodies that exceed
   the local byte cap are truncated and marked in compatibility metadata.
+
+For direct `/v1/chat/completions`, DeepSeek defaults to
+`CODEXCOMPAT_CHAT_FILE_INPUT_MODE=text`: the original request messages are
+preserved in the local stored Chat lifecycle, while the upstream provider
+receives text markers plus the extracted local file context.
 
 Configuration:
 

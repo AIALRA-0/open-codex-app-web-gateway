@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat File Input Fallback
+
+- Extended provider-aware file input handling to direct
+  `POST /v1/chat/completions` passthrough requests. The OpenAI Chat create
+  reference documents text, image, and audio Chat modalities with
+  model-dependent support; file inputs remain a provider/client extension in
+  Chat, so the bridge now handles compatible `input_file` / `file` content
+  parts explicitly instead of forwarding them to text-only providers.
+- Added `CODEXCOMPAT_CHAT_FILE_INPUT_MODE=auto|file|text`:
+  - DeepSeek defaults to `text`, converting Chat `input_file` / compatible
+    `file` content parts to safe `[file:...]` markers before the upstream
+    provider call;
+  - OpenAI-compatible file-capable providers default to `file`, preserving
+    native/extension file content parts.
+- Direct Chat text fallback now reuses the bounded local `input_file`
+  extractor for local Files API `file_id`, inline `file_data`, and `file_url`
+  inputs, injecting extracted text as a system context message for upstream
+  Chat-only providers.
+- Direct Chat compatibility metadata now records
+  `metadata.compatibility.chat_passthrough.chat_file_inputs` with provider
+  mode, message count, file part count, local file-id count, inline-file
+  count, file-url count, and text part count. Extractor results remain under
+  `metadata.compatibility.chat_passthrough.local_input_files`.
+- Stored Chat completion messages continue to preserve the caller's original
+  content parts for local lifecycle retrieval; the transformed text prompt and
+  extracted context are only used for the upstream provider request.
+- Security boundary: inline base64 file payloads are decoded locally for
+  bounded extraction and are not embedded into fallback markers or
+  compatibility metadata. Provider credentials and the user-provided test API
+  key remain absent from tracked files.
+- Validation:
+  - `node --check` passed for `src/bridge/translator.js`,
+    `src/bridge/input_files.js`, `src/bridge/server.js`, and
+    `scripts/eval-harness.mjs`.
+  - `npm test` passed 221/221 tests, including the new direct Chat file
+    passthrough fixture.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`; local bridge `/healthz` returned
+    `ok:true` with DeepSeek provider base `https://api.deepseek.com` and
+    default model `deepseek-v4-pro`.
+  - Live `chat-file-content` bridge-regression case passed 1/1, reading the
+    exact marker from an inline direct Chat file input.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000` passed 112/112
+    cases against `deepseek-v4-pro`, pass rate 1.0, average latency 1291 ms,
+    P95 latency 3056 ms, total usage 26,283 tokens.
+  - `npm run smoke:bridge` passed and returned `bridge-ok`.
+  - `npm run smoke:ui` passed against `https://opencodexapp.aialra.online`,
+    covering load/auth, sidebar controls, page navigation, project dialog,
+    browser upload, prompt send, completed-turn controls, reload persistence,
+    generated image artifact display, saved-project create/reopen/cleanup, and
+    no browser console errors.
+  - Public HTTPS entrypoint returned HTTP 200 from
+    `https://opencodexapp.aialra.online/`.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key all passed with no tracked secret matches.
+  - Runtime prune dry-run selected only one old UI-smoke screenshot
+    (83,898 bytes). Storage check: repo path 110 MB, `state/` 42 MB,
+    `output/` 4.5 MB, `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB; root filesystem had 7.9 GB
+    available.
+
 ## 2026-06-15 Direct Chat Audio Input Fallback
 
 - Extended provider-aware audio input handling to direct

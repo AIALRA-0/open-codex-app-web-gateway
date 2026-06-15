@@ -93,6 +93,14 @@ safe text markers for text-only providers such as DeepSeek, that base64 audio
 bytes are not copied into the upstream prompt, and that
 `metadata.compatibility.chat_passthrough.chat_audio_inputs` records the
 provider mode and aggregate audio-part counts.
+Direct Chat file-content coverage verifies that `/v1/chat/completions`
+requests with `messages[].content[]` Chat `input_file` / compatible `file`
+parts are rewritten to safe text markers for text-only providers such as
+DeepSeek, that base64 file bytes are not copied into the upstream prompt, that
+bounded local extraction supplies usable text context, and that
+`metadata.compatibility.chat_passthrough.chat_file_inputs` plus
+`metadata.compatibility.chat_passthrough.local_input_files` record the provider
+mode and extraction counts.
 Bridge-regression live cases and unit/mock-provider coverage also check local
 Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
 vector-store resources, injects local retrieval evidence, persists a
@@ -492,7 +500,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `previous_response_id` replay messages before upstream Chat calls when the
   local context budget is exceeded, while disabled truncation returns a bounded
   `context_length_exceeded` error before provider calls.
-- Responses `input_file` text extraction works for local file IDs, completed text/PDF Uploads API files, inline base64 payloads, bounded HTTP(S) file URLs, PDF text layers, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML document text, with failed/unsupported/truncated files surfaced in compatibility metadata.
+- Responses `input_file` and direct Chat `file` / `input_file` text extraction works for local file IDs, completed text/PDF Uploads API files, inline base64 payloads, bounded HTTP(S) file URLs, PDF text layers, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML document text, with failed/unsupported/truncated files surfaced in compatibility metadata.
 - Local Uploads API lifecycle creates pending Upload objects, adds Parts, completes ordered `part_ids` into usable byte-preserving Files, rejects byte-count mismatches, and blocks new Parts after cancellation.
 - Local Batch API accepts `purpose:"batch"` JSONL Files, executes supported endpoints including Responses `image_generation`, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, and direct `/v1/videos` requests, exposes OpenAI-style Batch objects, and writes output/error JSONL Files that can be read through `/v1/files/{file_id}/content`.
 - Local Evals API accepts eval definitions, `purpose:"evals"` JSONL Files,

@@ -2152,6 +2152,32 @@ function buildSuites(defaultModel) {
           && json.metadata?.compatibility?.chat_passthrough?.chat_audio_inputs?.inline_audio_count >= 1,
       },
       {
+        id: "chat-file-content",
+        mode: "chat",
+        request: {
+          model: defaultModel,
+          store: true,
+          metadata: { suite: "chat-file-content" },
+          thinking: { type: "disabled" },
+          messages: [{
+            role: "user",
+            content: [
+              { type: "text", text: "Use the attached direct Chat file and return exactly chat-file-live-ok with no extra words." },
+              {
+                type: "input_file",
+                filename: "direct-chat-file.txt",
+                file_data: `data:text/plain;base64,${Buffer.from("The exact direct Chat file marker is chat-file-live-ok.", "utf8").toString("base64")}`,
+              },
+            ],
+          }],
+          max_tokens: 128,
+        },
+        check: ({ json, text }) => /chat-file-live-ok/i.test(text)
+          && json.metadata?.compatibility?.chat_passthrough?.chat_file_inputs?.provider === "text_fallback"
+          && json.metadata?.compatibility?.chat_passthrough?.chat_file_inputs?.file_part_count >= 1
+          && json.metadata?.compatibility?.chat_passthrough?.local_input_files?.resolved_count >= 1,
+      },
+      {
         id: "chat-developer-compat",
         mode: "chat",
         request: {
