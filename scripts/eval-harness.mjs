@@ -14,6 +14,12 @@ const caseFilter = args.get("case");
 const verbose = !!args.get("verbose");
 let cachedCrcTable = null;
 const ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE = "step_details.tool_calls[*].file_search.results[*].content";
+const ORGANIZATION_DATA_RETENTION_TYPES = [
+  "zero_data_retention",
+  "modified_abuse_monitoring",
+  "enhanced_zero_data_retention",
+  "enhanced_modified_abuse_monitoring",
+];
 
 const suites = buildSuites(model);
 const selected = caseFilter
@@ -794,6 +800,87 @@ function buildSuites(defaultModel) {
           && archivedProject?.status === "archived"
           && archivedProjectAlerts?.status === 400
           && archivedProjectAlerts.json?.error?.code === "project_archived",
+      },
+      {
+        id: "organization-policy-controls",
+        mode: "organization-policy-controls",
+        check: ({
+          organizationRetention,
+          missingOrganizationRetention,
+          invalidOrganizationRetention,
+          updatedOrganizationRetention,
+          initialOrganizationRetentionType,
+          restoredOrganizationRetention,
+          organizationRetentionLogs,
+          project,
+          defaultProjectRetention,
+          updatedProjectRetention,
+          invalidProjectRetention,
+          projectRetentionLogs,
+          defaultModelPermissions,
+          invalidModelPermissions,
+          invalidModelIds,
+          updatedModelPermissions,
+          modelPermissionLogs,
+          deletedModelPermissions,
+          resetModelPermissions,
+          defaultHostedToolPermissions,
+          invalidHostedToolPermissions,
+          updatedHostedToolPermissions,
+          hostedToolPermissionLogs,
+          archivedProject,
+          archivedProjectRetention,
+          archivedModelPermissions,
+          archivedHostedToolPermissions,
+        }) => organizationRetention?.object === "organization.data_retention"
+          && ORGANIZATION_DATA_RETENTION_TYPES.includes(organizationRetention.type)
+          && missingOrganizationRetention?.status === 400
+          && missingOrganizationRetention.json?.error?.param === "retention_type"
+          && invalidOrganizationRetention?.status === 400
+          && invalidOrganizationRetention.json?.error?.code === "invalid_organization_data_retention_type"
+          && updatedOrganizationRetention?.type === "zero_data_retention"
+          && restoredOrganizationRetention?.type === initialOrganizationRetentionType
+          && organizationRetentionLogs?.data?.some((entry) => entry.type === "data_retention.updated"
+            && entry["data_retention.updated"]?.data?.type === "zero_data_retention")
+          && project?.object === "organization.project"
+          && defaultProjectRetention?.object === "project.data_retention"
+          && defaultProjectRetention.type === "organization_default"
+          && updatedProjectRetention?.type === "enhanced_modified_abuse_monitoring"
+          && invalidProjectRetention?.status === 400
+          && invalidProjectRetention.json?.error?.code === "invalid_project_data_retention_type"
+          && projectRetentionLogs?.data?.some((entry) => entry.type === "data_retention.updated"
+            && entry["data_retention.updated"]?.project_id === project?.id)
+          && defaultModelPermissions?.object === "project.model_permissions"
+          && defaultModelPermissions.mode === "deny_list"
+          && defaultModelPermissions.model_ids?.length === 0
+          && invalidModelPermissions?.status === 400
+          && invalidModelPermissions.json?.error?.code === "invalid_project_model_permissions_mode"
+          && invalidModelIds?.status === 400
+          && invalidModelIds.json?.error?.code === "invalid_project_model_permissions_model_ids"
+          && updatedModelPermissions?.mode === "allow_list"
+          && updatedModelPermissions.model_ids?.includes("deepseek-v4-pro")
+          && updatedModelPermissions.model_ids?.includes("gpt-4o-mini")
+          && modelPermissionLogs?.data?.some((entry) => entry.type === "model_permissions.updated"
+            && entry["model_permissions.updated"]?.data?.model_ids?.includes("deepseek-v4-pro"))
+          && deletedModelPermissions?.object === "project.model_permissions.deleted"
+          && deletedModelPermissions.deleted === true
+          && resetModelPermissions?.mode === "deny_list"
+          && defaultHostedToolPermissions?.web_search?.enabled === true
+          && defaultHostedToolPermissions?.mcp?.enabled === true
+          && invalidHostedToolPermissions?.status === 400
+          && invalidHostedToolPermissions.json?.error?.param === "web_search.enabled"
+          && updatedHostedToolPermissions?.web_search?.enabled === false
+          && updatedHostedToolPermissions?.code_interpreter?.enabled === false
+          && updatedHostedToolPermissions?.mcp?.enabled === true
+          && hostedToolPermissionLogs?.data?.some((entry) => entry.type === "hosted_tool_permissions.updated"
+            && entry["hosted_tool_permissions.updated"]?.data?.permissions?.web_search?.enabled === false)
+          && archivedProject?.status === "archived"
+          && archivedProjectRetention?.status === 400
+          && archivedProjectRetention.json?.error?.code === "project_archived"
+          && archivedModelPermissions?.status === 400
+          && archivedModelPermissions.json?.error?.code === "project_archived"
+          && archivedHostedToolPermissions?.status === 400
+          && archivedHostedToolPermissions.json?.error?.code === "project_archived",
       },
       {
         id: "organization-project-users-rate-limits",
@@ -3478,6 +3565,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "organization-spend-alerts") {
       return await runOrganizationSpendAlertsCase(testCase, context, started);
     }
+    if (testCase.mode === "organization-policy-controls") {
+      return await runOrganizationPolicyControlsCase(testCase, context, started);
+    }
     if (testCase.mode === "organization-project-users-rate-limits") {
       return await runOrganizationProjectUsersRateLimitsCase(testCase, context, started);
     }
@@ -4543,6 +4633,118 @@ async function runOrganizationSpendAlertsCase(testCase, context, started) {
     project_alert_id: projectAlert.json?.id || null,
     usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
     output_text: `organization_spend_alerts:${organizationAlert.json.id}:${projectAlert.json?.id || "missing"}`,
+  });
+}
+
+async function runOrganizationPolicyControlsCase(testCase, context, started) {
+  const marker = `bridge-policy-${Date.now()}-${context.iteration}`;
+  const organizationRetention = await getJson(`${baseUrl}/v1/organization/data_retention`);
+  const initialOrganizationRetentionType = ORGANIZATION_DATA_RETENTION_TYPES.includes(organizationRetention.json?.type)
+    ? organizationRetention.json.type
+    : "modified_abuse_monitoring";
+  const missingOrganizationRetention = await postJsonCapture(`${baseUrl}/v1/organization/data_retention`, {});
+  const invalidOrganizationRetention = await postJsonCapture(`${baseUrl}/v1/organization/data_retention`, {
+    retention_type: "forever",
+  });
+  const updatedOrganizationRetention = await postJsonCapture(`${baseUrl}/v1/organization/data_retention`, {
+    retention_type: "zero_data_retention",
+  });
+  const organizationRetentionLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=data_retention.updated&resource_ids%5B%5D=organization_data_retention&limit=20`);
+
+  const project = await postJsonCapture(`${baseUrl}/v1/organization/projects`, {
+    name: `Bridge Eval Policy ${marker}`,
+  });
+  if (!project.ok || !project.json?.id) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: project.status,
+      error: truncate(project.body),
+      usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    });
+  }
+  const projectId = encodeURIComponent(project.json.id);
+
+  const defaultProjectRetention = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/data_retention`);
+  const updatedProjectRetention = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/data_retention`, {
+    retention_type: "enhanced_modified_abuse_monitoring",
+  });
+  const invalidProjectRetention = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/data_retention`, {
+    retention_type: "invalid",
+  });
+  const projectRetentionLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=data_retention.updated&project_ids%5B%5D=${projectId}&limit=20`);
+
+  const defaultModelPermissions = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`);
+  const invalidModelPermissions = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`, {
+    mode: "maybe",
+    model_ids: ["deepseek-v4-pro"],
+  });
+  const invalidModelIds = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`, {
+    mode: "allow_list",
+    model_ids: "deepseek-v4-pro",
+  });
+  const updatedModelPermissions = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`, {
+    mode: "allow_list",
+    model_ids: ["deepseek-v4-pro", "gpt-4o-mini", "deepseek-v4-pro"],
+  });
+  const modelPermissionLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=model_permissions.updated&project_ids%5B%5D=${projectId}&limit=20`);
+  const deletedModelPermissionsRaw = await deleteJson(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`);
+  const deletedModelPermissions = parseJsonish(deletedModelPermissionsRaw.body);
+  const resetModelPermissions = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`);
+
+  const defaultHostedToolPermissions = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/hosted_tool_permissions`);
+  const invalidHostedToolPermissions = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/hosted_tool_permissions`, {
+    web_search: { enabled: "yes" },
+  });
+  const updatedHostedToolPermissions = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/hosted_tool_permissions`, {
+    web_search: { enabled: false },
+    code_interpreter: { enabled: false },
+    mcp: null,
+  });
+  const hostedToolPermissionLogs = await getJson(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=hosted_tool_permissions.updated&project_ids%5B%5D=${projectId}&limit=20`);
+
+  const archivedProject = await postJsonCapture(`${baseUrl}/v1/organization/projects/${projectId}/archive`, {});
+  const archivedProjectRetention = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/data_retention`);
+  const archivedModelPermissions = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/model_permissions`);
+  const archivedHostedToolPermissions = await getJson(`${baseUrl}/v1/organization/projects/${projectId}/hosted_tool_permissions`);
+  const restoredOrganizationRetention = await postJsonCapture(`${baseUrl}/v1/organization/data_retention`, {
+    retention_type: initialOrganizationRetentionType,
+  });
+
+  const ok = !!testCase.check({
+    organizationRetention: organizationRetention.json,
+    missingOrganizationRetention,
+    invalidOrganizationRetention,
+    updatedOrganizationRetention: updatedOrganizationRetention.json,
+    initialOrganizationRetentionType,
+    restoredOrganizationRetention: restoredOrganizationRetention.json,
+    organizationRetentionLogs: organizationRetentionLogs.json,
+    project: project.json,
+    defaultProjectRetention: defaultProjectRetention.json,
+    updatedProjectRetention: updatedProjectRetention.json,
+    invalidProjectRetention,
+    projectRetentionLogs: projectRetentionLogs.json,
+    defaultModelPermissions: defaultModelPermissions.json,
+    invalidModelPermissions,
+    invalidModelIds,
+    updatedModelPermissions: updatedModelPermissions.json,
+    modelPermissionLogs: modelPermissionLogs.json,
+    deletedModelPermissions,
+    resetModelPermissions: resetModelPermissions.json,
+    defaultHostedToolPermissions: defaultHostedToolPermissions.json,
+    invalidHostedToolPermissions,
+    updatedHostedToolPermissions: updatedHostedToolPermissions.json,
+    hostedToolPermissionLogs: hostedToolPermissionLogs.json,
+    archivedProject: archivedProject.json,
+    archivedProjectRetention,
+    archivedModelPermissions,
+    archivedHostedToolPermissions,
+  });
+  return finishResult(testCase, context, started, {
+    ok,
+    status: project.status,
+    project_id: project.json.id,
+    usage: { input_tokens: 0, output_tokens: 0, total_tokens: 0 },
+    output_text: `organization_policy_controls:${project.json.id}`,
   });
 }
 

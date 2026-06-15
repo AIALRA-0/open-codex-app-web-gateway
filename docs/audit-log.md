@@ -4463,6 +4463,89 @@ Open follow-ups:
   the repository. The local service-account compatibility key prefix remains
   `oc_local_key_`, never `sk-`, and is not persisted.
 
+## 2026-06-15 - Local Organization policy controls compatibility
+
+- Used official OpenAI sources for the next Organization admin slice:
+  - OpenAI OpenAPI operation `retrieve-organization-data-retention` documents
+    `GET/POST /organization/data_retention`, `organization.data_retention`,
+    and organization `retention_type` values;
+  - OpenAI Node SDK generated project data-retention resource documents
+    `GET/POST /organization/projects/{project_id}/data_retention`,
+    `project.data_retention`, and project-specific `organization_default` /
+    `none` values;
+  - OpenAI Node SDK generated project model-permissions resource documents
+    retrieve/update/delete, `project.model_permissions`,
+    `mode:"allow_list"|"deny_list"`, `model_ids[]`, and
+    `project.model_permissions.deleted`;
+  - OpenAI Node SDK generated project hosted-tool-permissions resource documents
+    retrieve/update and per-tool `enabled` flags for `code_interpreter`,
+    `file_search`, `image_generation`, `mcp`, and `web_search`.
+- Extended the local file-backed Organization admin compatibility layer:
+  - added local organization data-retention state at
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/organization_data_retention.json`;
+  - added local project data-retention, model-permission, and hosted-tool
+    permission settings under
+    `CODEXCOMPAT_ORGANIZATION_ADMIN_STATE_DIR/project_resources/<project>/`;
+  - added `GET/POST /v1/organization/data_retention`;
+  - added `GET/POST /v1/organization/projects/{project_id}/data_retention`;
+  - added `GET/POST/DELETE /v1/organization/projects/{project_id}/model_permissions`;
+  - added `GET/POST /v1/organization/projects/{project_id}/hosted_tool_permissions`;
+  - defaults organization retention to `modified_abuse_monitoring`, project
+    retention to `organization_default`, model permissions to an empty
+    `deny_list`, and hosted tool permissions to all enabled;
+  - records local `data_retention.updated`, `model_permissions.updated`,
+    `model_permissions.deleted`, and `hosted_tool_permissions.updated` audit
+    events.
+- Current boundary: these endpoints close another class of Organization admin
+  SDK/UI 404s for Chat Completions-backed deployments. They persist local
+  protocol metadata only; the bridge does not change provider data-retention
+  settings, enforce provider model allow/deny lists, or enforce hosted-tool
+  permissions in request execution yet.
+- Added regression coverage:
+  - unit/mock-provider coverage verifies default retrieve, update, invalid
+    values, model-permission delete/reset, hosted-tool partial updates and
+    `null` reset, archived-project rejection, audit-log filters, and zero
+    upstream provider calls;
+  - live `bridge-regression` now includes `organization-policy-controls`,
+    covering the same lifecycle against the deployed DeepSeek-backed bridge with
+    zero provider token usage.
+- Final verification:
+  - `node --check` passed for `src/bridge/local_organization_admin.js`,
+    `src/bridge/server.js`, `test/server.test.js`, and
+    `scripts/eval-harness.mjs`.
+  - Focused Organization policy-control unit test passed 1/1.
+  - Focused Organization unit tests passed 10/10.
+  - `npm test` passed 210/210.
+  - `npm run eval:protocol` passed 2/2, avg latency 1193 ms, p95 1399 ms,
+    99 total tokens.
+  - `npm run smoke:bridge` returned a completed `bridge-ok` response.
+  - Focused live
+    `node scripts/eval-harness.mjs --suite bridge-regression --case organization-policy-controls --timeout-ms 90000 --verbose`
+    passed 1/1 with zero provider tokens, then the full live
+    `bridge-regression` suite passed 107/107, avg latency 1213 ms, p95
+    3344 ms, 24812 total tokens.
+  - `npm run smoke:ui -- --timeout-ms 180000` passed against
+    `https://opencodexapp.aialra.online`, covering navigation, project
+    dialogs/uploads, chat submit/reload, completed-turn actions, generated
+    image artifact display, and saved-project cleanup.
+  - Deployment health checks passed: `aialra-opencodexapp-app-server`,
+    `aialra-opencodexapp-bridge`, and `aialra-opencodexapp-web` were all
+    active; bridge `/healthz` returned `ok:true` with provider base
+    `https://api.deepseek.com`; the public domain returned HTTP 200.
+  - Storage check reported `/srv/aialra/apps/open-codex-app-web-gateway`
+    on a 193G filesystem with 25G available, `state` 35M, `output` 4.5M,
+    `/srv/aialra/data/opencodexapp` 136K, and
+    `/srv/aialra/logs/opencodexapp` 29M.
+  - `npm run prune:runtime -- --dry-run` selected one old UI screenshot, and
+    `npm run prune:runtime -- --apply` deleted 1 file / 82916 bytes with zero
+    errors.
+- Updated compatibility/evaluation/deployment docs to list the new
+  Organization/project data-retention, model-permission, and hosted-tool
+  permission endpoints, source references, focused live eval command, and local
+  state-directory boundaries.
+- Secret handling: no API keys, account credentials, provider headers, local
+  deployment env files, or provider policy secrets were added to the repository.
+
 ## 2026-06-15 - Local Organization spend alerts compatibility
 
 - Used official OpenAI sources for the next Organization admin slice:

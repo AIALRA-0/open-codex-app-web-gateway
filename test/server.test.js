@@ -12425,6 +12425,199 @@ test("Organization spend alerts manage local organization and project thresholds
   });
 });
 
+test("Organization data retention and project permission policies are local and audited", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization policy compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const organizationRetention = await fetch(`${baseUrl}/v1/organization/data_retention`);
+    assert.equal(organizationRetention.status, 200);
+    const organizationRetentionJson = await organizationRetention.json();
+    assert.equal(organizationRetentionJson.object, "organization.data_retention");
+    assert.equal(organizationRetentionJson.type, "modified_abuse_monitoring");
+    assert.equal(organizationRetentionJson.compatibility.locally_defaulted, true);
+
+    const missingOrganizationRetention = await fetch(`${baseUrl}/v1/organization/data_retention`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    assert.equal(missingOrganizationRetention.status, 400);
+    assert.equal((await missingOrganizationRetention.json()).error.param, "retention_type");
+
+    const invalidOrganizationRetention = await fetch(`${baseUrl}/v1/organization/data_retention`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ retention_type: "forever" }),
+    });
+    assert.equal(invalidOrganizationRetention.status, 400);
+    assert.equal((await invalidOrganizationRetention.json()).error.code, "invalid_organization_data_retention_type");
+
+    const updatedOrganizationRetention = await fetch(`${baseUrl}/v1/organization/data_retention`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ retention_type: "zero_data_retention" }),
+    });
+    assert.equal(updatedOrganizationRetention.status, 200);
+    assert.equal((await updatedOrganizationRetention.json()).type, "zero_data_retention");
+
+    const organizationRetentionLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=data_retention.updated&resource_ids%5B%5D=organization_data_retention`);
+    assert.equal(organizationRetentionLogs.status, 200);
+    assert.equal((await organizationRetentionLogs.json()).data[0]["data_retention.updated"].data.type, "zero_data_retention");
+
+    const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Policy Project" }),
+    });
+    assert.equal(projectResponse.status, 200);
+    const project = await projectResponse.json();
+
+    const defaultProjectRetention = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/data_retention`);
+    assert.equal(defaultProjectRetention.status, 200);
+    const defaultProjectRetentionJson = await defaultProjectRetention.json();
+    assert.equal(defaultProjectRetentionJson.object, "project.data_retention");
+    assert.equal(defaultProjectRetentionJson.type, "organization_default");
+
+    const updatedProjectRetention = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/data_retention`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ retention_type: "enhanced_modified_abuse_monitoring" }),
+    });
+    assert.equal(updatedProjectRetention.status, 200);
+    assert.equal((await updatedProjectRetention.json()).type, "enhanced_modified_abuse_monitoring");
+
+    const invalidProjectRetention = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/data_retention`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ retention_type: "invalid" }),
+    });
+    assert.equal(invalidProjectRetention.status, 400);
+    assert.equal((await invalidProjectRetention.json()).error.code, "invalid_project_data_retention_type");
+
+    const projectRetentionLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=data_retention.updated&project_ids%5B%5D=${project.id}`);
+    assert.equal(projectRetentionLogs.status, 200);
+    assert.equal((await projectRetentionLogs.json()).data[0]["data_retention.updated"].project_id, project.id);
+
+    const defaultModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`);
+    assert.equal(defaultModelPermissions.status, 200);
+    assert.deepEqual(await defaultModelPermissions.json(), {
+      object: "project.model_permissions",
+      mode: "deny_list",
+      model_ids: [],
+      compatibility: {
+        provider: "local",
+        reason: "project_model_permissions_protocol_compatibility",
+        actual_openai_admin_data: false,
+        locally_persisted: false,
+        locally_defaulted: true,
+        project_id: project.id,
+      },
+    });
+
+    const invalidModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "maybe", model_ids: ["deepseek-v4-pro"] }),
+    });
+    assert.equal(invalidModelPermissions.status, 400);
+    assert.equal((await invalidModelPermissions.json()).error.code, "invalid_project_model_permissions_mode");
+
+    const invalidModelIds = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ mode: "allow_list", model_ids: "deepseek-v4-pro" }),
+    });
+    assert.equal(invalidModelIds.status, 400);
+    assert.equal((await invalidModelIds.json()).error.code, "invalid_project_model_permissions_model_ids");
+
+    const updatedModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        mode: "allow_list",
+        model_ids: ["deepseek-v4-pro", "gpt-4o-mini", "deepseek-v4-pro"],
+      }),
+    });
+    assert.equal(updatedModelPermissions.status, 200);
+    const updatedModelPermissionsJson = await updatedModelPermissions.json();
+    assert.equal(updatedModelPermissionsJson.object, "project.model_permissions");
+    assert.equal(updatedModelPermissionsJson.mode, "allow_list");
+    assert.deepEqual(updatedModelPermissionsJson.model_ids, ["deepseek-v4-pro", "gpt-4o-mini"]);
+
+    const modelPermissionLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=model_permissions.updated&project_ids%5B%5D=${project.id}`);
+    assert.equal(modelPermissionLogs.status, 200);
+    assert.deepEqual((await modelPermissionLogs.json()).data[0]["model_permissions.updated"].data.model_ids, ["deepseek-v4-pro", "gpt-4o-mini"]);
+
+    const deletedModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedModelPermissions.status, 200);
+    assert.deepEqual(await deletedModelPermissions.json(), {
+      object: "project.model_permissions.deleted",
+      deleted: true,
+    });
+    const resetModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`);
+    assert.equal(resetModelPermissions.status, 200);
+    assert.equal((await resetModelPermissions.json()).mode, "deny_list");
+
+    const defaultHostedToolPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/hosted_tool_permissions`);
+    assert.equal(defaultHostedToolPermissions.status, 200);
+    const defaultHostedToolPermissionsJson = await defaultHostedToolPermissions.json();
+    assert.equal(defaultHostedToolPermissionsJson.web_search.enabled, true);
+    assert.equal(defaultHostedToolPermissionsJson.file_search.enabled, true);
+    assert.equal(defaultHostedToolPermissionsJson.code_interpreter.enabled, true);
+    assert.equal(defaultHostedToolPermissionsJson.image_generation.enabled, true);
+    assert.equal(defaultHostedToolPermissionsJson.mcp.enabled, true);
+
+    const invalidHostedToolPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/hosted_tool_permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ web_search: { enabled: "yes" } }),
+    });
+    assert.equal(invalidHostedToolPermissions.status, 400);
+    assert.equal((await invalidHostedToolPermissions.json()).error.param, "web_search.enabled");
+
+    const updatedHostedToolPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/hosted_tool_permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        web_search: { enabled: false },
+        code_interpreter: { enabled: false },
+        mcp: null,
+      }),
+    });
+    assert.equal(updatedHostedToolPermissions.status, 200);
+    const updatedHostedToolPermissionsJson = await updatedHostedToolPermissions.json();
+    assert.equal(updatedHostedToolPermissionsJson.web_search.enabled, false);
+    assert.equal(updatedHostedToolPermissionsJson.code_interpreter.enabled, false);
+    assert.equal(updatedHostedToolPermissionsJson.mcp.enabled, true);
+    assert.equal(updatedHostedToolPermissionsJson.file_search.enabled, true);
+    assert.equal(updatedHostedToolPermissionsJson.compatibility.actual_openai_admin_data, false);
+
+    const hostedToolPermissionLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=hosted_tool_permissions.updated&project_ids%5B%5D=${project.id}`);
+    assert.equal(hostedToolPermissionLogs.status, 200);
+    assert.equal((await hostedToolPermissionLogs.json()).data[0]["hosted_tool_permissions.updated"].data.permissions.web_search.enabled, false);
+
+    const archivedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedResponse.status, 200);
+    const archivedProjectRetention = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/data_retention`);
+    assert.equal(archivedProjectRetention.status, 400);
+    assert.equal((await archivedProjectRetention.json()).error.code, "project_archived");
+    const archivedModelPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/model_permissions`);
+    assert.equal(archivedModelPermissions.status, 400);
+    assert.equal((await archivedModelPermissions.json()).error.code, "project_archived");
+    const archivedHostedToolPermissions = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/hosted_tool_permissions`);
+    assert.equal(archivedHostedToolPermissions.status, 400);
+    assert.equal((await archivedHostedToolPermissions.json()).error.code, "project_archived");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization audit logs list local admin lifecycle events and filters", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization audit logs compatibility should not call upstream provider");

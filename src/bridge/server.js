@@ -8283,6 +8283,20 @@ function handleOrganizationAdminApiKeyDelete(res, organizationAdminStore, apiKey
   sendJson(res, 200, organizationAdminStore.deleteOrganizationAdminApiKey(apiKeyId));
 }
 
+function handleOrganizationDataRetentionGet(res, organizationAdminStore) {
+  sendJson(res, 200, organizationAdminStore.getOrganizationDataRetention());
+}
+
+async function handleOrganizationDataRetentionUpdate(req, res, organizationAdminStore) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("organization data retention request body must be a JSON object", {
+      code: "invalid_organization_data_retention_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateOrganizationDataRetention(body));
+}
+
 async function handleOrganizationSpendAlertCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -8661,6 +8675,52 @@ function handleOrganizationProjectGroupGet(res, organizationAdminStore, projectI
 
 function handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId) {
   sendJson(res, 200, organizationAdminStore.deleteProjectGroup(projectId, groupId));
+}
+
+function handleOrganizationProjectDataRetentionGet(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.getProjectDataRetention(projectId));
+}
+
+async function handleOrganizationProjectDataRetentionUpdate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project data retention request body must be a JSON object", {
+      code: "invalid_project_data_retention_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectDataRetention(projectId, body));
+}
+
+function handleOrganizationProjectModelPermissionsGet(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.getProjectModelPermissions(projectId));
+}
+
+async function handleOrganizationProjectModelPermissionsUpdate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project model permissions request body must be a JSON object", {
+      code: "invalid_project_model_permissions_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectModelPermissions(projectId, body));
+}
+
+function handleOrganizationProjectModelPermissionsDelete(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectModelPermissions(projectId));
+}
+
+function handleOrganizationProjectHostedToolPermissionsGet(res, organizationAdminStore, projectId) {
+  sendJson(res, 200, organizationAdminStore.getProjectHostedToolPermissions(projectId));
+}
+
+async function handleOrganizationProjectHostedToolPermissionsUpdate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project hosted tool permissions request body must be a JSON object", {
+      code: "invalid_project_hosted_tool_permissions_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectHostedToolPermissions(projectId, body));
 }
 
 async function handleOrganizationProjectSpendAlertCreate(req, res, organizationAdminStore, projectId) {
@@ -12285,6 +12345,17 @@ function createServer(config = loadConfig()) {
         }
       }
 
+      if (url.pathname === "/v1/organization/data_retention") {
+        if (req.method === "GET") {
+          handleOrganizationDataRetentionGet(res, organizationAdminStore);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationDataRetentionUpdate(req, res, organizationAdminStore);
+          return;
+        }
+      }
+
       if (url.pathname === "/v1/organization/spend_alerts") {
         if (req.method === "GET") {
           handleOrganizationSpendAlertsList(res, organizationAdminStore, url);
@@ -12552,6 +12623,49 @@ function createServer(config = loadConfig()) {
         }
         if (groupId && req.method === "DELETE") {
           handleOrganizationProjectGroupDelete(res, organizationAdminStore, projectId, groupId);
+          return;
+        }
+      }
+
+      const organizationProjectDataRetentionRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/data_retention$/);
+      if (organizationProjectDataRetentionRoute) {
+        const projectId = decodeURIComponent(organizationProjectDataRetentionRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationProjectDataRetentionGet(res, organizationAdminStore, projectId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationProjectDataRetentionUpdate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+      }
+
+      const organizationProjectModelPermissionsRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/model_permissions$/);
+      if (organizationProjectModelPermissionsRoute) {
+        const projectId = decodeURIComponent(organizationProjectModelPermissionsRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationProjectModelPermissionsGet(res, organizationAdminStore, projectId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationProjectModelPermissionsUpdate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleOrganizationProjectModelPermissionsDelete(res, organizationAdminStore, projectId);
+          return;
+        }
+      }
+
+      const organizationProjectHostedToolPermissionsRoute = url.pathname.match(/^\/v1\/organization\/projects\/([^/]+)\/hosted_tool_permissions$/);
+      if (organizationProjectHostedToolPermissionsRoute) {
+        const projectId = decodeURIComponent(organizationProjectHostedToolPermissionsRoute[1]);
+        if (req.method === "GET") {
+          handleOrganizationProjectHostedToolPermissionsGet(res, organizationAdminStore, projectId);
+          return;
+        }
+        if (req.method === "POST") {
+          await handleOrganizationProjectHostedToolPermissionsUpdate(req, res, organizationAdminStore, projectId);
           return;
         }
       }

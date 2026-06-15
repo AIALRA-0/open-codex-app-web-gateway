@@ -144,6 +144,29 @@ const DEFAULT_RATE_LIMITS = Object.freeze([
   },
 ]);
 
+const ORGANIZATION_DATA_RETENTION_TYPES = Object.freeze([
+  "zero_data_retention",
+  "modified_abuse_monitoring",
+  "enhanced_zero_data_retention",
+  "enhanced_modified_abuse_monitoring",
+]);
+
+const PROJECT_DATA_RETENTION_TYPES = Object.freeze([
+  "organization_default",
+  "none",
+  ...ORGANIZATION_DATA_RETENTION_TYPES,
+]);
+
+const MODEL_PERMISSION_MODES = Object.freeze(["allow_list", "deny_list"]);
+
+const HOSTED_TOOL_PERMISSION_TYPES = Object.freeze([
+  "code_interpreter",
+  "file_search",
+  "image_generation",
+  "mcp",
+  "web_search",
+]);
+
 class LocalOrganizationAdminStore {
   constructor(options = {}) {
     this.dir = path.resolve(options.dir || path.join(process.cwd(), "state", "responses-bridge", "local-organization-admin"));
@@ -194,6 +217,10 @@ class LocalOrganizationAdminStore {
 
   organizationAdminApiKeysDir() {
     return path.join(this.dir, "organization_admin_api_keys");
+  }
+
+  organizationDataRetentionPath() {
+    return path.join(this.dir, "organization_data_retention.json");
   }
 
   organizationSpendAlertsDir() {
@@ -328,6 +355,24 @@ class LocalOrganizationAdminStore {
     const dir = this.projectResourceDir(projectId, "spend_alerts");
     if (!clean || !dir) return null;
     return path.join(dir, `${clean}.json`);
+  }
+
+  projectDataRetentionPath(projectId) {
+    const dir = this.projectResourceDir(projectId, "data_retention");
+    if (!dir) return null;
+    return path.join(dir, "settings.json");
+  }
+
+  projectModelPermissionsPath(projectId) {
+    const dir = this.projectResourceDir(projectId, "model_permissions");
+    if (!dir) return null;
+    return path.join(dir, "settings.json");
+  }
+
+  projectHostedToolPermissionsPath(projectId) {
+    const dir = this.projectResourceDir(projectId, "hosted_tool_permissions");
+    if (!dir) return null;
+    return path.join(dir, "settings.json");
   }
 
   rateLimitPath(projectId, rateLimitId) {
@@ -476,6 +521,44 @@ class LocalOrganizationAdminStore {
       id: apiKey.id,
       deleted: true,
     };
+  }
+
+  getOrganizationDataRetention() {
+    const existing = this.readJson(this.organizationDataRetentionPath());
+    if (existing) return this.dataRetentionProjection(existing, "organization");
+    return this.dataRetentionProjection({
+      object: "organization.data_retention",
+      type: "modified_abuse_monitoring",
+      compatibility: localCompatibility("organization_data_retention_protocol_compatibility", {
+        locally_persisted: false,
+        locally_defaulted: true,
+      }),
+    }, "organization");
+  }
+
+  updateOrganizationDataRetention(body = {}) {
+    const type = this.normalizeDataRetentionType(body, ORGANIZATION_DATA_RETENTION_TYPES, {
+      code: "invalid_organization_data_retention_type",
+    });
+    const record = {
+      object: "organization.data_retention",
+      type,
+      updated_at: nowSeconds(),
+      compatibility: localCompatibility("organization_data_retention_protocol_compatibility", {
+        locally_persisted: true,
+        last_lifecycle_action: "update",
+      }),
+    };
+    this.writeJson(this.organizationDataRetentionPath(), record);
+    this.recordAuditLog("data_retention.updated", {
+      id: "organization_data_retention",
+      data: {
+        type,
+      },
+    }, {
+      resourceId: "organization_data_retention",
+    });
+    return this.dataRetentionProjection(record, "organization");
   }
 
   createOrganizationSpendAlert(body = {}) {
@@ -1808,6 +1891,191 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  getProjectDataRetention(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const existing = this.readJson(this.projectDataRetentionPath(project.id));
+    if (existing) return this.dataRetentionProjection(existing, "project");
+    return this.dataRetentionProjection({
+      object: "project.data_retention",
+      type: "organization_default",
+      project_id: project.id,
+      compatibility: localCompatibility("project_data_retention_protocol_compatibility", {
+        locally_persisted: false,
+        locally_defaulted: true,
+        project_id: project.id,
+      }),
+    }, "project");
+  }
+
+  updateProjectDataRetention(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const type = this.normalizeDataRetentionType(body, PROJECT_DATA_RETENTION_TYPES, {
+      code: "invalid_project_data_retention_type",
+    });
+    const record = {
+      object: "project.data_retention",
+      type,
+      project_id: project.id,
+      updated_at: nowSeconds(),
+      compatibility: localCompatibility("project_data_retention_protocol_compatibility", {
+        locally_persisted: true,
+        last_lifecycle_action: "update",
+        project_id: project.id,
+      }),
+    };
+    this.writeJson(this.projectDataRetentionPath(project.id), record);
+    this.recordAuditLog("data_retention.updated", {
+      id: `project_data_retention_${stableToken(project.id, 20)}`,
+      project_id: project.id,
+      data: {
+        type,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
+    return this.dataRetentionProjection(record, "project");
+  }
+
+  getProjectModelPermissions(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const existing = this.readJson(this.projectModelPermissionsPath(project.id));
+    if (existing) return this.projectModelPermissionsProjection(existing);
+    return this.projectModelPermissionsProjection({
+      object: "project.model_permissions",
+      mode: "deny_list",
+      model_ids: [],
+      project_id: project.id,
+      compatibility: localCompatibility("project_model_permissions_protocol_compatibility", {
+        locally_persisted: false,
+        locally_defaulted: true,
+        project_id: project.id,
+      }),
+    });
+  }
+
+  updateProjectModelPermissions(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const request = isPlainObject(body) ? body : {};
+    const mode = optionalString(request.mode);
+    if (!mode) {
+      throw organizationAdminError("mode is required", {
+        code: "missing_required_parameter",
+        param: "mode",
+      });
+    }
+    if (!MODEL_PERMISSION_MODES.includes(mode)) {
+      throw organizationAdminError("mode must be allow_list or deny_list", {
+        code: "invalid_project_model_permissions_mode",
+        param: "mode",
+      });
+    }
+    if (!Array.isArray(request.model_ids)) {
+      throw organizationAdminError("model_ids must be an array", {
+        code: "invalid_project_model_permissions_model_ids",
+        param: "model_ids",
+      });
+    }
+    const modelIds = uniqueStrings(request.model_ids);
+    const record = {
+      object: "project.model_permissions",
+      mode,
+      model_ids: modelIds,
+      project_id: project.id,
+      updated_at: nowSeconds(),
+      compatibility: localCompatibility("project_model_permissions_protocol_compatibility", {
+        locally_persisted: true,
+        last_lifecycle_action: "update",
+        project_id: project.id,
+      }),
+    };
+    this.writeJson(this.projectModelPermissionsPath(project.id), record);
+    this.recordAuditLog("model_permissions.updated", {
+      id: `project_model_permissions_${stableToken(project.id, 20)}`,
+      project_id: project.id,
+      data: {
+        mode,
+        model_ids: modelIds,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
+    return this.projectModelPermissionsProjection(record);
+  }
+
+  deleteProjectModelPermissions(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    try { fs.unlinkSync(this.projectModelPermissionsPath(project.id)); } catch {}
+    this.recordAuditLog("model_permissions.deleted", {
+      id: `project_model_permissions_${stableToken(project.id, 20)}`,
+      project_id: project.id,
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
+    return {
+      object: "project.model_permissions.deleted",
+      deleted: true,
+    };
+  }
+
+  getProjectHostedToolPermissions(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const existing = this.readJson(this.projectHostedToolPermissionsPath(project.id));
+    if (existing) return this.projectHostedToolPermissionsProjection(existing);
+    return this.projectHostedToolPermissionsProjection({
+      project_id: project.id,
+      permissions: this.defaultHostedToolPermissions(),
+      compatibility: localCompatibility("project_hosted_tool_permissions_protocol_compatibility", {
+        locally_persisted: false,
+        locally_defaulted: true,
+        project_id: project.id,
+      }),
+    });
+  }
+
+  updateProjectHostedToolPermissions(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const existing = this.readJson(this.projectHostedToolPermissionsPath(project.id));
+    const permissions = isPlainObject(existing?.permissions)
+      ? this.normalizeHostedToolPermissions(existing.permissions, { partial: true, base: this.defaultHostedToolPermissions() })
+      : this.defaultHostedToolPermissions();
+    const updates = this.normalizeHostedToolPermissions(body, { partial: true });
+    for (const tool of HOSTED_TOOL_PERMISSION_TYPES) {
+      if (updates[tool]) permissions[tool] = updates[tool];
+    }
+    const record = {
+      project_id: project.id,
+      permissions,
+      updated_at: nowSeconds(),
+      compatibility: localCompatibility("project_hosted_tool_permissions_protocol_compatibility", {
+        locally_persisted: true,
+        last_lifecycle_action: "update",
+        project_id: project.id,
+      }),
+    };
+    this.writeJson(this.projectHostedToolPermissionsPath(project.id), record);
+    this.recordAuditLog("hosted_tool_permissions.updated", {
+      id: `project_hosted_tool_permissions_${stableToken(project.id, 20)}`,
+      project_id: project.id,
+      data: {
+        permissions,
+      },
+    }, {
+      projectId: project.id,
+      resourceId: project.id,
+    });
+    return this.projectHostedToolPermissionsProjection(record);
+  }
+
   createProjectSpendAlert(projectId, body = {}) {
     const project = this.getRequiredProject(projectId);
     this.assertProjectActive(project);
@@ -1945,6 +2213,94 @@ class LocalOrganizationAdminStore {
       resourceId: rateLimit.id,
     });
     return clone(rateLimit);
+  }
+
+  normalizeDataRetentionType(body = {}, allowedTypes = [], options = {}) {
+    const request = isPlainObject(body) ? body : {};
+    const type = optionalString(request.retention_type);
+    if (!type) {
+      throw organizationAdminError("retention_type is required", {
+        code: "missing_required_parameter",
+        param: "retention_type",
+      });
+    }
+    if (!allowedTypes.includes(type)) {
+      throw organizationAdminError(`retention_type must be one of: ${allowedTypes.join(", ")}`, {
+        code: options.code || "invalid_data_retention_type",
+        param: "retention_type",
+      });
+    }
+    return type;
+  }
+
+  dataRetentionProjection(record, scope) {
+    return {
+      object: scope === "project" ? "project.data_retention" : "organization.data_retention",
+      type: record.type,
+      compatibility: isPlainObject(record.compatibility) ? clone(record.compatibility) : undefined,
+    };
+  }
+
+  projectModelPermissionsProjection(record) {
+    return {
+      object: "project.model_permissions",
+      mode: MODEL_PERMISSION_MODES.includes(record.mode) ? record.mode : "deny_list",
+      model_ids: uniqueStrings(record.model_ids),
+      compatibility: isPlainObject(record.compatibility) ? clone(record.compatibility) : undefined,
+    };
+  }
+
+  defaultHostedToolPermissions() {
+    return HOSTED_TOOL_PERMISSION_TYPES.reduce((permissions, tool) => {
+      permissions[tool] = { enabled: true };
+      return permissions;
+    }, {});
+  }
+
+  normalizeHostedToolPermissions(value = {}, options = {}) {
+    const request = isPlainObject(value) ? value : {};
+    const base = isPlainObject(options.base) ? clone(options.base) : {};
+    const normalized = {};
+    for (const tool of HOSTED_TOOL_PERMISSION_TYPES) {
+      if (request[tool] === undefined) {
+        if (!options.partial) normalized[tool] = { enabled: true };
+        else if (base[tool]) normalized[tool] = this.normalizeHostedToolPermission(tool, base[tool]);
+        continue;
+      }
+      if (request[tool] === null) {
+        normalized[tool] = { enabled: true };
+        continue;
+      }
+      normalized[tool] = this.normalizeHostedToolPermission(tool, request[tool]);
+    }
+    return normalized;
+  }
+
+  normalizeHostedToolPermission(tool, value) {
+    if (!isPlainObject(value)) {
+      throw organizationAdminError(`${tool} must be an object or null`, {
+        code: "invalid_hosted_tool_permission",
+        param: tool,
+      });
+    }
+    if (typeof value.enabled !== "boolean") {
+      throw organizationAdminError(`${tool}.enabled must be a boolean`, {
+        code: "invalid_hosted_tool_permission",
+        param: `${tool}.enabled`,
+      });
+    }
+    return { enabled: value.enabled };
+  }
+
+  projectHostedToolPermissionsProjection(record) {
+    const permissions = this.normalizeHostedToolPermissions(record.permissions, {
+      partial: true,
+      base: this.defaultHostedToolPermissions(),
+    });
+    return {
+      ...permissions,
+      compatibility: isPlainObject(record.compatibility) ? clone(record.compatibility) : undefined,
+    };
   }
 
   updateServiceAccountApiKeyOwners(projectId, serviceAccount) {
@@ -2528,7 +2884,17 @@ class LocalOrganizationAdminStore {
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
-      for (const resource of ["api_keys", "service_accounts", "users", "groups", "spend_alerts", "rate_limits"]) {
+      for (const resource of [
+        "api_keys",
+        "service_accounts",
+        "users",
+        "groups",
+        "spend_alerts",
+        "data_retention",
+        "model_permissions",
+        "hosted_tool_permissions",
+        "rate_limits",
+      ]) {
         const files = this.listCleanupEntries(path.join(projectDir, resource));
         for (const entry of files.slice(this.maxRecords)) {
           try { fs.unlinkSync(entry.filePath); } catch {}
