@@ -181,7 +181,7 @@ behavior.
 | local web search context | output `web_search_call` plus `output_text.annotations[].url_citation` | Emulated for non-streaming, streaming, and background Responses; bounded `open_page` extraction can inject top result page text and local `find_in_page` snippets |
 | local file search context | output `file_search_call` plus `output_text.annotations[].file_citation` | Emulated for non-streaming, streaming, and background Responses |
 | local shell context | output `shell_call` plus `shell_call_output` | Emulated for non-streaming, streaming, and background Responses when an explicit command is found |
-| local computer context | output `computer_call` plus returned `computer_call_output` prompt context | Emulated for non-streaming, streaming, and background Responses; the bridge emits screenshot-first `computer_call` items, maps client-returned `computer_call_output` input items into Chat-visible evidence, and maps non-streaming/background model-requested follow-up actions back into `computer_call` items |
+| local computer context | output `computer_call` plus returned `computer_call_output` prompt context | Emulated for non-streaming, streaming, and background Responses; the bridge emits screenshot-first `computer_call` items, maps client-returned `computer_call_output` input items into Chat-visible evidence, and maps model-requested follow-up actions back into `computer_call` items |
 | local hosted-tool budget | `metadata.compatibility.local_tool_budget` | Emulates Responses `max_tool_calls` across local hosted-tool adapters with `max_tool_calls`, `used`, `skipped`, `exhausted`, and bounded `skipped_calls` audit details |
 | local conversation context | `response.conversation` plus persisted conversation items | Emulated for non-streaming, streaming, and background Responses attached to a local conversation; replay-only for `/input_tokens` and local compaction probes |
 
@@ -1046,15 +1046,16 @@ Use action-loop shape. The adapter:
 - accepts follow-up Responses `computer_call_output` input items and translates
   `call_id`, `output.type`, `output.image_url`, `detail`, text, and acknowledged
   safety-check count into Chat-visible context;
-- on non-streaming and active background follow-up turns with returned
-  `computer_call_output`, injects a generated Chat function tool that lets the
-  model request the next Computer Use action. Supported action types follow the
-  official Computer Use loop: `click`, `double_click`, `scroll`, `type`,
-  `wait`, `keypress`, `drag`, `move`, and `screenshot`;
+- on non-streaming, streaming, and active background follow-up turns with
+  returned `computer_call_output`, injects a generated Chat function tool that
+  lets the model request the next Computer Use action. Supported action types
+  follow the official Computer Use loop: `click`, `double_click`, `scroll`,
+  `type`, `wait`, `keypress`, `drag`, `move`, and `screenshot`;
 - maps model-returned generated function calls back to Responses
   `computer_call` output items, preserving `action`, `actions[]`,
   `pending_safety_checks`, `environment`, display dimensions, and `call_id`,
-  while suppressing the bridge-internal function call from public output;
+  while suppressing the bridge-internal function call from public output and
+  stream events;
 - maps forced `tool_choice:{type:"computer"}` / `computer_use_preview`
   follow-up requests to the generated Chat function name and records the
   mapping under `metadata.compatibility.local_computer.tool_choice`;
@@ -1081,7 +1082,7 @@ screenshot, or isolate desktop state by itself. A client-side or server-side
 executor must run returned actions and send `computer_call_output` back to the
 bridge. Full parity requires a Playwright or VNC-backed execution harness,
 safety-check acknowledgement policy, DOM/screenshot capture, secrets
-isolation, per-session cleanup, and streaming multi-action interception.
+isolation, per-session cleanup, and multi-round action-loop control.
 
 ## Local MCP Tool Adapter
 
@@ -1396,7 +1397,7 @@ Configuration:
 | OpenAI hosted `file_search` full parity | The local adapter covers API shape, byte-preserving file upload, vector-store lifecycle, static overlapping chunks for text-like files, hybrid local keyword + hashed-semantic retrieval, comparison/compound attribute filters, bounded multi-query decomposition, `score_threshold` ranking options, local OpenAI-compatible embeddings, and citations, but it is not OpenAI's managed semantic vector search, hosted embedding model, reranker, or binary document ingestion pipeline | Add provider/model-backed embeddings, ANN vector indexing, PDF/Office parsers for indexing, async batches, managed-style query rewriting/reranking, and larger eval sets |
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
-| OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, non-streaming/background model-requested follow-up action mapping for `click`, `double_click`, `scroll`, `type`, `wait`, `keypress`, `drag`, `move`, and `screenshot`, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet physically perform UI actions or intercept streaming model-requested actions | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement policy, streaming action interception, per-session isolation, and cleanup policies |
+| OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context, non-streaming/streaming/background model-requested follow-up action mapping for `click`, `double_click`, `scroll`, `type`, `wait`, `keypress`, `drag`, `move`, and `screenshot`, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet physically perform UI actions or run server-side multi-step UI loops | Add Playwright/VNC execution, screenshot capture, safety-check acknowledgement policy, per-session isolation, cleanup policies, and richer multi-round action-loop control |
 | OpenAI hosted MCP / Connectors full parity | The local MCP adapter covers MCP tool reservation, remote `initialize` / `tools/list` import over Streamable HTTP-style JSON-RPC with JSON/SSE responses, exact MCP `tool_choice` mapping to generated Chat function names when uniquely resolvable, non-streaming, streaming, and active background auto-approved remote `tools/call` execution through Chat function-tool proxies, streaming `mcp_call` argument/progress events, streaming `mcp_approval_request` emission, non-streaming/streaming/background `mcp_approval_request` / `mcp_approval_response` execution for approval-required remote calls, `mcp_list_tools` and `mcp_call` output items, caller-supplied MCP input context, authorization redaction, background snapshots, streaming list output items, and shared `max_tool_calls`, but it does not provide restart-resumable per-request MCP authorization or hosted connector flows | Add hosted connector OAuth/token sidecars, allowlists, tool-output review, restart-resumable connector credentials, broader approval-state persistence, and multi-turn call replay tests |
 | OpenAI hosted `image_generation` / Videos full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, direct `/v1/images/variations` multipart/JSON compatibility, provider-backed Images API generations, multipart edits, and multipart variations, upstream provider SSE relay for direct Images generation/edit requests, input image and mask upload mapping, placeholder fallback, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, JSON-form `/v1/images/edits`, JSON-form `/v1/images/variations`, direct `/v1/videos`, local Videos create/list/retrieve/delete/content protocol compatibility, local Videos character create/retrieve/delete compatibility, and video `characters` reference preservation. It does not yet perform hosted Sora-quality video rendering, OpenAI hosted model-side prompt rewriting, or image/video-quality evals beyond protocol shape checks | Add moderation/error-detail parity, provider-backed video rendering, hosted-style prompt rewrite metadata, and image/video-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |

@@ -3012,10 +3012,14 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   emitFileSearchStreamItems(res, state, localFileSearch);
 
   try {
-    if (canRunStreamingMcpToolLoop(localMcp, config)) {
-      const mcpStreamResult = await streamProviderWithMcpToolLoop(res, state, config, chat, req.headers, localMcp, toolBudget);
-      if (!mcpStreamResult.ok) {
-        emitError(res, state, mcpStreamResult.text || mcpStreamResult.json?.error?.message || "upstream provider request failed", mcpStreamResult.status);
+    if (canRunStreamingLocalToolLoop(localMcp, localComputer, config)) {
+      const localToolStreamResult = await streamProviderWithLocalToolLoop(res, state, config, chat, req.headers, {
+        localMcp,
+        localComputer,
+        toolBudget,
+      });
+      if (!localToolStreamResult.ok) {
+        emitError(res, state, localToolStreamResult.text || localToolStreamResult.json?.error?.message || "upstream provider request failed", localToolStreamResult.status);
         res.end();
         return;
       }
@@ -3037,6 +3041,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
 
     annotateWebSearchResponse(response, localWebSearch);
     annotateFileSearchResponse(response, localFileSearch);
+    mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
     mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
     Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
     syncStreamTextFromResponse(state);
@@ -3105,7 +3110,17 @@ function canRunStreamingMcpToolLoop(localMcp, config = {}) {
     && localMcp.chat_tool_map.size > 0;
 }
 
-async function streamProviderWithMcpToolLoop(res, state, config, chat, incomingHeaders, localMcp, toolBudget) {
+function canRunStreamingComputerActionLoop(localComputer) {
+  return !!localComputer?.chat_action_tool_name;
+}
+
+function canRunStreamingLocalToolLoop(localMcp, localComputer, config = {}) {
+  return canRunStreamingComputerActionLoop(localComputer)
+    || canRunStreamingMcpToolLoop(localMcp, config);
+}
+
+async function streamProviderWithLocalToolLoop(res, state, config, chat, incomingHeaders, contexts = {}) {
+  const { localMcp = null, localComputer = null, toolBudget = null } = contexts;
   const usageParts = [];
   const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
 
@@ -3114,7 +3129,15 @@ async function streamProviderWithMcpToolLoop(res, state, config, chat, incomingH
     if (!current.ok) return current;
     if (current.completion?.usage) usageParts.push(current.completion.usage);
 
+    const computerExecution = executeComputerChatToolCalls(localComputer, current.completion, config, { toolBudget });
+    if (computerExecution.executed) {
+      emitComputerExecutionStreamItems(res, state, computerExecution.output_items || []);
+      applyCombinedStreamUsage(state, usageParts);
+      return { ok: true };
+    }
+
     const execution = round < maxRounds
+      && canRunStreamingMcpToolLoop(localMcp, config)
       ? await executeMcpChatToolCalls(localMcp, current.completion, config, { toolBudget })
       : { executed: false };
     if (!execution.executed) {
@@ -3226,6 +3249,10 @@ function emitMcpExecutionStreamItems(res, state, items = []) {
   }
 }
 
+function emitComputerExecutionStreamItems(res, state, items = []) {
+  for (const item of items) emitComputerStreamItem(res, state, item);
+}
+
 function writeSse(res, event, data) {
   res.write(`event: ${event}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -3326,14 +3353,19 @@ function emitShellStreamItems(res, state, context) {
 
 function emitComputerStreamItems(res, state, context) {
   for (const item of computerOutputItems(context)) {
-    state.response.output.push(item);
-    writeSse(res, "response.output_item.added", sequence(state, {
-      type: "response.output_item.added",
-      response_id: state.response.id,
-      output_index: state.response.output.length - 1,
-      item: clone(item),
-    }));
+    emitComputerStreamItem(res, state, item);
   }
+}
+
+function emitComputerStreamItem(res, state, rawItem) {
+  const item = clone(rawItem);
+  state.response.output.push(item);
+  writeSse(res, "response.output_item.added", sequence(state, {
+    type: "response.output_item.added",
+    response_id: state.response.id,
+    output_index: state.response.output.length - 1,
+    item: clone(item),
+  }));
 }
 
 function emitMcpStreamItems(res, state, context) {

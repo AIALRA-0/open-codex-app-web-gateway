@@ -107,7 +107,7 @@ function attachComputerOutput(response, context) {
 
 function injectComputerActionTool(chat, context) {
   if (!chat || !context) return;
-  if (!context.received_outputs?.length || chat.stream) return;
+  if (!context.received_outputs?.length) return;
   if (!Array.isArray(chat.tools)) chat.tools = [];
   const usedNames = new Set(chat.tools.map((tool) => tool?.function?.name).filter(Boolean));
   const toolName = uniqueComputerActionToolName(usedNames);

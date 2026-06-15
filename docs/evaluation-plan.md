@@ -108,9 +108,10 @@ mapping.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The
-live `responses-computer-action` case forces `tool_choice:{type:"computer"}`
-and validates that the public response contains a `computer_call`, not the
-bridge-internal function call.
+live `responses-computer-action` and `responses-computer-action-stream` cases
+force `tool_choice:{type:"computer"}` and validate that the public response
+contains a `computer_call`, not the bridge-internal function call or function
+call stream events.
 
 Useful commands:
 
@@ -159,6 +160,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case responses-web-sea
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-max-tool-calls --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer-action --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-computer-action-stream --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-shell-skill --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-file-search --timeout-ms 90000 --verbose
@@ -437,7 +439,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
 - Hosted-tool emulation returns auditable screenshot-first `computer_call`
   items for computer-use requests and maps returned `computer_call_output`
-  screenshot/result context into follow-up Chat requests.
+  screenshot/result context into follow-up Chat requests, including streaming
+  follow-up action requests through a generated Chat function tool.
 - Local Skills API can create, version, retrieve zip content, delete, and mount
   `skill_reference` bundles into local shell/code-interpreter containers.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.

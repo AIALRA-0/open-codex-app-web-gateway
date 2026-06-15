@@ -4466,6 +4466,82 @@ Open follow-ups:
 - Secret handling: no API keys, account credentials, provider headers, or local
   deployment env files were added to the repository.
 
+## 2026-06-15 - Computer Use streaming follow-up action mapping
+
+- Continued the local Computer Use action-loop work from the official OpenAI
+  Computer Use action list:
+  <https://developers.openai.com/api/docs/guides/tools-computer-use#possible-computer-use-actions>.
+- Closed the streaming follow-up action interception gap for Chat-only
+  providers:
+  - `computer_call_output` follow-up turns now inject the generated
+    `local_computer_action` Chat function tool for streaming requests as well
+    as non-streaming/background requests;
+  - streaming Responses now use a local tool loop that buffers upstream Chat
+    SSE chunks, reconstructs the Chat completion, detects generated Computer
+    action tool calls, maps them back to public `computer_call` output items,
+    and suppresses bridge-internal `function_call` output items and
+    `response.function_call_arguments.*` events;
+  - the same stream loop still preserves remote MCP streaming call/approval
+    behavior, so Computer action interception does not break MCP tool loops;
+  - forced `tool_choice:{type:"computer"}` still maps to the generated Chat
+    function name and records
+    `metadata.compatibility.local_computer.tool_choice`.
+- Extended coverage:
+  - added a mock-provider unit test for streamed generated Computer action
+    tool-call fragments, proving the public SSE contains `computer_call` and
+    never exposes the bridge-internal function call;
+  - added live bridge-regression case `responses-computer-action-stream`;
+  - updated the compatibility matrix and evaluation plan to describe
+    non-streaming, streaming, and background follow-up action mapping.
+- Current boundary: the bridge now preserves the protocol loop for screenshot
+  requests and model-requested follow-up actions across non-streaming,
+  streaming, and background Responses. It still does not physically run a
+  browser/desktop executor, capture real screenshots, acknowledge safety checks
+  as policy, isolate desktop state, or orchestrate server-side multi-round UI
+  execution.
+- Verification:
+  - `node --check` passed for `src/bridge/local_computer.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - Focused Computer Use unit tests passed 6/6.
+  - `npm test`: passed 196/196.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Focused live `responses-computer-action-stream`: passed 1/1 against
+    `deepseek-v4-pro`, latency 2042 ms, 5 SSE events, and 1097 total tokens.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 93/93,
+    pass rate 1.0, average latency 1429 ms, P95 latency 3930 ms, and total
+    usage 24552 tokens. The suite includes
+    `responses-computer-action-stream`.
+  - `npm run eval:protocol`: passed 2/2, pass rate 1.0, average latency
+    1171 ms, P95 latency 1192 ms, and total usage 99 tokens.
+  - `npm run smoke:bridge`: passed and returned `bridge-ok`.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online/`, covering sidebar navigation, core
+    pages, project dialog/upload, prompt submission, completed-turn controls,
+    reload persistence, generated image artifact display, saved project
+    reopen/cleanup, and console error/warning checks; screenshot written to
+    `output/playwright/ui-smoke-2026-06-15T14-28-29-514Z.png`.
+  - `npm run prune:runtime -- --dry-run`: after UI smoke, scanned 1638 runtime
+    candidates, selected 1 old UI-smoke screenshot, selected 87671 bytes, and
+    reported 0 errors.
+  - `npm run prune:runtime -- --apply`: deleted that 1 artifact, freed
+    87671 bytes, and reported 0 errors.
+  - Final `node --check` passed for `src/bridge/local_computer.js`,
+    `src/bridge/server.js`, `scripts/eval-harness.mjs`, and
+    `test/server.test.js`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Service/storage check after cleanup: app-server, bridge, and web services
+    were active; the filesystem had 36 GB available; `state/` was 23 MB,
+    `output/` was 4.7 MB, `/srv/aialra/data/opencodexapp` was 84 KB, and
+    `/srv/aialra/logs/opencodexapp` was 27 MB.
+  - Local bridge healthz returned `ok:true`; the public
+    `https://opencodexapp.aialra.online/` entrypoint returned HTTP 200.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-15 - Computer Use follow-up action mapping
 
 - Used the official OpenAI Computer Use guide for the action-loop surface:

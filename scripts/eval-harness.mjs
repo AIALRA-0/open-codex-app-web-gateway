@@ -2059,6 +2059,56 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-computer-action-stream",
+        mode: "responses-stream",
+        request: {
+          model: defaultModel,
+          instructions: "A computer screenshot was returned. Stream by using the provided computer action tool to request exactly one click at x=42 and y=55, then stop without normal text.",
+          input: [{
+            type: "computer_call_output",
+            call_id: "call_eval_stream_screenshot",
+            output: {
+              type: "input_image",
+              image_url: "https://example.test/computer-stream-screen.png",
+              detail: "low",
+            },
+            acknowledged_safety_checks: [{ id: "safe_eval_stream_ack" }],
+          }],
+          tools: [{
+            type: "computer",
+            environment: "browser",
+            display_width: 1024,
+            display_height: 768,
+          }],
+          tool_choice: { type: "computer" },
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          stream: true,
+          store: false,
+        },
+        check: ({ events, json }) => {
+          const call = (json.output || []).find((item) => item.type === "computer_call");
+          const computer = json.metadata?.compatibility?.local_computer || {};
+          const budget = json.metadata?.compatibility?.local_tool_budget || {};
+          return !!call
+            && call.status === "completed"
+            && call.action?.type === "click"
+            && call.actions?.some((action) => action.type === "click")
+            && call.environment === "browser"
+            && call.display_width === 1024
+            && call.display_height === 768
+            && events.some((event) => event.event === "response.output_item.added" && event.data?.item?.type === "computer_call")
+            && events.some((event) => event.event === "response.output_item.done" && event.data?.item?.type === "computer_call")
+            && !events.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
+            && computer.status === "action_requested"
+            && computer.returned_output_count === 1
+            && computer.model_action_tool_call_count === 1
+            && computer.model_action_call_count === 1
+            && computer.tool_choice?.reason === "computer_tool_choice_mapped"
+            && budget.used === 1;
+        },
+      },
+      {
         id: "responses-image-generation",
         mode: "responses",
         request: {

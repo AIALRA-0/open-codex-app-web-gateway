@@ -4301,6 +4301,136 @@ test("POST /v1/responses streams local computer_call items", async () => {
   });
 });
 
+test("POST /v1/responses streams model-requested computer actions as computer_call", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, true);
+    assert.equal(call.body.tools.length, 1);
+    const toolName = call.body.tools[0].function.name;
+    assert.match(toolName, /^local_computer_action/);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: toolName },
+    });
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Received computer_call_output items/);
+    assert.match(prompt, /Supported action types: click/);
+
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_computer_action",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [{
+            index: 0,
+            id: "call_stream_next_click",
+            type: "function",
+            function: {
+              name: toolName,
+              arguments: "{\"action\":{\"type\":\"click\"",
+            },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_computer_action",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            function: {
+              arguments: ",\"x\":42,\"y\":55,\"button\":\"left\"},\"pending_safety_checks\":[{\"id\":\"safe_stream_click\"}]}",
+            },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_computer_action",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_stream_screenshot",
+          output: {
+            type: "input_image",
+            image_url: "https://example.test/stream-screen.png",
+            detail: "low",
+          },
+        }],
+        tools: [{
+          type: "computer",
+          environment: "browser",
+          display_width: 1024,
+          display_height: 768,
+        }],
+        tool_choice: { type: "computer" },
+        max_tool_calls: 1,
+        stream: true,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.some((event) => event.event === "response.function_call_arguments.delta"), false);
+    assert.equal(events.some((event) => event.data?.item?.type === "function_call"), false);
+    const computerEvent = events.find((event) => (
+      event.event === "response.output_item.added"
+      && event.data?.item?.type === "computer_call"
+    ));
+    assert.ok(computerEvent);
+    assert.equal(computerEvent.data.item.call_id, "call_stream_next_click");
+    assert.deepEqual(computerEvent.data.item.action, {
+      type: "click",
+      x: 42,
+      y: 55,
+      button: "left",
+    });
+    assert.equal(computerEvent.data.item.actions.length, 1);
+    assert.equal(computerEvent.data.item.pending_safety_checks[0].id, "safe_stream_click");
+    const doneEvent = events.find((event) => (
+      event.event === "response.output_item.done"
+      && event.data?.item?.type === "computer_call"
+    ));
+    assert.ok(doneEvent);
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output.length, 1);
+    assert.equal(completed.output[0].type, "computer_call");
+    assert.equal(completed.output[0].action.type, "click");
+    assert.equal(completed.metadata.compatibility.local_computer.status, "action_requested");
+    assert.equal(completed.metadata.compatibility.local_computer.returned_output_count, 1);
+    assert.equal(completed.metadata.compatibility.local_computer.model_action_tool_call_count, 1);
+    assert.equal(completed.metadata.compatibility.local_computer.model_action_call_count, 1);
+    assert.equal(completed.metadata.compatibility.local_computer.deepseek_thinking, "disabled_for_local_computer");
+    assert.deepEqual(completed.metadata.compatibility.local_tool_budget, {
+      max_tool_calls: 1,
+      used: 1,
+      skipped: 0,
+      exhausted: true,
+    });
+    assert.equal(completed.usage.input_tokens, 8);
+    assert.equal(completed.usage.output_tokens, 4);
+  });
+});
+
 test("POST /v1/responses streams local image_generation_call partial images", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
