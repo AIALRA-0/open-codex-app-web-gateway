@@ -115,6 +115,7 @@ const {
   filterStreamOptionsForProvider,
   mapUsage,
   normalizeChatAudioPart,
+  normalizeContentParts,
   normalizeOutputTextLogprobs,
   normalizeReasoningEffort,
   prefixedId,
@@ -228,12 +229,28 @@ function streamOptionFieldsFromEnv(fallback) {
     .filter(Boolean);
 }
 
+function normalizeChatImageInputMode(value, deepseekProvider = false) {
+  const fallback = deepseekProvider ? "text" : "vision";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (!normalized || normalized === "auto") return fallback;
+  if (["text", "fallback", "marker", "markers", "disabled"].includes(normalized)) return "text";
+  if (["vision", "native", "content_parts", "content-parts", "multimodal"].includes(normalized)) return "vision";
+  return fallback;
+}
+
 function loadConfig(overrides = {}) {
   const apiKeyEnv = process.env.CODEXCOMPAT_PROVIDER_API_KEY_ENV || "DEEPSEEK_API_KEY";
   const imageGenerationApiKeyEnv = process.env.CODEXCOMPAT_IMAGE_GENERATION_API_KEY_ENV || "OPENAI_API_KEY";
   const stateDir = overrides.stateDir || process.env.CODEXCOMPAT_STATE_DIR || path.join(process.cwd(), "state", "responses-bridge");
   const providerBaseUrl = trimTrailingSlash(process.env.CODEXCOMPAT_PROVIDER_BASE_URL || DEFAULT_PROVIDER_BASE_URL);
   const deepseekProvider = isDeepSeekProvider(overrides.providerBaseUrl || providerBaseUrl);
+  const normalizedOverrides = { ...overrides };
+  if (Object.prototype.hasOwnProperty.call(normalizedOverrides, "chatImageInputMode")) {
+    normalizedOverrides.chatImageInputMode = normalizeChatImageInputMode(
+      normalizedOverrides.chatImageInputMode,
+      deepseekProvider,
+    );
+  }
   const webSearchProvider = overrides.webSearchProvider || process.env.CODEXCOMPAT_WEB_SEARCH_PROVIDER || "wikipedia";
   const defaultWebSearchOpenPages = String(webSearchProvider).toLowerCase() === "wikipedia" ? 1 : 0;
   const compactionSecretFile = overrides.compactionSecretFile
@@ -308,6 +325,7 @@ function loadConfig(overrides = {}) {
     inputImageProvider: process.env.CODEXCOMPAT_INPUT_IMAGE_PROVIDER || "local",
     inputImageMaxImages: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES", 32, 1, 1500),
     inputImageMaxBytes: numberFromEnv("CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES", 4 * 1024 * 1024, 1024, 50 * 1024 * 1024),
+    chatImageInputMode: normalizeChatImageInputMode(process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE, deepseekProvider),
     webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -410,7 +428,7 @@ function loadConfig(overrides = {}) {
     streamOptionFields: streamOptionFieldsFromEnv(deepseekProvider ? ["include_usage"] : null),
     streamIncludeUsage: parseBoolean(process.env.CODEXCOMPAT_STREAM_INCLUDE_USAGE, true),
     forwardReasoningSummary: parseBoolean(process.env.CODEXCOMPAT_FORWARD_REASONING_SUMMARY, false),
-    ...overrides,
+    ...normalizedOverrides,
   };
 }
 
@@ -12033,11 +12051,19 @@ async function prepareAssistantChatRequest({
   skillStore,
 }) {
   const messageTruncation = assistantRunThreadMessagesForChat(run, messages);
-  const chat = assistantRunToChatRequest(run, messageTruncation.messages, config, chatOptions);
+  const assistantChatMessages = assistantMessagesForChatInput(messageTruncation.messages);
+  const localInputImages = prepareInputImageContext({
+    model: run.model || config.defaultModel,
+    input: assistantChatMessages,
+  }, config, fileSearchStore);
+  const chatMessages = localInputImages?.request?.input || assistantChatMessages;
+  const chat = assistantRunToChatRequest(run, chatMessages, config, chatOptions);
   const contexts = {};
   const compatibility = {};
+  Object.assign(compatibility, inputImageCompatibility(localInputImages));
   const input = assistantLocalToolInput(messageTruncation.messages, chatOptions);
   const localHostedToolTypes = assistantLocalHostedToolTypes(run);
+  const inputContentCompatibility = assistantInputContentCompatibility(chatMessages, config);
 
   const fileSearchTools = assistantFileSearchTools(run);
   if (fileSearchTools.length) {
@@ -12078,6 +12104,7 @@ async function prepareAssistantChatRequest({
       hosted_tools_supported: true,
       local_hosted_tool_types: localHostedToolTypes,
       local_hosted_tool_call_count: hostedToolCalls.length,
+      ...(inputContentCompatibility ? { input_content: inputContentCompatibility } : {}),
       ...(messageTruncation.compatibility ? { truncation: messageTruncation.compatibility } : {}),
       ...(contexts.file_search ? { local_file_search_status: fileSearchCompatibility(contexts.file_search).local_file_search?.status } : {}),
       ...(contexts.shell ? { local_code_interpreter_status: shellCompatibility(contexts.shell).local_shell?.status } : {}),
@@ -12487,8 +12514,8 @@ function assistantRunToChatRequest(run, threadMessages, config, options = {}) {
   if (instructions) messages.push({ role: "system", content: instructions });
   for (const message of threadMessages) {
     const role = message.role === "assistant" ? "assistant" : "user";
-    const content = assistantMessageContentText(message.content);
-    if (content) messages.push({ role, content });
+    const content = assistantMessageContentForChat(message.content, role, config);
+    if (chatMessageContentPresent(content)) messages.push({ role, content });
   }
   if (Array.isArray(options.requiredToolCalls) && options.requiredToolCalls.length) {
     messages.push({
@@ -12525,6 +12552,104 @@ function assistantRunToChatRequest(run, threadMessages, config, options = {}) {
     if (run.parallel_tool_calls !== undefined) chat.parallel_tool_calls = run.parallel_tool_calls;
   }
   return chat;
+}
+
+function assistantMessagesForChatInput(messages = []) {
+  return (Array.isArray(messages) ? messages : []).map((message) => ({
+    ...message,
+    content: assistantContentForChatInput(message?.content),
+  }));
+}
+
+function assistantContentForChatInput(content) {
+  if (!Array.isArray(content)) return content;
+  return content.map(assistantContentPartForChatInput);
+}
+
+function assistantContentPartForChatInput(part) {
+  if (!isPlainObject(part)) return part;
+  if (part.type === "text") {
+    return {
+      type: "text",
+      text: stringifyContent(part.text?.value ?? part.text ?? part.content ?? ""),
+    };
+  }
+  if (part.type === "image_file") {
+    const imageFile = isPlainObject(part.image_file) ? part.image_file : part;
+    const fileId = stringifyContent(imageFile.file_id || part.file_id || "").trim();
+    return {
+      type: "input_image",
+      ...(fileId ? { file_id: fileId } : {}),
+      ...(imageFile.detail != null || part.detail != null ? { detail: stringifyContent(imageFile.detail ?? part.detail) } : {}),
+    };
+  }
+  if (part.type === "image_url") {
+    const imageUrl = isPlainObject(part.image_url) ? clone(part.image_url) : part.image_url;
+    return {
+      type: "image_url",
+      ...(imageUrl !== undefined ? { image_url: imageUrl } : {}),
+      ...(part.detail != null ? { detail: stringifyContent(part.detail) } : {}),
+    };
+  }
+  return clone(part);
+}
+
+function assistantMessageContentForChat(content, role = "user", options = {}) {
+  const prepared = assistantContentForChatInput(content);
+  if (!assistantContentNeedsChatParts(prepared)) return assistantMessageContentText(prepared);
+  return normalizeContentParts(prepared, role, options);
+}
+
+function assistantContentNeedsChatParts(content) {
+  if (!Array.isArray(content)) return false;
+  return content.some((part) => (
+    isPlainObject(part)
+    && ["image_file", "image_url", "input_image", "input_audio", "audio"].includes(part.type)
+  ));
+}
+
+function chatMessageContentPresent(content) {
+  if (Array.isArray(content)) return content.length > 0;
+  return content !== null && content !== undefined && content !== "";
+}
+
+function assistantInputContentCompatibility(messages = [], options = {}) {
+  let multimodalMessageCount = 0;
+  let textPartCount = 0;
+  let imagePartCount = 0;
+  let dataUrlImageCount = 0;
+  for (const message of Array.isArray(messages) ? messages : []) {
+    const parts = Array.isArray(message?.content) ? message.content : [];
+    const hasImage = parts.some((part) => assistantChatImagePartUrl(part));
+    if (hasImage) multimodalMessageCount += 1;
+    for (const part of parts) {
+      if (part?.type === "text") textPartCount += 1;
+      const imageUrl = assistantChatImagePartUrl(part);
+      if (imageUrl) {
+        imagePartCount += 1;
+        if (String(imageUrl).startsWith("data:")) dataUrlImageCount += 1;
+      }
+    }
+  }
+  if (!imagePartCount) return null;
+  const mode = String(options.chatImageInputMode || "vision").toLowerCase() === "text" ? "text" : "vision";
+  return {
+    provider: mode === "text" ? "text_fallback" : "chat_content_parts",
+    mode,
+    multimodal_message_count: multimodalMessageCount,
+    image_part_count: imagePartCount,
+    data_url_image_count: dataUrlImageCount,
+    text_part_count: textPartCount,
+  };
+}
+
+function assistantChatImagePartUrl(part) {
+  if (!isPlainObject(part)) return "";
+  if (part.type !== "image_url" && part.type !== "input_image") return "";
+  if (typeof part.image_url === "string") return part.image_url;
+  if (typeof part.image_url?.url === "string") return part.image_url.url;
+  if (typeof part.url === "string") return part.url;
+  return "";
 }
 
 function assistantFunctionToolMapping(tools = []) {

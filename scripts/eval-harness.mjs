@@ -1283,6 +1283,31 @@ function buildSuites(defaultModel) {
           && steps?.data?.some((step) => step.type === "message_creation"),
       },
       {
+        id: "assistants-vision-content",
+        mode: "assistants-vision-content",
+        request: {
+          model: defaultModel,
+          image_base64: tinyPngBase64,
+        },
+        check: ({ run, messages, file }) => {
+          const inputContent = run?.metadata?.compatibility?.local_assistants?.input_content || {};
+          const localInputImages = run?.metadata?.compatibility?.local_input_images || {};
+          const userMessage = (messages?.data || []).find((message) => message.role === "user");
+          return run?.status === "completed"
+            && /assistants-vision-live-ok/i.test(assistantMessageTextFromList(messages?.data || []))
+            && ["chat_content_parts", "text_fallback"].includes(inputContent.provider)
+            && inputContent.image_part_count >= 2
+            && inputContent.data_url_image_count >= 1
+            && localInputImages.status === "completed"
+            && localInputImages.resolved_count >= 1
+            && localInputImages.files?.some((item) => item.file_id === file?.id
+              && item.media_type === "image/png"
+              && !Object.prototype.hasOwnProperty.call(item, "image_url"))
+            && userMessage?.content?.some((part) => part.type === "image_url")
+            && userMessage?.content?.some((part) => part.type === "image_file");
+        },
+      },
+      {
         id: "assistants-file-search",
         mode: "assistants-file-search",
         request: {
@@ -3738,6 +3763,9 @@ async function runCase(testCase, context) {
     if (testCase.mode === "assistants-additional-messages") {
       return await runAssistantsAdditionalMessagesCase(testCase, context, started);
     }
+    if (testCase.mode === "assistants-vision-content") {
+      return await runAssistantsVisionContentCase(testCase, context, started);
+    }
     if (testCase.mode === "assistants-file-search") {
       return await runAssistantsFileSearchCase(testCase, context, started);
     }
@@ -5929,6 +5957,118 @@ async function runAssistantsAdditionalMessagesCase(testCase, context, started) {
   } finally {
     if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
     if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+  }
+}
+
+async function runAssistantsVisionContentCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  let assistantId = null;
+  let threadId = null;
+  let fileId = null;
+  try {
+    const file = await postJsonCapture(`${baseUrl}/v1/files`, {
+      filename: `${testCase.id}.png`,
+      purpose: "vision",
+      content_base64: request.image_base64,
+      mime_type: "image/png",
+    });
+    if (!file.ok || !file.json?.id) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: file.status,
+        error: truncate(file.body),
+      });
+    }
+    fileId = file.json.id;
+
+    const assistant = await postJsonCapture(`${baseUrl}/v1/assistants`, {
+      model: request.model,
+      name: `Bridge ${testCase.id}`,
+      instructions: "Return exactly assistants-vision-live-ok and no extra words.",
+      metadata: { suite: testCase.id },
+    });
+    if (!assistant.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: assistant.status,
+        file_id: fileId,
+        error: truncate(assistant.body),
+      });
+    }
+    assistantId = assistant.json.id;
+
+    const thread = await postJsonCapture(`${baseUrl}/v1/threads`, {
+      messages: [{
+        role: "user",
+        content: [
+          { type: "text", text: "Compare these assistant image inputs. Return exactly assistants-vision-live-ok." },
+          {
+            type: "image_url",
+            image_url: {
+              url: "https://example.test/assistant-vision-live.png",
+              detail: "high",
+            },
+          },
+          {
+            type: "image_file",
+            image_file: {
+              file_id: fileId,
+              detail: "low",
+            },
+          },
+        ],
+      }],
+      metadata: { suite: testCase.id },
+    });
+    if (!thread.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: thread.status,
+        file_id: fileId,
+        assistant_id: assistantId,
+        error: truncate(thread.body),
+      });
+    }
+    threadId = thread.json.id;
+
+    const run = await postJsonCapture(`${baseUrl}/v1/threads/${threadId}/runs`, {
+      assistant_id: assistantId,
+      metadata: { suite: testCase.id },
+    });
+    if (!run.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: run.status,
+        file_id: fileId,
+        assistant_id: assistantId,
+        thread_id: threadId,
+        error: truncate(run.body),
+      });
+    }
+
+    const messages = await getJson(`${baseUrl}/v1/threads/${threadId}/messages?order=asc&limit=20`);
+    const ok = !!testCase.check({
+      run: run.json,
+      messages: messages.json,
+      file: file.json,
+    });
+    return finishResult(testCase, context, started, {
+      ok,
+      status: run.status,
+      assistant_id: assistantId,
+      thread_id: threadId,
+      file_id: fileId,
+      usage: assistantsUsage(run.json),
+      output_text: assistantMessageTextFromList(messages.json?.data || []),
+      error: ok ? undefined : truncate(JSON.stringify({
+        run: run.json,
+        messages: messages.json,
+      })),
+    });
+  } finally {
+    if (threadId) await deleteJson(`${baseUrl}/v1/threads/${threadId}`);
+    if (assistantId) await deleteJson(`${baseUrl}/v1/assistants/${assistantId}`);
+    if (fileId) await deleteJson(`${baseUrl}/v1/files/${fileId}`);
   }
 }
 

@@ -1,5 +1,30 @@
 # Audit Log
 
+## 2026-06-15 Assistants Vision Message Content
+
+- Added Assistants message-content mapping for image inputs before Chat
+  provider calls:
+  - `image_url` parts preserve URL and `detail` as Chat vision content parts
+  - `image_file.file_id` parts resolve through the local Files API into
+    bounded data URLs for upstream Chat vision requests
+- Reused the existing Responses `input_image` resolver so local file image
+  limits and metadata redaction stay consistent across APIs.
+- Added provider-aware Chat image input mode:
+  - DeepSeek defaults to safe text markers because its Chat endpoint rejects
+    `image_url` content parts for the current default model
+  - vision-capable OpenAI-compatible providers can use native Chat
+    multimodal content parts with `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE=vision`
+  - text fallback never injects data URLs or base64 image payloads into the
+    upstream prompt
+- Added mock-provider coverage proving Assistants `image_url` + `image_file`
+  content reaches upstream Chat as multimodal content parts when enabled and
+  safe text markers when Chat vision is disabled.
+- Added a bridge-regression `assistants-vision-content` case for the live
+  harness.
+- Security boundary: run compatibility metadata records counts, file IDs,
+  media types, byte sizes, and status only. It does not store image data URLs,
+  base64 image payloads, provider credentials, or Authorization headers.
+
 ## 2026-06-15 Local Hosted-Tool Usage Ledger
 
 - Extended the local Organization Usage ledger to meter local hosted-tool

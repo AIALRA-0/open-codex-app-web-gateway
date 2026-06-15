@@ -844,6 +844,70 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
   });
 });
 
+test("POST /v1/responses falls back to text markers when Chat image content parts are disabled", async () => {
+  const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user"]);
+    assert.equal(typeof call.body.messages[0].content, "string");
+    assert.match(call.body.messages[0].content, /Inspect these image markers\./);
+    assert.match(call.body.messages[0].content, /\[image:https:\/\/example\.test\/vision\.png\]/);
+    assert.match(call.body.messages[0].content, /detail: high/);
+    assert.match(call.body.messages[0].content, /\[image:inline-data\]/);
+    assert.match(call.body.messages[0].content, /media_type: image\/png/);
+    assert.match(call.body.messages[0].content, /detail: low/);
+    assert.doesNotMatch(call.body.messages[0].content, /data:image/);
+    assert.doesNotMatch(call.body.messages[0].content, new RegExp(imageBase64));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_image_text_fallback",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "image text fallback ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 13, completion_tokens: 4, total_tokens: 17 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "Inspect these image markers." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/vision.png",
+                detail: "high",
+              },
+            },
+            {
+              type: "input_image",
+              file_data: imageBase64,
+              media_type: "image/png",
+              detail: "low",
+            },
+          ],
+        }],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "image text fallback ok");
+    assert.equal(json.metadata.compatibility.chat_image_inputs.provider, "text_fallback");
+    assert.equal(json.metadata.compatibility.chat_image_inputs.mode, "text");
+    assert.equal(json.metadata.compatibility.chat_image_inputs.image_part_count, 2);
+  }, { chatImageInputMode: "text" });
+});
+
 test("Responses input_items include message.input_image.image_url only when requested", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [{
@@ -1710,6 +1774,225 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
     assert.equal(deleteAssistant.status, 200);
     assert.equal((await deleteAssistant.json()).deleted, true);
   });
+});
+
+test("Assistants API maps image_url and image_file message content to Chat vision parts", async () => {
+  const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    assert.deepEqual(request.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.deepEqual(request.body.messages[1].content, [
+      { type: "text", text: "Compare these two assistant images." },
+      {
+        type: "image_url",
+        image_url: {
+          url: "https://example.test/assistant-vision.png",
+          detail: "high",
+        },
+      },
+      {
+        type: "image_url",
+        image_url: {
+          url: `data:image/png;base64,${imageBase64}`,
+          detail: "low",
+        },
+      },
+    ]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_vision",
+      object: "chat.completion",
+      created: 1700000002,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-vision-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 29, completion_tokens: 4, total_tokens: 33 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-vision.png",
+        purpose: "vision",
+        content_base64: imageBase64,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Inspect assistant image inputs.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Compare these two assistant images." },
+            {
+              type: "image_url",
+              image_url: {
+                url: "https://example.test/assistant-vision.png",
+                detail: "high",
+              },
+            },
+            {
+              type: "image_file",
+              image_file: {
+                file_id: file.id,
+                detail: "low",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.metadata.compatibility.local_input_images.status, "completed");
+    assert.equal(run.metadata.compatibility.local_input_images.resolved_count, 1);
+    assert.equal(run.metadata.compatibility.local_input_images.files[0].file_id, file.id);
+    assert.equal(run.metadata.compatibility.local_input_images.files[0].media_type, "image/png");
+    assert.equal(Object.prototype.hasOwnProperty.call(run.metadata.compatibility.local_input_images.files[0], "image_url"), false);
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.image_part_count, 2);
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.data_url_image_count, 1);
+    assert.equal(requests.length, 1);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const userMessage = (await listedMessages.json()).data.find((message) => message.role === "user");
+    assert.deepEqual(userMessage.content.map((part) => part.type), ["text", "image_url", "image_file"]);
+  });
+});
+
+test("Assistants API falls back to text markers for image message content when Chat vision is disabled", async () => {
+  const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.tools, undefined);
+    assert.deepEqual(request.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.equal(typeof request.body.messages[1].content, "string");
+    assert.match(request.body.messages[1].content, /Compare these two assistant images\./);
+    assert.match(request.body.messages[1].content, /\[image:https:\/\/example\.test\/assistant-vision\.png\]/);
+    assert.match(request.body.messages[1].content, /detail: high/);
+    assert.match(request.body.messages[1].content, /\[image:file_/);
+    assert.match(request.body.messages[1].content, /media_type: image\/png/);
+    assert.match(request.body.messages[1].content, /detail: low/);
+    assert.doesNotMatch(request.body.messages[1].content, /data:image/);
+    assert.doesNotMatch(request.body.messages[1].content, new RegExp(imageBase64));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_vision_text_fallback",
+      object: "chat.completion",
+      created: 1700000002,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-vision-text-fallback-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 29, completion_tokens: 6, total_tokens: 35 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "assistant-vision.png",
+        purpose: "vision",
+        content_base64: imageBase64,
+        mime_type: "image/png",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Inspect assistant image inputs.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "Compare these two assistant images." },
+            {
+              type: "image_url",
+              image_url: {
+                url: "https://example.test/assistant-vision.png",
+                detail: "high",
+              },
+            },
+            {
+              type: "image_file",
+              image_file: {
+                file_id: file.id,
+                detail: "low",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.metadata.compatibility.local_input_images.status, "completed");
+    assert.equal(run.metadata.compatibility.local_input_images.resolved_count, 1);
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.provider, "text_fallback");
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.mode, "text");
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.image_part_count, 2);
+    assert.equal(run.metadata.compatibility.local_assistants.input_content.data_url_image_count, 1);
+    assert.equal(requests.length, 1);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const userMessage = (await listedMessages.json()).data.find((message) => message.role === "user");
+    assert.deepEqual(userMessage.content.map((part) => part.type), ["text", "image_url", "image_file"]);
+  }, { chatImageInputMode: "text" });
 });
 
 test("Assistants API create run maps reasoning_effort through Chat compatibility", async () => {
@@ -16704,11 +16987,13 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousChatNativeFields = process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   const previousChatCustomTools = process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   const previousStreamOptionFields = process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
+  const previousChatImageInputMode = process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_NATIVE_FIELDS;
   delete process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS;
   delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
+  delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
     assert.equal(deepseekConfig.forwardServiceTier, false);
@@ -16716,6 +17001,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(deepseekConfig.forwardChatNativeFields, false);
     assert.equal(deepseekConfig.forwardChatCustomTools, false);
     assert.deepEqual(deepseekConfig.streamOptionFields, ["include_usage"]);
+    assert.equal(deepseekConfig.chatImageInputMode, "text");
 
     const openaiCompatibleConfig = loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" });
     assert.equal(openaiCompatibleConfig.forwardServiceTier, true);
@@ -16723,6 +17009,13 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(openaiCompatibleConfig.forwardChatNativeFields, true);
     assert.equal(openaiCompatibleConfig.forwardChatCustomTools, true);
     assert.equal(openaiCompatibleConfig.streamOptionFields, null);
+    assert.equal(openaiCompatibleConfig.chatImageInputMode, "vision");
+
+    process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = "vision";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatImageInputMode, "vision");
+
+    process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = "text";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatImageInputMode, "text");
 
     process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields, null);
@@ -16743,6 +17036,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS = previousChatCustomTools;
     if (previousStreamOptionFields === undefined) delete process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS;
     else process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = previousStreamOptionFields;
+    if (previousChatImageInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
+    else process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE = previousChatImageInputMode;
   }
 });
 

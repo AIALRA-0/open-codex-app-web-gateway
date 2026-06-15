@@ -13,6 +13,7 @@ Primary sources:
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
 - OpenAI Conversations reference: https://developers.openai.com/api/docs/api-reference/conversations/create
 - OpenAI Assistants deep dive run lifecycle: https://developers.openai.com/api/docs/assistants/deep-dive#runs-and-run-steps
+- OpenAI Assistants image input content: https://developers.openai.com/api/docs/assistants/deep-dive#creating-image-input-content
 - OpenAI Assistants file search guide: https://developers.openai.com/api/docs/assistants/tools/file-search
 - OpenAI Assistants OpenAPI operation `createAssistant`: https://api.openai.com/v1/assistants
 - OpenAI Threads OpenAPI operation `createThread`: https://api.openai.com/v1/threads
@@ -141,7 +142,7 @@ implementations for those tools.
 | string `input` | `messages: [{role:"user"}]` | Direct |
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |
-| `input_image` | chat `image_url` content part | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...`. Local Files API `file_id` image inputs are resolved to bounded data URLs before upstream Chat calls and recorded in `metadata.compatibility.local_input_images` without storing the base64 payload in metadata |
+| `input_image` | chat `image_url` content part or text marker | Provider-dependent. URL and base64 data-URL inputs are forwarded as Chat `image_url.url` when `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE=vision`; `detail` is preserved under `image_url.detail` for both Responses and Chat shapes. Compatible inline `file_data` / `data` image payloads are converted to `data:<media_type>;base64,...` for vision-capable providers. Local Files API `file_id` image inputs are resolved to bounded data URLs before upstream Chat calls and recorded in `metadata.compatibility.local_input_images` without storing the base64 payload in metadata. Text-only providers use explicit `[image:...]` markers without embedding data URLs |
 | `input_audio` | chat `input_audio` content part | Direct for audio-capable Chat providers using `input_audio:{data,format}`. The bridge also accepts compatible top-level `data`, `audio_data`, or `file_data` shapes and preserves extra audio fields. Non-user or non-forwardable audio becomes an explicit text marker with any transcript; text-only providers such as DeepSeek do not natively understand audio input |
 | `input_file` | local extraction context plus explicit text marker | Emulated for local Files API `file_id`, completed Uploads API files, inline base64 `file_data`, and HTTP(S) `file_url` when text can be extracted; PDFs use local Poppler `pdftotext` when enabled; `.docx`, `.xlsx`, and `.pptx` OOXML files are extracted locally from ZIP/XML content |
 | prior `message` output item | assistant chat message | Direct |
@@ -340,6 +341,16 @@ and `incomplete_details.reason` set to `max_prompt_tokens` or
 compatibility approximation, not OpenAI hosted tokenizer accounting or hosted
 async worker scheduling.
 
+Assistant message content supports image inputs before the generated Chat
+request. `image_url` parts keep their URL and `detail` value as Chat vision
+content parts. `image_file.file_id` parts are resolved through the local Files
+API with the same bounded data-URL resolver used by Responses `input_image`;
+the data URL is sent upstream when the configured Chat provider accepts vision
+content. When the configured provider is text-only, the bridge sends explicit
+image markers instead of Chat vision parts and never places data URLs in the
+prompt. Compatibility metadata records only file id, media type, byte count,
+status, provider mode, and aggregate part counts.
+
 Assistant `file_search` and `code_interpreter` tools are intercepted before the
 upstream Chat call. `file_search` merges assistant-, thread-, and run-level
 `tool_resources.file_search.vector_store_ids`, searches the local vector store,
@@ -387,7 +398,7 @@ Message attachments for `file_search` create/reuse a local thread vector store
 with a seven-day last-active expiration policy, and `code_interpreter`
 attachments are unioned into thread file resources. Code interpreter executes
 explicit Python blocks locally rather than running a model-driven hosted code
-loop. Broader edge-delta parity for non-text message content, hosted tool
+loop. Broader edge-delta parity for non-image message content, hosted tool
 output deltas, and hosted async worker scheduling remain future work. Local
 active-run locks are implemented for message creation and run creation, and
 stale non-terminal runs are marked `expired` when `expires_at` has elapsed.
@@ -1140,12 +1151,14 @@ parts, so the bridge resolves local Files API image `file_id` inputs before the
 upstream Chat request:
 
 - `image_url` strings and `image_url:{url,detail}` objects are forwarded
-  directly;
+  directly when the configured Chat image mode is `vision`;
 - inline base64 `file_data`, `data`, and `image_data` are converted to
-  `data:<media_type>;base64,...`;
+  `data:<media_type>;base64,...` for vision-capable Chat providers;
 - local Files API `file_id` image inputs are read as bytes, checked against
   local image byte caps, converted to data URLs, and the original `detail` is
   preserved;
+- text-only providers receive explicit `[image:...]` markers with URL/file
+  hints, media type, and detail instead of Chat vision parts or data URLs;
 - compatibility metadata records only file IDs, filenames, media types, byte
   counts, status, and errors; it does not echo the base64 image payload.
 
@@ -1156,6 +1169,7 @@ Configuration:
 | `CODEXCOMPAT_INPUT_IMAGE_PROVIDER` | `local` | Use `disabled` to leave `input_image.file_id` as a marker-only compatibility fallback |
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES` | `32` | Maximum local image file IDs resolved per request |
 | `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before it is converted to a data URL |
+| `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE` | `text` for DeepSeek, `vision` otherwise | Use `auto`, `vision`, or `text`. `vision` forwards Chat multimodal content parts; `text` emits safe image markers for providers that reject `image_url` content parts |
 
 This adapter does not make a text-only model understand images. It preserves
 the protocol shape for vision-capable Chat providers and keeps DeepSeek text

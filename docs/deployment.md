@@ -122,6 +122,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_INPUT_FILE_FETCH_TIMEOUT_MS` | `10000` | Timeout for remote `input_file.file_url` fetches |
 | `CODEXCOMPAT_INPUT_FILE_PDF_EXTRACTOR` | `pdftotext` | Uses local Poppler `pdftotext` to extract text-layer content from PDFs; set `disabled` to skip PDFs |
 | `CODEXCOMPAT_INPUT_FILE_PDF_TIMEOUT_MS` | `10000` | Timeout for each local PDF extraction process |
+| `CODEXCOMPAT_INPUT_IMAGE_PROVIDER` | `local` | Local Responses and Assistants image-file resolver; use `disabled` to leave image file IDs as marker-only compatibility hints |
+| `CODEXCOMPAT_INPUT_IMAGE_MAX_IMAGES` | `32` | Maximum local image file IDs resolved per upstream Chat request |
+| `CODEXCOMPAT_INPUT_IMAGE_MAX_BYTES` | `4194304` | Maximum bytes accepted from each local image file before conversion to a data URL for vision-capable Chat providers |
+| `CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE` | `text` for DeepSeek, `vision` otherwise | `auto`, `vision`, or `text`; DeepSeek defaults to safe text markers because current DeepSeek Chat rejects `image_url` content parts |
 | `CODEXCOMPAT_AUDIO_PROVIDER` | `placeholder` | Local request-based Audio API compatibility provider for `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations`; use `disabled` to reject local Audio requests |
 | `CODEXCOMPAT_AUDIO_SPEECH_MODEL` | `gpt-4o-mini-tts` | Default model id returned/recorded by local speech synthesis compatibility when a client omits `model` |
 | `CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | Default model id for local transcription compatibility when a client omits `model` |

@@ -46,13 +46,14 @@ function stringifyContent(value) {
   return JSON.stringify(value);
 }
 
-function normalizeContentParts(content, role = "user") {
+function normalizeContentParts(content, role = "user", options = {}) {
   if (content == null) return "";
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return stringifyContent(content);
 
   const parts = [];
   const textFallback = [];
+  const imageInputMode = normalizeChatImageInputModeOption(options);
 
   for (const part of content) {
     if (!isPlainObject(part)) {
@@ -62,14 +63,14 @@ function normalizeContentParts(content, role = "user") {
 
     if (part.type === "input_text" || part.type === "output_text" || part.type === "text") {
       const text = stringifyContent(part.text ?? part.content ?? "");
-      if (role === "user") parts.push({ type: "text", text });
+      if (role === "user" && imageInputMode !== "text") parts.push({ type: "text", text });
       else textFallback.push(text);
       continue;
     }
 
     if (part.type === "input_image" || part.type === "image_url") {
       const image = normalizeInputImageContentPart(part);
-      if (role === "user" && image) {
+      if (role === "user" && image && imageInputMode !== "text") {
         parts.push(image);
       } else {
         textFallback.push(inputImageFallbackText(part, image));
@@ -108,6 +109,12 @@ function normalizeContentParts(content, role = "user") {
   }
 
   return textFallback.join("\n");
+}
+
+function normalizeChatImageInputModeOption(options = {}) {
+  const value = options.chatImageInputMode ?? options.imageInputMode;
+  const normalized = String(value || "vision").trim().toLowerCase();
+  return normalized === "text" ? "text" : "vision";
 }
 
 function normalizeInputImageContentPart(part) {
@@ -150,9 +157,17 @@ function inputImageFallbackText(part, image) {
   const imageUrlObject = isPlainObject(part.image_url) ? part.image_url : null;
   const source = imageUrlObject || part;
   const directImageUrl = imageUrlObject ? undefined : part.image_url;
-  const url = image?.image_url?.url || source.url || directImageUrl || part.url || part.file_id || "inline";
+  const rawUrl = source.url || directImageUrl || part.url || image?.image_url?.url || "";
+  const url = part.file_id
+    || part.filename
+    || (String(rawUrl).startsWith("data:") ? "inline-data" : rawUrl)
+    || "inline";
   const detail = image?.image_url?.detail || part.detail || source.detail;
-  return `[image:${stringifyContent(url)}]${detail ? `\ndetail: ${stringifyContent(detail)}` : ""}`;
+  const mediaType = part.media_type || part.mime_type || source.media_type || source.mime_type || "";
+  const lines = [`[image:${stringifyContent(url)}]`];
+  if (mediaType) lines.push(`media_type: ${stringifyContent(mediaType)}`);
+  if (detail) lines.push(`detail: ${stringifyContent(detail)}`);
+  return lines.join("\n");
 }
 
 function normalizeInputAudioContentPart(part) {
@@ -198,7 +213,7 @@ function inputItemToChatMessages(item, options = {}) {
     const role = normalizeChatRole(item.role, options);
     const message = {
       role,
-      content: normalizeContentParts(item.content, role),
+      content: normalizeContentParts(item.content, role, options),
     };
     if (item.name) message.name = item.name;
     if (item.tool_call_id) message.tool_call_id = item.tool_call_id;
@@ -494,6 +509,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const serviceTierCompatibility = mapServiceTier(request, chat, options);
   const streamOptionsCompatibility = mapStreamOptions(request, chat, options);
   const deepseekUserIdCompatibility = mapDeepSeekUserId(request, chat, options);
+  const chatImageInputCompatibility = mapChatImageInputCompatibility(request, options);
 
   const logprobsRequested = shouldRequestChatLogprobs(request);
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
@@ -540,11 +556,34 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
       ...(streamOptionsCompatibility ? { stream_options: streamOptionsCompatibility } : {}),
       ...(deepseekUserIdCompatibility ? { deepseek_user_id: deepseekUserIdCompatibility } : {}),
+      ...(chatImageInputCompatibility ? { chat_image_inputs: chatImageInputCompatibility } : {}),
       ...(promptCompatibility ? { prompt_template: promptCompatibility } : {}),
       ...(maxTokensCompatibility || {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
+}
+
+function mapChatImageInputCompatibility(request, options = {}) {
+  const imagePartCount = countInputImageParts(request?.input);
+  if (!imagePartCount) return null;
+  const mode = normalizeChatImageInputModeOption(options);
+  return {
+    provider: mode === "text" ? "text_fallback" : "chat_content_parts",
+    mode,
+    image_part_count: imagePartCount,
+    reason: mode === "text"
+      ? "provider_without_chat_vision_content_parts"
+      : "provider_accepts_chat_vision_content_parts",
+  };
+}
+
+function countInputImageParts(value) {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countInputImageParts(item), 0);
+  if (!isPlainObject(value)) return 0;
+  let count = value.type === "input_image" || value.type === "image_url" ? 1 : 0;
+  if (Array.isArray(value.content)) count += countInputImageParts(value.content);
+  return count;
 }
 
 function mapStoredChatFields(request, chat, options = {}) {
@@ -1369,6 +1408,7 @@ module.exports = {
   mapToolChoice,
   mapUsage,
   normalizeChatAudioPart,
+  normalizeContentParts,
   normalizeOutputTextLogprobs,
   normalizeReasoningEffort,
   prefixedId,

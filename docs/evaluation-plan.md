@@ -90,7 +90,12 @@ blocks in the local container workspace, injects stdout evidence, and persists
 a `code_interpreter` Run Step. Attachment coverage verifies that message
 `file_search` attachments create or reuse thread vector stores, that
 `code_interpreter` attachments populate thread file resources, and that those
-resources are visible to the following run.
+resources are visible to the following run. Assistants vision-content coverage
+verifies that `image_url` message parts preserve `detail`, that
+`image_file.file_id` parts resolve through local Files into bounded Chat vision
+data URLs for vision-capable providers or safe text markers for text-only
+providers such as DeepSeek, and that compatibility metadata omits image data
+while recording provider mode and aggregate image part counts.
 Assistants truncation coverage verifies that Run
 `truncation_strategy:{type:"last_messages"}` removes older thread messages
 before the upstream Chat request, that local hosted-tool context follows the
@@ -142,6 +147,7 @@ node scripts/eval-harness.mjs --suite bridge-regression --case assistants-requir
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-reasoning-effort-none --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-truncation --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-token-budget-incomplete --timeout-ms 90000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case assistants-vision-content --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-file-search --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-code-interpreter --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case assistants-attachments --timeout-ms 90000 --verbose
