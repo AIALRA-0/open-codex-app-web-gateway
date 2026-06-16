@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 DeepSeek Structured Output Passthrough Downgrade
+
+- Rechecked the official OpenAI Structured Outputs guidance through the
+  OpenAI developer docs MCP. OpenAI documents `json_schema` Structured Outputs
+  as schema-adherent output and `json_object` JSON mode as a weaker valid-JSON
+  mode; both are supported across Responses, Chat Completions, Assistants,
+  Fine-tuning, and Batch where model support allows it.
+- Rechecked the official DeepSeek JSON Output guide. DeepSeek documents
+  `response_format:{"type":"json_object"}` and requires an explicit prompt
+  instruction containing "json" plus an example or desired shape; it does not
+  document OpenAI's `response_format:{"type":"json_schema"}` as a Chat
+  completion request format.
+- Extended shared Chat passthrough compatibility so Direct Chat and
+  Assistants-backed Chat requests no longer forward unsupported OpenAI
+  `response_format.type:"json_schema"` to DeepSeek-compatible providers by
+  default:
+  - the upstream request is downgraded to `response_format:{type:"json_object"}`;
+  - the original JSON Schema name, description, `strict`, and schema body are
+    injected as model-visible system instructions that include the word
+    "json";
+  - compatibility metadata records `response_format.type`, `forwarded:false`,
+    `downgraded_to:"json_object"`, the schema name, and the injected prompt
+    instruction;
+  - plain `json_object` Direct Chat requests receive a generic JSON-mode
+    instruction only when the request context does not already mention JSON.
+- Tightened the existing Responses `text.format.type:"json_schema"` downgrade
+  prompt to use the same explicit "valid json" wording and include the schema
+  description.
+- Added regressions for:
+  - Direct `/v1/chat/completions` `response_format:{type:"json_schema"}` with
+    local stored-chat message retrieval proving the stored input remains the
+    caller's original message;
+  - Assistants `/v1/threads/{thread_id}/runs` `response_format` downgrade,
+    including `metadata.compatibility.local_assistants.chat_passthrough`.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "json_schema response_format"`:
+    passed 204/204.
+  - `npm test`: passed 248/248.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1329 ms, P95 latency 1444 ms, and 99 total
+    tokens.
+  - Live localhost `/v1/chat/completions` smoke with
+    `response_format:{type:"json_schema"}` against `deepseek-v4-pro` returned
+    HTTP 200, content `{"status":"ok-live-json-schema"}`, and compatibility
+    metadata showing `forwarded:false`, `downgraded_to:"json_object"`, and
+    `schema_name:"live_json_schema_smoke"`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Input Token Probe Multimodal Coverage
 
 - Rechecked the official OpenAI token-counting guidance through the OpenAI

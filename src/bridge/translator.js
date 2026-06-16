@@ -1097,9 +1097,10 @@ function makeStructuredOutputMessage(text, options = {}) {
   return {
     role: "system",
     content: [
-      "Structured output compatibility: return only valid JSON matching this JSON Schema.",
+      "Structured output compatibility: return only valid json. Do not include markdown or prose outside the JSON value. Match this JSON Schema as closely as possible.",
       JSON.stringify({
         name: format.name,
+        description: format.description,
         strict: format.strict,
         schema: format.schema,
       }),

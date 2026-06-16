@@ -2122,6 +2122,91 @@ test("Assistants API create run maps reasoning_effort through Chat compatibility
   });
 });
 
+test("Assistants API create run downgrades json_schema response_format for DeepSeek-compatible providers", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.deepEqual(request.body.response_format, { type: "json_object" });
+    assert.deepEqual(request.body.messages.map((message) => message.role), ["system", "system", "user"]);
+    assert.match(request.body.messages[0].content, /return only valid json/i);
+    assert.match(request.body.messages[0].content, /JSON Schema/);
+    assert.match(request.body.messages[0].content, /assistant_run_schema/);
+    assert.match(request.body.messages[0].content, /"status"/);
+    assert.match(request.body.messages[1].content, /Return assistant structured output/);
+    assert.match(request.body.messages[2].content, /Return assistants-json-schema-ok/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_json_schema",
+      object: "chat.completion",
+      created: 1700000002,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "{\"status\":\"assistants-json-schema-ok\"}" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 31, completion_tokens: 9, total_tokens: 40 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Return assistant structured output.",
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        messages: [{ role: "user", content: "Return assistants-json-schema-ok." }],
+      }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "assistant_run_schema",
+            description: "Assistants run structured output compatibility.",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { status: { type: "string" } },
+              required: ["status"],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(run.status, "completed");
+    assert.equal(run.metadata.compatibility.local_assistants.chat_passthrough.response_format.type, "json_schema");
+    assert.equal(run.metadata.compatibility.local_assistants.chat_passthrough.response_format.forwarded, false);
+    assert.equal(run.metadata.compatibility.local_assistants.chat_passthrough.response_format.downgraded_to, "json_object");
+    assert.equal(run.metadata.compatibility.local_assistants.chat_passthrough.response_format.schema_name, "assistant_run_schema");
+    assert.equal(run.metadata.compatibility.local_assistants.chat_passthrough.response_format.prompt_instruction, "injected");
+    assert.equal(requests.length, 1);
+
+    const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
+    assert.equal(listedMessages.status, 200);
+    const assistantMessage = (await listedMessages.json()).data.find((message) => message.role === "assistant");
+    assert.equal(assistantMessage.content[0].text.value, "{\"status\":\"assistants-json-schema-ok\"}");
+  });
+});
+
 test("Assistants API create run applies truncation_strategy and max_prompt_tokens before upstream Chat", async () => {
   await withMockProvider((_req, res, request) => {
     const prompt = request.body.messages.map((message) => message.content || "").join("\n");
@@ -17940,6 +18025,72 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     forwardStoredChatFields: false,
     forwardChatNativeFields: false,
     forwardServiceTier: false,
+  });
+});
+
+test("POST /v1/chat/completions downgrades json_schema response_format for DeepSeek-compatible providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.response_format, { type: "json_object" });
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(call.body.messages[0].content, /return only valid json/i);
+    assert.match(call.body.messages[0].content, /JSON Schema/);
+    assert.match(call.body.messages[0].content, /direct_chat_schema/);
+    assert.match(call.body.messages[0].content, /"answer"/);
+    assert.match(call.body.messages[1].content, /Return the schema object/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_direct_chat_json_schema",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "{\"answer\":\"direct-chat-json-schema-ok\"}" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 21, completion_tokens: 8, total_tokens: 29 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-json-schema" },
+        messages: [{ role: "user", content: "Return the schema object." }],
+        response_format: {
+          type: "json_schema",
+          json_schema: {
+            name: "direct_chat_schema",
+            description: "Direct Chat structured output compatibility.",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { answer: { type: "string" } },
+              required: ["answer"],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "{\"answer\":\"direct-chat-json-schema-ok\"}");
+    assert.equal(json.metadata.suite, "direct-chat-json-schema");
+    assert.equal(json.metadata.compatibility.chat_passthrough.response_format.type, "json_schema");
+    assert.equal(json.metadata.compatibility.chat_passthrough.response_format.forwarded, false);
+    assert.equal(json.metadata.compatibility.chat_passthrough.response_format.downgraded_to, "json_object");
+    assert.equal(json.metadata.compatibility.chat_passthrough.response_format.schema_name, "direct_chat_schema");
+    assert.equal(json.metadata.compatibility.chat_passthrough.response_format.prompt_instruction, "injected");
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+    assert.equal(inputMessage.content, "Return the schema object.");
   });
 });
 

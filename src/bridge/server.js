@@ -4383,6 +4383,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const streamOptions = filterChatPassthroughStreamOptions(upstreamBody, config);
   if (streamOptions) compatibility.stream_options = streamOptions;
 
+  const responseFormat = normalizeChatPassthroughResponseFormat(upstreamBody, config);
+  if (responseFormat) compatibility.response_format = responseFormat;
+
   const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config);
   if (nativeFields) compatibility.chat_native_fields = nativeFields;
 
@@ -4390,6 +4393,80 @@ function chatPassthroughUpstreamBody(body, config) {
     upstreamBody,
     compatibility: Object.keys(compatibility).length ? compatibility : null,
   };
+}
+
+function normalizeChatPassthroughResponseFormat(upstreamBody, config = {}) {
+  const format = upstreamBody.response_format;
+  if (!isPlainObject(format)) return null;
+  const type = stringifyContent(format.type);
+  const jsonSchemaMode = config.jsonSchemaMode || "json_object";
+  if (type === "json_schema") {
+    if (jsonSchemaMode === "off") {
+      delete upstreamBody.response_format;
+      return {
+        source: "response_format",
+        type,
+        forwarded: false,
+        reason: "json_schema_disabled",
+      };
+    }
+    if (jsonSchemaMode === "json_object") {
+      upstreamBody.response_format = { type: "json_object" };
+      injectChatPassthroughJsonInstruction(upstreamBody, makeChatPassthroughJsonSchemaInstruction(format));
+      return {
+        source: "response_format",
+        type,
+        forwarded: false,
+        downgraded_to: "json_object",
+        reason: "provider_json_schema_unsupported",
+        schema_name: stringifyContent(format.json_schema?.name || format.name || ""),
+        prompt_instruction: "injected",
+      };
+    }
+    return null;
+  }
+  if (type === "json_object" && !chatPassthroughMessagesContainJson(upstreamBody.messages)) {
+    injectChatPassthroughJsonInstruction(upstreamBody, makeChatPassthroughJsonModeInstruction());
+    return {
+      source: "response_format",
+      type,
+      forwarded: true,
+      reason: "json_mode_requires_prompt_instruction",
+      prompt_instruction: "injected",
+    };
+  }
+  return null;
+}
+
+function makeChatPassthroughJsonSchemaInstruction(format = {}) {
+  const schema = isPlainObject(format.json_schema) ? format.json_schema : format;
+  return [
+    "Structured output compatibility: return only valid json. Do not include markdown or prose outside the JSON value. Match this JSON Schema as closely as possible.",
+    JSON.stringify({
+      name: schema.name,
+      description: schema.description,
+      strict: schema.strict,
+      schema: schema.schema,
+    }),
+  ].join("\n");
+}
+
+function makeChatPassthroughJsonModeInstruction() {
+  return "JSON mode compatibility: return only valid json. Do not include markdown or prose outside the JSON value.";
+}
+
+function injectChatPassthroughJsonInstruction(upstreamBody, content) {
+  const message = { role: "system", content };
+  if (!Array.isArray(upstreamBody.messages)) {
+    upstreamBody.messages = [message];
+    return;
+  }
+  upstreamBody.messages = [message, ...upstreamBody.messages];
+}
+
+function chatPassthroughMessagesContainJson(messages = []) {
+  return (Array.isArray(messages) ? messages : [])
+    .some((message) => /\bjson\b/i.test(stringifyContent(message?.content)));
 }
 
 function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {
