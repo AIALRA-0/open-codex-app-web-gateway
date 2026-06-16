@@ -1,5 +1,72 @@
 # Audit Log
 
+## 2026-06-16 Official Storage Flag Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Responses `background` is a nullable boolean with default `false`;
+  Responses `store` is a nullable boolean with default `true`; Chat
+  Completions `store` is a nullable boolean with default `false`.
+- Added local request validation before provider calls or local async/storage
+  routing:
+  - `POST /v1/responses` now rejects non-boolean `background` values before
+    Responses-to-Chat translation, local background job creation, or upstream
+    provider calls.
+  - `POST /v1/responses` now rejects non-boolean `store` values before local
+    replay persistence decisions or upstream provider calls.
+  - `POST /v1/chat/completions` now rejects non-boolean `store` values before
+    direct Chat passthrough, local stored Chat lifecycle handling, or streaming
+    reconstruction.
+  - Invalid strings, numbers, arrays, and objects now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    the relevant `param` locally with zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values:
+  - valid `background:true` still enters the local async Responses path, forces
+    local storage, and runs upstream Chat non-streaming;
+  - valid `background:false` remains synchronous;
+  - valid `store:false` can still be forwarded to OpenAI-compatible upstream
+    Chat providers when configured, but it does not create local stored
+    Responses or Chat completion records;
+  - DeepSeek-compatible production profiles can still filter unsupported
+    stored-completion fields through provider-aware configuration.
+- Added regression coverage proving invalid `background` and `store` values
+  fail locally with zero upstream calls on Responses, invalid direct Chat
+  `store` values fail locally with zero upstream calls, valid `background:false`
+  stays completed/synchronous, and valid `store:false` leaves local retrieve
+  endpoints returning 404.
+- Updated the compatibility matrix and evaluation plan so storage/background
+  parity tracks official boolean request validation in addition to lifecycle
+  storage behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "validates storage flags|validates store flag"`:
+    passed 239/239; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 288/288.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact tracked-file search for the user-provided DeepSeek test key: clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-flag smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"background"` for `background:"false"` and `param:"store"` for
+    `store:"false"`; public `/v1/chat/completions` returned HTTP 400 with
+    `param:"store"` for `store:"false"`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 4.4G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Stream Flag Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

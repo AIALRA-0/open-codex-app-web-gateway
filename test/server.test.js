@@ -1428,6 +1428,72 @@ test("POST /v1/responses validates stream flag before provider calls", async () 
   });
 });
 
+test("POST /v1/responses validates storage flags before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.store, false);
+    assert.equal(call.body.background, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_response_store_flag_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "storage flags ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidValues = ["false", 1, [], {}];
+    for (const field of ["background", "store"]) {
+      for (const value of invalidValues) {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "mock-model",
+            input: "Check storage flag validation.",
+            [field]: value,
+          }),
+        });
+        assert.equal(response.status, 400);
+        assert.deepEqual(await response.json(), {
+          error: {
+            message: `${field} must be a boolean`,
+            type: "invalid_request_error",
+            param: field,
+            code: "invalid_request_parameter",
+          },
+        });
+      }
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check storage flag boundary.",
+        background: false,
+        store: false,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const validJson = await valid.json();
+    assert.equal(validJson.status, "completed");
+    assert.equal(validJson.store, false);
+    assert.equal(validJson.background, false);
+    assert.equal(validJson.output[0].content[0].text, "storage flags ok");
+    assert.equal(requests.length, 1);
+
+    const unstored = await fetch(`${baseUrl}/v1/responses/${validJson.id}`);
+    assert.equal(unstored.status, 404);
+  });
+});
+
 test("POST /v1/responses validates parallel_tool_calls before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.parallel_tool_calls, true);
@@ -19268,6 +19334,65 @@ test("POST /v1/chat/completions validates stream flag before provider calls", as
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat stream flag ok");
     assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates store flag before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.store, false);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_store_flag_boundary",
+      object: "chat.completion",
+      created: 1700000304,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat store flag ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidValues = ["false", 1, [], {}];
+    for (const value of invalidValues) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          store: value,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "store must be a boolean",
+          type: "invalid_request_error",
+          param: "store",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        store: false,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const validJson = await valid.json();
+    assert.equal(validJson.choices[0].message.content, "chat store flag ok");
+    assert.equal(requests.length, 1);
+
+    const unstored = await fetch(`${baseUrl}/v1/chat/completions/${validJson.id}`);
+    assert.equal(unstored.status, 404);
   });
 });
 

@@ -822,6 +822,16 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, streamError.message, streamError);
     return;
   }
+  const storeError = validateOpenAIStoreFlag(request);
+  if (storeError) {
+    sendError(res, 400, storeError.message, storeError);
+    return;
+  }
+  const backgroundError = validateOpenAIBackgroundFlag(request);
+  if (backgroundError) {
+    sendError(res, 400, backgroundError.message, backgroundError);
+    return;
+  }
   const choiceCountError = validateOpenAIChoiceCount(request);
   if (choiceCountError) {
     sendError(res, 400, choiceCountError.message, choiceCountError);
@@ -2383,6 +2393,14 @@ function validateOpenAIParallelToolCalls(body = {}) {
 
 function validateOpenAIStreamFlag(body = {}) {
   return validateOpenAIBooleanParameter(body, "stream");
+}
+
+function validateOpenAIStoreFlag(body = {}) {
+  return validateOpenAIBooleanParameter(body, "store");
+}
+
+function validateOpenAIBackgroundFlag(body = {}) {
+  return validateOpenAIBooleanParameter(body, "background");
 }
 
 function validateOpenAIChoiceCount(body = {}) {
@@ -4686,6 +4704,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const streamError = validateOpenAIStreamFlag(body);
   if (streamError) {
     sendError(res, 400, streamError.message, streamError);
+    return;
+  }
+  const storeError = validateOpenAIStoreFlag(body);
+  if (storeError) {
+    sendError(res, 400, storeError.message, storeError);
     return;
   }
   const choiceCountError = validateOpenAIChoiceCount(body);
