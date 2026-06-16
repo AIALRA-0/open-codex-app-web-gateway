@@ -15321,6 +15321,10 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(fetchedJson.id, createdJson.id);
     assert.equal(fetchedJson.output[0].content[0].text, "stored response");
 
+    const invalidInclude = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?include=not.a.real.include`);
+    assert.equal(invalidInclude.status, 400);
+    assert.equal((await invalidInclude.json()).error.param, "include.0");
+
     const updated = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },

@@ -1,5 +1,38 @@
 # Audit Log
 
+## 2026-06-17 Responses Retrieve Include Query Tightening
+
+- Rechecked the official OpenAI `GET /v1/responses/{response_id}` schema
+  through the official `openai/openai-openapi` schema. Current response
+  retrieval supports the shared `IncludeEnum` query array, plus streaming
+  resume controls.
+- Tightened local Responses retrieval:
+  - invalid `include` query values now fail with `include.N` validation errors
+    before returning stored local response data;
+  - valid include values continue to project stored output fields such as
+    `message.output_text.logprobs`, `reasoning.encrypted_content`,
+    `web_search_call.action.sources`, `code_interpreter_call.outputs`, and
+    `file_search_call.results`.
+- Updated tests and the compatibility matrix to document retrieve-time include
+  validation.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'Responses lifecycle endpoints retrieve input items|Responses input_items'`:
+    passed 290/290 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 341/341.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed stored response retrieval rejects invalid
+    `include` query values with HTTP 400 and `param:"include.0"`, while valid
+    include retrieval remains HTTP 200.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Responses Input Items Query Tightening
 
 - Rechecked the official OpenAI

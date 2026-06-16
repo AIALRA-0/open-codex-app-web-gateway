@@ -13451,6 +13451,12 @@ function handleBatchCancel(res, store, batchId) {
 }
 
 function handleResponseGet(res, store, responseId, url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
+
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
