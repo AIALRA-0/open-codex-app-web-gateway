@@ -478,9 +478,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   preserving function tools and auditing incompatible `tool_choice` values,
   disabling DeepSeek thinking for direct Chat function-tool `tool_choice`
   requests by default,
-  filtering unsupported OpenAI-only Chat fields such as
-  `parallel_tool_calls`, preserving local `store`/`metadata` behavior while
-  filtering those unsupported upstream fields, locally emulating unsupported
+  validating OpenAI boolean `parallel_tool_calls` requests before provider
+  calls, filtering unsupported OpenAI-only Chat fields, preserving local
+  `store`/`metadata` behavior while filtering those unsupported upstream
+  fields, locally emulating unsupported
   non-streaming and streaming `n>1` requests with merged/remapped `choices`,
   aggregated `usage`, a single logical streaming completion id, and stored
   Chat messages, mapping stable user identity/cache aliases into `user_id`
@@ -570,10 +571,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/chat/completions`: providers that do not accept the legacy fields should
   receive modern `tools` / `tool_choice` instead, with mapped-field metadata
   recorded rather than generic dropped-field metadata.
-- `parallel_tool_calls:false` compatibility must verify that tool-bearing
-  Responses and direct Chat requests sent to providers without native field
-  support receive a single-tool-call system instruction, omit the upstream
-  `parallel_tool_calls` field, and record mapped compatibility metadata.
+- `parallel_tool_calls` compatibility must verify that Responses and direct
+  Chat requests reject non-boolean values locally with zero upstream calls, and
+  that valid `false` tool-bearing requests sent to providers without native
+  field support receive a single-tool-call system instruction, omit the
+  upstream `parallel_tool_calls` field, and record mapped compatibility
+  metadata.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `top_logprobs` integer bounds and the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.

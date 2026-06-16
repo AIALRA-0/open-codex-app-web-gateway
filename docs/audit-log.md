@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-16 Official Parallel Tool Calls Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `parallel_tool_calls` is a boolean request field for Chat Completions and
+  Responses, with OpenAPI default `true` on the shared Chat schema and response
+  object.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects non-boolean `parallel_tool_calls` values
+    with `type:"invalid_request_error"`, `code:"invalid_request_parameter"`,
+    and `param:"parallel_tool_calls"`.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough.
+  - Existing provider-aware compatibility remains in place for valid boolean
+    values: `false` can still map to the single-tool-call system instruction
+    when tools are present and native Chat field forwarding is disabled, while
+    `true` follows the normal passthrough/filtering path.
+- Added regression coverage proving invalid string, numeric, array, and object
+  values fail locally with zero upstream calls on both endpoints, while valid
+  boolean boundaries still reach the mock upstream request body unchanged.
+- Updated the compatibility matrix and evaluation plan so `parallel_tool_calls`
+  parity tracks both OpenAI request-contract validation and Chat-only provider
+  compatibility mapping.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "parallel_tool_calls|parallel tool-call|normalizes OpenAI Chat fields"`:
+    passed 276/276; the current Node test runner executed both selected test
+    files except unrelated cases filtered by the name pattern.
+  - `npm test`: passed 280/280.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `parallel_tool_calls` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"parallel_tool_calls"` when `parallel_tool_calls` was sent as the
+    string `"false"`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 5.7G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Reasoning Effort Validation
 
 - Rechecked the official OpenAI create request surface through the OpenAI

@@ -815,6 +815,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, stopError.message, stopError);
     return;
   }
+  const parallelToolCallsError = validateOpenAIParallelToolCalls(request);
+  if (parallelToolCallsError) {
+    sendError(res, 400, parallelToolCallsError.message, parallelToolCallsError);
+    return;
+  }
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
@@ -2360,6 +2365,10 @@ function validateOpenAIStopSequences(body = {}) {
   );
 }
 
+function validateOpenAIParallelToolCalls(body = {}) {
+  return validateOpenAIBooleanParameter(body, "parallel_tool_calls");
+}
+
 function validateOpenAILogitBias(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "logit_bias") || body.logit_bias == null) return null;
   if (!isPlainObject(body.logit_bias)) {
@@ -2507,6 +2516,14 @@ function validateOpenAIServiceTier(body = {}) {
       `service_tier must be one of: ${OPENAI_SERVICE_TIER_VALUES.join(", ")}`,
       "service_tier",
     );
+  }
+  return null;
+}
+
+function validateOpenAIBooleanParameter(body = {}, field) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  if (typeof body[field] !== "boolean") {
+    return requestValidationError(`${field} must be a boolean`, field);
   }
   return null;
 }
@@ -4640,6 +4657,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const stopError = validateOpenAIStopSequences(body);
   if (stopError) {
     sendError(res, 400, stopError.message, stopError);
+    return;
+  }
+  const parallelToolCallsError = validateOpenAIParallelToolCalls(body);
+  if (parallelToolCallsError) {
+    sendError(res, 400, parallelToolCallsError.message, parallelToolCallsError);
     return;
   }
   const logitBiasError = validateOpenAILogitBias(body);
