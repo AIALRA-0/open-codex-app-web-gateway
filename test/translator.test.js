@@ -192,6 +192,29 @@ test("maps image detail and base64 image data to Chat image content parts", () =
   }]);
 });
 
+test("maps Responses original image detail to Chat high detail", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-chat",
+    input: [{
+      role: "user",
+      content: [
+        { type: "input_text", text: "Inspect this original-resolution image." },
+        { type: "input_image", image_url: "https://example.test/original.png", detail: "original" },
+      ],
+    }],
+  });
+
+  assert.deepEqual(chat.messages[0], {
+    role: "user",
+    content: [
+      { type: "text", text: "Inspect this original-resolution image." },
+      { type: "image_url", image_url: { url: "https://example.test/original.png", detail: "high" } },
+    ],
+  });
+  assert.equal(compatibility.chat_image_inputs.original_detail_count, 1);
+  assert.equal(compatibility.chat_image_inputs.original_detail_handling, "mapped_to_high");
+});
+
 test("falls back to text for non-user audio content parts", () => {
   const messages = responseInputToChatMessages([
     {

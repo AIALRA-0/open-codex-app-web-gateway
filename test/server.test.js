@@ -497,6 +497,11 @@ test("POST /v1/responses validates prompt references before provider calls", asy
         param: "prompt.variables.file.file_id",
         message: "prompt.variables.file.file_id must be a string",
       },
+      {
+        prompt: { id: "pmpt_test", variables: { file: { type: "input_file", file_id: "file_test", detail: "auto" } } },
+        param: "prompt.variables.file.detail",
+        message: "prompt.variables.file.detail must be one of: low, high",
+      },
     ];
 
     for (const invalidCase of invalidCases) {
@@ -507,6 +512,103 @@ test("POST /v1/responses validates prompt references before provider calls", asy
           model: "mock-model",
           input: "Validate prompt reference.",
           prompt: invalidCase.prompt,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/responses accepts prompt variable image detail original", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.match(call.body.messages[0].content, /hosted prompt template reference/i);
+    assert.match(call.body.messages[0].content, /variable_keys: image/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_prompt_image_original",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "prompt image original ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 4, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: {
+          id: "pmpt_image",
+          variables: {
+            image: { type: "input_image", image_url: "https://example.test/original.png", detail: "original" },
+          },
+        },
+        input: "Use the prompt image variable.",
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "prompt image original ok");
+  });
+});
+
+test("Responses endpoints validate input image and file detail before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid Responses input detail");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "user",
+          content: [{ type: "input_image", image_url: "https://example.test/a.png", detail: "ultra" }],
+        }],
+        param: "input.0.content.0.detail",
+        message: "input.0.content.0.detail must be one of: auto, low, high, original",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "user",
+          content: [{ type: "input_file", file_id: "file_test", detail: "auto" }],
+        }],
+        param: "input.0.content.0.detail",
+        message: "input.0.content.0.detail must be one of: low, high",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          role: "user",
+          content: [{ type: "input_image", image_url: { url: "https://example.test/a.png", detail: "tiny" } }],
+        }],
+        param: "input.0.content.0.image_url.detail",
+        message: "input.0.content.0.image_url.detail must be one of: auto, low, high, original",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}${invalidCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: invalidCase.input,
         }),
       });
       assert.equal(response.status, 400, invalidCase.param);
@@ -3015,6 +3117,13 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
             detail: "high",
           },
         },
+        {
+          type: "image_url",
+          image_url: {
+            url: "https://example.test/original.png",
+            detail: "high",
+          },
+        },
       ],
     }]);
     res.writeHead(200, { "content-type": "application/json" });
@@ -3047,6 +3156,11 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
                 detail: "high",
               },
             },
+            {
+              type: "input_image",
+              image_url: "https://example.test/original.png",
+              detail: "original",
+            },
           ],
         }],
         store: false,
@@ -3056,6 +3170,8 @@ test("POST /v1/responses maps input_image detail to Chat image content parts", a
     assert.equal(response.status, 200);
     const json = await response.json();
     assert.equal(json.output[0].content[0].text, "image detail ok");
+    assert.equal(json.metadata.compatibility.chat_image_inputs.original_detail_count, 1);
+    assert.equal(json.metadata.compatibility.chat_image_inputs.original_detail_handling, "mapped_to_high");
   });
 });
 

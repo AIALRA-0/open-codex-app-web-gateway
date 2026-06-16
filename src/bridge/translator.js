@@ -144,11 +144,16 @@ function normalizeInputImageContentPart(part) {
     url: stringifyContent(url),
   };
   const detail = part.detail ?? source.detail;
-  if (detail != null) imageUrl.detail = stringifyContent(detail);
+  if (detail != null) imageUrl.detail = normalizeInputImageDetailForChat(detail);
   return {
     type: "image_url",
     image_url: imageUrl,
   };
+}
+
+function normalizeInputImageDetailForChat(detail) {
+  const value = stringifyContent(detail);
+  return value === "original" ? "high" : value;
 }
 
 function inputImageDataUrl(part) {
@@ -178,7 +183,7 @@ function inputImageFallbackText(part, image) {
     || part.filename
     || (String(rawUrl).startsWith("data:") ? "inline-data" : rawUrl)
     || "inline";
-  const detail = image?.image_url?.detail || part.detail || source.detail;
+  const detail = part.detail ?? source.detail ?? image?.image_url?.detail;
   const mediaType = part.media_type || part.mime_type || source.media_type || source.mime_type || "";
   const lines = [`[image:${stringifyContent(url)}]`];
   if (mediaType) lines.push(`media_type: ${stringifyContent(mediaType)}`);
@@ -837,10 +842,15 @@ function mapChatImageInputCompatibility(request, options = {}) {
   const imagePartCount = countInputImageParts(request?.input);
   if (!imagePartCount) return null;
   const mode = normalizeChatImageInputModeOption(options);
+  const originalDetailCount = countInputImageDetails(request?.input, "original");
   return {
     provider: mode === "text" ? "text_fallback" : "chat_content_parts",
     mode,
     image_part_count: imagePartCount,
+    ...(originalDetailCount ? {
+      original_detail_count: originalDetailCount,
+      original_detail_handling: mode === "text" ? "preserved_in_text_marker" : "mapped_to_high",
+    } : {}),
     reason: mode === "text"
       ? "provider_without_chat_vision_content_parts"
       : "provider_accepts_chat_vision_content_parts",
@@ -852,6 +862,18 @@ function countInputImageParts(value) {
   if (!isPlainObject(value)) return 0;
   let count = value.type === "input_image" || value.type === "image_url" ? 1 : 0;
   if (Array.isArray(value.content)) count += countInputImageParts(value.content);
+  return count;
+}
+
+function countInputImageDetails(value, detail) {
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + countInputImageDetails(item, detail), 0);
+  if (!isPlainObject(value)) return 0;
+  let count = 0;
+  if (value.type === "input_image" || value.type === "image_url") {
+    const source = isPlainObject(value.image_url) ? value.image_url : value;
+    if (value.detail === detail || source.detail === detail) count += 1;
+  }
+  if (Array.isArray(value.content)) count += countInputImageDetails(value.content, detail);
   return count;
 }
 

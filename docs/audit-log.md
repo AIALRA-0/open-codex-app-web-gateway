@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Responses Multimodal Detail Validation
+
+- Rechecked the official OpenAI Responses create OpenAPI schema through the
+  OpenAI developer-docs MCP. The current request body documents
+  `ResponseInputImage.detail` as `auto`, `low`, `high`, or `original`, while
+  `ResponseInputFile.detail` is `low` or `high`.
+- Added Responses-specific input detail validation before Chat translation,
+  local file/image preparation, or provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` reject invalid `input_image.detail`,
+    compatible nested `image_url.detail`, and `input_file.detail` values with
+    OpenAI-style `400 invalid_request_error` responses;
+  - prompt-reference variables now validate `input_image` and `input_file`
+    objects with Responses enum rules, so `input_image.detail:"original"` is
+    accepted while invalid `input_file.detail` values fail locally.
+- Updated the Responses-to-Chat image mapper for the Responses-only
+  `detail:"original"` value:
+  - vision-capable Chat provider calls map it to Chat-compatible
+    `image_url.detail:"high"`;
+  - text fallback keeps `original` visible in the `[image:...]` marker;
+  - `metadata.compatibility.chat_image_inputs` records the original-detail
+    count and handling mode.
+- Updated the compatibility matrix and evaluation plan so bridge-regression
+  coverage distinguishes Responses image/file detail validation from Chat
+  image detail passthrough.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - Targeted server tests for prompt-variable `original`, Responses input
+    detail validation, and image-detail mapping: passed 4/4.
+  - Targeted translator tests for image detail and `original -> high` mapping:
+    passed 2/2.
+  - `npm test`: passed 338/338.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all active afterward.
+  - Local and public healthz returned HTTP 200 with `ok:true`, provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Local and public invalid-request smoke tests returned HTTP 400 with
+    expected params for `/v1/responses` `input_image.detail:"ultra"`,
+    `/v1/responses/input_tokens` `input_file.detail:"auto"`, and
+    `/v1/responses/compact` nested `image_url.detail:"tiny"`.
+  - Local and public valid `input_image.detail:"original"` smoke tests returned
+    HTTP 200 `status:"completed"` and
+    `metadata.compatibility.chat_image_inputs.original_detail_count:1`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact tracked-file search for the development DeepSeek key: clean.
+
 ## 2026-06-16 Responses `prompt` Reference Validation
 
 - Rechecked the official OpenAI generated Responses create reference:

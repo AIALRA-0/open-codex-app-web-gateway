@@ -260,6 +260,8 @@ const OPENAI_CHAT_USER_CONTENT_PART_TYPES = Object.freeze([
 ]);
 const OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES = Object.freeze(["text", "refusal"]);
 const OPENAI_CHAT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high"]);
+const OPENAI_RESPONSES_INPUT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high", "original"]);
+const OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES = Object.freeze(["low", "high"]);
 const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
 const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
@@ -906,6 +908,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const promptError = validateOpenAIResponsesPrompt(request);
   if (promptError) {
     sendError(res, 400, promptError.message, promptError);
+    return;
+  }
+  const inputDetailsError = validateOpenAIResponsesInputDetails(request);
+  if (inputDetailsError) {
+    sendError(res, 400, inputDetailsError.message, inputDetailsError);
     return;
   }
   const logprobsFlagError = validateOpenAIChatLogprobsFlag(request);
@@ -3066,10 +3073,22 @@ function validateOpenAIChatInputImageAliasPart(part, param) {
 }
 
 function validateOpenAIChatImageDetail(detail, param) {
-  if (detail == null) return null;
-  if (typeof detail !== "string" || !OPENAI_CHAT_IMAGE_DETAIL_VALUES.includes(detail)) {
+  return validateOpenAIEnumValue(detail, param, OPENAI_CHAT_IMAGE_DETAIL_VALUES);
+}
+
+function validateOpenAIResponsesInputImageDetail(detail, param) {
+  return validateOpenAIEnumValue(detail, param, OPENAI_RESPONSES_INPUT_IMAGE_DETAIL_VALUES);
+}
+
+function validateOpenAIResponsesInputFileDetail(detail, param) {
+  return validateOpenAIEnumValue(detail, param, OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES);
+}
+
+function validateOpenAIEnumValue(value, param, values) {
+  if (value == null) return null;
+  if (typeof value !== "string" || !values.includes(value)) {
     return requestValidationError(
-      `${param} must be one of: ${OPENAI_CHAT_IMAGE_DETAIL_VALUES.join(", ")}`,
+      `${param} must be one of: ${values.join(", ")}`,
       param,
     );
   }
@@ -4017,6 +4036,148 @@ function validateOpenAIResponsesInstructions(body = {}) {
   return validateOpenAIStringParameter(body, "instructions");
 }
 
+function validateOpenAIResponsesInputDetails(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "input") || body.input == null) return null;
+  return validateOpenAIResponsesInputDetailsValue(body.input, "input");
+}
+
+function validateOpenAIResponsesInputDetailsValue(value, param) {
+  if (Array.isArray(value)) {
+    for (const [index, item] of value.entries()) {
+      const error = validateOpenAIResponsesInputDetailsValue(item, `${param}.${index}`);
+      if (error) return error;
+    }
+    return null;
+  }
+  if (!isPlainObject(value)) return null;
+
+  if (value.type === "input_image" || value.type === "image_url") {
+    const error = validateOpenAIResponsesInputImageDetails(value, param);
+    if (error) return error;
+  }
+  if (value.type === "input_file" || value.type === "file") {
+    const error = validateOpenAIResponsesInputFileDetails(value, param);
+    if (error) return error;
+  }
+  if (Object.prototype.hasOwnProperty.call(value, "content")) {
+    return validateOpenAIResponsesInputDetailsValue(value.content, `${param}.content`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesInputImageDetails(part, param) {
+  const detailError = validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
+  if (detailError) return detailError;
+  if (isPlainObject(part.image_url)) {
+    const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(part.image_url.detail, `${param}.image_url.detail`);
+    if (imageUrlDetailError) return imageUrlDetailError;
+  }
+  if (isPlainObject(part.image_file)) {
+    const imageFileDetailError = validateOpenAIResponsesInputImageDetail(part.image_file.detail, `${param}.image_file.detail`);
+    if (imageFileDetailError) return imageFileDetailError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesInputFileDetails(part, param) {
+  const detailError = validateOpenAIResponsesInputFileDetail(part.detail, `${param}.detail`);
+  if (detailError) return detailError;
+  if (isPlainObject(part.file)) {
+    const fileDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
+    if (fileDetailError) return fileDetailError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesPromptVariableContentPart(part, param) {
+  if (!isPlainObject(part)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  const allowedPartTypes = ["input_text", "input_image", "input_file"];
+  if (typeof part.type !== "string" || !allowedPartTypes.includes(part.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${allowedPartTypes.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (part.type === "input_text") {
+    if (typeof part.text !== "string") {
+      return requestValidationError(`${param}.text must be a string`, `${param}.text`);
+    }
+    return null;
+  }
+  if (part.type === "input_image") {
+    return validateOpenAIResponsesPromptInputImagePart(part, param);
+  }
+  return validateOpenAIResponsesPromptInputFilePart(part, param);
+}
+
+function validateOpenAIResponsesPromptInputImagePart(part, param) {
+  if (Object.prototype.hasOwnProperty.call(part, "image_url")) {
+    const imageUrl = part.image_url;
+    if (typeof imageUrl === "string") {
+      return validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
+    }
+    if (!isPlainObject(imageUrl)) {
+      return requestValidationError(`${param}.image_url must be an object`, `${param}.image_url`);
+    }
+    if (typeof imageUrl.url !== "string") {
+      return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
+    }
+    const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(imageUrl.detail, `${param}.image_url.detail`);
+    if (imageUrlDetailError) return imageUrlDetailError;
+  } else {
+    const sourceFields = ["file_id", "file_data", "data", "image_data", "url"];
+    const hasSource = sourceFields.some((field) => Object.prototype.hasOwnProperty.call(part, field));
+    if (!hasSource) {
+      return requestValidationError(
+        `${param} requires file_id, image_url, file_data, or data`,
+        param,
+      );
+    }
+    for (const field of sourceFields) {
+      if (
+        Object.prototype.hasOwnProperty.call(part, field)
+        && part[field] != null
+        && typeof part[field] !== "string"
+      ) {
+        return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+      }
+    }
+  }
+  return validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
+}
+
+function validateOpenAIResponsesPromptInputFilePart(part, param) {
+  if (isPlainObject(part.file)) {
+    const nestedError = validateOpenAIChatFileSourceFields(part.file, `${param}.file`, [
+      "filename",
+      "file_data",
+      "file_id",
+      "mime_type",
+      "media_type",
+    ]);
+    if (nestedError) return nestedError;
+    const nestedDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
+    if (nestedDetailError) return nestedDetailError;
+  }
+  const sourceFields = ["filename", "file_data", "file_id", "file_url", "data", "content_base64", "mime_type", "media_type"];
+  const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields);
+  if (sourceError) return sourceError;
+  if (!isPlainObject(part.file)) {
+    const hasSource = ["file_data", "file_id", "file_url", "data", "content_base64"].some((field) => (
+      Object.prototype.hasOwnProperty.call(part, field)
+    ));
+    if (!hasSource) {
+      return requestValidationError(
+        `${param} requires file_id, file_data, file_url, data, or content_base64`,
+        param,
+      );
+    }
+  }
+  return validateOpenAIResponsesInputFileDetail(part.detail, `${param}.detail`);
+}
+
 function validateOpenAIResponsesPrompt(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "prompt") || body.prompt == null) return null;
   const prompt = body.prompt;
@@ -4063,7 +4224,7 @@ function validateOpenAIResponsesPrompt(body = {}) {
     if (!isPlainObject(value)) {
       return requestValidationError(`${param} must be a string or response input object`, param);
     }
-    const error = validateOpenAIChatContentPart(value, param, ["input_text", "input_image", "input_file"]);
+    const error = validateOpenAIResponsesPromptVariableContentPart(value, param);
     if (error) return error;
   }
   return null;
@@ -4337,6 +4498,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, instructionsError.message, instructionsError);
     return;
   }
+  const inputDetailsError = validateOpenAIResponsesInputDetails(request);
+  if (inputDetailsError) {
+    sendError(res, 400, inputDetailsError.message, inputDetailsError);
+    return;
+  }
   const personalityError = validateResponsesInputTokensPersonality(request);
   if (personalityError) {
     sendError(res, 400, personalityError.message, personalityError);
@@ -4468,6 +4634,11 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   const instructionsError = validateOpenAIResponsesInstructions(request);
   if (instructionsError) {
     sendError(res, 400, instructionsError.message, instructionsError);
+    return;
+  }
+  const inputDetailsError = validateOpenAIResponsesInputDetails(request);
+  if (inputDetailsError) {
+    sendError(res, 400, inputDetailsError.message, inputDetailsError);
     return;
   }
   const stateReferenceError = validateOpenAIResponseStateReferences(request);

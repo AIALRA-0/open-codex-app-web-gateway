@@ -82,9 +82,12 @@ larger agent evaluations.
 The bridge regression track also explicitly covers Responses `instructions`
 request validation across create, `/input_tokens`, and `/compact`, plus
 Responses create `prompt` reference validation for official
-`id`/`version`/`variables` shapes. Malformed values must fail locally before
-any Chat provider call while valid strings and prompt references continue to
-map into model-visible system guidance.
+`id`/`version`/`variables` shapes. It also covers official Responses
+`input_image.detail` validation, including `original` being accepted on
+Responses inputs and mapped to Chat-compatible `high`, plus `input_file.detail`
+validation as `low`/`high`. Malformed values must fail locally before any Chat
+provider call while valid strings, prompt references, and multimodal detail
+values continue to map into model-visible system guidance.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
