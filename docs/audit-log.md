@@ -1,5 +1,85 @@
 # Audit Log
 
+## 2026-06-16 Public Domain API Routing
+
+- Found that the public `https://opencodexapp.aialra.online/v1/models`
+  route was being served by the Codex App SPA fallback as `text/html` instead
+  of reaching the local compatibility bridge. The local bridge at
+  `127.0.0.1:12912` already returned the expected JSON model list, so the gap
+  was the public web entry path rather than the Responses/Chat adapter.
+- Kept the existing Nginx shape simple: the public vhost still proxies the
+  hostname to the web service on `127.0.0.1:12920`. Added a versioned
+  streaming-safe proxy inside `web-server.js` so:
+  - `/v1`, `/v1/*`, and `/healthz` forward to the local bridge;
+  - SPA routes, static assets, `/health`, and the browser WebSocket bridge keep
+    their existing behavior;
+  - request bodies, authorization headers, SSE streams, and response headers
+    are piped without buffering through JSON;
+  - `CODEXAPP_API_PROXY_HOST`, `CODEXAPP_API_PROXY_PORT`, and
+    `CODEXAPP_API_PROXY_TIMEOUT_MS` can override the default target, which
+    otherwise follows `CODEXCOMPAT_HOST` / `CODEXCOMPAT_PORT` and finally
+    `127.0.0.1:12912`.
+- Added `test/web-server-proxy.test.js`, which spawns `web-server.js` against a
+  mock API bridge and verifies:
+  - `GET /v1/models?limit=1` is proxied even when the client accepts HTML;
+  - `GET /healthz` reaches the bridge;
+  - normal SPA fallback still injects the initial route;
+  - streaming `POST /v1/chat/completions` stays `text/event-stream`;
+  - request body and authorization headers reach the bridge.
+- Updated `README.md` and `docs/deployment.md` to document the public API path
+  split and the SDK base URL `https://opencodexapp.aialra.online/v1`.
+- Validation:
+  - `node --check web-server.js` and
+    `node --check test/web-server-proxy.test.js`: passed.
+  - `node --test test/web-server-proxy.test.js`: passed 1/1.
+  - `npm test`: passed 252/252.
+  - Restarted `aialra-opencodexapp-web.service`; web, bridge, and app-server
+    services were all `active`.
+  - Local web proxy `http://127.0.0.1:12920/v1/models`: HTTP 200
+    `application/json`, returning `deepseek-v4-flash` and
+    `deepseek-v4-pro`.
+  - Public API `https://opencodexapp.aialra.online/v1/models`: HTTP 200
+    `application/json`, returning `deepseek-v4-flash` and
+    `deepseek-v4-pro`.
+  - Public root `https://opencodexapp.aialra.online/`: HTTP 200
+    `text/html`, preserving the frontend.
+  - Public `https://opencodexapp.aialra.online/healthz`: HTTP 200 JSON with
+    service `open-codex-responses-bridge`, provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public direct Chat smoke through
+    `https://opencodexapp.aialra.online/v1/chat/completions`: HTTP 200
+    `application/json`, returned exact content `ok-public-api`, and preserved
+    DeepSeek `reasoning_effort:"none"` compatibility metadata.
+  - Public streaming direct Chat smoke: HTTP 200 `text/event-stream`, 6 SSE
+    frames, object `chat.completion.chunk`, content `ok-public-stream`, one
+    usage chunk, and 13 total tokens.
+  - Public protocol smoke with
+    `CODEXCOMPAT_EVAL_BASE_URL=https://opencodexapp.aialra.online npm run eval:protocol`:
+    passed 2/2 against `deepseek-v4-pro`, pass rate 1.0, average latency
+    1219 ms, P95 latency 1258 ms, and 116 total tokens.
+  - `npm run smoke:ui -- --timeout-ms 180000`: passed against
+    `https://opencodexapp.aialra.online` with marker `ui-smoke-mqg54br7`,
+    covering login/public entry, sidebar controls, core navigation, project
+    dialog/upload services, prompt submission, completed-turn actions, reload
+    persistence, generated-image artifact display, saved project reopen/cleanup,
+    and console error/warning checks.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run prune:runtime -- --dry-run` initially selected 205 old runtime
+    artifacts totaling 429732 bytes; `npm run prune:runtime -- --apply`
+    completed successfully; follow-up dry-run selected 0 artifacts and reported
+    0 errors.
+  - Post-cleanup storage/service check: app-server, bridge, and web services
+    were active; root filesystem had 11 GB available; repository checkout was
+    125 MB, `state/` was 40 MB, `output/` was 4.4 MB,
+    `/srv/aialra/data/opencodexapp` was 136 KB, and
+    `/srv/aialra/logs/opencodexapp` was 30 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Direct Chat Streaming N Choice Fan-Out Compatibility
 
 - Rechecked the official OpenAI Chat Completions schema through the OpenAI

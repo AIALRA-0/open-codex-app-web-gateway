@@ -7,7 +7,8 @@ DeepSeek.
 
 ## Components
 
-- `web-server.js`: the existing Codex App web bridge.
+- `web-server.js`: the Codex App web bridge, including the public `/v1/*`
+  reverse proxy to the local Responses compatibility bridge.
 - `login-proxy.js`: the existing login/session reverse proxy.
 - `src/bridge/server.js`: Responses API facade, Chat Completions upstream.
 - `src/bridge/translator.js`: schema and streaming event translation.
@@ -25,6 +26,11 @@ DEEPSEEK_API_KEY=... npm run start:bridge
 Then point a Codex provider at `http://127.0.0.1:12912/v1` with
 `wire_api = "responses"`. Keep real keys in machine-local secret files, never in
 the repository.
+
+For the public web deployment, Nginx proxies the hostname to the web service,
+and `web-server.js` forwards `/v1/*` plus `/healthz` to the local bridge. The
+default target follows `CODEXCOMPAT_HOST` / `CODEXCOMPAT_PORT`, or
+`127.0.0.1:12912`.
 
 ## Safety Rules
 

@@ -238,6 +238,14 @@ The public vhost should terminate TLS and proxy to `127.0.0.1:12920` for
 1:1 parity with the existing `codexapp.aialra.online` deployment. The tracked
 template is `deploy/nginx/opencodexapp.aialra.online.conf`.
 
+The web service owns public API path splitting: `web-server.js` forwards
+`/v1`, `/v1/*`, and `/healthz` to the local compatibility bridge while serving
+all other routes from the Codex App webview. The proxy target defaults to
+`CODEXAPP_API_PROXY_HOST` / `CODEXAPP_API_PROXY_PORT` when set, otherwise
+`CODEXCOMPAT_HOST` / `CODEXCOMPAT_PORT`, and finally `127.0.0.1:12912`.
+This lets SDK clients use `https://opencodexapp.aialra.online/v1` as the base
+URL without requiring a second public API hostname.
+
 ```nginx
 include /srv/aialra/config/nginx/sites-available/opencodexapp.aialra.online.conf;
 ```
@@ -251,6 +259,7 @@ npm test
 npm run secret-scan
 npm run prune:runtime -- --dry-run
 curl http://127.0.0.1:12912/healthz
+curl https://opencodexapp.aialra.online/v1/models
 npm run smoke:bridge
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000

@@ -12,6 +12,15 @@ const { WebSocket, WebSocketServer } = require("ws");
 const host = process.env.CODEXAPP_WEB_HOST || "127.0.0.1";
 const port = Number(process.env.CODEXAPP_WEB_PORT || 12910);
 const appServerPort = Number(process.env.CODEXAPP_APP_SERVER_PORT || 12911);
+const apiProxyEnabled = parseBoolean(process.env.CODEXAPP_API_PROXY_ENABLED, true);
+const apiProxyHost = process.env.CODEXAPP_API_PROXY_HOST || process.env.CODEXCOMPAT_HOST || "127.0.0.1";
+const apiProxyPort = numberFromEnv(
+  "CODEXAPP_API_PROXY_PORT",
+  numberFromEnv("CODEXCOMPAT_PORT", 12912, 1, 65535),
+  1,
+  65535,
+);
+const apiProxyTimeoutMs = numberFromEnv("CODEXAPP_API_PROXY_TIMEOUT_MS", 10 * 60 * 1000, 0, 24 * 60 * 60 * 1000);
 const webviewDir = path.resolve(process.env.CODEXAPP_WEBVIEW_DIR || path.join(process.cwd(), "webview"));
 const codexCli = process.env.CODEXAPP_CODEX_CLI || "codex";
 const home = process.env.HOME || os.homedir();
@@ -109,6 +118,16 @@ const MIME_TYPES = new Map([
   [".woff2", "font/woff2"],
   [".ttf", "font/ttf"],
   [".map", "application/json; charset=utf-8"],
+]);
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
 ]);
 
 function log(...args) {
@@ -1679,6 +1698,86 @@ async function prewarmAppServerCaches() {
 function send(res, status, headers, body = "") {
   res.writeHead(status, headers);
   res.end(body);
+}
+
+function apiProxyHostHeader() {
+  const hostText = String(apiProxyHost || "127.0.0.1");
+  const normalizedHost = hostText.includes(":") && !hostText.startsWith("[") ? `[${hostText}]` : hostText;
+  return `${normalizedHost}:${apiProxyPort}`;
+}
+
+function shouldProxyToApiBridge(urlPath) {
+  if (!apiProxyEnabled) return false;
+  return urlPath === "/healthz" || urlPath === "/v1" || urlPath.startsWith("/v1/");
+}
+
+function filteredProxyHeaders(headers, overrides = {}) {
+  const next = {};
+  for (const [name, value] of Object.entries(headers || {})) {
+    const key = name.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(key)) continue;
+    next[name] = value;
+  }
+  for (const [name, value] of Object.entries(overrides)) {
+    if (value == null) delete next[name];
+    else next[name] = value;
+  }
+  return next;
+}
+
+function proxyToApiBridge(req, res, url) {
+  const targetPath = `${url.pathname}${url.search}`;
+  const headers = filteredProxyHeaders(req.headers, { host: apiProxyHostHeader() });
+  const proxyReq = http.request({
+    host: apiProxyHost,
+    port: apiProxyPort,
+    method: req.method || "GET",
+    path: targetPath || "/",
+    headers,
+  }, (proxyRes) => {
+    const responseHeaders = filteredProxyHeaders(proxyRes.headers);
+    res.writeHead(proxyRes.statusCode || 502, responseHeaders);
+    proxyRes.on("error", (error) => {
+      log("api bridge proxy response error", { path: targetPath, error: error.message });
+      if (!res.destroyed) res.destroy(error);
+    });
+    proxyRes.pipe(res);
+  });
+
+  if (apiProxyTimeoutMs > 0) {
+    proxyReq.setTimeout(apiProxyTimeoutMs, () => {
+      proxyReq.destroy(new Error("API bridge proxy request timed out"));
+    });
+  }
+
+  proxyReq.on("error", (error) => {
+    log("api bridge proxy error", {
+      method: req.method || "GET",
+      path: targetPath,
+      target: `${apiProxyHost}:${apiProxyPort}`,
+      error: error.message,
+    });
+    if (res.headersSent) {
+      if (!res.destroyed) res.destroy(error);
+      return;
+    }
+    send(res, 502, { "Content-Type": "application/json; charset=utf-8" }, JSON.stringify({
+      error: {
+        message: "API bridge proxy failed",
+        type: "api_bridge_proxy_error",
+        param: null,
+        code: "api_bridge_unavailable",
+      },
+    }));
+  });
+
+  req.on("aborted", () => {
+    proxyReq.destroy(new Error("Client aborted API bridge proxy request"));
+  });
+  res.on("close", () => {
+    if (!res.writableEnded) proxyReq.destroy(new Error("Client closed API bridge proxy response"));
+  });
+  req.pipe(proxyReq);
 }
 
 function safeJoin(root, requestPath) {
@@ -6137,6 +6236,10 @@ class BridgeSession {
 const server = http.createServer((req, res) => {
   try {
     const url = new URL(req.url || "/", `http://${req.headers.host || "localhost"}`);
+    if (shouldProxyToApiBridge(url.pathname)) {
+      proxyToApiBridge(req, res, url);
+      return;
+    }
     if (url.pathname === "/health") {
       send(res, 200, { "Content-Type": "application/json" }, JSON.stringify({ ok: true }));
       return;
