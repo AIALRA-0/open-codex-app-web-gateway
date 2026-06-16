@@ -873,6 +873,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, includeError.message, includeError);
     return;
   }
+  const stateReferenceError = validateOpenAIResponseStateReferences(request);
+  if (stateReferenceError) {
+    sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
   const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
   if (responsesMaxOutputTokensError) {
     sendError(res, 400, responsesMaxOutputTokensError.message, responsesMaxOutputTokensError);
@@ -2548,6 +2553,41 @@ function validateOpenAIResponsesInclude(body = {}) {
   return null;
 }
 
+function validateOpenAIResponseStateReferences(body = {}) {
+  const previousResponseError = validateOpenAIStringParameter(body, "previous_response_id");
+  if (previousResponseError) return previousResponseError;
+
+  if (Object.prototype.hasOwnProperty.call(body, "conversation") && body.conversation != null) {
+    const conversation = body.conversation;
+    if (
+      typeof conversation !== "string"
+      && (!isPlainObject(conversation) || typeof conversation.id !== "string")
+    ) {
+      return requestValidationError(
+        "conversation must be a string or an object with an id string",
+        "conversation",
+      );
+    }
+  }
+
+  const conversationIdError = validateOpenAIStringParameter(body, "conversation_id");
+  if (conversationIdError) return conversationIdError;
+
+  const hasPreviousResponse = Object.prototype.hasOwnProperty.call(body, "previous_response_id")
+    && body.previous_response_id != null;
+  const hasConversation = Object.prototype.hasOwnProperty.call(body, "conversation")
+    && body.conversation != null;
+  const hasConversationId = Object.prototype.hasOwnProperty.call(body, "conversation_id")
+    && body.conversation_id != null;
+  if (hasPreviousResponse && (hasConversation || hasConversationId)) {
+    return requestValidationError(
+      "previous_response_id cannot be used with conversation",
+      "previous_response_id",
+    );
+  }
+  return null;
+}
+
 function validateOpenAILegacyEcho(body = {}) {
   return validateOpenAIBooleanParameter(body, "echo");
 }
@@ -3885,6 +3925,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, styleError.message, styleError);
     return;
   }
+  const stateReferenceError = validateOpenAIResponseStateReferences(request);
+  if (stateReferenceError) {
+    sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
   const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
   if (responsesMaxOutputTokensError) {
     sendError(res, 400, responsesMaxOutputTokensError.message, responsesMaxOutputTokensError);
@@ -3972,6 +4017,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
 
 async function handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore) {
   const request = await readJson(req);
+  const stateReferenceError = validateOpenAIResponseStateReferences(request);
+  if (stateReferenceError) {
+    sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
   const conversation = prepareConversationContext(request, conversationStore, config);
   if (conversation?.missing) {
     sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });

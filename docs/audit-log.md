@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-16 Official Responses State Reference Validation
+
+- Rechecked the current official OpenAI Responses create, input-token-count,
+  and compact documentation through the OpenAI developer docs MCP:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count`,
+  and `https://developers.openai.com/api/reference/resources/responses/methods/compact`.
+  The docs state that `previous_response_id` is the prior response id for
+  multi-turn state and cannot be used with `conversation`. The official OpenAPI
+  schema also defines `ConversationParam` as a string or object with required
+  string `id`.
+- Added local request validation before provider calls:
+  - `previous_response_id` must be string/null on Responses stateful entry
+    points.
+  - `conversation` must be an id string or an object with an `id` string.
+  - The local compatibility alias `conversation_id` must be string/null.
+  - Requests combining `previous_response_id` with `conversation` or
+    `conversation_id` now return `400 invalid_request_error` with
+    `param:"previous_response_id"` before replay lookup, local conversation
+    reads, compaction, input-token probes, or upstream Chat calls.
+- Updated the compatibility matrix and evaluation plan so state-reference
+  validation is tracked across `POST /v1/responses`,
+  `POST /v1/responses/input_tokens`, and `POST /v1/responses/compact`.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "state references|local Conversations API persists items|auxiliary endpoints replay local conversation state|maps to /v1/chat/completions and stores previous response replay" test/server.test.js`:
+    passed 4/4.
+  - `npm test`: passed 322/322.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/responses/input_tokens` returned HTTP 400 with params
+    `previous_response_id` and `conversation` for the new conflict and shape
+    validation paths.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 6.3G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Responses Include Validation
 
 - Rechecked the current official OpenAI Responses create documentation through

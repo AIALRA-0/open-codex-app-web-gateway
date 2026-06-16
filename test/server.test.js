@@ -16128,6 +16128,92 @@ test("Responses conversation references return 404 when the local conversation i
   });
 });
 
+test("Responses state references validate previous_response_id and conversation before provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "provider should not be called" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCreateCases = [
+      {
+        body: { previous_response_id: 123 },
+        param: "previous_response_id",
+        message: "previous_response_id must be a string",
+      },
+      {
+        body: { conversation: 123 },
+        param: "conversation",
+        message: "conversation must be a string or an object with an id string",
+      },
+      {
+        body: { conversation: {} },
+        param: "conversation",
+        message: "conversation must be a string or an object with an id string",
+      },
+      {
+        body: { conversation: { id: 123 } },
+        param: "conversation",
+        message: "conversation must be a string or an object with an id string",
+      },
+      {
+        body: { conversation_id: 123 },
+        param: "conversation_id",
+        message: "conversation_id must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCreateCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check state reference validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+
+    for (const endpoint of ["/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"]) {
+      const conflictCases = [
+        { conversation: "conv_current" },
+        { conversation: { id: "conv_current" } },
+        { conversation_id: "conv_current" },
+      ];
+      for (const conflictCase of conflictCases) {
+        const response = await fetch(`${baseUrl}${endpoint}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "mock-model",
+            previous_response_id: "resp_previous",
+            input: "Check state conflict.",
+            ...conflictCase,
+          }),
+        });
+        assert.equal(response.status, 400, `${endpoint} ${Object.keys(conflictCase)[0]}`);
+        assert.deepEqual(await response.json(), {
+          error: {
+            message: "previous_response_id cannot be used with conversation",
+            type: "invalid_request_error",
+            param: "previous_response_id",
+            code: "invalid_request_parameter",
+          },
+        });
+      }
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses auxiliary endpoints replay local conversation state", async () => {
   await withMockProvider(async (_req, res, call) => {
     res.writeHead(200, { "content-type": "application/json" });

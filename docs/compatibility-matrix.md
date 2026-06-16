@@ -7,6 +7,8 @@ Primary sources:
 - OpenAI migration guide: https://developers.openai.com/api/docs/guides/migrate-to-responses
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses create reference: https://developers.openai.com/api/reference/resources/responses/methods/create
+- OpenAI Responses input-token count reference: https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count
+- OpenAI Responses compact reference: https://developers.openai.com/api/reference/resources/responses/methods/compact
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
 - OpenAI official OpenAPI schema: https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 - OpenAI encrypted reasoning guidance: https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness
@@ -162,8 +164,8 @@ requests.
 | `tool_search_call` / `tool_search_output` input items | local loaded-tool context plus Chat function tools | Emulated locally. The bridge skips raw Chat text fallback for tool-search protocol items, loads `tool_search_output.tools` into Chat function definitions even when the next request does not repeat `tools:[{type:"tool_search"}]`, and records `metadata.compatibility.local_tool_search` |
 | `additional_tools` input item | local loaded-tool context plus Chat function tools | Emulated locally for function and namespace tool definitions. Chat providers receive the loaded tools as global function tools plus a compatibility prompt; exact Responses mid-input tool availability ordering is approximated because Chat Completions tool definitions are request-global |
 | `prompt` template reference | local prompt-template expansion or compatibility system context | Emulated locally. Official `prompt:{id,version,variables}` references are expanded from `CODEXCOMPAT_PROMPT_TEMPLATES` / `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` when available, using `{{variable}}` substitution; otherwise the bridge injects a bounded compatibility system message preserving the prompt id/version/variable keys and records `metadata.compatibility.prompt_template` |
-| `previous_response_id` | local replay store | Emulated locally |
-| `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
+| `previous_response_id` | local replay store | Emulated locally; validated as a string/null request field and rejected before provider calls when combined with `conversation` or the local `conversation_id` alias |
+| `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; `conversation` accepts an id string or `{id}` object, `conversation_id` is a local string alias, and invalid shapes are rejected before replay; supports durable conversation state even when a response sets `store:false` |
 | `context` | local compatibility metadata | Recognized as official Responses context-management configuration. Chat Completions has no equivalent request field, so the bridge does not forward it upstream and records `metadata.compatibility.context_management` with the value type and object keys only; caller-provided context values are not copied into compatibility metadata |
 | `truncation:"auto"` | local replay-message pruning before upstream Chat | Emulated with `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS` as an estimated input-character budget. The bridge drops oldest `conversation` / `previous_response_id` replay messages first and records `metadata.compatibility.local_truncation`; current request input and local tool context are preserved |
 | `truncation:"disabled"` / omitted | local preflight error when over local budget | If the estimated Chat input exceeds `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS`, the bridge returns `400 context_length_exceeded` before calling the provider; otherwise the Chat provider's native context handling applies |
@@ -773,7 +775,10 @@ existing conversation items into the upstream Chat prompt, returns
 `response.conversation`, and appends the new input plus output items back to the
 conversation. This append happens even when the Responses request sets
 `store:false`, matching the OpenAI conversation-state guide's distinction
-between response storage and durable Conversation items. The auxiliary
+between response storage and durable Conversation items. Requests that combine
+`previous_response_id` with `conversation` or the local `conversation_id` alias
+are rejected before replay or provider calls, matching the current Responses
+create, input-token-count, and compact request contract. The auxiliary
 `/v1/responses/input_tokens` and `/v1/responses/compact` endpoints also replay
 the local Conversation items before calling upstream Chat Completions, but they
 do not mutate the Conversation item list; compaction returns
