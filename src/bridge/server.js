@@ -226,12 +226,21 @@ const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
 const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
 const OPENAI_RESPONSE_FORMAT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const OPENAI_FUNCTION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OPENAI_RESPONSE_MODALITY_VALUES = Object.freeze(["text", "audio"]);
 const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "flac", "opus", "pcm16"]);
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
+const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
+const OPENAI_CHAT_TOOL_CHOICE_VALUES = Object.freeze(["none", "auto", "required"]);
+const OPENAI_CHAT_TOOL_CHOICE_OBJECT_TYPES = Object.freeze(["function", "custom", "allowed_tools"]);
+const OPENAI_ALLOWED_TOOLS_MODE_VALUES = Object.freeze(["auto", "required"]);
+const OPENAI_CUSTOM_TOOL_FORMAT_TYPES = Object.freeze(["text", "grammar"]);
+const OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES = Object.freeze(["lark", "regex"]);
+const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
+const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -922,6 +931,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const webSearchOptionsError = validateOpenAIChatWebSearchOptions(request);
   if (webSearchOptionsError) {
     sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
+    return;
+  }
+  const legacyFunctionFieldsError = validateOpenAILegacyFunctionFields(request);
+  if (legacyFunctionFieldsError) {
+    sendError(res, 400, legacyFunctionFieldsError.message, legacyFunctionFieldsError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2908,6 +2922,259 @@ function validateOpenAIChatWebSearchOptions(body = {}) {
     }
   }
   return null;
+}
+
+function validateOpenAIChatToolFields(body = {}) {
+  const toolsError = validateOpenAIChatTools(body);
+  if (toolsError) return toolsError;
+
+  const toolChoiceError = validateOpenAIChatToolChoice(body);
+  if (toolChoiceError) return toolChoiceError;
+
+  return validateOpenAILegacyFunctionFields(body);
+}
+
+function validateOpenAIChatTools(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "tools")) return null;
+  if (!Array.isArray(body.tools)) {
+    return requestValidationError("tools must be an array", "tools");
+  }
+
+  for (const [index, tool] of body.tools.entries()) {
+    const param = `tools.${index}`;
+    if (!isPlainObject(tool)) {
+      return requestValidationError(`${param} must be an object`, param);
+    }
+    if (typeof tool.type !== "string" || !OPENAI_CHAT_TOOL_TYPES.includes(tool.type)) {
+      return requestValidationError(
+        `${param}.type must be one of: ${OPENAI_CHAT_TOOL_TYPES.join(", ")}`,
+        `${param}.type`,
+      );
+    }
+    if (tool.type === "function") {
+      const functionError = validateOpenAIFunctionObject(tool.function, `${param}.function`, {
+        strict: true,
+      });
+      if (functionError) return functionError;
+    } else if (tool.type === "custom") {
+      const customError = validateOpenAICustomToolObject(tool.custom, `${param}.custom`);
+      if (customError) return customError;
+    }
+  }
+  return null;
+}
+
+function validateOpenAIChatToolChoice(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "tool_choice")) return null;
+  const toolChoice = body.tool_choice;
+  if (typeof toolChoice === "string") {
+    if (!OPENAI_CHAT_TOOL_CHOICE_VALUES.includes(toolChoice)) {
+      return requestValidationError(
+        `tool_choice must be one of: ${OPENAI_CHAT_TOOL_CHOICE_VALUES.join(", ")}`,
+        "tool_choice",
+      );
+    }
+    return null;
+  }
+  if (!isPlainObject(toolChoice)) {
+    return requestValidationError(
+      `tool_choice must be one of: ${OPENAI_CHAT_TOOL_CHOICE_VALUES.join(", ")}, or an object`,
+      "tool_choice",
+    );
+  }
+  if (
+    typeof toolChoice.type !== "string"
+    || !OPENAI_CHAT_TOOL_CHOICE_OBJECT_TYPES.includes(toolChoice.type)
+  ) {
+    return requestValidationError(
+      `tool_choice.type must be one of: ${OPENAI_CHAT_TOOL_CHOICE_OBJECT_TYPES.join(", ")}`,
+      "tool_choice.type",
+    );
+  }
+  if (toolChoice.type === "function") {
+    return validateOpenAINamedToolChoice(toolChoice.function, "tool_choice.function", {
+      validateFunctionName: true,
+    });
+  }
+  if (toolChoice.type === "custom") {
+    return validateOpenAINamedToolChoice(toolChoice.custom, "tool_choice.custom");
+  }
+  return validateOpenAIAllowedToolsChoice(toolChoice.allowed_tools, "tool_choice.allowed_tools");
+}
+
+function validateOpenAIAllowedToolsChoice(allowedTools, param) {
+  if (!isPlainObject(allowedTools)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (
+    typeof allowedTools.mode !== "string"
+    || !OPENAI_ALLOWED_TOOLS_MODE_VALUES.includes(allowedTools.mode)
+  ) {
+    return requestValidationError(
+      `${param}.mode must be one of: ${OPENAI_ALLOWED_TOOLS_MODE_VALUES.join(", ")}`,
+      `${param}.mode`,
+    );
+  }
+  if (!Array.isArray(allowedTools.tools)) {
+    return requestValidationError(`${param}.tools must be an array`, `${param}.tools`);
+  }
+  for (const [index, tool] of allowedTools.tools.entries()) {
+    if (!isPlainObject(tool)) {
+      return requestValidationError(`${param}.tools.${index} must be an object`, `${param}.tools.${index}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAINamedToolChoice(choice, param, options = {}) {
+  if (!isPlainObject(choice)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof choice.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (options.validateFunctionName && !OPENAI_FUNCTION_NAME_RE.test(choice.name)) {
+    return requestValidationError(openAIFunctionNameMessage(param), `${param}.name`);
+  }
+  return null;
+}
+
+function validateOpenAICustomToolObject(custom, param) {
+  if (!isPlainObject(custom)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof custom.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(custom, "description")
+    && custom.description !== null
+    && typeof custom.description !== "string"
+  ) {
+    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(custom, "format")) return null;
+  return validateOpenAICustomToolFormat(custom.format, `${param}.format`);
+}
+
+function validateOpenAICustomToolFormat(format, param) {
+  if (!isPlainObject(format)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof format.type !== "string" || !OPENAI_CUSTOM_TOOL_FORMAT_TYPES.includes(format.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${OPENAI_CUSTOM_TOOL_FORMAT_TYPES.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (format.type === "text") {
+    const extraKeys = Object.keys(format).filter((key) => key !== "type");
+    if (extraKeys.length) {
+      return requestValidationError(`${param} text format must only include type`, param);
+    }
+    return null;
+  }
+  if (!isPlainObject(format.grammar)) {
+    return requestValidationError(`${param}.grammar must be an object`, `${param}.grammar`);
+  }
+  if (typeof format.grammar.definition !== "string") {
+    return requestValidationError(`${param}.grammar.definition must be a string`, `${param}.grammar.definition`);
+  }
+  if (
+    typeof format.grammar.syntax !== "string"
+    || !OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES.includes(format.grammar.syntax)
+  ) {
+    return requestValidationError(
+      `${param}.grammar.syntax must be one of: ${OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES.join(", ")}`,
+      `${param}.grammar.syntax`,
+    );
+  }
+  return null;
+}
+
+function validateOpenAILegacyFunctionFields(body = {}) {
+  const functionsError = validateOpenAILegacyFunctions(body);
+  if (functionsError) return functionsError;
+  return validateOpenAILegacyFunctionCall(body);
+}
+
+function validateOpenAILegacyFunctions(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "functions")) return null;
+  if (!Array.isArray(body.functions)) {
+    return requestValidationError("functions must be an array", "functions");
+  }
+  if (body.functions.length < 1 || body.functions.length > OPENAI_LEGACY_FUNCTIONS_MAX) {
+    return requestValidationError(
+      `functions must contain 1 to ${OPENAI_LEGACY_FUNCTIONS_MAX} items`,
+      "functions",
+    );
+  }
+  for (const [index, fn] of body.functions.entries()) {
+    const error = validateOpenAIFunctionObject(fn, `functions.${index}`, {
+      strict: false,
+    });
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateOpenAILegacyFunctionCall(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "function_call")) return null;
+  const functionCall = body.function_call;
+  if (typeof functionCall === "string") {
+    if (!OPENAI_LEGACY_FUNCTION_CALL_VALUES.includes(functionCall)) {
+      return requestValidationError(
+        `function_call must be one of: ${OPENAI_LEGACY_FUNCTION_CALL_VALUES.join(", ")}`,
+        "function_call",
+      );
+    }
+    return null;
+  }
+  if (!isPlainObject(functionCall)) {
+    return requestValidationError(
+      `function_call must be one of: ${OPENAI_LEGACY_FUNCTION_CALL_VALUES.join(", ")}, or an object`,
+      "function_call",
+    );
+  }
+  if (typeof functionCall.name !== "string" || !OPENAI_FUNCTION_NAME_RE.test(functionCall.name)) {
+    return requestValidationError(openAIFunctionNameMessage("function_call"), "function_call.name");
+  }
+  return null;
+}
+
+function validateOpenAIFunctionObject(fn, param, options = {}) {
+  if (!isPlainObject(fn)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof fn.name !== "string" || !OPENAI_FUNCTION_NAME_RE.test(fn.name)) {
+    return requestValidationError(openAIFunctionNameMessage(param), `${param}.name`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(fn, "description")
+    && fn.description !== null
+    && typeof fn.description !== "string"
+  ) {
+    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(fn, "parameters")
+    && !isPlainObject(fn.parameters)
+  ) {
+    return requestValidationError(`${param}.parameters must be an object`, `${param}.parameters`);
+  }
+  if (
+    options.strict
+    && Object.prototype.hasOwnProperty.call(fn, "strict")
+    && fn.strict !== null
+    && typeof fn.strict !== "boolean"
+  ) {
+    return requestValidationError(`${param}.strict must be a boolean or null`, `${param}.strict`);
+  }
+  return null;
+}
+
+function openAIFunctionNameMessage(param) {
+  return `${param}.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes`;
 }
 
 function validateOpenAIBooleanParameter(body = {}, field) {
@@ -5189,6 +5456,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const webSearchOptionsError = validateOpenAIChatWebSearchOptions(body);
   if (webSearchOptionsError) {
     sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
+    return;
+  }
+  const toolFieldsError = validateOpenAIChatToolFields(body);
+  if (toolFieldsError) {
+    sendError(res, 400, toolFieldsError.message, toolFieldsError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);

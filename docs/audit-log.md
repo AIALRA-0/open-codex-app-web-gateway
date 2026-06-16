@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-16 Official Chat Tool Field Validation
+
+- Rechecked the official OpenAI Chat Completions request contract through the
+  OpenAI developer docs MCP search result and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateChatCompletionRequest` documents `tools` as function or custom tools,
+  `tool_choice` as `none`, `auto`, `required`, named function/custom choice,
+  or `allowed_tools`, deprecated `functions` as 1-128 function definitions,
+  and deprecated `function_call` as `none`, `auto`, or `{name}`. Function
+  names must use letters, numbers, underscores, or dashes and be at most 64
+  characters.
+- Added local request validation before provider calls:
+  - Direct `POST /v1/chat/completions` now validates Chat `tools` and
+    `tool_choice` shapes before passthrough, DeepSeek-compatible custom-tool
+    filtering, stored-chat handling, local web-search setup, or upstream Chat
+    requests.
+  - Both `POST /v1/responses` and direct Chat now validate deprecated Chat
+    `functions` / `function_call` compatibility aliases before legacy
+    function-to-tool mapping or upstream Chat requests.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved valid compatibility behavior: function tools still forward to
+  capable providers, valid custom tools and `allowed_tools` choices remain
+  pass-through when provider-native forwarding is enabled, DeepSeek-compatible
+  deployments still filter unsupported custom tools and incompatible choices
+  while preserving function tools, and valid legacy functions still map to
+  modern Chat `tools` / `tool_choice` with compatibility metadata.
+- Added regression coverage proving invalid direct Chat tool arrays, function
+  names, function parameters, strict flags, custom formats, grammar syntax,
+  `tool_choice` strings, named choices, and `allowed_tools` choices fail
+  locally with zero upstream calls; Responses legacy `functions` /
+  `function_call` invalid shapes also fail locally with zero upstream calls.
+- Updated the compatibility matrix and evaluation plan so direct Chat tool
+  definitions, tool-choice constraints, and deprecated Chat function aliases
+  are tracked as OpenAI-boundary validated fields.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "legacy Chat function fields|tools and tool_choice before provider calls|normalizes OpenAI Chat fields|filters custom tools|legacy Chat functions" test/server.test.js`:
+    passed 4/4.
+  - `npm test`: passed 316/316.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/chat/completions` and
+    `/v1/responses` returned HTTP 400 with params `tools.0.type`,
+    `tool_choice.allowed_tools.mode`, and `function_call.name`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 8.6G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Chat Web Search Options Validation
 
 - Rechecked the official OpenAI Chat Completions request contract through the

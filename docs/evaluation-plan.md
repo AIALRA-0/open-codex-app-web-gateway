@@ -668,6 +668,18 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   coverage proves invalid values produce zero upstream calls while valid
   DeepSeek-compatible direct Chat requests continue through local web-search
   emulation with source annotations and compatibility metadata.
+- Direct Chat requests that include `tools` or `tool_choice` validate the
+  official Chat create request contract locally before provider calls:
+  `tools` must contain function or custom tools with valid function names,
+  object parameters, optional strict booleans/null, and valid custom
+  text/grammar formats; `tool_choice` must be `none`, `auto`, `required`, a
+  named function/custom choice, or `allowed_tools` with `auto`/`required` mode.
+  Responses and direct Chat requests that use deprecated Chat
+  `functions`/`function_call` aliases validate the official legacy function
+  shape before mapping to modern Chat tools. Regression coverage proves
+  invalid tool definitions, choices, and legacy function fields produce zero
+  upstream calls while valid custom/allowed-tools shapes pass through to
+  capable providers and valid legacy functions still map for DeepSeek.
 - Responses and direct Chat requests that include `reasoning.effort`,
   direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
   the current OpenAI reasoning-effort enum locally before provider calls; valid

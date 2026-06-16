@@ -1079,6 +1079,118 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
   });
 });
 
+test("POST /v1/responses validates legacy Chat function fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.tools, [{
+      type: "function",
+      function: {
+        name: "legacy_noop",
+        description: "Return a marker.",
+        parameters: { type: "object", properties: {} },
+      },
+    }]);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: "legacy_noop" },
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_legacy_functions_validation",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses legacy functions ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { functions: "legacy_noop" },
+        param: "functions",
+        message: "functions must be an array",
+      },
+      {
+        body: { functions: [] },
+        param: "functions",
+        message: "functions must contain 1 to 128 items",
+      },
+      {
+        body: { functions: [null] },
+        param: "functions.0",
+        message: "functions.0 must be an object",
+      },
+      {
+        body: { functions: [{ name: "bad name" }] },
+        param: "functions.0.name",
+        message: "functions.0.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { functions: [{ name: "legacy_noop", parameters: [] }] },
+        param: "functions.0.parameters",
+        message: "functions.0.parameters must be an object",
+      },
+      {
+        body: { function_call: "required" },
+        param: "function_call",
+        message: "function_call must be one of: none, auto",
+      },
+      {
+        body: { function_call: [] },
+        param: "function_call",
+        message: "function_call must be one of: none, auto, or an object",
+      },
+      {
+        body: { function_call: { name: "bad name" } },
+        param: "function_call.name",
+        message: "function_call.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check legacy function validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid legacy function mapping.",
+        functions: [{
+          name: "legacy_noop",
+          description: "Return a marker.",
+          parameters: { type: "object", properties: {} },
+        }],
+        function_call: { name: "legacy_noop" },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses legacy functions ok");
+    assert.equal(requests.length, 1);
+  }, { forwardChatNativeFields: false });
+});
+
 test("POST /v1/responses validates Chat output fields before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.modalities, ["text", "audio"]);
@@ -21520,6 +21632,204 @@ test("POST /v1/chat/completions validates Chat output fields before provider cal
     );
     assert.equal(requests.length, 1);
   }, { forwardChatNativeFields: false });
+});
+
+test("POST /v1/chat/completions validates tools and tool_choice before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.tools, [
+      {
+        type: "function",
+        function: {
+          name: "lookup_weather",
+          description: "Lookup weather.",
+          parameters: { type: "object", properties: { city: { type: "string" } } },
+          strict: true,
+        },
+      },
+      {
+        type: "custom",
+        custom: {
+          name: "run_code",
+          description: "Run code.",
+          format: {
+            type: "grammar",
+            grammar: { definition: "start: /[a-z]+/", syntax: "lark" },
+          },
+        },
+      },
+    ]);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "allowed_tools",
+      allowed_tools: {
+        mode: "required",
+        tools: [{ type: "function", function: { name: "lookup_weather" } }],
+      },
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_tools_boundary",
+      object: "chat.completion",
+      created: 1700000412,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat tools ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { tools: null },
+        param: "tools",
+        message: "tools must be an array",
+      },
+      {
+        body: { tools: [{ type: "file_search" }] },
+        param: "tools.0.type",
+        message: "tools.0.type must be one of: function, custom",
+      },
+      {
+        body: { tools: [{ type: "function" }] },
+        param: "tools.0.function",
+        message: "tools.0.function must be an object",
+      },
+      {
+        body: { tools: [{ type: "function", function: { name: "bad name" } }] },
+        param: "tools.0.function.name",
+        message: "tools.0.function.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tools: [{ type: "function", function: { name: "lookup_weather", description: 1 } }] },
+        param: "tools.0.function.description",
+        message: "tools.0.function.description must be a string or null",
+      },
+      {
+        body: { tools: [{ type: "function", function: { name: "lookup_weather", parameters: [] } }] },
+        param: "tools.0.function.parameters",
+        message: "tools.0.function.parameters must be an object",
+      },
+      {
+        body: { tools: [{ type: "function", function: { name: "lookup_weather", strict: "true" } }] },
+        param: "tools.0.function.strict",
+        message: "tools.0.function.strict must be a boolean or null",
+      },
+      {
+        body: { tools: [{ type: "custom", custom: { name: "run_code", format: { type: "json" } } }] },
+        param: "tools.0.custom.format.type",
+        message: "tools.0.custom.format.type must be one of: text, grammar",
+      },
+      {
+        body: {
+          tools: [{
+            type: "custom",
+            custom: {
+              name: "run_code",
+              format: {
+                type: "grammar",
+                grammar: { definition: "start: WORD", syntax: "peg" },
+              },
+            },
+          }],
+        },
+        param: "tools.0.custom.format.grammar.syntax",
+        message: "tools.0.custom.format.grammar.syntax must be one of: lark, regex",
+      },
+      {
+        body: { tool_choice: "force" },
+        param: "tool_choice",
+        message: "tool_choice must be one of: none, auto, required",
+      },
+      {
+        body: { tool_choice: null },
+        param: "tool_choice",
+        message: "tool_choice must be one of: none, auto, required, or an object",
+      },
+      {
+        body: { tool_choice: { type: "function", function: { name: "bad name" } } },
+        param: "tool_choice.function.name",
+        message: "tool_choice.function.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tool_choice: { type: "custom", custom: {} } },
+        param: "tool_choice.custom.name",
+        message: "tool_choice.custom.name must be a string",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "all", tools: [] } } },
+        param: "tool_choice.allowed_tools.mode",
+        message: "tool_choice.allowed_tools.mode must be one of: auto, required",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: "all" } } },
+        param: "tool_choice.allowed_tools.tools",
+        message: "tool_choice.allowed_tools.tools must be an array",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        tools: [
+          {
+            type: "function",
+            function: {
+              name: "lookup_weather",
+              description: "Lookup weather.",
+              parameters: { type: "object", properties: { city: { type: "string" } } },
+              strict: true,
+            },
+          },
+          {
+            type: "custom",
+            custom: {
+              name: "run_code",
+              description: "Run code.",
+              format: {
+                type: "grammar",
+                grammar: { definition: "start: /[a-z]+/", syntax: "lark" },
+              },
+            },
+          },
+        ],
+        tool_choice: {
+          type: "allowed_tools",
+          allowed_tools: {
+            mode: "required",
+            tools: [{ type: "function", function: { name: "lookup_weather" } }],
+          },
+        },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat tools ok");
+    assert.equal(requests.length, 1);
+  });
 });
 
 test("POST /v1/chat/completions validates verbosity values before provider calls", async () => {
