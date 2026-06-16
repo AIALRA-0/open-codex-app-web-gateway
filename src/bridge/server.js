@@ -201,6 +201,10 @@ const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
+const OPENAI_TEMPERATURE_MIN = 0;
+const OPENAI_TEMPERATURE_MAX = 2;
+const OPENAI_TOP_P_MIN = 0;
+const OPENAI_TOP_P_MAX = 1;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -789,6 +793,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const topLogprobsError = validateOpenAITopLogprobs(request);
   if (topLogprobsError) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
+    return;
+  }
+  const samplingError = validateOpenAISamplingParameters(request);
+  if (samplingError) {
+    sendError(res, 400, samplingError.message, samplingError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2278,6 +2287,25 @@ function validateOpenAITopLogprobs(body = {}, options = {}) {
   }
   if (options.requireChatLogprobsTrue && body.logprobs !== true) {
     return requestValidationError("logprobs must be true when top_logprobs is set", "logprobs");
+  }
+  return null;
+}
+
+function validateOpenAISamplingParameters(body = {}) {
+  const temperatureError = validateNumberRange(
+    body,
+    "temperature",
+    OPENAI_TEMPERATURE_MIN,
+    OPENAI_TEMPERATURE_MAX,
+  );
+  if (temperatureError) return temperatureError;
+  return validateNumberRange(body, "top_p", OPENAI_TOP_P_MIN, OPENAI_TOP_P_MAX);
+}
+
+function validateNumberRange(body = {}, field, min, max) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  if (typeof body[field] !== "number" || !Number.isFinite(body[field]) || body[field] < min || body[field] > max) {
+    return requestValidationError(`${field} must be a number between ${min} and ${max}`, field);
   }
   return null;
 }
@@ -4393,6 +4421,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const topLogprobsError = validateOpenAITopLogprobs(body, { requireChatLogprobsTrue: true });
   if (topLogprobsError) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
+    return;
+  }
+  const samplingError = validateOpenAISamplingParameters(body);
+  if (samplingError) {
+    sendError(res, 400, samplingError.message, samplingError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);

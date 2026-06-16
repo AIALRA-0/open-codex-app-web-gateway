@@ -927,6 +927,71 @@ test("POST /v1/responses validates top_logprobs range before provider calls", as
   });
 });
 
+test("POST /v1/responses validates sampling parameter ranges before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.temperature, 0);
+    assert.equal(call.body.top_p, 1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_sampling_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "sampling ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { temperature: -0.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: 2.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: "1" }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { top_p: -0.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: 1.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: "0.5" }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check sampling validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check sampling lower and upper boundaries.",
+        temperature: 0,
+        top_p: 1,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "sampling ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps output logprobs include to Chat and back", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -18192,6 +18257,70 @@ test("POST /v1/chat/completions validates top_logprobs contract before provider 
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat logprobs ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates sampling parameter ranges before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.temperature, 2);
+    assert.equal(call.body.top_p, 0);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_sampling_boundary",
+      object: "chat.completion",
+      created: 1700000301,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat sampling ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { temperature: -0.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: 2.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: "1" }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { top_p: -0.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: 1.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: "0.5" }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        temperature: 2,
+        top_p: 0,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat sampling ok");
     assert.equal(requests.length, 1);
   });
 });

@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-16 Official Sampling Parameter Validation
+
+- Rechecked the official OpenAI Responses create and Chat Completions create
+  body-parameter docs through the OpenAI developer docs MCP before changing
+  validation behavior. Both surfaces document `temperature` as a number between
+  0 and 2, and document `top_p` as nucleus-sampling probability mass where
+  values such as 0.1 restrict sampling to the top 10% probability mass.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects non-number, below-minimum, and
+    above-maximum `temperature` / `top_p` values before translating the request
+    to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough, so OpenAI SDK callers receive an OpenAI-style local
+    `400 invalid_request_error` instead of provider-specific errors.
+  - Valid boundary values still pass through unchanged:
+    `temperature:0` / `top_p:1` on Responses, and
+    `temperature:2` / `top_p:0` on direct Chat.
+- Added regression coverage proving invalid values `temperature:-0.1`,
+  `temperature:2.1`, `temperature:"1"`, `top_p:-0.01`, `top_p:1.01`, and
+  `top_p:"0.5"` fail locally for both Responses and direct Chat with zero
+  upstream calls, while valid boundaries still reach the mock Chat provider.
+- Updated the compatibility matrix and evaluation plan so sampling parity now
+  tracks request-contract validation as well as provider passthrough.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "sampling|temperature|top_p"`:
+    passed 216/216; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 265/265.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public sampling smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses error used `param:"temperature"` for `temperature:2.1`, and
+    the Chat error used `param:"top_p"` for `top_p:1.01`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Top Logprobs Contract Validation
 
 - Rechecked the official OpenAI Responses create and Chat Completions create
