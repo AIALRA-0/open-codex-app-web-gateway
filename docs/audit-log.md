@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-16 Official Top Logprobs Contract Validation
+
+- Rechecked the official OpenAI Responses create and Chat Completions create
+  body-parameter docs through the OpenAI developer docs MCP before changing
+  validation behavior. Both surfaces document `top_logprobs` as an integer
+  between 0 and 20. The Chat Completions surface additionally requires
+  `logprobs:true` whenever `top_logprobs` is used.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects non-integer or out-of-range
+    `top_logprobs` values before translation. Valid Responses requests still
+    map `top_logprobs` to upstream Chat `top_logprobs` and automatically set
+    `logprobs:true`.
+  - `POST /v1/chat/completions` now rejects the same invalid range values and
+    also rejects `top_logprobs` when `logprobs` is missing or false, matching
+    the OpenAI Chat contract instead of relying on provider-side failures.
+- Added regression coverage proving invalid values `-1`, `21`, `1.5`, and
+  `"2"` fail locally for Responses with zero upstream calls; valid boundary
+  `top_logprobs:0` still reaches the mock Chat provider with `logprobs:true`.
+  Direct Chat coverage now proves `top_logprobs:21`, missing `logprobs`, and
+  `logprobs:false` fail locally with zero upstream calls; valid boundary
+  `top_logprobs:20` plus `logprobs:true` still passes through.
+- Updated the compatibility matrix and evaluation plan so logprobs parity now
+  tracks both output projection and request-contract validation.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "top_logprobs|logprobs"`:
+    passed 214/214; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 263/263.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `top_logprobs` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses error used `param:"top_logprobs"` for an out-of-range value,
+    and the Chat error used `param:"logprobs"` when `top_logprobs` was supplied
+    without `logprobs:true`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official String Metadata Validation
 
 - Rechecked the official OpenAI Responses create and Chat Completions create

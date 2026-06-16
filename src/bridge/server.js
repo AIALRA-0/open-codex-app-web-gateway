@@ -199,6 +199,8 @@ const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const OPENAI_STRING_METADATA_MAX_PAIRS = 16;
 const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
+const OPENAI_TOP_LOGPROBS_MIN = 0;
+const OPENAI_TOP_LOGPROBS_MAX = 20;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -782,6 +784,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const metadataError = validateOpenAIStringMetadata(request);
   if (metadataError) {
     sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
+  const topLogprobsError = validateOpenAITopLogprobs(request);
+  if (topLogprobsError) {
+    sendError(res, 400, topLogprobsError.message, topLogprobsError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2260,7 +2267,26 @@ function validateOpenAIStringMetadata(body = {}) {
   return null;
 }
 
+function validateOpenAITopLogprobs(body = {}, options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "top_logprobs") || body.top_logprobs == null) return null;
+  if (
+    !Number.isInteger(body.top_logprobs)
+    || body.top_logprobs < OPENAI_TOP_LOGPROBS_MIN
+    || body.top_logprobs > OPENAI_TOP_LOGPROBS_MAX
+  ) {
+    return requestValidationError(`top_logprobs must be an integer between ${OPENAI_TOP_LOGPROBS_MIN} and ${OPENAI_TOP_LOGPROBS_MAX}`, "top_logprobs");
+  }
+  if (options.requireChatLogprobsTrue && body.logprobs !== true) {
+    return requestValidationError("logprobs must be true when top_logprobs is set", "logprobs");
+  }
+  return null;
+}
+
 function metadataValidationError(message, param = "metadata") {
+  return requestValidationError(message, param);
+}
+
+function requestValidationError(message, param) {
   return {
     message,
     type: "invalid_request_error",
@@ -4362,6 +4388,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const metadataError = validateOpenAIStringMetadata(body);
   if (metadataError) {
     sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
+  const topLogprobsError = validateOpenAITopLogprobs(body, { requireChatLogprobsTrue: true });
+  if (topLogprobsError) {
+    sendError(res, 400, topLogprobsError.message, topLogprobsError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);
