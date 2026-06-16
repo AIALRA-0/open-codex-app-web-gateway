@@ -13451,9 +13451,9 @@ function handleBatchCancel(res, store, batchId) {
 }
 
 function handleResponseGet(res, store, responseId, url) {
-  const includeError = validateOpenAIIncludeQuery(url);
-  if (includeError) {
-    sendError(res, 400, includeError.message, includeError);
+  const queryError = validateResponseRetrieveQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
     return;
   }
 
@@ -13463,7 +13463,223 @@ function handleResponseGet(res, store, responseId, url) {
     return;
   }
 
-  sendJson(res, 200, projectResponseForIncludes(record.response, url));
+  const response = projectResponseForIncludes(record.response, url);
+  if (queryBooleanFromUrl(url, "stream", false)) {
+    writeStoredResponseEventStream(res, response, url);
+    return;
+  }
+
+  sendJson(res, 200, response);
+}
+
+function validateResponseRetrieveQuery(url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) return includeError;
+  const streamError = validateOpenAIQueryBoolean(url, "stream");
+  if (streamError) return streamError;
+  const includeObfuscationError = validateOpenAIQueryBoolean(url, "include_obfuscation");
+  if (includeObfuscationError) return includeObfuscationError;
+  return validateOpenAIQueryInteger(url, "starting_after", { min: 0 });
+}
+
+function writeStoredResponseEventStream(res, response, url) {
+  const startingAfter = queryIntegerFromUrl(url, "starting_after", 0);
+  const state = { sequenceNumber: 0 };
+  const emit = (event, payload) => {
+    const sequenced = sequence(state, payload);
+    if (sequenced.sequence_number > startingAfter) writeSse(res, event, sequenced);
+  };
+
+  res.writeHead(200, {
+    "content-type": "text/event-stream; charset=utf-8",
+    "cache-control": "no-cache, no-transform",
+    "connection": "keep-alive",
+    "x-accel-buffering": "no",
+  });
+
+  const progressResponse = {
+    ...clone(response),
+    status: "in_progress",
+    completed_at: null,
+    error: null,
+    incomplete_details: null,
+    output: [],
+  };
+  emit("response.created", { type: "response.created", response: clone(progressResponse) });
+  emit("response.in_progress", { type: "response.in_progress", response: clone(progressResponse) });
+
+  for (const [event, payload] of storedResponseOutputStreamEvents(response)) {
+    emit(event, payload);
+  }
+
+  if (["completed", "failed", "incomplete"].includes(response.status)) {
+    const terminalEvent = terminalEventForResponseStatus(response.status);
+    emit(terminalEvent, { type: terminalEvent, response: clone(response) });
+  }
+
+  res.end();
+}
+
+function storedResponseOutputStreamEvents(response) {
+  const events = [];
+  for (const [outputIndex, item] of (Array.isArray(response.output) ? response.output : []).entries()) {
+    const addedItem = streamAddedOutputItem(item);
+    events.push(["response.output_item.added", {
+      type: "response.output_item.added",
+      response_id: response.id,
+      output_index: outputIndex,
+      item: addedItem,
+    }]);
+
+    if (item?.type === "message" && Array.isArray(item.content)) {
+      events.push(...storedMessageContentStreamEvents(response.id, item, outputIndex));
+    } else if (item?.type === "reasoning") {
+      events.push(...storedReasoningStreamEvents(response.id, item, outputIndex));
+    } else if (item?.type === "function_call") {
+      events.push(...storedFunctionCallStreamEvents(response.id, item, outputIndex));
+    }
+
+    events.push(["response.output_item.done", {
+      type: "response.output_item.done",
+      response_id: response.id,
+      output_index: outputIndex,
+      item: clone(item),
+    }]);
+  }
+  return events;
+}
+
+function streamAddedOutputItem(item) {
+  const added = clone(item);
+  if (typeof added?.status === "string") added.status = "in_progress";
+  if (added?.type === "message" && Array.isArray(added.content)) {
+    added.content = [];
+  }
+  if (added?.type === "function_call") added.arguments = "";
+  return added;
+}
+
+function storedMessageContentStreamEvents(responseId, item, outputIndex) {
+  const events = [];
+  for (const [contentIndex, part] of item.content.entries()) {
+    events.push(["response.content_part.added", {
+      type: "response.content_part.added",
+      response_id: responseId,
+      item_id: item.id,
+      output_index: outputIndex,
+      content_index: contentIndex,
+      part: streamAddedContentPart(part),
+    }]);
+
+    if (part?.type === "output_text") {
+      if (part.text) {
+        events.push(["response.output_text.delta", {
+          type: "response.output_text.delta",
+          response_id: responseId,
+          item_id: item.id,
+          output_index: outputIndex,
+          content_index: contentIndex,
+          delta: part.text,
+        }]);
+      }
+      events.push(["response.output_text.done", {
+        type: "response.output_text.done",
+        response_id: responseId,
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: contentIndex,
+        text: part.text || "",
+      }]);
+    } else if (part?.type === "refusal") {
+      if (part.refusal) {
+        events.push(["response.refusal.delta", {
+          type: "response.refusal.delta",
+          response_id: responseId,
+          item_id: item.id,
+          output_index: outputIndex,
+          content_index: contentIndex,
+          delta: part.refusal,
+        }]);
+      }
+      events.push(["response.refusal.done", {
+        type: "response.refusal.done",
+        response_id: responseId,
+        item_id: item.id,
+        output_index: outputIndex,
+        content_index: contentIndex,
+        refusal: part.refusal || "",
+      }]);
+    }
+
+    events.push(["response.content_part.done", {
+      type: "response.content_part.done",
+      response_id: responseId,
+      item_id: item.id,
+      output_index: outputIndex,
+      content_index: contentIndex,
+      part: clone(part),
+    }]);
+  }
+  return events;
+}
+
+function streamAddedContentPart(part) {
+  if (part?.type === "output_text") {
+    return {
+      type: "output_text",
+      text: "",
+      annotations: Array.isArray(part.annotations) ? clone(part.annotations) : [],
+    };
+  }
+  if (part?.type === "refusal") return { type: "refusal", refusal: "" };
+  return clone(part);
+}
+
+function storedReasoningStreamEvents(responseId, item, outputIndex) {
+  const events = [];
+  for (const [summaryIndex, summary] of (Array.isArray(item.summary) ? item.summary : []).entries()) {
+    if (summary?.type !== "summary_text") continue;
+    if (summary.text) {
+      events.push(["response.reasoning_summary_text.delta", {
+        type: "response.reasoning_summary_text.delta",
+        response_id: responseId,
+        item_id: item.id,
+        output_index: outputIndex,
+        summary_index: summaryIndex,
+        delta: summary.text,
+      }]);
+    }
+    events.push(["response.reasoning_summary_text.done", {
+      type: "response.reasoning_summary_text.done",
+      response_id: responseId,
+      item_id: item.id,
+      output_index: outputIndex,
+      summary_index: summaryIndex,
+      text: summary.text || "",
+    }]);
+  }
+  return events;
+}
+
+function storedFunctionCallStreamEvents(responseId, item, outputIndex) {
+  const events = [];
+  if (item.arguments) {
+    events.push(["response.function_call_arguments.delta", {
+      type: "response.function_call_arguments.delta",
+      response_id: responseId,
+      item_id: item.id,
+      output_index: outputIndex,
+      delta: item.arguments,
+    }]);
+  }
+  events.push(["response.function_call_arguments.done", {
+    type: "response.function_call_arguments.done",
+    response_id: responseId,
+    item_id: item.id,
+    output_index: outputIndex,
+    arguments: item.arguments || "",
+  }]);
+  return events;
 }
 
 async function handleResponseUpdate(req, res, store, responseId, url) {
@@ -14100,6 +14316,41 @@ function validateOpenAIIncludeQuery(url) {
         `include.${index}`,
       );
     }
+  }
+  return null;
+}
+
+function queryBooleanFromUrl(url, name, fallback = false) {
+  if (!url?.searchParams?.has?.(name)) return fallback;
+  const value = String(url.searchParams.get(name) || "").trim().toLowerCase();
+  if (["1", "true"].includes(value)) return true;
+  if (["0", "false"].includes(value)) return false;
+  return fallback;
+}
+
+function validateOpenAIQueryBoolean(url, name) {
+  if (!url?.searchParams?.has?.(name)) return null;
+  const value = String(url.searchParams.get(name) || "").trim().toLowerCase();
+  if (["1", "true", "0", "false"].includes(value)) return null;
+  return requestValidationError(`${name} must be a boolean`, name);
+}
+
+function queryIntegerFromUrl(url, name, fallback = 0) {
+  if (!url?.searchParams?.has?.(name)) return fallback;
+  const value = String(url.searchParams.get(name) || "").trim();
+  if (!/^-?\d+$/.test(value)) return fallback;
+  return Number(value);
+}
+
+function validateOpenAIQueryInteger(url, name, options = {}) {
+  if (!url?.searchParams?.has?.(name)) return null;
+  const value = String(url.searchParams.get(name) || "").trim();
+  if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+    return requestValidationError(`${name} must be an integer`, name);
+  }
+  const parsed = Number(value);
+  if (options.min != null && parsed < options.min) {
+    return requestValidationError(`${name} must be an integer greater than or equal to ${options.min}`, name);
   }
   return null;
 }

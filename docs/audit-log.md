@@ -1,5 +1,44 @@
 # Audit Log
 
+## 2026-06-17 Responses Retrieve Stream Replay
+
+- Rechecked the official OpenAI `GET /v1/responses/{response_id}` schema
+  through the official `openai/openai-openapi` schema. Current response
+  retrieval supports `stream`, `starting_after`, and `include_obfuscation`
+  query parameters in addition to the shared `include` enum.
+- Added local stored-response SSE replay for response retrieval:
+  - `stream=true` returns `text/event-stream` with typed Responses events for
+    the stored response snapshot;
+  - replayed events include response lifecycle events, output item/content
+    added/delta/done events, and the terminal response event for terminal
+    stored responses;
+  - `starting_after` filters replayed events by sequence number;
+  - `stream`, `starting_after`, and `include_obfuscation` query values are
+    validated before local data is returned.
+- The replay path does not call the upstream Chat provider again and does not
+  yet wait on an active background job; in-progress local records are replayed
+  as their current snapshot.
+- Updated tests and the compatibility matrix to document retrieve streaming
+  behavior.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'Responses lifecycle endpoints retrieve input items'`:
+    passed 290/290 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 341/341.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed `stream=true` returns
+    `text/event-stream`, `starting_after=4` resumes at sequence 5, invalid
+    `stream` values return HTTP 400 with `param:"stream"`, and real stored
+    DeepSeek responses can replay terminal `response.incomplete` events.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Responses Retrieve Include Query Tightening
 
 - Rechecked the official OpenAI `GET /v1/responses/{response_id}` schema

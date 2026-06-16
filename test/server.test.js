@@ -15325,6 +15325,40 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(invalidInclude.status, 400);
     assert.equal((await invalidInclude.json()).error.param, "include.0");
 
+    const streamed = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true`);
+    assert.equal(streamed.status, 200);
+    assert.match(streamed.headers.get("content-type") || "", /^text\/event-stream\b/);
+    const streamEvents = parseSseEvents(await streamed.text());
+    assert.deepEqual(streamEvents.map((event) => event.event), [
+      "response.created",
+      "response.in_progress",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    assert.deepEqual(streamEvents.map((event) => event.data.sequence_number), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert.equal(streamEvents[4].data.delta, "stored response");
+    assert.equal(streamEvents[8].data.response.id, createdJson.id);
+
+    const resumed = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&starting_after=4&include_obfuscation=false`);
+    assert.equal(resumed.status, 200);
+    const resumedEvents = parseSseEvents(await resumed.text());
+    assert.equal(resumedEvents[0].event, "response.output_text.delta");
+    assert.equal(resumedEvents[0].data.sequence_number, 5);
+    assert.equal(resumedEvents.at(-1).event, "response.completed");
+
+    const invalidStream = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=eventually`);
+    assert.equal(invalidStream.status, 400);
+    assert.equal((await invalidStream.json()).error.param, "stream");
+
+    const invalidStartingAfter = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&starting_after=soon`);
+    assert.equal(invalidStartingAfter.status, 400);
+    assert.equal((await invalidStartingAfter.json()).error.param, "starting_after");
+
     const updated = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
