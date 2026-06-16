@@ -5874,6 +5874,11 @@ function parseJsonOrNull(text) {
 
 async function handleLegacyCompletions(req, res, config) {
   const request = await readJson(req);
+  const logitBiasError = validateOpenAILogitBias(request);
+  if (logitBiasError) {
+    sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
   const prompts = normalizeCompletionPrompts(request.prompt);
   if (request.stream) {
     await handleStreamingLegacyCompletions(req, res, config, request, prompts);

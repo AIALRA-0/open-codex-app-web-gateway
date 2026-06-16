@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Legacy Completions Logit Bias Validation
+
+- Rechecked the official OpenAI legacy Completions create operation through
+  the OpenAI developer docs MCP and OpenAPI endpoint spec before changing
+  behavior:
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`
+  and `https://api.openai.com/v1/completions`. The endpoint is marked legacy,
+  but current clients and benchmark harnesses can still call it, and this
+  bridge maps it to upstream Chat Completions.
+- Extended the existing OpenAI `logit_bias` request-contract validation to
+  `POST /v1/completions` before prompt normalization, non-stream execution, or
+  streaming execution can make provider calls. The accepted shape is a JSON
+  object whose values are finite numbers from -100 through 100.
+- Added regression coverage proving array/string `logit_bias` values,
+  below-minimum values, above-maximum values, and a string bias value on a
+  streaming legacy request all fail locally with zero upstream calls. The
+  existing legacy prompt-to-Chat test now also proves valid `logit_bias`
+  passthrough, and the new boundary test proves `-100` and `100` reach the mock
+  Chat provider unchanged.
+- Updated the compatibility matrix and evaluation plan so legacy Completions
+  parity tracks local request-contract validation in addition to Chat-backed
+  prompt/response mapping.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "logit_bias|/v1/completions maps legacy|/v1/completions streams"`:
+    passed 221/221; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 270/270.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public legacy Completions `logit_bias` smoke through
+    `https://opencodexapp.aialra.online/v1/completions` returned HTTP 400
+    with `type:"invalid_request_error"`, `param:"logit_bias.11"`, and
+    `code:"invalid_request_parameter"` for a `stream:true` request with a
+    string-valued bias.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Logit Bias Validation
 
 - Rechecked the official OpenAI Chat Completions create body-parameter docs

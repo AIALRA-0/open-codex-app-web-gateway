@@ -288,7 +288,7 @@ Chat responses back to `object:"text_completion"` completion objects.
 | `max_tokens` | configured Chat max-token field, default `max_tokens` | Direct |
 | `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `n` | same-name Chat fields | Direct/provider-dependent |
 | `logprobs` | `logprobs:true` plus bounded `top_logprobs`; Chat token logprobs are reshaped to legacy `tokens`, `token_logprobs`, `top_logprobs`, and `text_offset` when present | Provider-dependent |
-| `logit_bias` | same-name Chat field when Chat-native passthrough is enabled | Provider-dependent |
+| `logit_bias` | same-name Chat field when Chat-native passthrough is enabled | The bridge validates legacy Completions `logit_bias` as an object whose values are numbers from -100 through 100 before any upstream Chat request; valid values then follow provider-dependent passthrough/filtering |
 | `user` | OpenAI-compatible `user`, or DeepSeek-compatible normalized `user_id` when `CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT=true` | Provider-aware |
 | `stream:true` | upstream Chat stream transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]` | Implemented |
 | `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks and applies provider-aware subfield filtering | Provider-dependent; DeepSeek defaults to `include_usage` only |

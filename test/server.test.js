@@ -18166,6 +18166,7 @@ test("POST /v1/completions maps legacy prompts to Chat Completions", async () =>
       n: 2,
       logprobs: true,
       top_logprobs: 2,
+      logit_bias: { "11": -100 },
       user: "legacy-user",
     });
     res.writeHead(200, { "content-type": "application/json" });
@@ -18209,6 +18210,7 @@ test("POST /v1/completions maps legacy prompts to Chat Completions", async () =>
         seed: 7,
         n: 2,
         logprobs: 2,
+        logit_bias: { "11": -100 },
         user: "legacy-user",
       }),
     });
@@ -18233,6 +18235,88 @@ test("POST /v1/completions maps legacy prompts to Chat Completions", async () =>
     assert.equal(json.choices[1].text, "completion-alt");
     assert.equal(json.choices[1].index, 1);
     assert.equal(json.choices[1].logprobs, null);
+  });
+});
+
+test("POST /v1/completions validates logit_bias before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.logit_bias, { "11": -100, "12": 100 });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_logit_bias_boundary",
+      object: "chat.completion",
+      created: 1700000124,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy logit bias ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { logit_bias: [] },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: "bad" },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "11": -101 } },
+        param: "logit_bias.11",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "11": 101 } },
+        param: "logit_bias.11",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "11": "-1" }, stream: true },
+        param: "logit_bias.11",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy logit_bias validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy logit_bias boundary.",
+        logit_bias: { "11": -100, "12": 100 },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.choices[0].text, "legacy logit bias ok");
+    assert.equal(requests.length, 1);
   });
 });
 
