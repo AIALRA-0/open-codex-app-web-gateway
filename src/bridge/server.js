@@ -307,6 +307,7 @@ const OPENAI_CUSTOM_TOOL_FORMAT_TYPES = Object.freeze(["text", "grammar"]);
 const OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES = Object.freeze(["lark", "regex"]);
 const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
 const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
+const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -4054,6 +4055,39 @@ function validateResponsesInputTokensStyle(request = {}) {
   return null;
 }
 
+function validateResponsesInputTokensPersonality(request = {}) {
+  if (!Object.prototype.hasOwnProperty.call(request, "personality") || request.personality == null) return null;
+  if (typeof request.personality !== "string") {
+    return {
+      message: "personality must be a string",
+      type: "invalid_request_error",
+      code: "invalid_request_parameter",
+      param: "personality",
+    };
+  }
+  if (Array.from(request.personality).length > RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS) {
+    return {
+      message: `personality must be at most ${RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS} characters`,
+      type: "invalid_request_error",
+      code: "invalid_request_parameter",
+      param: "personality",
+    };
+  }
+  return null;
+}
+
+function applyResponsesInputTokensPersonality(chat, request = {}) {
+  const personality = typeof request.personality === "string" ? request.personality : "";
+  if (!personality) return;
+  chat.messages = [
+    {
+      role: "system",
+      content: `Compatibility notice: apply the Responses model-owned personality preset ${JSON.stringify(personality)} to this request.`,
+    },
+    ...(Array.isArray(chat.messages) ? chat.messages : []),
+  ];
+}
+
 function applyResponsesInputTokensStyle(chat, request = {}) {
   const style = typeof request.style === "string" ? request.style : "";
   if (!style) return;
@@ -4202,6 +4236,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, styleError.message, styleError);
     return;
   }
+  const personalityError = validateResponsesInputTokensPersonality(request);
+  if (personalityError) {
+    sendError(res, 400, personalityError.message, personalityError);
+    return;
+  }
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
   if (stateReferenceError) {
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
@@ -4272,6 +4311,7 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   const translatorRequest = localInputImages?.request || request;
   const { chat } = responsesToChatRequest(translatorRequest, previousMessages, translatorOptions(config));
   applyResponsesInputTokensStyle(chat, request);
+  applyResponsesInputTokensPersonality(chat, request);
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) injectInputFileMessages(chat, localInputFiles);

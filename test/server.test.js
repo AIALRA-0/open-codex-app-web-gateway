@@ -17341,6 +17341,84 @@ test("POST /v1/responses/input_tokens validates and counts style preset", async 
   });
 });
 
+test("POST /v1/responses/input_tokens validates and counts personality preset", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Responses model-owned personality preset "curious-custom"/);
+    assert.match(prompt, /Personality target request/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_token_probe_personality",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 58, completion_tokens: 1, total_tokens: 59 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        personality: 42,
+        message: "personality must be a string",
+      },
+      {
+        personality: "x".repeat(65),
+        message: "personality must be at most 64 characters",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "This should fail before the upstream probe.",
+          personality: invalidCase.personality,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: "personality",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const inputTokens = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Personality target request.",
+        personality: "curious-custom",
+      }),
+    });
+    assert.equal(inputTokens.status, 200);
+    assert.deepEqual(await inputTokens.json(), {
+      object: "response.input_tokens",
+      input_tokens: 58,
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].body.messages, [
+      {
+        role: "system",
+        content: 'Compatibility notice: apply the Responses model-owned personality preset "curious-custom" to this request.',
+      },
+      { role: "user", content: "Personality target request." },
+    ]);
+  });
+});
+
 test("POST /v1/responses/input_tokens counts conversation, files, images, and tools", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);

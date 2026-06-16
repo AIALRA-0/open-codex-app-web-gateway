@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Responses Input Tokens `personality` Preset
+
+- Rechecked the official OpenAI Responses input-token-count contract through the
+  generated developer reference at
+  `https://developers.openai.com/api/reference/resources/responses/subresources/input_tokens/methods/count/index.md`.
+  The current request body documents `personality` as an optional model-owned
+  style preset string, including `friendly` and `pragmatic` examples, with
+  supported values allowed to expand and a maximum length of 64 characters.
+- Added local `/v1/responses/input_tokens` request validation before local
+  context preparation, Chat translation side effects, or upstream provider
+  calls:
+  - non-string `personality` values return an OpenAI-style
+    `400 invalid_request_error` with `param:"personality"`;
+  - `personality` strings longer than 64 characters return the same local 400
+    boundary without contacting DeepSeek or another Chat provider.
+- Mapped valid `personality` strings into the upstream Chat Completions token
+  probe as a Chat-visible compatibility instruction, preserving arbitrary
+  future preset values instead of enum-restricting the request to the currently
+  documented examples. The older `style` preset remains accepted as a
+  64-character compatibility alias.
+- Updated the compatibility matrix and evaluation plan so future regression
+  passes track official `personality` support alongside the retained `style`
+  compatibility path.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern
+    "input_tokens validates and counts (style|personality) preset"
+    test/server.test.js`: passed 2/2.
+  - `npm test`: passed 331/331.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS invalid-request smoke tests with a 65-character
+    `personality` returned HTTP 400 with `param:"personality"`.
+  - Local and public HTTPS valid-request smoke tests with
+    `personality:"curious-custom"` returned HTTP 200,
+    `object:"response.input_tokens"`, and `input_tokens:33`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses `context_management` Request Validation
 
 - Rechecked the official OpenAI Responses create contract through the OpenAI
