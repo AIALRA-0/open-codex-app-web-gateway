@@ -631,6 +631,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   passthrough or DeepSeek `user_id` mapping; legacy Completions must reject
   non-string `user` before prompt-to-Chat mapping.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `logprobs` boolean/null handling on Responses and direct Chat requests, official `top_logprobs` integer bounds, the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set, and legacy Completions `echo` boolean/null plus `logprobs` integer 0..5 validation before prompt-to-Chat mapping.
+- Responses create requests must validate `include` as an array/null of the
+  current official `IncludeEnum` values before provider calls, including
+  `web_search_call.results`, `web_search_call.action.sources`,
+  `code_interpreter_call.outputs`, `computer_call_output.output.image_url`,
+  `file_search_call.results`, `message.input_image.image_url`,
+  `message.output_text.logprobs`, and `reasoning.encrypted_content`.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.
 - Non-streaming Chat responses with multiple `choices[]` map each returned message/tool/function call into Responses output items instead of dropping all but `choices[0]`.

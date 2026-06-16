@@ -579,6 +579,95 @@ test("POST /v1/responses validates required model before provider calls", async 
   });
 });
 
+test("POST /v1/responses validates include values before provider calls", async () => {
+  const validInclude = [
+    "file_search_call.results",
+    "web_search_call.results",
+    "web_search_call.action.sources",
+    "message.input_image.image_url",
+    "computer_call_output.output.image_url",
+    "code_interpreter_call.outputs",
+    "reasoning.encrypted_content",
+    "message.output_text.logprobs",
+  ];
+
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.model, "mock-model");
+    assert.equal(call.body.logprobs, true);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_include_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses include ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { include: "message.output_text.logprobs" },
+        param: "include",
+        message: "include must be an array",
+      },
+      {
+        body: { include: ["unknown.include"] },
+        param: "include.0",
+        message: `include.0 must be one of: ${validInclude.join(", ")}`,
+      },
+      {
+        body: { include: ["message.output_text.logprobs", 42] },
+        param: "include.1",
+        message: `include.1 must be one of: ${validInclude.join(", ")}`,
+      },
+      {
+        body: { include: [""] },
+        param: "include.0",
+        message: `include.0 must be one of: ${validInclude.join(", ")}`,
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check include validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid include values.",
+        include: validInclude,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses include ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses validates text.format response formats before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.response_format, { type: "json_object" });

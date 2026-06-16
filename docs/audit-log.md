@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 Official Responses Include Validation
+
+- Rechecked the current official OpenAI Responses create documentation through
+  the OpenAI developer docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateResponse.include` is `array|null`, and each item must be an
+  `IncludeEnum` value. The current enum contains `file_search_call.results`,
+  `web_search_call.results`, `web_search_call.action.sources`,
+  `message.input_image.image_url`,
+  `computer_call_output.output.image_url`,
+  `code_interpreter_call.outputs`, `reasoning.encrypted_content`, and
+  `message.output_text.logprobs`.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-array `include` values, unknown
+    include strings, empty strings, and non-string include elements with
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    nested `param` values such as `include.1`.
+  - Valid official include values continue through the existing projection
+    layer; `message.output_text.logprobs` still enables upstream Chat
+    `logprobs:true`, and local hidden-field projections remain controlled by
+    the include set.
+  - `web_search_call.results` is accepted as an official include enum value;
+    current local web-search detail exposure remains through the already
+    implemented `web_search_call.action.sources` projection.
+- Added regression coverage proving invalid include shapes/values fail locally
+  with zero upstream provider calls, while a request carrying every current
+  official include value reaches the mock Chat provider and returns normally.
+- Updated the compatibility matrix and evaluation plan so include enum
+  validation is tracked as a protocol-correctness invariant.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "validates include values before provider calls|maps output logprobs include to Chat and back|includes local web_search action sources when requested|local code_interpreter emits Responses code_interpreter_call outputs|file_search_call.results" test/server.test.js`:
+    passed 4/4.
+  - `npm test`: passed 321/321.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    params `include`, `include.0`, and `include.1` for string, unknown, and
+    non-string include values.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 6.7G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Required Create Field Validation
 
 - Rechecked the current official OpenAI request schema through the OpenAI

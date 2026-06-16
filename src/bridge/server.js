@@ -213,6 +213,16 @@ const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
 const OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS = 64;
 const OPENAI_PROMPT_CACHE_RETENTION_VALUES = Object.freeze(["in_memory", "24h"]);
 const OPENAI_STREAM_OPTION_FIELDS = Object.freeze(["include_usage", "include_obfuscation"]);
+const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
+  "file_search_call.results",
+  "web_search_call.results",
+  "web_search_call.action.sources",
+  "message.input_image.image_url",
+  "computer_call_output.output.image_url",
+  "code_interpreter_call.outputs",
+  "reasoning.encrypted_content",
+  "message.output_text.logprobs",
+]);
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -856,6 +866,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const topLogprobsError = validateOpenAITopLogprobs(request);
   if (topLogprobsError) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
+    return;
+  }
+  const includeError = validateOpenAIResponsesInclude(request);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
     return;
   }
   const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
@@ -2515,6 +2530,22 @@ function validateOpenAIBackgroundFlag(body = {}) {
 
 function validateOpenAIChatLogprobsFlag(body = {}) {
   return validateOpenAIBooleanParameter(body, "logprobs");
+}
+
+function validateOpenAIResponsesInclude(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "include") || body.include == null) return null;
+  if (!Array.isArray(body.include)) {
+    return requestValidationError("include must be an array", "include");
+  }
+  for (const [index, value] of body.include.entries()) {
+    if (typeof value !== "string" || !OPENAI_RESPONSES_INCLUDE_VALUES.includes(value)) {
+      return requestValidationError(
+        `include.${index} must be one of: ${OPENAI_RESPONSES_INCLUDE_VALUES.join(", ")}`,
+        `include.${index}`,
+      );
+    }
+  }
+  return null;
 }
 
 function validateOpenAILegacyEcho(body = {}) {
