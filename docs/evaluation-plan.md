@@ -165,11 +165,14 @@ response emits `tool_search_call`, `mcp_list_tools`, and `mcp_approval_request`
 without running `tools/call`; the continuation uses `previous_response_id` plus
 `mcp_approval_response` to reuse that `mcp_list_tools` context, skip a second
 remote `tools/list`, execute the approved `tools/call`, and redact
-authorization from provider prompts and public Responses output. The streaming
-regression for the same path also verifies `response.output_item.added` for the
-search and MCP list items, MCP argument delta/done/progress events, combined
-streaming usage, and suppression of bridge-internal Chat `function_call` stream
-items. Follow-up eval work should add live bridge cases for `tool_search`,
+authorization from provider prompts and public Responses output. Streaming
+coverage verifies both auto-approved and approval-required variants: the
+approval-required case emits `response.output_item.added` for
+`tool_search_call`, `mcp_list_tools`, and `mcp_approval_request` without
+surfacing bridge-internal Chat `function_call` events, then the streaming
+continuation approves the request, reuses the prior `mcp_list_tools`, emits MCP
+argument delta/done/progress events for the approved `mcp_call`, combines usage,
+and still skips a second remote `tools/list`. Follow-up eval work should add live bridge cases for `tool_search`,
 collision-heavy streaming function names, hosted connectors, and large catalogs
 to measure latency, token savings, and tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
