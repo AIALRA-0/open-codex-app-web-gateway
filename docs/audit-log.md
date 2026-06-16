@@ -42,6 +42,11 @@
   - `npm run eval:protocol` reached the local deployed bridge, but both live
     DeepSeek cases returned HTTP 402 `Insufficient Balance`; no live
     model-quality assertion was possible on this run.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`, local `/healthz` returned `ok:true`,
+    and public HTTPS returned HTTP 200.
+  - Storage check after this iteration: root filesystem had 8.4 GB available
+    at 96% usage.
 
 ## 2026-06-16 Computer Use Action Alias Normalization
 
