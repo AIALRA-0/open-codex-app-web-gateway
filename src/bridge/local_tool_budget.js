@@ -2,16 +2,15 @@
 
 function createToolCallBudget(maxToolCalls) {
   if (maxToolCalls == null) return null;
-  const value = Number(maxToolCalls);
-  if (!Number.isInteger(value) || value < 0) {
-    const error = new Error("max_tool_calls must be a non-negative integer");
+  if (typeof maxToolCalls !== "number" || !Number.isInteger(maxToolCalls) || maxToolCalls < 0) {
+    const error = new Error("max_tool_calls must be a non-negative integer number");
     error.status = 400;
     error.code = "invalid_max_tool_calls";
     error.param = "max_tool_calls";
     throw error;
   }
   return {
-    limit: value,
+    limit: maxToolCalls,
     used: 0,
     skipped: 0,
     skipped_calls: [],

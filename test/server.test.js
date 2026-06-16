@@ -12775,21 +12775,25 @@ test("POST /v1/responses rejects invalid max_tool_calls", async () => {
   await withMockProvider(async () => {
     assert.fail("provider should not be called for invalid max_tool_calls");
   }, async ({ bridgeAddress }) => {
-    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        model: "mock-model",
-        input: "invalid max tool calls",
-        tools: [{ type: "web_search_preview" }],
-        max_tool_calls: -1,
-      }),
-    });
+    const invalidValues = [-1, 1.5, "1", "", true, false];
 
-    assert.equal(response.status, 400);
-    const json = await response.json();
-    assert.equal(json.error.code, "invalid_max_tool_calls");
-    assert.equal(json.error.param, "max_tool_calls");
+    for (const invalidValue of invalidValues) {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "invalid max tool calls",
+          tools: [{ type: "web_search_preview" }],
+          max_tool_calls: invalidValue,
+        }),
+      });
+
+      assert.equal(response.status, 400, `expected 400 for max_tool_calls=${JSON.stringify(invalidValue)}`);
+      const json = await response.json();
+      assert.equal(json.error.code, "invalid_max_tool_calls");
+      assert.equal(json.error.param, "max_tool_calls");
+    }
   });
 });
 

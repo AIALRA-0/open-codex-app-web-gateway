@@ -1,5 +1,43 @@
 # Audit Log
 
+## 2026-06-16 Responses `max_tool_calls` Strict JSON Type Validation
+
+- Rechecked the OpenAI Responses create contract through the official developer
+  docs MCP for `https://api.openai.com/v1/responses` and the generated
+  markdown reference at
+  `https://developers.openai.com/api/reference/resources/responses/methods/create/index.md`.
+  The reference lists `max_tool_calls` as an optional numeric request field and
+  describes it as the maximum total built-in tool calls processed in a
+  response.
+- Tightened the local hosted-tool budget validator so `max_tool_calls` must be
+  a JSON number that is also a non-negative integer. The bridge no longer
+  coerces strings such as `"1"` or booleans such as `true` into numeric budgets.
+- Extended the `/v1/responses` invalid request regression to cover negative,
+  fractional, string, empty-string, and boolean `max_tool_calls` values before
+  any provider call.
+- Updated the compatibility matrix and evaluation plan so future bridge
+  regressions keep type-coercion rejection as part of Responses compatibility.
+- Validation:
+  - `node --check src/bridge/local_tool_budget.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "max_tool_calls" test/server.test.js`:
+    passed 5/5.
+  - `node --test --test-name-pattern "corrupt resumable background"
+    test/server.test.js`: passed 1/1.
+  - `npm test`: passed 327/327.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS smoke tests for
+    `max_tool_calls:"1"` returned HTTP 400 with param `max_tool_calls` and code
+    `invalid_max_tool_calls`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses Native Tool Request Validation
 
 - Rechecked the official OpenAI Responses tool schemas through the OpenAI

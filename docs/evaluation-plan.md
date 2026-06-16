@@ -787,7 +787,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Hosted-tool emulation returns auditable search/open-page/find-in-page call items, create/retrieve `web_search_call.action.sources` projection, and citations for web search.
 - Responses `max_tool_calls` is enforced across local hosted-tool emulation so
   skipped web/file/shell/computer/image-generation actions are not executed and
-  are recorded in compatibility metadata.
+  are recorded in compatibility metadata; invalid non-number, non-integer, and
+  negative values are rejected before provider calls.
 - Hosted-tool emulation returns auditable call items and citations for file search.
 - Hosted-tool emulation returns auditable `image_generation_call` items with
   base64 PNG `result` data, `revised_prompt`, streaming partial-image events,
