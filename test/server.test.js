@@ -1062,6 +1062,87 @@ test("POST /v1/responses validates stop sequences before provider calls", async 
   });
 });
 
+test("POST /v1/responses validates logit_bias before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.logit_bias, { "7": -100, "8": 100 });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_logit_bias_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "logit bias ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { logit_bias: [] },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: "bad" },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "7": -101 } },
+        param: "logit_bias.7",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "7": 101 } },
+        param: "logit_bias.7",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "7": "-1" } },
+        param: "logit_bias.7",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check logit_bias validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check logit_bias boundary.",
+        logit_bias: { "7": -100, "8": 100 },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "logit bias ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps output logprobs include to Chat and back", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -18461,6 +18542,87 @@ test("POST /v1/chat/completions validates stop sequences before provider calls",
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat stop ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates logit_bias before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.logit_bias, { "42": -100, "99": 100 });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_logit_bias_boundary",
+      object: "chat.completion",
+      created: 1700000303,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat logit bias ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { logit_bias: [] },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: "bad" },
+        param: "logit_bias",
+        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "42": -101 } },
+        param: "logit_bias.42",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "42": 101 } },
+        param: "logit_bias.42",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "42": "-1" } },
+        param: "logit_bias.42",
+        message: "logit_bias values must be numbers between -100 and 100",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        logit_bias: { "42": -100, "99": 100 },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat logit bias ok");
     assert.equal(requests.length, 1);
   });
 });

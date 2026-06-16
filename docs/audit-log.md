@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Official Logit Bias Validation
+
+- Rechecked the official OpenAI Chat Completions create body-parameter docs
+  through the OpenAI developer docs MCP before changing validation behavior:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`.
+  The Chat contract accepts `logit_bias` as a JSON object that maps token IDs
+  to numeric bias values from -100 through 100. The legacy Completions create
+  docs describe the same range at
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`.
+  The Responses create docs do not expose `logit_bias` as a first-class
+  Responses parameter, but this bridge already accepts it on
+  `POST /v1/responses` as a Chat-native alias, so the accepted alias now
+  follows the Chat request contract.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects non-object `logit_bias` aliases before
+    translating the request to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough.
+  - Each supplied bias value must be a finite number from -100 through 100.
+    Valid boundary values still pass through unchanged.
+- Added regression coverage proving array/string `logit_bias` values,
+  below-minimum values, above-maximum values, and string bias values fail
+  locally for both Responses and direct Chat with zero upstream calls, while
+  valid -100 and 100 boundary values still reach the mock Chat provider.
+- Updated the compatibility matrix and evaluation plan so Chat-native
+  `logit_bias` parity tracks local request-contract validation as well as
+  passthrough/filtering behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "logit_bias|Chat-native request fields|normalizes OpenAI Chat fields"`:
+    passed 220/220; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 269/269.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `logit_bias` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses request rejected above-range `logit_bias.7`, and the Chat
+    request rejected string-valued `logit_bias.42`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Stop Sequence Validation
 
 - Rechecked the official OpenAI Chat Completions create body-parameter docs

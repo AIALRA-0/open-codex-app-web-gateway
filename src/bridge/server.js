@@ -208,6 +208,8 @@ const OPENAI_TOP_P_MAX = 1;
 const OPENAI_PENALTY_MIN = -2;
 const OPENAI_PENALTY_MAX = 2;
 const OPENAI_STOP_MAX_SEQUENCES = 4;
+const OPENAI_LOGIT_BIAS_MIN = -100;
+const OPENAI_LOGIT_BIAS_MAX = 100;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -806,6 +808,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const stopError = validateOpenAIStopSequences(request);
   if (stopError) {
     sendError(res, 400, stopError.message, stopError);
+    return;
+  }
+  const logitBiasError = validateOpenAILogitBias(request);
+  if (logitBiasError) {
+    sendError(res, 400, logitBiasError.message, logitBiasError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2326,6 +2333,30 @@ function validateOpenAIStopSequences(body = {}) {
     `stop must be a string or an array of strings with at most ${OPENAI_STOP_MAX_SEQUENCES} items`,
     "stop",
   );
+}
+
+function validateOpenAILogitBias(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "logit_bias") || body.logit_bias == null) return null;
+  if (!isPlainObject(body.logit_bias)) {
+    return requestValidationError(
+      `logit_bias must be an object mapping token IDs to numbers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
+      "logit_bias",
+    );
+  }
+  for (const [tokenId, bias] of Object.entries(body.logit_bias)) {
+    if (
+      typeof bias !== "number"
+      || !Number.isFinite(bias)
+      || bias < OPENAI_LOGIT_BIAS_MIN
+      || bias > OPENAI_LOGIT_BIAS_MAX
+    ) {
+      return requestValidationError(
+        `logit_bias values must be numbers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
+        `logit_bias.${tokenId}`,
+      );
+    }
+  }
+  return null;
 }
 
 function validateNumberRange(body = {}, field, min, max) {
@@ -4457,6 +4488,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const stopError = validateOpenAIStopSequences(body);
   if (stopError) {
     sendError(res, 400, stopError.message, stopError);
+    return;
+  }
+  const logitBiasError = validateOpenAILogitBias(body);
+  if (logitBiasError) {
+    sendError(res, 400, logitBiasError.message, logitBiasError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);

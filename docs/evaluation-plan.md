@@ -592,6 +592,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   streaming Run Step events, file citations, attachment-created thread vector
   stores, and mounted file resources.
 - Responses compatibility requests that include Chat-native `stop` sequences validate the official string-or-up-to-4-strings shape locally, forward valid values to upstream Chat providers, and verify the stop marker is omitted from visible output.
+- Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-number bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
 - Responses and direct Chat sampling requests validate official `temperature`, `top_p`, `frequency_penalty`, and `presence_penalty` numeric bounds locally before provider calls, while valid boundary values still pass through to upstream Chat providers unchanged.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.
