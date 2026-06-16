@@ -13778,8 +13778,13 @@ function handleConversationDelete(res, conversationStore, conversationId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleConversationItemsCreate(req, res, conversationStore, conversationId) {
+async function handleConversationItemsCreate(req, res, conversationStore, conversationId, url) {
   const body = await readJson(req);
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
   const validationError = validateConversationItemsCreateRequest(body);
   if (validationError) {
     sendError(res, 400, validationError.message, validationError);
@@ -13791,7 +13796,8 @@ async function handleConversationItemsCreate(req, res, conversationStore, conver
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
     return;
   }
-  sendJson(res, 200, Array.isArray(inputItems) ? paginateList(items, new URL("http://local/?limit=100")) : items[0]);
+  const projected = projectInputItemsForIncludes(items, url);
+  sendJson(res, 200, Array.isArray(inputItems) ? paginateList(projected, new URL("http://local/?limit=100")) : projected[0]);
 }
 
 function validateConversationItemsCreateRequest(body = {}) {
@@ -13835,6 +13841,11 @@ function isValidLocalConversationItemExtension(value) {
 }
 
 function handleConversationItemsList(res, conversationStore, conversationId, url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
   const items = conversationStore.listItems(conversationId);
   if (!items) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
@@ -13844,6 +13855,11 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
 }
 
 function handleConversationItemGet(res, conversationStore, conversationId, itemId, url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
   const item = conversationStore.getItem(conversationId, itemId);
   if (!item) {
     sendError(res, 404, `conversation item not found: ${itemId}`, { code: "conversation_item_not_found" });
@@ -14051,13 +14067,30 @@ function redactComputerOutputImageUrlItem(item) {
 }
 
 function includeValuesFromUrl(url) {
+  return new Set(includeListFromUrl(url));
+}
+
+function includeListFromUrl(url) {
   const values = [];
   for (const key of ["include", "include[]"]) {
     for (const value of url?.searchParams?.getAll?.(key) || []) {
       values.push(...String(value || "").split(",").map((item) => item.trim()).filter(Boolean));
     }
   }
-  return new Set(values);
+  return values;
+}
+
+function validateOpenAIIncludeQuery(url) {
+  const values = includeListFromUrl(url);
+  for (const [index, value] of values.entries()) {
+    if (!OPENAI_RESPONSES_INCLUDE_VALUES.includes(value)) {
+      return requestValidationError(
+        `include.${index} must be one of: ${OPENAI_RESPONSES_INCLUDE_VALUES.join(", ")}`,
+        `include.${index}`,
+      );
+    }
+  }
+  return null;
 }
 
 function includeValuesFromRequest(request = {}) {
@@ -18022,7 +18055,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!itemId && req.method === "POST") {
-          await handleConversationItemsCreate(req, res, conversationStore, conversationId);
+          await handleConversationItemsCreate(req, res, conversationStore, conversationId, url);
           return;
         }
         if (itemId && req.method === "GET") {

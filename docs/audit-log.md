@@ -1,5 +1,36 @@
 # Audit Log
 
+## 2026-06-17 Conversation Items Include Query Tightening
+
+- Rechecked the official OpenAI Conversation items create/list/retrieve
+  schemas and `IncludeEnum` through the official `openai/openai-openapi`
+  schema. Current Conversation items endpoints accept `include` query arrays
+  using the shared Responses `IncludeEnum`.
+- Tightened local Conversation item include handling:
+  - create/list/retrieve now reject unknown `include` query values before
+    returning local data;
+  - create-items responses now use the same local input-item projection as
+    list/retrieve, so hidden image URLs remain hidden unless requested.
+- Updated tests and the compatibility matrix to document the query validation
+  and create-response projection behavior.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'Conversations items include|local Conversations API validates'`:
+    passed 289/289 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 340/340.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed invalid Conversation item `include`
+    returns HTTP 400 with `param:"include.0"`, create-items hides input image
+    URLs by default, and create-items returns image URLs when requested.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Item Delete Response Alignment
 
 - Rechecked the official OpenAI

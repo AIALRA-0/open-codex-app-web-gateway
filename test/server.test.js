@@ -3435,6 +3435,55 @@ test("Conversations items include message.input_image.image_url only when reques
     const includedItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${includedJson.data[0].id}?include[]=message.input_image.image_url`);
     assert.equal(includedItem.status, 200);
     assert.equal((await includedItem.json()).content[1].image_url.url, "https://example.test/conversation-vision.png");
+
+    const defaultCreate = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Create hides image URL by default." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/conversation-create-hidden.png",
+                detail: "high",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(defaultCreate.status, 200);
+    const defaultCreateJson = await defaultCreate.json();
+    assert.equal(defaultCreateJson.data[0].content[1].image_url, undefined);
+    assert.equal(defaultCreateJson.data[0].content[1].detail, "high");
+
+    const includedCreate = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?include=message.input_image.image_url`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{
+          type: "message",
+          role: "user",
+          content: [
+            { type: "input_text", text: "Create returns image URL when requested." },
+            {
+              type: "input_image",
+              image_url: {
+                url: "https://example.test/conversation-create-included.png",
+                detail: "low",
+              },
+            },
+          ],
+        }],
+      }),
+    });
+    assert.equal(includedCreate.status, 200);
+    const includedCreateJson = await includedCreate.json();
+    assert.equal(includedCreateJson.data[0].content[1].image_url.url, "https://example.test/conversation-create-included.png");
     assert.equal(requests.length, 0);
   });
 });
@@ -16618,6 +16667,37 @@ test("local Conversations API validates metadata and request contracts", async (
     assert.equal(localItemExtensionJson.type, "message");
     assert.equal(localItemExtensionJson.role, "user");
     assert.equal(localItemExtensionJson.content, "legacy item extension");
+
+    const invalidIncludeCases = [
+      {
+        name: "item-create-invalid-include",
+        method: "POST",
+        path: `/v1/conversations/${conversation.id}/items?include=not.a.real.include`,
+        body: { items: [{ type: "message", role: "user", content: "invalid include create" }] },
+      },
+      {
+        name: "item-list-invalid-include",
+        method: "GET",
+        path: `/v1/conversations/${conversation.id}/items?include[]=not.a.real.include`,
+      },
+      {
+        name: "item-get-invalid-include",
+        method: "GET",
+        path: `/v1/conversations/${conversation.id}/items/${officialItemsJson.data[0].id}?include=not.a.real.include`,
+      },
+    ];
+
+    for (const testCase of invalidIncludeCases) {
+      const response = await fetch(`${baseUrl}${testCase.path}`, {
+        method: testCase.method,
+        headers: testCase.body ? { "content-type": "application/json" } : undefined,
+        body: testCase.body ? JSON.stringify(testCase.body) : undefined,
+      });
+      assert.equal(response.status, 400, testCase.name);
+      const json = await response.json();
+      assert.match(json.error.message, /^include\.0 must be one of:/, testCase.name);
+      assert.equal(json.error.param, "include.0", testCase.name);
+    }
 
     const updateCases = [
       {
