@@ -481,8 +481,11 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   filtering those unsupported upstream fields, locally emulating unsupported
   non-streaming and streaming `n>1` requests with merged/remapped `choices`,
   aggregated `usage`, a single logical streaming completion id, and stored
-  Chat messages, mapping stable user identity into `user_id`, and
-  recording the compatibility action in returned/stored metadata.
+  Chat messages, mapping stable user identity/cache aliases into `user_id`
+  without reporting consumed aliases as dropped fields, reflecting
+  `safety_identifier` / `prompt_cache_key` in local organization usage
+  `user_id` dimensions, and recording the compatibility action in
+  returned/stored metadata.
 - Local ChatKit coverage creates and cancels beta-style sessions, creates,
   lists, updates, and deletes local threads, appends and lists thread items with
   stable ordering, filters threads by `user`, and includes ChatKit runtime

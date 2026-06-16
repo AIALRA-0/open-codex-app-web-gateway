@@ -15034,6 +15034,18 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     assert.equal(chatResponse.status, 200);
     assert.equal((await chatResponse.json()).choices[0].message.content, "usage ledger ok");
 
+    const safetyIdentifierResponse = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "Count this safety identifier usage." }],
+        safety_identifier: "safe_usage_ledger",
+      }),
+    });
+    assert.equal(safetyIdentifierResponse.status, 200);
+    assert.equal((await safetyIdentifierResponse.json()).choices[0].message.content, "usage ledger ok");
+
     const embeddingsResponse = await fetch(`${baseUrl}/v1/embeddings`, {
       method: "POST",
       headers,
@@ -15161,6 +15173,14 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     assert.equal(JSON.stringify(completionsJson).includes("local-usage-test-token"), false);
     assert.equal(completionsJson.compatibility.source, "local_usage_ledger");
 
+    const safetyCompletions = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&group_by%5B%5D=user_id&user_ids%5B%5D=safe_usage_ledger&models%5B%5D=mock-model`);
+    assert.equal(safetyCompletions.status, 200);
+    const safetyCompletionResult = (await safetyCompletions.json()).data[0].results[0];
+    assert.equal(safetyCompletionResult.user_id, "safe_usage_ledger");
+    assert.equal(safetyCompletionResult.num_model_requests, 1);
+    assert.equal(safetyCompletionResult.input_tokens, 12);
+    assert.equal(safetyCompletionResult.output_tokens, 5);
+
     const filteredOut = await fetch(`${baseUrl}/v1/organization/usage/completions?start_time=${startTime}&end_time=${startTime + 3600}&bucket_width=1h&limit=1&project_ids%5B%5D=proj_missing`);
     assert.equal(filteredOut.status, 200);
     assert.equal((await filteredOut.json()).data[0].results[0].input_tokens, 0);
@@ -15256,7 +15276,7 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     const vectorStoresCost = costResults.find((result) => result.line_item === "Vector stores");
     assert.equal(completionsCost.amount.value, 0);
     assert.equal(completionsCost.amount.currency, "usd");
-    assert.equal(completionsCost.quantity, 34);
+    assert.equal(completionsCost.quantity, 51);
     assert.equal(completionsCost.project_id, "proj_usage_ledger");
     assert.equal(imagesCost.quantity, 2);
     assert.equal(fileSearchCost.quantity, 1);
@@ -15273,7 +15293,7 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
     assert.equal(pageTwo.status, 200);
     assert.equal((await pageTwo.json()).data[0].start_time, startTime + 3600);
 
-    assert.equal(requests.length, 2);
+    assert.equal(requests.length, 3);
   }, {
     webSearchProvider: "static",
     webSearchStaticResults: [{
@@ -18029,10 +18049,10 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         "prediction",
         "prompt_cache_key",
         "prompt_cache_retention",
-        "safety_identifier",
         "web_search_options",
       ].sort(),
     );
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.chat_native_fields.mapped, ["safety_identifier"]);
     assert.equal(json.moderation.input.results[0].flagged, false);
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
@@ -18052,6 +18072,51 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     forwardChatNativeFields: false,
     forwardServiceTier: false,
     webSearchProvider: "disabled",
+  });
+});
+
+test("POST /v1/chat/completions maps prompt_cache_key to DeepSeek user_id when it is the only identity alias", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.prompt_cache_key, undefined);
+    assert.equal(call.body.user_id, "tenant-cache-user");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_prompt_cache_user",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "prompt-cache-user-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 4, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "Return prompt-cache-user-ok." }],
+        prompt_cache_key: "tenant-cache-user",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "prompt-cache-user-ok");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.deepseek_user_id, {
+      source: "prompt_cache_key",
+      target: "user_id",
+      normalized: "direct",
+    });
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.chat_native_fields, {
+      mapped: ["prompt_cache_key"],
+      reason: "provider_unsupported_mapped",
+    });
+  }, {
+    deepseekUserIdCompat: true,
+    forwardChatNativeFields: false,
   });
 });
 

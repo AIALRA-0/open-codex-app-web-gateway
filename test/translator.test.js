@@ -719,7 +719,9 @@ test("passes stop sequences and maps DeepSeek user identity aliases", () => {
     stop: ["<cut>"],
     user: "legacy-user",
     safety_identifier: "user@example.test",
-  }, [], { deepseekUserIdCompat: true });
+    prompt_cache_key: "cache-user",
+    prompt_cache_retention: "24h",
+  }, [], { deepseekUserIdCompat: true, forwardChatNativeFields: false });
 
   assert.deepEqual(chat.stop, ["<cut>"]);
   assert.equal(chat.user, undefined);
@@ -727,6 +729,30 @@ test("passes stop sequences and maps DeepSeek user identity aliases", () => {
   assert.deepEqual(compatibility.deepseek_user_id, {
     source: "safety_identifier",
     normalized: "sha256",
+  });
+  assert.deepEqual(compatibility.chat_native_fields.mapped, ["safety_identifier"]);
+  assert.deepEqual(compatibility.chat_native_fields.filtered.sort(), [
+    "prompt_cache_key",
+    "prompt_cache_retention",
+  ].sort());
+  assert.equal(compatibility.chat_native_fields.reason, "provider_unsupported");
+});
+
+test("maps prompt_cache_key to DeepSeek user_id when no safer user alias is present", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Hello",
+    prompt_cache_key: "tenant-cache-user",
+  }, [], { deepseekUserIdCompat: true, forwardChatNativeFields: false });
+
+  assert.equal(chat.user_id, "tenant-cache-user");
+  assert.deepEqual(compatibility.deepseek_user_id, {
+    source: "prompt_cache_key",
+    normalized: "direct",
+  });
+  assert.deepEqual(compatibility.chat_native_fields, {
+    mapped: ["prompt_cache_key"],
+    reason: "provider_unsupported_mapped",
   });
 });
 

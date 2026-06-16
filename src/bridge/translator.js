@@ -602,7 +602,10 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
   const verbosityCompatibility = mapVerbosity(request, chat, options);
-  const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, options);
+  const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, {
+    ...options,
+    mappedNativeFields: deepseekUserIdCompatibility?.source ? [deepseekUserIdCompatibility.source] : [],
+  });
 
   const toolChoice = mapToolChoice(request.tool_choice);
   if (tools.length) {
@@ -924,9 +927,15 @@ function mapChatNativeFields(request, chat, options = {}) {
 
   const forwarded = [];
   const filtered = [];
+  const mapped = [];
   const forward = options.forwardChatNativeFields !== false;
+  const mappedNativeFields = new Set(Array.isArray(options.mappedNativeFields) ? options.mappedNativeFields : []);
   for (const field of present) {
     if (!forward && field === "verbosity" && verbosityInstruction(request[field])) continue;
+    if (!forward && mappedNativeFields.has(field)) {
+      mapped.push(field);
+      continue;
+    }
     if (forward) {
       chat[field] = clone(request[field]);
       forwarded.push(field);
@@ -935,10 +944,17 @@ function mapChatNativeFields(request, chat, options = {}) {
     }
   }
 
+  if (!forwarded.length && !mapped.length && !filtered.length) return null;
+
   return {
     ...(forwarded.length ? { forwarded } : {}),
+    ...(mapped.length ? { mapped } : {}),
     ...(filtered.length ? { filtered } : {}),
-    reason: forward ? "chat_native_passthrough" : "provider_unsupported",
+    reason: forward
+      ? "chat_native_passthrough"
+      : filtered.length
+        ? "provider_unsupported"
+        : "provider_unsupported_mapped",
   };
 }
 

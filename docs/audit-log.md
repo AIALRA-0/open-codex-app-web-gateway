@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-16 Chat Identity Alias Mapping Audit
+
+- Rechecked the current official OpenAI Chat Completions schema through the
+  OpenAI developer docs MCP/OpenAPI spec before changing compatibility behavior.
+  The relevant Chat request fields are `safety_identifier`, `prompt_cache_key`,
+  `prompt_cache_retention`, and legacy `user`; OpenAI positions
+  `safety_identifier` as the safety identifier and `prompt_cache_key` as a cache
+  routing hint.
+- Tightened Responses-to-Chat and direct Chat passthrough metadata for
+  DeepSeek-compatible providers:
+  - when `safety_identifier` or `prompt_cache_key` is consumed by the DeepSeek
+    `user_id` compatibility mapping, it is recorded under
+    `metadata.compatibility.*.chat_native_fields.mapped`;
+  - consumed identity/cache aliases are no longer reported as plain filtered
+    provider-unsupported fields;
+  - remaining unsupported Chat fields such as `prompt_cache_retention` still
+    appear under `chat_native_fields.filtered`.
+- Extended local organization usage dimensions so direct Chat usage can group
+  by `user_id` from `request.user_id`, then `safety_identifier`, then legacy
+  `user`, then `prompt_cache_key`, preserving stable local admin/reporting
+  behavior without storing prompts, messages, or provider secrets.
+- Added regression coverage for:
+  - Responses translation where `safety_identifier` wins over
+    `prompt_cache_key`, records `mapped:["safety_identifier"]`, and filters the
+    still-unsupported prompt-cache fields;
+  - Responses translation where `prompt_cache_key` maps to DeepSeek `user_id`
+    when no higher-priority identity alias exists;
+  - direct `/v1/chat/completions` passthrough metadata showing
+    `chat_native_fields.mapped:["safety_identifier"]`;
+  - direct `/v1/chat/completions` passthrough where `prompt_cache_key` alone
+    maps to DeepSeek `user_id` and is omitted from the upstream native Chat
+    field payload;
+  - local organization usage aggregation by `safety_identifier` as the
+    `user_id` dimension.
+- Validation:
+  - `node --check src/bridge/translator.js`, `src/bridge/server.js`,
+    `test/translator.test.js`, and `test/server.test.js`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "DeepSeek user identity|prompt_cache_key|Chat-native request fields"`:
+    passed 42/42.
+  - `node --test test/server.test.js`: passed 208/208.
+  - `npm test`: passed 254/254.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public direct Chat smoke through
+    `https://opencodexapp.aialra.online/v1/chat/completions`: HTTP 200,
+    content `ok-identity-map`, `chat_native_fields.mapped` contained
+    `safety_identifier`, filtered fields contained `prompt_cache_key` and
+    `prompt_cache_retention`, and `deepseek_user_id.source` was
+    `safety_identifier`.
+  - Public organization usage query through
+    `https://opencodexapp.aialra.online/v1/organization/usage/completions`
+    grouped the live request under `user_id:"live_identity_user"`,
+    `model:"deepseek-v4-pro"`, `num_model_requests:1`, `input_tokens:11`, and
+    `output_tokens:4`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Public Domain API Routing
 
 - Found that the public `https://opencodexapp.aialra.online/v1/models`

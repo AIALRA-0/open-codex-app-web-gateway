@@ -4704,7 +4704,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const webSearchOptions = normalizeChatPassthroughWebSearchOptions(upstreamBody, config);
   if (webSearchOptions) compatibility.web_search_options = webSearchOptions;
 
-  const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config);
+  const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config, {
+    mappedFields: deepseekUserId?.source ? [deepseekUserId.source] : [],
+  });
   if (nativeFields) compatibility.chat_native_fields = nativeFields;
 
   return {
@@ -5382,7 +5384,7 @@ function filterChatPassthroughStreamOptions(upstreamBody, config = {}) {
   };
 }
 
-function filterChatPassthroughNativeFields(upstreamBody, config = {}) {
+function filterChatPassthroughNativeFields(upstreamBody, config = {}, options = {}) {
   if (config.forwardChatNativeFields !== false) return null;
   const filterable = [
     "logit_bias",
@@ -5401,16 +5403,24 @@ function filterChatPassthroughNativeFields(upstreamBody, config = {}) {
     "function_call",
   ];
   const filtered = [];
+  const mapped = [];
+  const mappedFields = new Set(Array.isArray(options.mappedFields) ? options.mappedFields : []);
   for (const field of filterable) {
     if (Object.prototype.hasOwnProperty.call(upstreamBody, field) && upstreamBody[field] !== undefined) {
+      if (mappedFields.has(field)) {
+        mapped.push(field);
+        delete upstreamBody[field];
+        continue;
+      }
       filtered.push(field);
       delete upstreamBody[field];
     }
   }
-  if (!filtered.length) return null;
+  if (!filtered.length && !mapped.length) return null;
   return {
-    filtered,
-    reason: "provider_unsupported",
+    ...(mapped.length ? { mapped } : {}),
+    ...(filtered.length ? { filtered } : {}),
+    reason: filtered.length ? "provider_unsupported" : "provider_unsupported_mapped",
   };
 }
 
@@ -9615,7 +9625,9 @@ function organizationUsageDimensions(req, request = {}) {
     ),
     user_id: safeUsageDimension(
       request.user_id
+      ?? request.safety_identifier
       ?? request.user
+      ?? request.prompt_cache_key
       ?? firstHeader(headers, ["openai-user", "x-openai-user"]),
     ),
     api_key_id: organizationUsageApiKeyId(headers, request),
