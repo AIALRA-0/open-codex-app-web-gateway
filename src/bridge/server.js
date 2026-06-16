@@ -3979,6 +3979,21 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, streamOptionsError.message, streamOptionsError);
     return;
   }
+  const parallelToolCallsError = validateOpenAIParallelToolCalls(request);
+  if (parallelToolCallsError) {
+    sendError(res, 400, parallelToolCallsError.message, parallelToolCallsError);
+    return;
+  }
+  const textError = validateOpenAIResponsesText(request);
+  if (textError) {
+    sendError(res, 400, textError.message, textError);
+    return;
+  }
+  const reasoningError = validateOpenAIResponsesReasoning(request);
+  if (reasoningError) {
+    sendError(res, 400, reasoningError.message, reasoningError);
+    return;
+  }
   const conversation = prepareConversationContext(request, conversationStore, config);
   if (conversation?.missing) {
     sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });

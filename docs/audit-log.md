@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-16 Responses Input Tokens Official Field Validation
+
+- Rechecked the official OpenAI `/v1/responses/input_tokens` endpoint through
+  the OpenAI developer docs MCP and the official OpenAPI source:
+  `https://api.openai.com/v1/responses/input_tokens` and
+  `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `TokenCountsBody` currently exposes `model`, `input`,
+  `previous_response_id`, `tools`, `text`, `reasoning`, `truncation`,
+  `instructions`, `conversation`, `tool_choice`, and `parallel_tool_calls`,
+  with no required fields. Its `parallel_tool_calls` field is boolean/null,
+  `text` references the Responses text format object, and `reasoning`
+  references the shared reasoning object.
+- Tightened local request validation for `POST /v1/responses/input_tokens`
+  before conversation replay, local file/image preparation, token probing, or
+  provider calls:
+  - `parallel_tool_calls` must be boolean/null.
+  - `text` must be an object/null and `text.format.type` must be `text`,
+    `json_object`, or `json_schema`, with the existing Responses
+    `json_schema` shape checks.
+  - `reasoning` must be an object/null and `reasoning.effort` must be one of
+    `none`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
+- Preserved valid field behavior through the Chat usage probe:
+  - valid `parallel_tool_calls` remains eligible for Chat-native passthrough or
+    provider-aware filtering/mapping;
+  - valid `text.format` still maps to Chat `response_format` or the local
+    DeepSeek-compatible JSON instruction path;
+  - valid `reasoning.effort` still flows through the existing DeepSeek
+    `reasoning_effort` / `thinking` compatibility mapper.
+- Updated the compatibility matrix and evaluation plan so input-token probes
+  carry the same official boundary coverage as Responses create for these
+  fields.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "responses/input_tokens" test/server.test.js`:
+    passed 8/8.
+  - `npm test`: passed 326/326.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses/input_tokens` returned
+    HTTP 400 with params `parallel_tool_calls`, `text.format.type`, and
+    `reasoning.effort` for invalid values.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 5.2G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Responses Compact Request Validation
 
 - Rechecked the current official OpenAI Responses compact documentation through

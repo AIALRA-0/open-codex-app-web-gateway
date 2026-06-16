@@ -585,12 +585,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/chat/completions`: providers that do not accept the legacy fields should
   receive modern `tools` / `tool_choice` instead, with mapped-field metadata
   recorded rather than generic dropped-field metadata.
-- `parallel_tool_calls` compatibility must verify that Responses and direct
-  Chat requests reject non-boolean values locally with zero upstream calls, and
-  that valid `false` tool-bearing requests sent to providers without native
-  field support receive a single-tool-call system instruction, omit the
-  upstream `parallel_tool_calls` field, and record mapped compatibility
-  metadata.
+- `parallel_tool_calls` compatibility must verify that Responses create,
+  local `/v1/responses/input_tokens`, and direct Chat requests reject
+  non-boolean values locally with zero upstream calls, and that valid `false`
+  tool-bearing requests sent to providers without native field support receive
+  a single-tool-call system instruction, omit the upstream
+  `parallel_tool_calls` field, and record mapped compatibility metadata.
 - Chat choice-count compatibility must verify that Responses Chat-native
   aliases, direct Chat requests, and legacy Completions requests reject `n`
   values outside the official integer 1-128 range locally with zero upstream
@@ -698,12 +698,13 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   invalid tool definitions, choices, and legacy function fields produce zero
   upstream calls while valid custom/allowed-tools shapes pass through to
   capable providers and valid legacy functions still map for DeepSeek.
-- Responses and direct Chat requests that include `reasoning.effort`,
-  direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
-  the current OpenAI reasoning-effort enum locally before provider calls; valid
-  OpenAI values still reach the existing DeepSeek `reasoning_effort` /
-  `thinking` compatibility mapper, while provider-only aliases such as
-  DeepSeek `max` fail at the OpenAI-compatible boundary.
+- Responses create and `/input_tokens` requests that include
+  `reasoning.effort`, plus direct Chat requests that include
+  `reasoning_effort` or a direct Chat `reasoning` object, validate the current
+  OpenAI reasoning-effort enum locally before provider calls; valid OpenAI
+  values still reach the existing DeepSeek `reasoning_effort` / `thinking`
+  compatibility mapper, while provider-only aliases such as DeepSeek `max`
+  fail at the OpenAI-compatible boundary.
 - Legacy `/v1/completions` requests that include `logit_bias` use the same local object/value contract validation before non-streaming or streaming Chat-backed execution, with regression coverage for zero upstream calls on invalid values and boundary passthrough for valid values.
 - Legacy `/v1/completions` requests that include `best_of` and `suffix`
   validate the official request contract before provider calls: `best_of` must
@@ -713,7 +714,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   forwarding unsupported legacy fields upstream.
 - Responses and direct Chat requests that include Chat-native `verbosity` validate the official `low` / `medium` / `high` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, empty strings, and non-string values producing zero upstream calls while valid values still feed the provider-aware passthrough or prompt-instruction compatibility path.
 - Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
-- Responses `text.format` and direct Chat `response_format` requests validate the official `text` / `json_object` / `json_schema` union locally before provider calls, including response-format object shape, schema config `name`, required Responses `schema`, optional Chat `json_schema.schema`, `strict` boolean/null, and `description` string/null coverage with zero upstream calls on invalid structures.
+- Responses create and `/input_tokens` `text.format`, plus direct Chat
+  `response_format`, requests validate the official `text` / `json_object` /
+  `json_schema` union locally before provider calls, including response-format
+  object shape, schema config `name`, required Responses `schema`, optional
+  Chat `json_schema.schema`, `strict` boolean/null, and `description`
+  string/null coverage with zero upstream calls on invalid structures.
 - Responses, direct Chat, and legacy Completions sampling requests validate
   official `temperature`, `top_p`, `frequency_penalty`, and
   `presence_penalty` numeric bounds locally before provider calls, while valid

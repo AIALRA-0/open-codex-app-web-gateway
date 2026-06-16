@@ -16990,6 +16990,113 @@ test("POST /v1/responses/input_tokens validates stream_options before provider c
   });
 });
 
+test("POST /v1/responses/input_tokens validates text, reasoning, and parallel tool fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.parallel_tool_calls, false);
+    assert.deepEqual(call.body.response_format, { type: "json_object" });
+    assert.equal(call.body.reasoning_effort, "high");
+    assert.equal(call.body.max_tokens, 1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_token_official_field_probe",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 67, completion_tokens: 1, total_tokens: 68 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { parallel_tool_calls: "false" },
+        param: "parallel_tool_calls",
+        message: "parallel_tool_calls must be a boolean",
+      },
+      {
+        body: { text: [] },
+        param: "text",
+        message: "text must be an object",
+      },
+      {
+        body: { text: { format: "json" } },
+        param: "text.format",
+        message: "text.format must be an object",
+      },
+      {
+        body: { text: { format: { type: "yaml" } } },
+        param: "text.format.type",
+        message: "text.format.type must be one of: text, json_object, json_schema",
+      },
+      {
+        body: { reasoning: "low" },
+        param: "reasoning",
+        message: "reasoning must be an object",
+      },
+      {
+        body: { reasoning: { effort: "max" } },
+        param: "reasoning.effort",
+        message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Count invalid official input-token fields.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Count valid official input-token fields.",
+        parallel_tool_calls: false,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "token_probe",
+            schema: {
+              type: "object",
+              properties: { ok: { type: "boolean" } },
+              required: ["ok"],
+              additionalProperties: false,
+            },
+            strict: true,
+          },
+        },
+        reasoning: { effort: "low" },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), {
+      object: "response.input_tokens",
+      input_tokens: 67,
+    });
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses/input_tokens validates and counts style preset", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
