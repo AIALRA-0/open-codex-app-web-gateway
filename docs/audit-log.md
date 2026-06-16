@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-16 Official Legacy Sampling And Stop Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Legacy `CreateCompletionRequest` documents `temperature` as number/null from
+  0 through 2, `top_p` as number/null from 0 through 1,
+  `frequency_penalty` and `presence_penalty` as number/null from -2 through 2,
+  and `stop` through `StopConfiguration`. The shared `StopConfiguration`
+  accepts null, a string, or an array with 1 to 4 string items.
+- Added local request validation before provider calls:
+  - `POST /v1/completions` now rejects invalid `temperature`, `top_p`,
+    `frequency_penalty`, and `presence_penalty` values before legacy
+    prompt-to-Chat mapping, non-streaming provider calls, or streaming provider
+    calls.
+  - `POST /v1/completions` now rejects invalid `stop` values before any
+    upstream Chat request.
+  - The shared stop-sequence validator now rejects empty `stop:[]` arrays for
+    Responses create, direct Chat, and legacy Completions, matching the
+    official 1-to-4 array item contract.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values: valid legacy
+  sampling parameters and valid string or 1-to-4-string stop sequences still
+  flow into the Chat-backed legacy completion request and keep existing
+  non-streaming/streaming completion response mapping.
+- Added regression coverage proving invalid legacy sampling and stop values
+  fail locally with zero upstream calls, valid boundary values pass through, and
+  `stop:[]` is rejected on Responses create, direct Chat, and legacy
+  Completions.
+- Updated the compatibility matrix and evaluation plan so sampling and stop
+  parity covers legacy Completions in addition to Responses/direct Chat.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "validates sampling parameter ranges before provider calls|validates stop sequences before provider calls|POST /v1/completions maps prompt-style"`:
+    passed 260/260; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 309/309.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/completions` returned HTTP 400 with
+    `param:"temperature"` for `temperature:2.1` and HTTP 400 with
+    `param:"stop"` for `stop:[]`; public `/v1/responses` and
+    `/v1/chat/completions` also returned HTTP 400 with `param:"stop"` for
+    `stop:[]`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 11G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Stream Options Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

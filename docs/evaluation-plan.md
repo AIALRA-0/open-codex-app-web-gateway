@@ -646,7 +646,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   persistence, include-gated `file_search` result content on list/retrieve and
   streaming Run Step events, file citations, attachment-created thread vector
   stores, and mounted file resources.
-- Responses compatibility requests that include Chat-native `stop` sequences validate the official string-or-up-to-4-strings shape locally, forward valid values to upstream Chat providers, and verify the stop marker is omitted from visible output.
+- Responses, direct Chat, and legacy Completions requests that include `stop`
+  sequences validate the official string-or-1-to-4-strings shape locally,
+  forward valid values to upstream Chat providers, and verify the stop marker
+  is omitted from visible output.
 - Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-number bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
 - Responses and direct Chat requests that include `reasoning.effort`,
   direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
@@ -658,7 +661,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Responses and direct Chat requests that include Chat-native `verbosity` validate the official `low` / `medium` / `high` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, empty strings, and non-string values producing zero upstream calls while valid values still feed the provider-aware passthrough or prompt-instruction compatibility path.
 - Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
 - Responses `text.format` and direct Chat `response_format` requests validate the official `text` / `json_object` / `json_schema` union locally before provider calls, including response-format object shape, schema config `name`, required Responses `schema`, optional Chat `json_schema.schema`, `strict` boolean/null, and `description` string/null coverage with zero upstream calls on invalid structures.
-- Responses and direct Chat sampling requests validate official `temperature`, `top_p`, `frequency_penalty`, and `presence_penalty` numeric bounds locally before provider calls, while valid boundary values still pass through to upstream Chat providers unchanged.
+- Responses, direct Chat, and legacy Completions sampling requests validate
+  official `temperature`, `top_p`, `frequency_penalty`, and
+  `presence_penalty` numeric bounds locally before provider calls, while valid
+  boundary values still pass through to upstream Chat providers unchanged.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.
 - Local `web_search` compatibility emits `web_search_call` items and only includes `action.sources` when `include:["web_search_call.action.sources"]` is requested on create or stored-response retrieval.

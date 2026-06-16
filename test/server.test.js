@@ -1690,6 +1690,7 @@ test("POST /v1/responses validates stop sequences before provider calls", async 
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const invalidCases = [
+      { stop: [] },
       { stop: ["a", "b", "c", "d", "e"] },
       { stop: ["a", null] },
       { stop: { sequence: "a" } },
@@ -1708,7 +1709,7 @@ test("POST /v1/responses validates stop sequences before provider calls", async 
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), {
         error: {
-          message: "stop must be a string or an array of strings with at most 4 items",
+          message: "stop must be a string or an array of 1 to 4 strings",
           type: "invalid_request_error",
           param: "stop",
           code: "invalid_request_parameter",
@@ -19712,6 +19713,141 @@ test("POST /v1/completions validates user before provider calls", async () => {
   });
 });
 
+test("POST /v1/completions validates sampling parameter ranges before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.temperature, 2);
+    assert.equal(call.body.top_p, 0);
+    assert.equal(call.body.frequency_penalty, 2);
+    assert.equal(call.body.presence_penalty, -2);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_sampling_boundary",
+      object: "chat.completion",
+      created: 1700000128,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy sampling ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { temperature: -0.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: 2.1 }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { temperature: "1" }, param: "temperature", message: "temperature must be a number between 0 and 2" },
+      { body: { top_p: -0.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: 1.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { top_p: "0.5" }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { frequency_penalty: -2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: 2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: "0" }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: -2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: 2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: "0" }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy sampling validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy sampling boundary.",
+        temperature: 2,
+        top_p: 0,
+        frequency_penalty: 2,
+        presence_penalty: -2,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy sampling ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/completions validates stop sequences before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.stop, ["<a>", "<b>", "<c>", "<d>"]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_stop_boundary",
+      object: "chat.completion",
+      created: 1700000128,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy stop ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { stop: [] },
+      { stop: ["a", "b", "c", "d", "e"] },
+      { stop: ["a", false] },
+      { stop: { sequence: "a" } },
+      { stop: 42 },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy stop validation.",
+          ...invalidCase,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "stop must be a string or an array of 1 to 4 strings",
+          type: "invalid_request_error",
+          param: "stop",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy stop boundary.",
+        stop: ["<a>", "<b>", "<c>", "<d>"],
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy stop ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates echo and logprobs before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -20513,6 +20649,7 @@ test("POST /v1/chat/completions validates stop sequences before provider calls",
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const invalidCases = [
+      { stop: [] },
       { stop: ["a", "b", "c", "d", "e"] },
       { stop: ["a", false] },
       { stop: { sequence: "a" } },
@@ -20531,7 +20668,7 @@ test("POST /v1/chat/completions validates stop sequences before provider calls",
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), {
         error: {
-          message: "stop must be a string or an array of strings with at most 4 items",
+          message: "stop must be a string or an array of 1 to 4 strings",
           type: "invalid_request_error",
           param: "stop",
           code: "invalid_request_parameter",

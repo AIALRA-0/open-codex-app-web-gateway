@@ -2418,13 +2418,14 @@ function validateOpenAIStopSequences(body = {}) {
   if (typeof body.stop === "string") return null;
   if (
     Array.isArray(body.stop)
+    && body.stop.length >= 1
     && body.stop.length <= OPENAI_STOP_MAX_SEQUENCES
     && body.stop.every((sequence) => typeof sequence === "string")
   ) {
     return null;
   }
   return requestValidationError(
-    `stop must be a string or an array of strings with at most ${OPENAI_STOP_MAX_SEQUENCES} items`,
+    `stop must be a string or an array of 1 to ${OPENAI_STOP_MAX_SEQUENCES} strings`,
     "stop",
   );
 }
@@ -6352,6 +6353,16 @@ function parseJsonOrNull(text) {
 
 async function handleLegacyCompletions(req, res, config) {
   const request = await readJson(req);
+  const samplingError = validateOpenAISamplingParameters(request);
+  if (samplingError) {
+    sendError(res, 400, samplingError.message, samplingError);
+    return;
+  }
+  const stopError = validateOpenAIStopSequences(request);
+  if (stopError) {
+    sendError(res, 400, stopError.message, stopError);
+    return;
+  }
   const streamError = validateOpenAIStreamFlag(request);
   if (streamError) {
     sendError(res, 400, streamError.message, streamError);
