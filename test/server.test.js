@@ -1414,6 +1414,77 @@ test("POST /v1/responses filters stream_options for non-streaming requests", asy
   });
 });
 
+test("POST /v1/responses validates stream_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream_options, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_stream_options_valid",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses stream options ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { stream_options: "yes", param: "stream_options", message: "stream_options must be an object" },
+      { stream_options: [], param: "stream_options", message: "stream_options must be an object" },
+      {
+        stream_options: { include_usage: "true" },
+        param: "stream_options.include_usage",
+        message: "stream_options.include_usage must be a boolean",
+      },
+      {
+        stream_options: { include_obfuscation: null },
+        param: "stream_options.include_obfuscation",
+        message: "stream_options.include_obfuscation must be a boolean",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check stream options validation.",
+          stream_options: invalidCase.stream_options,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid non-stream options are filtered.",
+        stream_options: { include_usage: true, include_obfuscation: false },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.output[0].content[0].text, "responses stream options ok");
+    assert.equal(json.metadata.compatibility.stream_options.reason, "stream_required");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses validates top_logprobs range before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -16094,6 +16165,79 @@ test("POST /v1/responses/input_tokens validates identity and cache fields before
   });
 });
 
+test("POST /v1/responses/input_tokens validates stream_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream_options, undefined);
+    assert.equal(call.body.max_tokens, 1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_stream_options_probe",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 63, completion_tokens: 1, total_tokens: 64 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { stream_options: 1, param: "stream_options", message: "stream_options must be an object" },
+      { stream_options: [], param: "stream_options", message: "stream_options must be an object" },
+      {
+        stream_options: { include_usage: "false" },
+        param: "stream_options.include_usage",
+        message: "stream_options.include_usage must be a boolean",
+      },
+      {
+        stream_options: { include_obfuscation: null },
+        param: "stream_options.include_obfuscation",
+        message: "stream_options.include_obfuscation must be a boolean",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Count invalid stream options request.",
+          stream_options: invalidCase.stream_options,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Count valid stream options request.",
+        stream_options: { include_usage: false, include_obfuscation: false },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), {
+      object: "response.input_tokens",
+      input_tokens: 63,
+    });
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses/input_tokens validates and counts style preset", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -19771,6 +19915,75 @@ test("POST /v1/completions validates stream flag before provider calls", async (
   });
 });
 
+test("POST /v1/completions validates stream_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream_options, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_stream_options",
+      object: "chat.completion",
+      created: 1700000128,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy stream options ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { stream_options: "yes", param: "stream_options", message: "stream_options must be an object" },
+      { stream_options: [], param: "stream_options", message: "stream_options must be an object" },
+      {
+        stream_options: { include_usage: "true" },
+        param: "stream_options.include_usage",
+        message: "stream_options.include_usage must be a boolean",
+      },
+      {
+        stream_options: { include_obfuscation: null },
+        param: "stream_options.include_obfuscation",
+        message: "stream_options.include_obfuscation must be a boolean",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy stream options validation.",
+          stream_options: invalidCase.stream_options,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy valid stream options.",
+        stream: false,
+        stream_options: { include_usage: true, include_obfuscation: false },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy stream options ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions streams Chat chunks as legacy completion chunks", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [{ role: "user", content: "stream legacy" }]);
@@ -20393,6 +20606,78 @@ test("POST /v1/chat/completions validates stream flag before provider calls", as
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat stream flag ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates stream_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, true);
+    assert.deepEqual(call.body.stream_options, { include_usage: false, include_obfuscation: false });
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_chat_stream_options",
+      object: "chat.completion.chunk",
+      created: 1700000305,
+      model: "mock-model",
+      choices: [{ index: 0, delta: { role: "assistant", content: "chat stream options ok" }, finish_reason: "stop" }],
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { stream_options: "true", param: "stream_options", message: "stream_options must be an object" },
+      { stream_options: [], param: "stream_options", message: "stream_options must be an object" },
+      {
+        stream_options: { include_usage: "true" },
+        param: "stream_options.include_usage",
+        message: "stream_options.include_usage must be a boolean",
+      },
+      {
+        stream_options: { include_obfuscation: null },
+        param: "stream_options.include_obfuscation",
+        message: "stream_options.include_obfuscation must be a boolean",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          stream: true,
+          stream_options: invalidCase.stream_options,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        stream: true,
+        stream_options: { include_usage: false, include_obfuscation: false },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.match(valid.headers.get("content-type"), /text\/event-stream/);
+    const events = parseSseEvents(await valid.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+    assert.equal(events[0].data.choices[0].delta.content, "chat stream options ok");
     assert.equal(requests.length, 1);
   });
 });

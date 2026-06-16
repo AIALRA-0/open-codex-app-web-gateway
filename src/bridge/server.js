@@ -210,6 +210,7 @@ const OPENAI_SEED_MAX = 9223372036854776000;
 const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
 const OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS = 64;
 const OPENAI_PROMPT_CACHE_RETENTION_VALUES = Object.freeze(["in_memory", "24h"]);
+const OPENAI_STREAM_OPTION_FIELDS = Object.freeze(["include_usage", "include_obfuscation"]);
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -856,6 +857,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const streamError = validateOpenAIStreamFlag(request);
   if (streamError) {
     sendError(res, 400, streamError.message, streamError);
+    return;
+  }
+  const streamOptionsError = validateOpenAIStreamOptions(request);
+  if (streamOptionsError) {
+    sendError(res, 400, streamOptionsError.message, streamOptionsError);
     return;
   }
   const storeError = validateOpenAIStoreFlag(request);
@@ -2431,6 +2437,22 @@ function validateOpenAIStreamFlag(body = {}) {
   return validateOpenAIBooleanParameter(body, "stream");
 }
 
+function validateOpenAIStreamOptions(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "stream_options") || body.stream_options == null) return null;
+  if (!isPlainObject(body.stream_options)) {
+    return requestValidationError("stream_options must be an object", "stream_options");
+  }
+  for (const field of OPENAI_STREAM_OPTION_FIELDS) {
+    if (
+      Object.prototype.hasOwnProperty.call(body.stream_options, field)
+      && typeof body.stream_options[field] !== "boolean"
+    ) {
+      return requestValidationError(`stream_options.${field} must be a boolean`, `stream_options.${field}`);
+    }
+  }
+  return null;
+}
+
 function validateOpenAIStoreFlag(body = {}) {
   return validateOpenAIBooleanParameter(body, "store");
 }
@@ -2933,6 +2955,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   const seedError = validateOpenAISeed(request);
   if (seedError) {
     sendError(res, 400, seedError.message, seedError);
+    return;
+  }
+  const streamOptionsError = validateOpenAIStreamOptions(request);
+  if (streamOptionsError) {
+    sendError(res, 400, streamOptionsError.message, streamOptionsError);
     return;
   }
   const conversation = prepareConversationContext(request, conversationStore, config);
@@ -4901,6 +4928,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, streamError.message, streamError);
     return;
   }
+  const streamOptionsError = validateOpenAIStreamOptions(body);
+  if (streamOptionsError) {
+    sendError(res, 400, streamOptionsError.message, streamOptionsError);
+    return;
+  }
   const storeError = validateOpenAIStoreFlag(body);
   if (storeError) {
     sendError(res, 400, storeError.message, storeError);
@@ -6323,6 +6355,11 @@ async function handleLegacyCompletions(req, res, config) {
   const streamError = validateOpenAIStreamFlag(request);
   if (streamError) {
     sendError(res, 400, streamError.message, streamError);
+    return;
+  }
+  const streamOptionsError = validateOpenAIStreamOptions(request);
+  if (streamOptionsError) {
+    sendError(res, 400, streamOptionsError.message, streamOptionsError);
     return;
   }
   const echoError = validateOpenAILegacyEcho(request);

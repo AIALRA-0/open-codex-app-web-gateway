@@ -492,6 +492,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   merged/remapped `choices`, aggregated `usage`, a single logical streaming
   completion id, and stored Chat messages, validating OpenAI `stream`
   boolean/null request values before stream routing, validating OpenAI
+  `stream_options` object/null request values and known boolean subfields
+  before streaming option filtering, validating OpenAI
   `store` boolean/null request values before stored-completion routing, mapping stable user identity/cache
   aliases into `user_id`
   without reporting consumed aliases as dropped fields, reflecting
@@ -595,6 +597,13 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   legacy Completions reject non-boolean `stream` values locally with zero
   upstream calls, while valid `false` stays on non-streaming paths and valid
   `true` remains covered by existing SSE conversion tests.
+- Streaming option compatibility must verify that Responses create, local
+  `/v1/responses/input_tokens`, direct Chat, and legacy Completions reject
+  non-object `stream_options` values and non-boolean known subfields such as
+  `include_usage` and `include_obfuscation` locally with zero upstream calls,
+  while valid options preserve existing non-stream filtering, Chat-native
+  `include_usage` usage-chunk behavior, Responses `include_obfuscation`
+  passthrough/filtering, and legacy prompt-to-Chat streaming conversion.
 - Storage/background flag compatibility must verify that Responses reject
   non-boolean `background` and `store` values locally with zero upstream calls,
   direct Chat rejects non-boolean `store` values locally, valid

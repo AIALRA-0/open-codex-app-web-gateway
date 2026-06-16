@@ -1,5 +1,73 @@
 # Audit Log
 
+## 2026-06-16 Official Stream Options Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Chat Completions and legacy Completions reference
+  `ChatCompletionStreamOptions`, an object/null with boolean
+  `include_usage` and `include_obfuscation` fields. Responses references
+  `ResponseStreamOptions`, an object/null with boolean `include_obfuscation`.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-object `stream_options` values and
+    non-boolean known subfields before Responses-to-Chat translation,
+    non-stream filtering, or upstream provider calls.
+  - local `POST /v1/responses/input_tokens` applies the same validation before
+    building the prompt-token probe.
+  - `POST /v1/chat/completions` now validates `stream_options` before direct
+    Chat passthrough, provider-specific stream-option filtering, or streaming
+    routing.
+  - `POST /v1/completions` now validates `stream_options` before legacy
+    prompt-to-Chat mapping, non-streaming provider calls, or streaming
+    provider calls.
+  - Invalid strings, arrays, and non-boolean known subfields now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    the relevant `param` locally with zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values: non-streaming
+  valid `stream_options` objects are still filtered with
+  `metadata.compatibility.stream_options.reason:"stream_required"`, direct Chat
+  still forwards provider-supported stream option fields, and the bridge keeps
+  the Responses-to-Chat `include_usage` compatibility extension while
+  validating it if callers provide it.
+- Added regression coverage proving invalid stream option values fail locally
+  with zero upstream calls on Responses create, Responses input-token probes,
+  direct Chat, and legacy Completions; valid values continue through the
+  existing non-stream filtering and SSE compatibility paths.
+- Updated the compatibility matrix and evaluation plan so streaming option
+  parity tracks official request validation in addition to provider-aware
+  passthrough/filtering.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "stream_options before provider calls|filters stream_options|streams Chat chunks|completions streams|streams and stores reconstructed|normalizes OpenAI Chat fields"`:
+    passed 258/258; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 307/307.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"stream_options"` for `stream_options:"yes"`; public
+    `/v1/responses/input_tokens` returned HTTP 400 with
+    `param:"stream_options.include_usage"` for string `include_usage`; public
+    `/v1/chat/completions` returned HTTP 400 with
+    `param:"stream_options.include_obfuscation"` for null
+    `include_obfuscation`; public `/v1/completions` returned HTTP 400 with
+    `param:"stream_options"` for array `stream_options`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 12G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Identity Cache Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer
