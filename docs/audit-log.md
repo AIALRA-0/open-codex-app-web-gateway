@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-16 Tool Search Catalog Sweep
+
+- Rechecked the official OpenAI `tool_search` guidance through the OpenAI
+  developer docs MCP. This slice follows the documented pattern of keeping
+  large tool catalogs deferred, grouping tools by intent/namespace, and loading
+  only the relevant group before exposing concrete function schemas to the
+  model.
+- Added `responses-tool-search-catalog-sweep` to the live
+  `bridge-regression` harness. The case runs three deterministic shuffled
+  large-catalog scenarios against the deployed DeepSeek bridge:
+  - `inventory.reserve_sku` with `{"sku":"SKU-9","order_id":"ORDER-314"}`;
+  - `security.rotate_key` with `{"key_id":"KEY-77"}`;
+  - `support.escalate_ticket` with `{"ticket_id":"TICK-55"}`.
+- The sweep records scenario pass rate, average/P95 latency, token usage,
+  loaded-catalog fraction, DSML text leaks, assistant prose leaks, text
+  pseudo-tool promotion counts, and final public Responses function-call names
+  so larger randomized catalog sweeps can compare protocol stability and model
+  behavior over time.
+- Updated the evaluation plan and compatibility matrix so large-catalog
+  `tool_search` now includes both the single returns-label regression and a
+  multi-scenario shuffled catalog sweep. Hosted connector inventories,
+  per-tenant indexes, broader randomized sweeps, and stricter suppression of
+  assistant prose on tool-only turns remain follow-up work.
+- Validation:
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Live `responses-tool-search-catalog-sweep` passed 1/1 against
+    `deepseek-v4-pro`; all 3/3 scenarios passed, pass rate 1.0, total latency
+    11416 ms, per-scenario average latency 3804 ms, P95 latency 3991 ms, usage
+    6723 input / 371 output / 7094 total tokens, loaded fraction average/max
+    0.125, DSML text leak count 0, assistant prose leak count 1, text
+    pseudo-tool call count 0, and final function calls
+    `inventory.reserve_sku`, `security.rotate_key`, and
+    `support.escalate_ticket`.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1186 ms, P95 latency 1241 ms, and 99 total tokens.
+  - `npm test`: passed 245/245.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Large-Catalog Tool Search Regression
 
 - Rechecked the official OpenAI `Use tool_search` deployment guidance through

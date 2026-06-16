@@ -3855,6 +3855,11 @@ function buildSuites(defaultModel) {
         request: largeToolSearchRequest(defaultModel),
       },
       {
+        id: "responses-tool-search-catalog-sweep",
+        mode: "responses-tool-search-catalog-sweep",
+        scenarios: toolSearchCatalogSweepScenarios(defaultModel),
+      },
+      {
         id: "responses-previous-response-replay",
         mode: "responses-sequence",
         steps: [
@@ -3896,6 +3901,59 @@ function largeToolSearchRequest(defaultModel) {
     tools: [
       { type: "tool_search" },
       ...largeToolSearchNamespaces(),
+    ],
+    tool_choice: { type: "tool_search" },
+    reasoning: { effort: "none" },
+    max_tool_calls: 1,
+    max_output_tokens: 128,
+    store: false,
+  };
+}
+
+function toolSearchCatalogSweepScenarios(defaultModel) {
+  return [
+    {
+      id: "inventory-reserve",
+      model: defaultModel,
+      seed: "inventory-reserve-2026-06-16",
+      input: "A customer order ORDER-314 needs SKU-9 reserved immediately. Use the catalog to perform the reservation.",
+      expected_namespace: "inventory",
+      expected_function: "reserve_sku",
+      expected_arguments: { sku: "SKU-9", order_id: "ORDER-314" },
+    },
+    {
+      id: "security-rotate-key",
+      model: defaultModel,
+      seed: "security-rotate-key-2026-06-16",
+      input: "Security asked us to rotate API key KEY-77. Find the right catalog tool and call it.",
+      expected_namespace: "security",
+      expected_function: "rotate_key",
+      expected_arguments: { key_id: "KEY-77" },
+    },
+    {
+      id: "support-escalate",
+      model: defaultModel,
+      seed: "support-escalate-2026-06-16",
+      input: "Escalate support ticket TICK-55 using the support operations catalog.",
+      expected_namespace: "support",
+      expected_function: "escalate_ticket",
+      expected_arguments: { ticket_id: "TICK-55" },
+    },
+  ];
+}
+
+function toolSearchCatalogSweepRequest(scenario) {
+  return {
+    model: scenario.model,
+    instructions: [
+      "Use hosted tool_search over the shuffled large catalog.",
+      "Load the one namespace needed for the user task, then call the appropriate loaded function.",
+      "Do not answer in prose.",
+    ].join(" "),
+    input: scenario.input,
+    tools: [
+      { type: "tool_search" },
+      ...shuffleCatalogNamespaces(largeToolSearchNamespaces(), scenario.seed),
     ],
     tool_choice: { type: "tool_search" },
     reasoning: { effort: "none" },
@@ -4030,6 +4088,24 @@ function parametersForProperties(properties = {}) {
   };
 }
 
+function shuffleCatalogNamespaces(namespaces, seed) {
+  return stableShuffle(namespaces.map((namespace) => ({
+    ...namespace,
+    tools: stableShuffle(namespace.tools || [], `${seed}:${namespace.name}`, (tool) => tool.name),
+  })), seed, (namespace) => namespace.name);
+}
+
+function stableShuffle(items = [], seed = "", label = (item) => String(item)) {
+  return items
+    .map((item, index) => ({
+      item,
+      index,
+      key: sha256Hex(`${seed}:${label(item)}:${index}`),
+    }))
+    .sort((left, right) => left.key.localeCompare(right.key) || left.index - right.index)
+    .map(({ item }) => item);
+}
+
 async function runCase(testCase, context) {
   const started = performance.now();
   try {
@@ -4044,6 +4120,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-tool-search-large-catalog") {
       return await runToolSearchLargeCatalogCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-tool-search-catalog-sweep") {
+      return await runToolSearchCatalogSweepCase(testCase, context, started);
     }
     if (testCase.mode === "chat-lifecycle") {
       return await runChatLifecycleCase(testCase, context, started);
@@ -4486,6 +4565,136 @@ async function runToolSearchLargeCatalogCase(testCase, context, started) {
     function_arguments: functionArguments,
     error: ok ? undefined : truncate(JSON.stringify(json)),
   });
+}
+
+async function runToolSearchCatalogSweepCase(testCase, context, started) {
+  const scenarios = testCase.scenarios || [];
+  const scenarioResults = [];
+
+  for (const scenario of scenarios) {
+    const scenarioStarted = performance.now();
+    const request = toolSearchCatalogSweepRequest(scenario);
+    const response = await postJson(`${baseUrl}/v1/responses`, request);
+    const body = await response.text();
+    const elapsedMs = Math.round(performance.now() - scenarioStarted);
+    if (!response.ok) {
+      scenarioResults.push({
+        id: scenario.id,
+        ok: false,
+        status: response.status,
+        elapsed_ms: elapsedMs,
+        error: truncate(body),
+      });
+      continue;
+    }
+
+    const json = parseJsonish(body);
+    scenarioResults.push(evaluateToolSearchSweepScenario(scenario, json, {
+      status: response.status,
+      elapsed_ms: elapsedMs,
+    }));
+  }
+
+  const passed = scenarioResults.filter((result) => result.ok).length;
+  const latencies = scenarioResults.map((result) => result.elapsed_ms).sort((a, b) => a - b);
+  const loadedFractions = scenarioResults
+    .map((result) => result.loaded_fraction)
+    .filter((value) => Number.isFinite(value));
+  const ok = scenarios.length > 0 && passed === scenarios.length;
+
+  return finishResult(testCase, context, started, {
+    ok,
+    status: ok ? 200 : 500,
+    usage: sumUsage(scenarioResults.map((result) => result.usage).filter(Boolean)),
+    scenario_count: scenarios.length,
+    passed_scenarios: passed,
+    scenario_pass_rate: scenarios.length ? Number((passed / scenarios.length).toFixed(4)) : 0,
+    latency_ms_avg: average(latencies),
+    latency_ms_p95: percentile(latencies, 0.95),
+    loaded_fraction_avg: averageFraction(loadedFractions),
+    loaded_fraction_max: loadedFractions.length ? Number(Math.max(...loadedFractions).toFixed(4)) : 0,
+    dsml_text_leak_count: scenarioResults.filter((result) => result.dsml_text_leak).length,
+    assistant_text_leak_count: scenarioResults.filter((result) => result.assistant_text_leak).length,
+    text_tool_call_count: scenarioResults.reduce((sum, result) => sum + (result.text_tool_call_count || 0), 0),
+    function_calls: scenarioResults.map((result) => `${result.function_namespace || "none"}.${result.function_name || "none"}`),
+    scenarios: scenarioResults,
+    error: ok ? undefined : truncate(JSON.stringify(scenarioResults.filter((result) => !result.ok))),
+  });
+}
+
+function evaluateToolSearchSweepScenario(scenario, json, transport) {
+  const outputTypes = (json.output || []).map((item) => item.type);
+  const toolSearchCall = (json.output || []).find((item) => item.type === "tool_search_call");
+  const toolSearchOutput = (json.output || []).find((item) => item.type === "tool_search_output");
+  const functionCall = (json.output || []).find((item) => item.type === "function_call");
+  const functionArguments = parseJsonish(functionCall?.arguments);
+  const localToolSearch = json.metadata?.compatibility?.local_tool_search || {};
+  const outputNamespaces = toolSearchOutputNamespaces(toolSearchOutput);
+  const loadedNamespaceNames = outputNamespaces.map((namespace) => namespace.name);
+  const targetNamespace = outputNamespaces.find((namespace) => namespace.name === scenario.expected_namespace);
+  const loadedToolNames = (targetNamespace?.tools || []).map((tool) => tool.name);
+  const outputText = responseOutputText(json);
+  const dsmlTextLeak = /DSML/.test(outputText);
+  const assistantTextLeak = !!outputText.trim();
+  const targetLoaded = !!targetNamespace && loadedToolNames.includes(scenario.expected_function);
+  const functionOk = functionCall?.namespace === scenario.expected_namespace
+    && functionCall?.name === scenario.expected_function;
+  const argumentsOk = expectedArgumentsMatch(functionArguments, scenario.expected_arguments);
+  const protocolOk = outputTypes.includes("tool_search_call")
+    && outputTypes.includes("tool_search_output")
+    && outputTypes.includes("function_call")
+    && toolSearchCall?.execution === "server"
+    && toolSearchOutput?.execution === "server"
+    && localToolSearch.provider === "local"
+    && localToolSearch.search_call_count === 1
+    && localToolSearch.namespace_count === 8
+    && localToolSearch.deferred_tool_count === 48
+    && localToolSearch.loaded_tool_count >= 1
+    && localToolSearch.loaded_tool_count < localToolSearch.deferred_tool_count
+    && localToolSearch.boundary === "deferred_tool_search_and_load";
+  const minimalLoadOk = outputNamespaces.length === 1 && loadedNamespaceNames[0] === scenario.expected_namespace;
+  const ok = protocolOk && targetLoaded && functionOk && argumentsOk && minimalLoadOk && !dsmlTextLeak;
+  const loadedFraction = localToolSearch.deferred_tool_count
+    ? localToolSearch.loaded_tool_count / localToolSearch.deferred_tool_count
+    : 0;
+
+  return {
+    id: scenario.id,
+    ok: !!ok,
+    status: transport.status,
+    elapsed_ms: transport.elapsed_ms,
+    usage: responseUsage(json),
+    expected_namespace: scenario.expected_namespace,
+    expected_function: scenario.expected_function,
+    loaded_namespaces: loadedNamespaceNames,
+    loaded_tool_count: localToolSearch.loaded_tool_count || 0,
+    deferred_tool_count: localToolSearch.deferred_tool_count || 0,
+    loaded_fraction: Number(loadedFraction.toFixed(4)),
+    loaded_tool_names: loadedToolNames,
+    function_namespace: functionCall?.namespace,
+    function_name: functionCall?.name,
+    function_arguments: functionArguments,
+    protocol_ok: !!protocolOk,
+    target_loaded: !!targetLoaded,
+    function_ok: !!functionOk,
+    arguments_ok: !!argumentsOk,
+    minimal_load_ok: !!minimalLoadOk,
+    dsml_text_leak: dsmlTextLeak,
+    assistant_text_leak: assistantTextLeak,
+    text_tool_call_count: localToolSearch.text_tool_call_count || 0,
+    text_suppressed_count: localToolSearch.text_suppressed_count || 0,
+    output_text: truncate(outputText, 300),
+    error: ok ? undefined : truncate(JSON.stringify(json)),
+  };
+}
+
+function toolSearchOutputNamespaces(toolSearchOutput) {
+  return (toolSearchOutput?.tools || []).filter((tool) => tool?.type === "namespace");
+}
+
+function expectedArgumentsMatch(actual, expected = {}) {
+  if (!actual || typeof actual !== "object") return false;
+  return Object.entries(expected).every(([key, value]) => String(actual[key]) === String(value));
 }
 
 async function runAudioSpeechCase(testCase, context, started) {
@@ -9709,6 +9918,11 @@ function parseJsonish(value) {
 function average(values) {
   if (!values.length) return 0;
   return Math.round(values.reduce((sum, value) => sum + value, 0) / values.length);
+}
+
+function averageFraction(values) {
+  if (!values.length) return 0;
+  return Number((values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(4));
 }
 
 function percentile(values, p) {

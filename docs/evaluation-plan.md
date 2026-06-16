@@ -162,7 +162,12 @@ namespace/name. Live large-catalog coverage exercises hosted `tool_search`
 against DeepSeek with eight namespaces and 48 deferred functions: the model
 loads only the selected `returns` namespace, receives six callable functions,
 and returns the public `returns.create_return_label` `function_call` with the
-expected `RMA-42`/`pdf` arguments. Mock-provider coverage hardens
+expected `RMA-42`/`pdf` arguments. The
+`responses-tool-search-catalog-sweep` live case repeats that shape over three
+deterministically shuffled large-catalog tasks for `inventory`, `security`,
+and `support`, recording scenario pass rate, average/P95 latency, token usage,
+loaded-catalog fraction, DSML text leaks, assistant prose leaks, and final
+function-call namespaces/arguments. Mock-provider coverage hardens
 DeepSeek-style DSML text pseudo-tool outputs for loaded functions by promoting
 direct function invocations, `local_tool_call` `path`/`input` wrappers, and
 namespace `method`/`params` wrappers into standard tool calls before public
@@ -195,8 +200,9 @@ and still skips a second remote `tools/list`. Mock-provider coverage also
 exercises collision-heavy streaming function names by splitting a generated
 namespace Chat function name across SSE chunks and verifying that public
 Responses output keeps the original `namespace` / `name`. Follow-up eval work
-should add live bridge cases for hosted connectors and broader large-catalog
-quality/latency/token sweeps across repeated randomized catalogs.
+should add live bridge cases for hosted connectors and expand the
+large-catalog quality/latency/token sweeps beyond the current deterministic
+sample.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The
@@ -221,6 +227,7 @@ node --test test/server.test.js --test-name-pattern 'promotes text tool_search|p
 node --test test/server.test.js --test-name-pattern 'loads deferred remote MCP tools through hosted tool_search|streams deferred remote MCP tools loaded through hosted tool_search'
 node --test --test-name-pattern 'deferred remote MCP loaded through hosted tool_search|text MCP approval emitted after hosted tool_search|suppresses pseudo tool markup' test/server.test.js
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-tool-search-large-catalog --timeout-ms 180000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-tool-search-catalog-sweep --timeout-ms 240000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-stream-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
