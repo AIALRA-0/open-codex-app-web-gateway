@@ -3311,6 +3311,62 @@ test("Responses input_items include message.input_image.image_url only when requ
   });
 });
 
+test("Responses input_items validate include query and default to descending order", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.messages.length, 2);
+    assert.equal(call.body.messages[0].content, "first response input");
+    assert.equal(call.body.messages[1].content, "second response input");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_response_input_items_order",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "input items order ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 4, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          { type: "message", role: "user", content: "first response input" },
+          { type: "message", role: "user", content: "second response input" },
+        ],
+        store: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+
+    const invalidInclude = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?include=not.a.real.include`);
+    assert.equal(invalidInclude.status, 400);
+    const invalidIncludeJson = await invalidInclude.json();
+    assert.match(invalidIncludeJson.error.message, /^include\.0 must be one of:/);
+    assert.equal(invalidIncludeJson.error.param, "include.0");
+
+    const defaultItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items`);
+    assert.equal(defaultItems.status, 200);
+    const defaultItemsJson = await defaultItems.json();
+    assert.equal(defaultItemsJson.data.length, 2);
+    assert.equal(defaultItemsJson.data[0].content, "second response input");
+    assert.equal(defaultItemsJson.data[1].content, "first response input");
+
+    const ascItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?order=asc`);
+    assert.equal(ascItems.status, 200);
+    const ascItemsJson = await ascItems.json();
+    assert.equal(ascItemsJson.data[0].content, "first response input");
+    assert.equal(ascItemsJson.data[1].content, "second response input");
+  });
+});
+
 test("POST /v1/responses resolves input_image file_id to Chat data URLs", async () => {
   const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (_req, res, call) => {
@@ -15322,7 +15378,7 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     });
     assert.equal(missingUpdate.status, 404);
 
-    const inputItems = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/input_items?limit=1`);
+    const inputItems = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/input_items?limit=1&order=asc`);
     assert.equal(inputItems.status, 200);
     const inputItemsJson = await inputItems.json();
     assert.equal(inputItemsJson.object, "list");

@@ -13558,6 +13558,11 @@ function handleResponseCancel(res, store, responseId, backgroundJobs, url) {
 }
 
 function handleResponseInputItems(res, store, responseId, url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
@@ -14145,7 +14150,7 @@ function isInputImageItem(value) {
 }
 
 function paginateInputItems(items, url) {
-  return paginateList(items, url);
+  return paginateListWithDefaultOrder(items, url, "desc", 20, 100);
 }
 
 function paginateChatKitThreads(items, url) {

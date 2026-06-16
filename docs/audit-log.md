@@ -1,5 +1,37 @@
 # Audit Log
 
+## 2026-06-17 Responses Input Items Query Tightening
+
+- Rechecked the official OpenAI
+  `GET /v1/responses/{response_id}/input_items` schema through the official
+  `openai/openai-openapi` schema. Current input-items listing supports `limit`,
+  `after`, `include`, and `order`, with default `order=desc` and shared
+  `IncludeEnum` query values.
+- Tightened local Responses input item listing:
+  - default listing now uses official descending order;
+  - explicit `order=asc` still returns input write order;
+  - invalid `include` query values now fail with `include.N` validation errors
+    before returning local data.
+- Updated tests and the compatibility matrix to document the default ordering
+  and query validation behavior.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'Responses input_items|Responses lifecycle endpoints retrieve input items'`:
+    passed 290/290 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 341/341.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed invalid `include` returns HTTP 400 with
+    `param:"include.0"`, default input item listing returns newest-first item
+    ids, and `order=asc` returns oldest-first item ids.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Items Include Query Tightening
 
 - Rechecked the official OpenAI Conversation items create/list/retrieve
