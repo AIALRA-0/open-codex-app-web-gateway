@@ -1,5 +1,33 @@
 # Audit Log
 
+## 2026-06-17 Response Delete Marker Alignment
+
+- Rechecked the official OpenAI `DELETE /v1/responses/{response_id}` example
+  through the official `openai/openai-openapi` schema. The official deletion
+  marker uses `object:"response"` with `deleted:true`.
+- Aligned the local Responses delete marker:
+  - deleted response records still abort any in-process background job and
+    remove the local replay record;
+  - successful deletes now return `object:"response"` instead of the older
+    local `response.deleted` marker.
+- Updated tests and the compatibility matrix for the official marker shape.
+- Validation:
+  - `npm test` passes: 341 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional `sk-...` pattern scan has no repository matches;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after bridge restart;
+  - local smoke against `http://127.0.0.1:12912` created a stored response,
+    deleted it with `object:"response"` and `deleted:true`, then confirmed the
+    deleted response returns 404;
+  - public smoke against `https://opencodexapp.aialra.online` created a stored
+    response, deleted it with `object:"response"` and `deleted:true`, then
+    confirmed the deleted response returns 404.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Response Update And Cancel Include Extension Validation
 
 - Rechecked the official OpenAI response retrieval/update/cancel paths through

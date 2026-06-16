@@ -13754,7 +13754,7 @@ function handleResponseDelete(res, store, responseId, backgroundJobs) {
 
   sendJson(res, 200, {
     id: responseId,
-    object: "response.deleted",
+    object: "response",
     deleted: true,
   });
 }

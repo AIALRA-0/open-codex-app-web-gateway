@@ -15446,7 +15446,7 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), {
       id: createdJson.id,
-      object: "response.deleted",
+      object: "response",
       deleted: true,
     });
 
