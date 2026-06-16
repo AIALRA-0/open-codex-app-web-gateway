@@ -1,5 +1,73 @@
 # Audit Log
 
+## 2026-06-16 Official Identity Cache Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Chat and Responses describe `safety_identifier` as a string user identifier
+  with a 64-character maximum, `prompt_cache_retention` as `in_memory` or
+  `24h`, and legacy `user` as a string. The OpenAPI source additionally
+  documents Responses `prompt_cache_key` as string/null with a 64-character
+  maximum and Chat `prompt_cache_key` as a string.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-string `user`,
+    `safety_identifier`, and `prompt_cache_key`, rejects
+    `safety_identifier` and Responses `prompt_cache_key` values over 64
+    characters, and rejects unsupported `prompt_cache_retention` values before
+    Responses-to-Chat translation or upstream provider calls.
+  - local `POST /v1/responses/input_tokens` applies the same identity/cache
+    validation before building the prompt-token probe.
+  - `POST /v1/chat/completions` now rejects non-string `user`,
+    `safety_identifier`, and `prompt_cache_key`, rejects
+    `safety_identifier` over 64 characters, and rejects unsupported
+    `prompt_cache_retention` values before direct Chat passthrough, provider
+    filtering, or DeepSeek `user_id` mapping.
+  - `POST /v1/completions` now rejects non-string legacy `user` values before
+    prompt-to-Chat mapping, non-streaming provider calls, or streaming provider
+    calls.
+  - Invalid strings, arrays, objects, numbers, and enum values now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    the relevant `param` locally with zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values: identity/cache
+  fields continue to be forwarded for providers that support them or mapped
+  into DeepSeek `user_id` compatibility metadata when configured.
+- Added regression coverage proving invalid identity/cache values fail locally
+  with zero upstream calls on Responses create, Responses input-token probes,
+  direct Chat, and legacy Completions; valid values continue through
+  provider-aware passthrough or mapping.
+- Updated the compatibility matrix and evaluation plan so identity/cache parity
+  tracks official request validation in addition to DeepSeek `user_id` mapping.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "identity and cache|validates user before provider calls|maps prompt_cache_key|normalizes OpenAI Chat fields"`:
+    passed 254/254; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 303/303.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"user"` for `user:{}`; public `/v1/responses/input_tokens`
+    returned HTTP 400 with `param:"prompt_cache_key"` for a 65-character
+    `prompt_cache_key`; public `/v1/chat/completions` returned HTTP 400 with
+    `param:"safety_identifier"` for a 65-character `safety_identifier`;
+    public `/v1/completions` returned HTTP 400 with `param:"user"` for
+    `user:[]`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 7.2G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Seed Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

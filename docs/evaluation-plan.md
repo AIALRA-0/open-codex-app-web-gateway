@@ -483,7 +483,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   validating OpenAI boolean `parallel_tool_calls` requests before provider
   calls, validating OpenAI Chat `logprobs` boolean/null request values before
   log-probability routing, validating OpenAI Chat `seed` integer/range request
-  values before deterministic-sampling passthrough, filtering unsupported OpenAI-only Chat fields, preserving local
+  values before deterministic-sampling passthrough, validating OpenAI
+  identity/cache field shapes before DeepSeek `user_id` mapping or
+  prompt-cache passthrough, filtering unsupported OpenAI-only Chat fields, preserving local
   `store`/`metadata` behavior while filtering those unsupported upstream
   fields, validating OpenAI Chat `n` integer bounds before provider calls,
   locally emulating unsupported non-streaming and streaming `n>1` requests with
@@ -608,6 +610,14 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/responses/input_tokens`, direct Chat, and legacy Completions reject
   non-integer or out-of-official-range `seed` values locally with zero upstream
   calls, while valid seeds continue through provider-aware passthrough.
+- Identity/cache compatibility must verify that Responses create, local
+  `/v1/responses/input_tokens`, and direct Chat reject non-string `user`,
+  `safety_identifier`, and `prompt_cache_key` values, reject
+  `safety_identifier` values over 64 characters, reject unsupported
+  `prompt_cache_retention` values, enforce the Responses 64-character
+  `prompt_cache_key` limit, and keep valid fields eligible for upstream
+  passthrough or DeepSeek `user_id` mapping; legacy Completions must reject
+  non-string `user` before prompt-to-Chat mapping.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `logprobs` boolean/null handling on Responses and direct Chat requests, official `top_logprobs` integer bounds, the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set, and legacy Completions `echo` boolean/null plus `logprobs` integer 0..5 validation before prompt-to-Chat mapping.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.

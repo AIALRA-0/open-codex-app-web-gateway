@@ -938,6 +938,92 @@ test("POST /v1/responses validates seed before provider calls", async () => {
   });
 });
 
+test("POST /v1/responses validates identity and cache fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.user, "legacy-user");
+    assert.equal(call.body.safety_identifier, "safe-user");
+    assert.equal(call.body.prompt_cache_key, "cache-key");
+    assert.equal(call.body.prompt_cache_retention, "24h");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_identity_cache",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses identity ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { user: {} }, param: "user", message: "user must be a string" },
+      { body: { safety_identifier: [] }, param: "safety_identifier", message: "safety_identifier must be a string" },
+      {
+        body: { safety_identifier: "s".repeat(65) },
+        param: "safety_identifier",
+        message: "safety_identifier must be at most 64 characters",
+      },
+      { body: { prompt_cache_key: [] }, param: "prompt_cache_key", message: "prompt_cache_key must be a string" },
+      {
+        body: { prompt_cache_key: "c".repeat(65) },
+        param: "prompt_cache_key",
+        message: "prompt_cache_key must be at most 64 characters",
+      },
+      {
+        body: { prompt_cache_retention: "forever" },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+      {
+        body: { prompt_cache_retention: {} },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check identity/cache validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid identity/cache request.",
+        user: "legacy-user",
+        safety_identifier: "safe-user",
+        prompt_cache_key: "cache-key",
+        prompt_cache_retention: "24h",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses identity ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps Chat-native aliases and request fields", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.max_tokens, 6);
@@ -15927,6 +16013,87 @@ test("POST /v1/responses/input_tokens validates seed before provider calls", asy
   });
 });
 
+test("POST /v1/responses/input_tokens validates identity and cache fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.user, "probe-user");
+    assert.equal(call.body.prompt_cache_key, "probe-cache");
+    assert.equal(call.body.prompt_cache_retention, "in_memory");
+    assert.equal(call.body.max_tokens, 1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_identity_cache_probe",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 61, completion_tokens: 1, total_tokens: 62 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { user: 123 }, param: "user", message: "user must be a string" },
+      {
+        body: { safety_identifier: "s".repeat(65) },
+        param: "safety_identifier",
+        message: "safety_identifier must be at most 64 characters",
+      },
+      {
+        body: { prompt_cache_key: "c".repeat(65) },
+        param: "prompt_cache_key",
+        message: "prompt_cache_key must be at most 64 characters",
+      },
+      {
+        body: { prompt_cache_retention: "7d" },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Count invalid identity/cache request.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Count valid identity/cache request.",
+        user: "probe-user",
+        prompt_cache_key: "probe-cache",
+        prompt_cache_retention: "in_memory",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), {
+      object: "response.input_tokens",
+      input_tokens: 61,
+    });
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses/input_tokens validates and counts style preset", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -19347,6 +19514,60 @@ test("POST /v1/completions validates seed before provider calls", async () => {
   });
 });
 
+test("POST /v1/completions validates user before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.user, "legacy-user");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_user",
+      object: "chat.completion",
+      created: 1700000127,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy user ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const user of [123, [], {}]) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy user validation.",
+          user,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "user must be a string",
+          type: "invalid_request_error",
+          param: "user",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy user passthrough.",
+        user: "legacy-user",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy user ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates echo and logprobs before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -19903,6 +20124,86 @@ test("POST /v1/chat/completions validates seed before provider calls", async () 
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat seed ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates identity and cache fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.user, "chat-user");
+    assert.equal(call.body.safety_identifier, "chat-safe-user");
+    assert.equal(call.body.prompt_cache_key, "chat-cache-key");
+    assert.equal(call.body.prompt_cache_retention, "in_memory");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_identity_cache",
+      object: "chat.completion",
+      created: 1700000304,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat identity ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { user: [] }, param: "user", message: "user must be a string" },
+      { body: { safety_identifier: {} }, param: "safety_identifier", message: "safety_identifier must be a string" },
+      {
+        body: { safety_identifier: "s".repeat(65) },
+        param: "safety_identifier",
+        message: "safety_identifier must be at most 64 characters",
+      },
+      { body: { prompt_cache_key: [] }, param: "prompt_cache_key", message: "prompt_cache_key must be a string" },
+      {
+        body: { prompt_cache_retention: "forever" },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+      {
+        body: { prompt_cache_retention: [] },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        user: "chat-user",
+        safety_identifier: "chat-safe-user",
+        prompt_cache_key: "chat-cache-key",
+        prompt_cache_retention: "in_memory",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat identity ok");
     assert.equal(requests.length, 1);
   });
 });
