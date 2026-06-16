@@ -13684,6 +13684,12 @@ function storedFunctionCallStreamEvents(responseId, item, outputIndex) {
 
 async function handleResponseUpdate(req, res, store, responseId, url) {
   const body = await readJson(req);
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
+
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });
@@ -13754,6 +13760,12 @@ function handleResponseDelete(res, store, responseId, backgroundJobs) {
 }
 
 function handleResponseCancel(res, store, responseId, backgroundJobs, url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) {
+    sendError(res, 400, includeError.message, includeError);
+    return;
+  }
+
   const record = store.get(responseId);
   if (!record?.response) {
     sendError(res, 404, `response not found: ${responseId}`, { code: "response_not_found" });

@@ -1,5 +1,38 @@
 # Audit Log
 
+## 2026-06-17 Response Update And Cancel Include Extension Validation
+
+- Rechecked the official OpenAI response retrieval/update/cancel paths through
+  the official `openai/openai-openapi` schema. The official retrieval endpoint
+  supports `include`; the local metadata update and cancel endpoints use
+  include projection as a compatibility extension.
+- Tightened the local extension:
+  - `POST /v1/responses/{response_id}` now rejects unknown local `include`
+    query values before updating stored metadata;
+  - `POST /v1/responses/{response_id}/cancel` now rejects unknown local
+    `include` query values before returning local terminal/background records;
+  - valid include values continue to project stored response fields exactly as
+    the retrieval endpoint does.
+- Updated tests and the compatibility matrix to document the extension and its
+  validation behavior.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'output logprobs include'`:
+    passed 290/290 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 341/341.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed invalid update/cancel include extensions
+    return HTTP 400 with `param:"include.0"`, while valid cancel include
+    projection still returns HTTP 200.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Responses Retrieve Stream Replay
 
 - Rechecked the official OpenAI `GET /v1/responses/{response_id}` schema

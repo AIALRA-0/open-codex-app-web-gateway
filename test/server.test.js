@@ -3090,6 +3090,14 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
     assert.equal(updatedIncludedJson.metadata.suite, "logprobs-update-included");
     assert.equal(updatedIncludedJson.output[0].content[0].logprobs[0].token, "yes");
 
+    const invalidUpdateInclude = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}?include=not.a.real.include`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "logprobs-update-invalid-include" } }),
+    });
+    assert.equal(invalidUpdateInclude.status, 400);
+    assert.equal((await invalidUpdateInclude.json()).error.param, "include.0");
+
     const cancelledHiddenResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}/cancel`, { method: "POST" });
     assert.equal(cancelledHiddenResponse.status, 200);
     const cancelledHiddenJson = await cancelledHiddenResponse.json();
@@ -3101,6 +3109,10 @@ test("POST /v1/responses maps output logprobs include to Chat and back", async (
     assert.equal(cancelledIncludedResponse.status, 200);
     const cancelledIncludedJson = await cancelledIncludedResponse.json();
     assert.equal(cancelledIncludedJson.output[0].content[0].logprobs[0].token, "yes");
+
+    const invalidCancelInclude = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${json.id}/cancel?include=not.a.real.include`, { method: "POST" });
+    assert.equal(invalidCancelInclude.status, 400);
+    assert.equal((await invalidCancelInclude.json()).error.param, "include.0");
   });
 });
 
