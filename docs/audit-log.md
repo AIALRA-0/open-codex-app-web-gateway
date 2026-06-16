@@ -1,5 +1,54 @@
 # Audit Log
 
+## 2026-06-16 Official Verbosity Validation
+
+- Rechecked the official OpenAI Chat Completions create body-parameter docs
+  through the OpenAI developer docs MCP before changing validation behavior:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`.
+  The Chat contract constrains `verbosity` to the currently supported values
+  `low`, `medium`, and `high`. The Responses create docs do not expose
+  `verbosity` as a first-class Responses parameter, but this bridge already
+  accepts it on `POST /v1/responses` as a Chat-native alias, so the accepted
+  alias now follows the Chat request contract.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects invalid Chat-native `verbosity` aliases
+    before translating the request to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough.
+  - `null` is treated as unset, matching the bridge's optional-field handling
+    for other OpenAI request parameters.
+- Added regression coverage proving invalid strings, uppercase enum values,
+  empty strings, and non-string values fail locally for both Responses and
+  direct Chat with zero upstream calls. Valid `low` and `high` values still
+  reach the existing DeepSeek-compatible prompt-instruction path when native
+  Chat fields are filtered.
+- Updated the compatibility matrix and evaluation plan so Chat-native
+  `verbosity` parity tracks request-contract validation as well as
+  passthrough/prompt-instruction behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "verbosity|Chat-native request fields|normalizes OpenAI Chat fields|filters Chat-native"`:
+    passed 268/268; the current Node test runner executed both full selected
+    test files.
+  - `npm test`: passed 272/272.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `verbosity` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"`, `param:"verbosity"`, and
+    `code:"invalid_request_parameter"`; the Responses request used
+    `verbosity:"terse"`, and the Chat request used `verbosity:"HIGH"`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Legacy Completions Logit Bias Validation
 
 - Rechecked the official OpenAI legacy Completions create operation through

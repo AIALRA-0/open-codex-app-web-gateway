@@ -210,6 +210,7 @@ const OPENAI_PENALTY_MAX = 2;
 const OPENAI_STOP_MAX_SEQUENCES = 4;
 const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
+const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -813,6 +814,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const verbosityError = validateOpenAIVerbosity(request);
+  if (verbosityError) {
+    sendError(res, 400, verbosityError.message, verbosityError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2355,6 +2361,17 @@ function validateOpenAILogitBias(body = {}) {
         `logit_bias.${tokenId}`,
       );
     }
+  }
+  return null;
+}
+
+function validateOpenAIVerbosity(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "verbosity") || body.verbosity == null) return null;
+  if (typeof body.verbosity !== "string" || !OPENAI_VERBOSITY_VALUES.includes(body.verbosity)) {
+    return requestValidationError(
+      `verbosity must be one of: ${OPENAI_VERBOSITY_VALUES.join(", ")}`,
+      "verbosity",
+    );
   }
   return null;
 }
@@ -4493,6 +4510,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const logitBiasError = validateOpenAILogitBias(body);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const verbosityError = validateOpenAIVerbosity(body);
+  if (verbosityError) {
+    sendError(res, 400, verbosityError.message, verbosityError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);

@@ -665,6 +665,69 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
   }, { forwardChatNativeFields: false, forwardStoredChatFields: false });
 });
 
+test("POST /v1/responses validates verbosity values before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.verbosity, undefined);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(call.body.messages[0].content, /Verbosity compatibility/);
+    assert.match(call.body.messages[0].content, /answer concisely/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_verbosity_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "verbosity ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { verbosity: "terse" },
+      { verbosity: "HIGH" },
+      { verbosity: "" },
+      { verbosity: 1 },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check verbosity validation.",
+          ...invalidCase,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "verbosity must be one of: low, medium, high",
+          type: "invalid_request_error",
+          param: "verbosity",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check verbosity boundary.",
+        verbosity: "low",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "verbosity ok");
+    assert.equal(requests.length, 1);
+  }, { forwardChatNativeFields: false });
+});
+
 test("POST /v1/responses validates official string metadata limits", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -18709,6 +18772,69 @@ test("POST /v1/chat/completions validates logit_bias before provider calls", asy
     assert.equal((await valid.json()).choices[0].message.content, "chat logit bias ok");
     assert.equal(requests.length, 1);
   });
+});
+
+test("POST /v1/chat/completions validates verbosity values before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.verbosity, undefined);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(call.body.messages[0].content, /Verbosity compatibility/);
+    assert.match(call.body.messages[0].content, /thorough detail/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_verbosity_boundary",
+      object: "chat.completion",
+      created: 1700000304,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat verbosity ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { verbosity: "terse" },
+      { verbosity: "HIGH" },
+      { verbosity: "" },
+      { verbosity: 1 },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "verbosity must be one of: low, medium, high",
+          type: "invalid_request_error",
+          param: "verbosity",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        verbosity: "high",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat verbosity ok");
+    assert.equal(requests.length, 1);
+  }, { forwardChatNativeFields: false });
 });
 
 test("POST /v1/chat/completions proxies and stores chat responses when requested", async () => {
