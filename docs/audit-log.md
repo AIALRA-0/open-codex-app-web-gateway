@@ -1,5 +1,39 @@
 # Audit Log
 
+## 2026-06-17 Service Tier Scale Enum Validation
+
+- Rechecked the official OpenAI `ServiceTierEnum` through the official
+  `openai/openai-openapi` spec. Current request values are `auto`, `default`,
+  `flex`, `scale`, and `priority`.
+- Closed a request-contract gap:
+  - `/v1/responses`, `/v1/responses/compact`, and direct
+    `/v1/chat/completions` now accept `service_tier:"scale"` as an
+    OpenAI-valid request value;
+  - provider-aware forwarding/filtering remains unchanged, so DeepSeek
+    deployments still filter unsupported `service_tier` fields while recording
+    compatibility metadata.
+- Validation:
+  - targeted service-tier server validation tests pass;
+  - targeted translator service-tier tests pass;
+  - `npm test` passes: 342 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional credential-pattern scan only matched a local test fixture bearer
+    token string;
+  - no stale `service_tier` enum documentation remains in `src`, `test`, or
+    `docs`;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local smoke against `http://127.0.0.1:12912` confirms invalid
+    `service_tier:"fast"` returns `400 invalid_request_parameter`, while valid
+    `service_tier:"scale"` returns
+    `metadata.compatibility.service_tier.reason` as `provider_unsupported`;
+  - public smoke against `https://opencodexapp.aialra.online` confirms the same
+    validation and compatibility metadata behavior.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Reasoning Summary Request Validation
 
 - Rechecked the official OpenAI `Reasoning` schema through the official

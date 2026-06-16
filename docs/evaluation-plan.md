@@ -733,7 +733,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   must still be converted into Chat-visible insertion context without
   forwarding unsupported legacy fields upstream.
 - Responses and direct Chat requests that include Chat-native `verbosity` validate the official `low` / `medium` / `high` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, empty strings, and non-string values producing zero upstream calls while valid values still feed the provider-aware passthrough or prompt-instruction compatibility path.
-- Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
+- Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `scale` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
 - Responses create and `/input_tokens` `text.format`, plus direct Chat
   `response_format`, requests validate the official `text` / `json_object` /
   `json_schema` union locally before provider calls, including response-format
@@ -773,7 +773,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   calls: `model` is required, `prompt_cache_key` follows the Responses
   64-character string limit, `prompt_cache_retention` follows the
   `in_memory` / `24h` enum, and `service_tier` follows the
-  `auto` / `default` / `flex` / `priority` enum. Valid prompt-cache and
+  `auto` / `default` / `flex` / `scale` / `priority` enum. Valid prompt-cache and
   provider-supported service-tier fields must survive the local compaction Chat
   request rebuild.
 - Responses `context_management` request compatibility records the official

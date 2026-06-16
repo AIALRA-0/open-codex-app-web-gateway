@@ -661,17 +661,17 @@ test("POST /v1/responses forwards service_tier and preserves provider tier", asy
 
 test("POST /v1/responses validates service_tier values before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
-    assert.equal(call.body.service_tier, "default");
+    assert.ok(["default", "scale"].includes(call.body.service_tier));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_tier_boundary",
       object: "chat.completion",
       created: 100,
       model: "mock-model",
-      service_tier: "default",
+      service_tier: call.body.service_tier,
       choices: [{
         index: 0,
-        message: { role: "assistant", content: "service tier ok" },
+        message: { role: "assistant", content: `service tier ${call.body.service_tier} ok` },
         finish_reason: "stop",
       }],
     }));
@@ -679,7 +679,6 @@ test("POST /v1/responses validates service_tier values before provider calls", a
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const invalidCases = [
       { service_tier: "fast" },
-      { service_tier: "scale" },
       { service_tier: "PRIORITY" },
       { service_tier: 1 },
     ];
@@ -696,7 +695,7 @@ test("POST /v1/responses validates service_tier values before provider calls", a
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), {
         error: {
-          message: "service_tier must be one of: auto, default, flex, priority",
+          message: "service_tier must be one of: auto, default, flex, scale, priority",
           type: "invalid_request_error",
           param: "service_tier",
           code: "invalid_request_parameter",
@@ -716,9 +715,24 @@ test("POST /v1/responses validates service_tier values before provider calls", a
     });
     assert.equal(valid.status, 200);
     const json = await valid.json();
-    assert.equal(json.output[0].content[0].text, "service tier ok");
+    assert.equal(json.output[0].content[0].text, "service tier default ok");
     assert.equal(json.service_tier, "default");
     assert.equal(requests.length, 1);
+
+    const scale = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check scale service tier boundary.",
+        service_tier: "scale",
+      }),
+    });
+    assert.equal(scale.status, 200);
+    const scaleJson = await scale.json();
+    assert.equal(scaleJson.output[0].content[0].text, "service tier scale ok");
+    assert.equal(scaleJson.service_tier, "scale");
+    assert.equal(requests.length, 2);
   });
 });
 
@@ -17344,7 +17358,7 @@ test("POST /v1/responses/compact validates official request fields before provid
       {
         body: { model: "mock-model", service_tier: "fast" },
         param: "service_tier",
-        message: "service_tier must be one of: auto, default, flex, priority",
+        message: "service_tier must be one of: auto, default, flex, scale, priority",
       },
     ];
 
@@ -23749,17 +23763,17 @@ test("POST /v1/chat/completions validates verbosity values before provider calls
 
 test("POST /v1/chat/completions validates service_tier values before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
-    assert.equal(call.body.service_tier, "priority");
+    assert.ok(["priority", "scale"].includes(call.body.service_tier));
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_chat_service_tier_boundary",
       object: "chat.completion",
       created: 1700000305,
       model: "mock-model",
-      service_tier: "flex",
+      service_tier: call.body.service_tier === "priority" ? "flex" : "scale",
       choices: [{
         index: 0,
-        message: { role: "assistant", content: "chat service tier ok" },
+        message: { role: "assistant", content: `chat service tier ${call.body.service_tier} ok` },
         finish_reason: "stop",
       }],
     }));
@@ -23767,7 +23781,6 @@ test("POST /v1/chat/completions validates service_tier values before provider ca
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const invalidCases = [
       { service_tier: "fast" },
-      { service_tier: "scale" },
       { service_tier: "PRIORITY" },
       { service_tier: 1 },
     ];
@@ -23784,7 +23797,7 @@ test("POST /v1/chat/completions validates service_tier values before provider ca
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), {
         error: {
-          message: "service_tier must be one of: auto, default, flex, priority",
+          message: "service_tier must be one of: auto, default, flex, scale, priority",
           type: "invalid_request_error",
           param: "service_tier",
           code: "invalid_request_parameter",
@@ -23804,9 +23817,24 @@ test("POST /v1/chat/completions validates service_tier values before provider ca
     });
     assert.equal(valid.status, 200);
     const json = await valid.json();
-    assert.equal(json.choices[0].message.content, "chat service tier ok");
+    assert.equal(json.choices[0].message.content, "chat service tier priority ok");
     assert.equal(json.service_tier, "flex");
     assert.equal(requests.length, 1);
+
+    const scale = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        service_tier: "scale",
+      }),
+    });
+    assert.equal(scale.status, 200);
+    const scaleJson = await scale.json();
+    assert.equal(scaleJson.choices[0].message.content, "chat service tier scale ok");
+    assert.equal(scaleJson.service_tier, "scale");
+    assert.equal(requests.length, 2);
   });
 });
 

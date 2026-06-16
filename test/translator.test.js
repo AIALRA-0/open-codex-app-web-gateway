@@ -947,23 +947,23 @@ test("passes Chat service tier to upstream requests", () => {
   const { chat } = responsesToChatRequest({
     model: "mock-model",
     input: "Use the requested tier.",
-    service_tier: "priority",
+    service_tier: "scale",
   });
 
-  assert.equal(chat.service_tier, "priority");
+  assert.equal(chat.service_tier, "scale");
 });
 
 test("can filter service tier for providers that do not support it", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",
     input: "Use the available tier.",
-    service_tier: "priority",
+    service_tier: "scale",
   }, [], { forwardServiceTier: false });
 
   assert.equal(chat.service_tier, undefined);
   assert.deepEqual(compatibility.service_tier, {
     source: "service_tier",
-    value: "priority",
+    value: "scale",
     forwarded: false,
     reason: "provider_unsupported",
   });
