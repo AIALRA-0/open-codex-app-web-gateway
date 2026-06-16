@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 Parallel Tool-Call Constraint Mapping
+
+- Rechecked the current official OpenAI Responses and Chat Completions create
+  schemas through the OpenAI developer docs MCP/OpenAPI spec before changing
+  compatibility behavior. Both surfaces define `parallel_tool_calls` as the
+  field that controls whether the model may run tool calls in parallel.
+- Added provider-aware compatibility for `parallel_tool_calls:false` on
+  Chat-only providers that do not accept the native field:
+  - `/v1/responses` translation now injects a system instruction requiring at
+    most one tool call in the assistant turn when tools are present and native
+    Chat fields are not forwarded;
+  - direct `/v1/chat/completions` passthrough now applies the same instruction
+    after legacy/custom tool normalization has determined that upstream tools
+    remain available;
+  - the native `parallel_tool_calls` field is not forwarded in this mode and is
+    recorded as mapped, not generically dropped;
+  - requests without tools, or values other than explicit `false`, keep the
+    existing generic provider-field filtering behavior.
+- Added regression coverage for:
+  - translator-level Responses behavior proving the upstream Chat request gets
+    the single-tool-call instruction and omits native `parallel_tool_calls`;
+  - direct Chat mock-provider behavior proving DeepSeek-compatible passthrough
+    sends the instruction with tool-bearing requests and records
+    `chat_passthrough.parallel_tool_calls`.
+- Updated the compatibility matrix and evaluation plan so future parity checks
+  treat `parallel_tool_calls:false` as a prompt-level compatibility mapping when
+  native provider support is unavailable.
+- Validation:
+  - `node --check src/bridge/translator.js`, `src/bridge/server.js`,
+    `test/translator.test.js`, and `test/server.test.js`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "parallel_tool_calls|Chat-native request fields"`:
+    passed 45/45.
+  - `node --test test/server.test.js --test-name-pattern "normalizes OpenAI Chat fields|parallel_tool_calls"`:
+    passed 209/209; the current Node test runner executed the whole server test
+    file.
+  - `npm test`: passed 258/258.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public direct Chat smoke through
+    `https://opencodexapp.aialra.online/v1/chat/completions`: HTTP 200, content
+    `ok-parallel-tool-constraint`,
+    `chat_passthrough.parallel_tool_calls.reason` was
+    `provider_unsupported_prompt_instruction`, and
+    `chat_native_fields.mapped` contained `parallel_tool_calls` without listing
+    it under filtered fields.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Legacy Chat Function Request Mapping
 
 - Rechecked the current official OpenAI Chat Completions create schema through

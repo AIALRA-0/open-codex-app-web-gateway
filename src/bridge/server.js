@@ -4678,6 +4678,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const customTools = filterChatPassthroughCustomTools(upstreamBody, config);
   if (customTools) compatibility.custom_tools = customTools;
 
+  const parallelToolCalls = normalizeChatPassthroughParallelToolCalls(upstreamBody, config);
+  if (parallelToolCalls) compatibility.parallel_tool_calls = parallelToolCalls;
+
   const deepseekThinking = normalizeChatPassthroughToolChoiceThinking(upstreamBody, config);
   if (deepseekThinking) compatibility.deepseek_thinking = deepseekThinking;
 
@@ -4708,7 +4711,10 @@ function chatPassthroughUpstreamBody(body, config) {
   if (webSearchOptions) compatibility.web_search_options = webSearchOptions;
 
   const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config, {
-    mappedFields: deepseekUserId?.source ? [deepseekUserId.source] : [],
+    mappedFields: [
+      ...(deepseekUserId?.source ? [deepseekUserId.source] : []),
+      ...(parallelToolCalls ? ["parallel_tool_calls"] : []),
+    ],
   });
   if (nativeFields) compatibility.chat_native_fields = nativeFields;
 
@@ -5334,6 +5340,29 @@ function legacyFunctionCallCompatibilityValue(functionCall) {
     return functionCall.name ? { name: stringifyContent(functionCall.name) } : {};
   }
   return stringifyContent(functionCall);
+}
+
+function normalizeChatPassthroughParallelToolCalls(upstreamBody, config = {}) {
+  if (
+    upstreamBody.parallel_tool_calls !== false
+    || config.forwardChatNativeFields !== false
+    || !Array.isArray(upstreamBody.tools)
+    || upstreamBody.tools.length === 0
+  ) {
+    return null;
+  }
+  injectChatPassthroughSystemInstruction(upstreamBody, parallelToolCallsInstruction());
+  return {
+    source: "parallel_tool_calls",
+    value: false,
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  };
+}
+
+function parallelToolCallsInstruction() {
+  return "Parallel tool-call compatibility: when you call tools, call at most one tool in this assistant turn. Do not emit multiple tool calls in the same response.";
 }
 
 function normalizeChatPassthroughToolChoiceThinking(upstreamBody, config = {}) {

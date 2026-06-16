@@ -609,11 +609,13 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   if (Object.prototype.hasOwnProperty.call(legacyFunctionsCompatibility || {}, "toolChoice")) {
     toolChoice = legacyFunctionsCompatibility.toolChoice;
   }
+  const parallelToolCallsCompatibility = mapParallelToolCalls(request, chat, tools, options);
   const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, {
     ...options,
     mappedNativeFields: [
       ...(deepseekUserIdCompatibility?.source ? [deepseekUserIdCompatibility.source] : []),
       ...(legacyFunctionsCompatibility?.mappedFields || []),
+      ...(parallelToolCallsCompatibility ? ["parallel_tool_calls"] : []),
     ],
   });
 
@@ -662,6 +664,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(verbosityCompatibility ? { verbosity: verbosityCompatibility } : {}),
       ...(contextManagementCompatibility ? { context_management: contextManagementCompatibility } : {}),
       ...(legacyFunctionsCompatibility?.compatibility ? { legacy_functions: legacyFunctionsCompatibility.compatibility } : {}),
+      ...(parallelToolCallsCompatibility ? { parallel_tool_calls: parallelToolCallsCompatibility } : {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
@@ -768,6 +771,32 @@ function legacyFunctionCallCompatibilityValue(functionCall) {
     return functionCall.name ? { name: stringifyContent(functionCall.name) } : {};
   }
   return stringifyContent(functionCall);
+}
+
+function mapParallelToolCalls(request = {}, chat = {}, tools = [], options = {}) {
+  if (
+    request.parallel_tool_calls !== false
+    || options.forwardChatNativeFields !== false
+    || !Array.isArray(tools)
+    || tools.length === 0
+  ) {
+    return null;
+  }
+  chat.messages = [
+    { role: "system", content: parallelToolCallsInstruction() },
+    ...(Array.isArray(chat.messages) ? chat.messages : []),
+  ];
+  return {
+    source: "parallel_tool_calls",
+    value: false,
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  };
+}
+
+function parallelToolCallsInstruction() {
+  return "Parallel tool-call compatibility: when you call tools, call at most one tool in this assistant turn. Do not emit multiple tool calls in the same response.";
 }
 
 function mapContextManagement(request = {}) {

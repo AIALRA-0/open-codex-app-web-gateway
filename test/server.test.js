@@ -17962,11 +17962,13 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
 
 test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compatible providers", async () => {
   await withMockProvider(async (_req, res, call) => {
-    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "system", "user"]);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "system", "system", "user"]);
     assert.match(call.body.messages[0].content, /Verbosity compatibility/);
     assert.match(call.body.messages[0].content, /answer concisely/);
-    assert.equal(call.body.messages[1].content, "Use terse answers.");
-    assert.equal(call.body.messages[2].content, "Return chat-developer-ok.");
+    assert.match(call.body.messages[1].content, /Parallel tool-call compatibility/);
+    assert.match(call.body.messages[1].content, /at most one tool/);
+    assert.equal(call.body.messages[2].content, "Use terse answers.");
+    assert.equal(call.body.messages[3].content, "Return chat-developer-ok.");
     assert.equal(call.body.user, undefined);
     assert.match(call.body.user_id, /^sha256_[a-f0-9]{64}$/);
     assert.equal(call.body.service_tier, undefined);
@@ -18083,6 +18085,13 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
       "provider_unsupported_prompt_instruction",
     );
     assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.prompt_instruction, "injected");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.parallel_tool_calls, {
+      source: "parallel_tool_calls",
+      value: false,
+      forwarded: false,
+      reason: "provider_unsupported_prompt_instruction",
+      prompt_instruction: "injected",
+    });
     assert.deepEqual(json.metadata.compatibility.chat_passthrough.legacy_functions, {
       functions: {
         source: "functions",
@@ -18115,14 +18124,16 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         "logit_bias",
         "modalities",
         "moderation",
-        "parallel_tool_calls",
         "prediction",
         "prompt_cache_key",
         "prompt_cache_retention",
         "web_search_options",
       ].sort(),
     );
-    assert.deepEqual(json.metadata.compatibility.chat_passthrough.chat_native_fields.mapped, ["safety_identifier"]);
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.chat_native_fields.mapped.sort(), [
+      "parallel_tool_calls",
+      "safety_identifier",
+    ].sort());
     assert.equal(json.moderation.input.results[0].flagged, false);
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);

@@ -718,6 +718,33 @@ test("maps legacy Chat functions to modern tools for unsupported providers", () 
   ].sort());
 });
 
+test("maps parallel_tool_calls false to a tool-use instruction for unsupported providers", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Use at most one tool.",
+    parallel_tool_calls: false,
+    tools: [{
+      type: "function",
+      name: "lookup_one",
+      description: "Look up one value.",
+      parameters: { type: "object", properties: {} },
+    }],
+  }, [], { forwardChatNativeFields: false });
+
+  assert.equal(chat.parallel_tool_calls, undefined);
+  assert.equal(chat.messages[0].role, "system");
+  assert.match(chat.messages[0].content, /Parallel tool-call compatibility/);
+  assert.match(chat.messages[0].content, /at most one tool/);
+  assert.deepEqual(compatibility.parallel_tool_calls, {
+    source: "parallel_tool_calls",
+    value: false,
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  });
+  assert.deepEqual(compatibility.chat_native_fields.mapped, ["parallel_tool_calls"]);
+});
+
 test("records Responses context management without forwarding it to Chat providers", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "mock-model",
