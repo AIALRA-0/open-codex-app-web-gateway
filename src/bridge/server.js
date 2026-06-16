@@ -196,6 +196,9 @@ const LOCAL_VIDEO_CONTENT_VARIANTS = new Set(["video", "thumbnail", "spritesheet
 const LOCAL_PLACEHOLDER_MP4 = Buffer.from("AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAGG1kYXQ=", "base64");
 const LOCAL_PLACEHOLDER_WEBP = Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64");
 const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const OPENAI_STRING_METADATA_MAX_PAIRS = 16;
+const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
+const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -776,6 +779,11 @@ function clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch) {
 
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
   const request = await readJson(req);
+  const metadataError = validateOpenAIStringMetadata(request);
+  if (metadataError) {
+    sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
   const responseId = prefixedId("resp");
   const toolBudget = createToolCallBudget(request.max_tool_calls);
   const conversation = prepareConversationContext(request, conversationStore, config);
@@ -2227,6 +2235,38 @@ function localTruncationErrorBody(error) {
 
 function sendLocalTruncationError(res, error) {
   sendJson(res, 400, localTruncationErrorBody(error));
+}
+
+function validateOpenAIStringMetadata(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "metadata") || body.metadata == null) return null;
+  if (!isPlainObject(body.metadata)) {
+    return metadataValidationError("metadata must be an object", "metadata");
+  }
+  const entries = Object.entries(body.metadata);
+  if (entries.length > OPENAI_STRING_METADATA_MAX_PAIRS) {
+    return metadataValidationError(`metadata must contain at most ${OPENAI_STRING_METADATA_MAX_PAIRS} key-value pairs`, "metadata");
+  }
+  for (const [key, value] of entries) {
+    if (Array.from(key).length > OPENAI_STRING_METADATA_MAX_KEY_CHARS) {
+      return metadataValidationError(`metadata keys must be at most ${OPENAI_STRING_METADATA_MAX_KEY_CHARS} characters`, `metadata.${key}`);
+    }
+    if (typeof value !== "string") {
+      return metadataValidationError("metadata values must be strings", `metadata.${key}`);
+    }
+    if (Array.from(value).length > OPENAI_STRING_METADATA_MAX_VALUE_CHARS) {
+      return metadataValidationError(`metadata values must be at most ${OPENAI_STRING_METADATA_MAX_VALUE_CHARS} characters`, `metadata.${key}`);
+    }
+  }
+  return null;
+}
+
+function metadataValidationError(message, param = "metadata") {
+  return {
+    message,
+    type: "invalid_request_error",
+    code: "invalid_request_parameter",
+    param,
+  };
 }
 
 function validateResponsesInputTokensStyle(request = {}) {
@@ -4319,6 +4359,11 @@ async function* iterateSseJson(stream) {
 
 async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const body = await readJson(req);
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) {
+    sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);
   const localInputFiles = await prepareChatPassthroughInputFileContext(body, config, fileSearchStore);
   const localWebSearch = await prepareChatPassthroughWebSearchContext(body, config);
@@ -11029,6 +11074,11 @@ async function handleResponseUpdate(req, res, store, responseId, url) {
     });
     return;
   }
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) {
+    sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
 
   const metadata = clone(body.metadata);
   const existingMetadata = isPlainObject(record.response.metadata) ? record.response.metadata : {};
@@ -11142,6 +11192,11 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
       param: unsupported[0] || "metadata",
       code: "unsupported_chat_completion_update",
     });
+    return;
+  }
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) {
+    sendError(res, 400, metadataError.message, metadataError);
     return;
   }
 

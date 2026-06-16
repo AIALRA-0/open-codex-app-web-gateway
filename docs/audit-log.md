@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-16 Official String Metadata Validation
+
+- Rechecked the official OpenAI Responses create and Chat Completions create
+  body-parameter docs through the OpenAI developer docs MCP before changing
+  validation behavior. Both surfaces document `metadata` as up to 16 key-value
+  pairs, with keys up to 64 characters and string values up to 512 characters.
+- Added request-side validation for user-supplied `metadata` on:
+  - `POST /v1/responses`;
+  - `POST /v1/responses/{response_id}` stored-response metadata updates;
+  - `POST /v1/chat/completions`;
+  - `POST /v1/chat/completions/{completion_id}` stored-chat metadata updates.
+- Invalid metadata now fails locally with OpenAI-style
+  `400 invalid_request_error` / `invalid_request_parameter` before any
+  upstream Chat provider call or stored-object mutation. The bridge still keeps
+  its internal `metadata.compatibility` objects on response bodies after
+  validation, so behavior audit trails remain available without treating those
+  internal fields as caller-supplied metadata.
+- Added regression coverage proving Responses creation rejects non-object
+  metadata, more than 16 pairs, overlong keys, non-string values, and overlong
+  values with zero upstream calls; valid 16-entry string metadata still
+  succeeds. Added direct Chat coverage for create-time rejection and stored-chat
+  metadata update rejection, plus stored-response metadata update rejection.
+- Updated the compatibility matrix and evaluation plan so metadata validation is
+  tracked as part of Responses/Chat protocol parity.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "metadata|response-lifecycle|chat responses"`:
+    passed 212/212; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 261/261.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-metadata smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400,
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"metadata.suite"`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses Input Token Style Preset Mapping
 
 - Rechecked the official OpenAI `/v1/responses/input_tokens` body parameters

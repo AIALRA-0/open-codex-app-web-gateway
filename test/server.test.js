@@ -665,6 +665,88 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
   }, { forwardChatNativeFields: false, forwardStoredChatFields: false });
 });
 
+test("POST /v1/responses validates official string metadata limits", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_metadata_valid",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "metadata ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidBodies = [
+      {
+        metadata: [],
+        expectedMessage: "metadata must be an object",
+        expectedParam: "metadata",
+      },
+      {
+        metadata: Object.fromEntries(Array.from({ length: 17 }, (_, index) => [`k${index}`, "v"])),
+        expectedMessage: "metadata must contain at most 16 key-value pairs",
+        expectedParam: "metadata",
+      },
+      {
+        metadata: { ["k".repeat(65)]: "v" },
+        expectedMessage: "metadata keys must be at most 64 characters",
+        expectedParam: `metadata.${"k".repeat(65)}`,
+      },
+      {
+        metadata: { suite: 123 },
+        expectedMessage: "metadata values must be strings",
+        expectedParam: "metadata.suite",
+      },
+      {
+        metadata: { suite: "x".repeat(513) },
+        expectedMessage: "metadata values must be at most 512 characters",
+        expectedParam: "metadata.suite",
+      },
+    ];
+
+    for (const body of invalidBodies) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "metadata validation",
+          metadata: body.metadata,
+        }),
+      });
+      assert.equal(response.status, 400);
+      const json = await response.json();
+      assert.equal(json.error.message, body.expectedMessage);
+      assert.equal(json.error.type, "invalid_request_error");
+      assert.equal(json.error.param, body.expectedParam);
+      assert.equal(json.error.code, "invalid_request_parameter");
+    }
+    assert.equal(requests.length, 0);
+
+    const validMetadata = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`k${index}`, `v${index}`]));
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "metadata validation",
+        metadata: validMetadata,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const validJson = await valid.json();
+    assert.equal(validJson.output[0].content[0].text, "metadata ok");
+    assert.equal(validJson.metadata.k15, "v15");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses records context management compatibility without provider forwarding", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.context, undefined);
@@ -13015,6 +13097,21 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(invalidUpdate.status, 400);
     assert.equal((await invalidUpdate.json()).error.code, "unsupported_response_update");
 
+    const invalidMetadataUpdate = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: true } }),
+    });
+    assert.equal(invalidMetadataUpdate.status, 400);
+    assert.deepEqual(await invalidMetadataUpdate.json(), {
+      error: {
+        message: "metadata values must be strings",
+        type: "invalid_request_error",
+        param: "metadata.suite",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const missingUpdate = await fetch(`${baseUrl}/v1/responses/resp_missing_lifecycle`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -17919,6 +18016,51 @@ test("POST /v1/completions streams Chat chunks as legacy completion chunks", asy
   }, { streamOptionFields: ["include_usage"] });
 });
 
+test("POST /v1/chat/completions validates official string metadata limits", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_metadata_valid",
+      object: "chat.completion",
+      choices: [{ index: 0, message: { role: "assistant", content: "chat metadata ok" }, finish_reason: "stop" }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        metadata: { suite: { nested: true } },
+      }),
+    });
+    assert.equal(invalid.status, 400);
+    assert.deepEqual(await invalid.json(), {
+      error: {
+        message: "metadata values must be strings",
+        type: "invalid_request_error",
+        param: "metadata.suite",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        metadata: { suite: "chat-metadata" },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat metadata ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/chat/completions proxies and stores chat responses when requested", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -17955,6 +18097,21 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     });
     assert.equal(invalidUpdate.status, 400);
     assert.equal((await invalidUpdate.json()).error.param, "model");
+
+    const invalidMetadataUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: false } }),
+    });
+    assert.equal(invalidMetadataUpdate.status, 400);
+    assert.deepEqual(await invalidMetadataUpdate.json(), {
+      error: {
+        message: "metadata values must be strings",
+        type: "invalid_request_error",
+        param: "metadata.suite",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const updated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
       method: "POST",
