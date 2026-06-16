@@ -484,7 +484,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   fields, validating OpenAI Chat `n` integer bounds before provider calls,
   locally emulating unsupported non-streaming and streaming `n>1` requests with
   merged/remapped `choices`, aggregated `usage`, a single logical streaming
-  completion id, and stored Chat messages, mapping stable user identity/cache
+  completion id, and stored Chat messages, validating OpenAI `stream`
+  boolean/null request values before stream routing, mapping stable user identity/cache
   aliases into `user_id`
   without reporting consumed aliases as dropped fields, reflecting
   `safety_identifier` / `prompt_cache_key` in local organization usage
@@ -583,6 +584,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   values outside the official integer 1-128 range locally with zero upstream
   calls, while valid boundary values still enter provider passthrough or local
   fan-out paths.
+- Streaming flag compatibility must verify that Responses, direct Chat, and
+  legacy Completions reject non-boolean `stream` values locally with zero
+  upstream calls, while valid `false` stays on non-streaming paths and valid
+  `true` remains covered by existing SSE conversion tests.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `top_logprobs` integer bounds and the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.

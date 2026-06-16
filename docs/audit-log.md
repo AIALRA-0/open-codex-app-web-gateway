@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-16 Official Stream Flag Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Responses defines `stream` as a nullable boolean with default `false`; Chat
+  Completions and legacy Completions define streaming as a boolean request flag
+  where `true` selects SSE delivery.
+- Added local request validation before any upstream provider call:
+  - `POST /v1/responses` now rejects non-boolean Chat-native `stream` aliases
+    before Responses-to-Chat translation or stream routing.
+  - `POST /v1/chat/completions` now rejects non-boolean direct Chat `stream`
+    values before passthrough, DeepSeek local fan-out, stored Chat handling, or
+    SSE proxying.
+  - `POST /v1/completions` now rejects non-boolean legacy Completions
+    `stream` values before prompt-to-Chat compatibility mapping.
+  - Invalid strings, numbers, arrays, and objects now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"stream"` locally with zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values:
+  - valid `stream:true` requests still enter the existing Responses typed SSE,
+    direct Chat SSE proxy/reconstruction, and legacy text-completion SSE
+    conversion paths;
+  - valid `stream:false` requests stay on non-streaming paths and no longer can
+    be misrouted by truthy non-boolean input such as `"false"`;
+  - legacy Completions keeps the existing prompt-to-Chat request shape for
+    `stream:false` and only sets upstream Chat streaming for valid `true`.
+- Added regression coverage proving invalid string, numeric, array, and object
+  values fail locally with zero upstream calls on Responses, direct Chat, and
+  legacy Completions; valid `stream:false` still reaches the mock upstream
+  non-streaming path.
+- Updated the compatibility matrix and evaluation plan so streaming parity
+  tracks both official boolean request validation and the existing SSE
+  conversion coverage.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "validates stream flag|streams Chat chunks|stream_options|streaming requests|normalizes OpenAI Chat fields"`:
+    passed 282/282; the current Node test runner executed both selected test
+    files except unrelated cases filtered by the name pattern.
+  - `npm test`: passed 286/286.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact tracked-file search for the user-provided DeepSeek test key: clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-`stream` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses`,
+    `/v1/chat/completions`, and `/v1/completions` all returned HTTP 400 with
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"stream"` when `stream:"false"` was sent.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 4.9G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Choice Count Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

@@ -188,6 +188,7 @@ implementations for those tools.
 | `verbosity` | same-name Chat field, or system instruction for unsupported providers | Provider-aware Chat-native passthrough. The bridge validates user-supplied Responses and direct Chat `verbosity` against the official `low` / `medium` / `high` values before provider calls; valid values are forwarded to capable providers or, for DeepSeek-compatible providers where Chat-native fields are filtered, translated into a leading system instruction and recorded in `metadata.compatibility.verbosity` or `metadata.compatibility.chat_passthrough.verbosity` instead of being silently dropped |
 | `web_search_options` | same-name Chat field, or local web-search context for unsupported providers | Provider-aware Chat-native passthrough. For DeepSeek-compatible direct Chat requests, the bridge removes the unsupported native field, runs the local web-search adapter, injects source context into the upstream Chat request, annotates non-streaming Chat messages with `url_citation` entries, records `metadata.compatibility.chat_passthrough.web_search_options` / `local_web_search`, and writes local `web_search_calls` usage when usage storage is enabled. If local web search is disabled, the field remains in the generic filtered field list |
 | `moderation` | same-name Chat field plus local inline moderation fallback | Provider-aware Chat-native passthrough when supported; when the field is filtered or the upstream Chat provider returns no moderation payload, the bridge attaches local `input`/`output` moderation results to `response.moderation` and records `metadata.compatibility.local_moderation` |
+| `stream` | same-name Chat field plus local SSE conversion | Responses, direct Chat, and legacy Completions validate `stream` as boolean/null before provider calls. Valid `true` values keep the existing Responses, Chat, and legacy completion SSE compatibility paths; valid `false` values use non-streaming paths and do not accidentally route through streaming because of truthy non-boolean input |
 | `stream_options` with `stream:true` | `stream_options` | Provider-aware subfield passthrough; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage. DeepSeek defaults to forwarding only `include_usage` and records filtered subfields with `metadata.compatibility.stream_options.reason=provider_stream_option_filter` |
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
 | `stop` | `stop` | Compatibility extension for Chat-native stop sequences; OpenAI Chat supports up to 4, DeepSeek Chat supports up to 16 |
@@ -291,7 +292,7 @@ Chat responses back to `object:"text_completion"` completion objects.
 | `logprobs` | `logprobs:true` plus bounded `top_logprobs`; Chat token logprobs are reshaped to legacy `tokens`, `token_logprobs`, `top_logprobs`, and `text_offset` when present | Provider-dependent |
 | `logit_bias` | same-name Chat field when Chat-native passthrough is enabled | The bridge validates legacy Completions `logit_bias` as an object whose values are numbers from -100 through 100 before any upstream Chat request; valid values then follow provider-dependent passthrough/filtering |
 | `user` | OpenAI-compatible `user`, or DeepSeek-compatible normalized `user_id` when `CODEXCOMPAT_DEEPSEEK_USER_ID_COMPAT=true` | Provider-aware |
-| `stream:true` | upstream Chat stream transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]` | Implemented |
+| `stream` | validates as boolean/null before prompt-to-Chat mapping; valid `true` upstream Chat streams are transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]`, while valid `false` remains non-streaming | Implemented |
 | `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks and applies provider-aware subfield filtering | Provider-dependent; DeepSeek defaults to `include_usage` only |
 | `echo:true` | the bridge prefixes the original prompt to returned completion text, including the first stream chunk for each choice | Emulated locally |
 | `suffix` | added as suffix context in the Chat prompt because Chat Completions has no insertion-suffix primitive | Best-effort local compatibility |
@@ -466,7 +467,8 @@ field, OpenAI Chat `web_search_options` is executed through the local
 web-search adapter when native Chat fields are not forwarded, OpenAI Chat
 `n` is validated as an integer from 1 through 128 before provider calls, and
 `n>1` is locally fanned out for providers that do not support native
-multi-choice generation, `stream_options` are removed on non-streaming requests,
+multi-choice generation, OpenAI Chat `stream` is validated as boolean/null
+before stream routing, `stream_options` are removed on non-streaming requests,
 provider-unsupported streaming subfields are filtered by
 `CODEXCOMPAT_STREAM_OPTION_FIELDS`, mapped identity/cache aliases are reported
 under `metadata.compatibility.chat_passthrough.chat_native_fields.mapped`, and

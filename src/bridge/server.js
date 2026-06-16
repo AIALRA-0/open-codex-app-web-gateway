@@ -817,6 +817,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, stopError.message, stopError);
     return;
   }
+  const streamError = validateOpenAIStreamFlag(request);
+  if (streamError) {
+    sendError(res, 400, streamError.message, streamError);
+    return;
+  }
   const choiceCountError = validateOpenAIChoiceCount(request);
   if (choiceCountError) {
     sendError(res, 400, choiceCountError.message, choiceCountError);
@@ -2374,6 +2379,10 @@ function validateOpenAIStopSequences(body = {}) {
 
 function validateOpenAIParallelToolCalls(body = {}) {
   return validateOpenAIBooleanParameter(body, "parallel_tool_calls");
+}
+
+function validateOpenAIStreamFlag(body = {}) {
+  return validateOpenAIBooleanParameter(body, "stream");
 }
 
 function validateOpenAIChoiceCount(body = {}) {
@@ -4674,6 +4683,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, stopError.message, stopError);
     return;
   }
+  const streamError = validateOpenAIStreamFlag(body);
+  if (streamError) {
+    sendError(res, 400, streamError.message, streamError);
+    return;
+  }
   const choiceCountError = validateOpenAIChoiceCount(body);
   if (choiceCountError) {
     sendError(res, 400, choiceCountError.message, choiceCountError);
@@ -6088,6 +6102,11 @@ function parseJsonOrNull(text) {
 
 async function handleLegacyCompletions(req, res, config) {
   const request = await readJson(req);
+  const streamError = validateOpenAIStreamFlag(request);
+  if (streamError) {
+    sendError(res, 400, streamError.message, streamError);
+    return;
+  }
   const choiceCountError = validateOpenAIChoiceCount(request);
   if (choiceCountError) {
     sendError(res, 400, choiceCountError.message, choiceCountError);
