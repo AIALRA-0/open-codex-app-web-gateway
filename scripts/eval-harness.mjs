@@ -3765,6 +3765,91 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-tool-search-client",
+        mode: "responses-tool-search-client",
+        request: {
+          model: defaultModel,
+          instructions: "Use client-executed tool_search. First call tool_search to ask the application registry for the shipping ETA tool. Do not call business tools until the client supplies tool_search_output.",
+          input: "Find the client registry tool needed to get the shipping ETA for order_42.",
+          tools: [
+            {
+              type: "tool_search",
+              execution: "client",
+              description: "Ask the client application registry which deferred tools should be loaded for the current tenant and task.",
+              parameters: {
+                type: "object",
+                properties: {
+                  query: { type: "string" },
+                  paths: { type: "array", items: { type: "string" } },
+                },
+                required: ["query"],
+                additionalProperties: false,
+              },
+            },
+            {
+              type: "namespace",
+              name: "shipping",
+              description: "Shipping and fulfillment tools for order delivery promises.",
+              tools: [{
+                type: "function",
+                name: "get_shipping_eta",
+                description: "Get the shipping ETA for an order.",
+                defer_loading: true,
+                parameters: {
+                  type: "object",
+                  properties: { order_id: { type: "string" } },
+                  required: ["order_id"],
+                  additionalProperties: false,
+                },
+              }],
+            },
+          ],
+          tool_choice: { type: "tool_search" },
+          reasoning: { effort: "none" },
+          max_tool_calls: 1,
+          max_output_tokens: 128,
+          store: true,
+        },
+        followUp: ({ previousResponseId, toolSearchCall }) => ({
+          model: defaultModel,
+          previous_response_id: previousResponseId,
+          instructions: "The client registry selected shipping.get_shipping_eta. Call that loaded tool with order_id order_42. Do not answer in prose.",
+          input: [
+            {
+              type: "tool_search_output",
+              execution: "client",
+              call_id: toolSearchCall.call_id,
+              status: "completed",
+              tools: [{
+                type: "namespace",
+                name: "shipping",
+                description: "Shipping and fulfillment tools for order delivery promises.",
+                tools: [{
+                  type: "function",
+                  name: "get_shipping_eta",
+                  description: "Get the shipping ETA for an order.",
+                  defer_loading: true,
+                  parameters: {
+                    type: "object",
+                    properties: { order_id: { type: "string" } },
+                    required: ["order_id"],
+                    additionalProperties: false,
+                  },
+                }],
+              }],
+            },
+            {
+              role: "user",
+              content: "Use the loaded shipping.get_shipping_eta tool for order_42.",
+            },
+          ],
+          tool_choice: { type: "function", name: "get_shipping_eta", namespace: "shipping" },
+          reasoning: { effort: "none" },
+          max_output_tokens: 128,
+          store: false,
+        }),
+      },
+      {
         id: "responses-previous-response-replay",
         mode: "responses-sequence",
         steps: [
@@ -3801,6 +3886,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-stream") {
       return await runStreamingResponsesCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-tool-search-client") {
+      return await runToolSearchClientCase(testCase, context, started);
     }
     if (testCase.mode === "chat-lifecycle") {
       return await runChatLifecycleCase(testCase, context, started);
@@ -4080,6 +4168,103 @@ async function runJsonCase(testCase, context, started, path, textSelector, usage
     });
   } finally {
     if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);
+  }
+}
+
+async function runToolSearchClientCase(testCase, context, started) {
+  const firstRequest = resolveRequest(testCase.request, {});
+  let firstResponseId = null;
+  try {
+    const firstResponse = await postJson(`${baseUrl}/v1/responses`, firstRequest);
+    const firstBody = await firstResponse.text();
+    if (!firstResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: firstResponse.status,
+        error: truncate(firstBody),
+      });
+    }
+
+    const firstJson = parseJsonish(firstBody);
+    firstResponseId = firstJson?.id || null;
+    const toolSearchCall = (firstJson.output || []).find((item) => item.type === "tool_search_call");
+    const firstLocalToolSearch = firstJson.metadata?.compatibility?.local_tool_search || {};
+    const firstSerialized = JSON.stringify(firstJson);
+    const firstOk = firstJson?.id
+      && toolSearchCall?.execution === "client"
+      && toolSearchCall?.status === "completed"
+      && typeof toolSearchCall.call_id === "string"
+      && toolSearchCall.call_id.length > 0
+      && firstLocalToolSearch.provider === "local"
+      && firstLocalToolSearch.execution === "client"
+      && firstLocalToolSearch.search_call_count === 1
+      && firstLocalToolSearch.deferred_tool_count === 1
+      && firstLocalToolSearch.loaded_tool_count === 0
+      && firstLocalToolSearch.tool_choice?.requested_type === "tool_search"
+      && !(firstJson.output || []).some((item) => item.type === "tool_search_output" || item.type === "function_call");
+    if (!firstOk) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: firstResponse.status,
+        usage: responseUsage(firstJson),
+        tool_search_call_count: firstLocalToolSearch.search_call_count || 0,
+        first_output_types: (firstJson.output || []).map((item) => item.type),
+        error: truncate(firstSerialized),
+      });
+    }
+
+    const secondRequest = resolveRequest(testCase.followUp, {
+      firstJson,
+      previousResponseId: firstJson.id,
+      toolSearchCall,
+    });
+    const secondResponse = await postJson(`${baseUrl}/v1/responses`, secondRequest);
+    const secondBody = await secondResponse.text();
+    if (!secondResponse.ok) {
+      return finishResult(testCase, context, started, {
+        ok: false,
+        status: secondResponse.status,
+        usage: responseUsage(firstJson),
+        tool_search_call_count: firstLocalToolSearch.search_call_count || 0,
+        error: truncate(secondBody),
+      });
+    }
+
+    const secondJson = parseJsonish(secondBody);
+    const functionCall = (secondJson.output || []).find((item) => item.type === "function_call");
+    const functionArguments = parseJsonish(functionCall?.arguments);
+    const secondLocalToolSearch = secondJson.metadata?.compatibility?.local_tool_search || {};
+    const secondSerialized = JSON.stringify(secondJson);
+    const secondOk = functionCall?.name === "get_shipping_eta"
+      && functionCall?.namespace === "shipping"
+      && functionArguments?.order_id === "order_42"
+      && secondLocalToolSearch.provider === "local"
+      && secondLocalToolSearch.execution === "client"
+      && secondLocalToolSearch.tool_types?.includes("tool_search_output")
+      && secondLocalToolSearch.input_tool_search_output_count === 1
+      && secondLocalToolSearch.loaded_input_tool_count === 1
+      && secondLocalToolSearch.loaded_chat_tool_count === 1
+      && secondLocalToolSearch.boundary === "loaded_from_tool_search_output_input"
+      && secondLocalToolSearch.tool_choice?.requested_type === "function"
+      && secondLocalToolSearch.tool_choice?.chat_name === "get_shipping_eta"
+      && !secondSerialized.includes("[tool_search_output:")
+      && !secondSerialized.includes("[tool_search_call:");
+
+    return finishResult(testCase, context, started, {
+      ok: !!secondOk,
+      status: secondResponse.status,
+      usage: sumUsage([responseUsage(firstJson), responseUsage(secondJson)]),
+      output_text: responseOutputText(secondJson),
+      tool_search_call_count: firstLocalToolSearch.search_call_count || 0,
+      input_tool_search_output_count: secondLocalToolSearch.input_tool_search_output_count || 0,
+      loaded_chat_tool_count: secondLocalToolSearch.loaded_chat_tool_count || 0,
+      function_name: functionCall?.name,
+      function_namespace: functionCall?.namespace,
+      function_arguments: functionArguments,
+      error: secondOk ? undefined : truncate(secondSerialized),
+    });
+  } finally {
+    if (firstResponseId) await deleteJson(`${baseUrl}/v1/responses/${firstResponseId}`);
   }
 }
 

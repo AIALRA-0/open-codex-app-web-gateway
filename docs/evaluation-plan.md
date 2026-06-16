@@ -153,9 +153,14 @@ final Chat function call is remapped back to the original Responses
 `namespace`. Mock-provider coverage also verifies client-executed second turns
 that pass `tool_search_output.tools` in `input` without repeating the `tools`
 array, plus `additional_tools` input items that inject function definitions
-without leaking raw protocol items into the prompt. MCP tool-search coverage
-verifies the official "group by MCP servers" guidance: a deferred remote MCP
-server starts as a searchable group, the model calls the generated
+without leaking raw protocol items into the prompt. Live bridge-regression
+coverage now exercises client-executed `tool_search` against DeepSeek: the
+first response emits only a client `tool_search_call`, the harness supplies a
+`tool_search_output` containing a namespace tool, and the follow-up response
+returns a `function_call` remapped to the original `shipping.get_shipping_eta`
+namespace/name. MCP tool-search coverage verifies the official "group by MCP
+servers" guidance: a deferred remote MCP server starts as a searchable group,
+the model calls the generated
 `local_tool_search` function, the bridge imports remote `tools/list`, emits
 `mcp_list_tools`, injects the imported MCP schema into a follow-up Chat request,
 executes the returned remote `tools/call`, and records
@@ -182,9 +187,8 @@ and still skips a second remote `tools/list`. Mock-provider coverage also
 exercises collision-heavy streaming function names by splitting a generated
 namespace Chat function name across SSE chunks and verifying that public
 Responses output keeps the original `namespace` / `name`. Follow-up eval work
-should add live bridge cases for client-executed `tool_search`, hosted
-connectors, and large catalogs to measure latency, token savings, and
-tool-selection quality.
+should add live bridge cases for hosted connectors and large catalogs to
+measure latency, token savings, and tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The

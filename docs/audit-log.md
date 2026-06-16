@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-16 Live Client Tool Search Regression
+
+- Rechecked the official OpenAI API deployment checklist through the OpenAI
+  developer docs MCP. The `Use tool_search` guidance distinguishes hosted
+  `tool_search` from client-executed `tool_search`; the latter is intended for
+  app-controlled discovery based on tenant, project, permissions, or an
+  internal registry.
+- Added a live bridge-regression case,
+  `responses-tool-search-client`, that exercises the client-executed sequence
+  against the deployed DeepSeek bridge:
+  - first request uses `tools:[{type:"tool_search", execution:"client"}, ...]`
+    with a deferred `shipping.get_shipping_eta` namespace tool and forced
+    `tool_choice:{type:"tool_search"}`;
+  - first response emits a public `tool_search_call` with
+    `execution:"client"` and no `tool_search_output` or `function_call`;
+  - the harness supplies a follow-up `tool_search_output` with the selected
+    namespace tool and `previous_response_id`;
+  - second response loads that client-supplied tool and returns a
+    `function_call` with `namespace:"shipping"`, `name:"get_shipping_eta"`,
+    and `{"order_id":"order_42"}`.
+- The runner deletes the first stored response after the follow-up completes so
+  repeated live evals do not accumulate unnecessary response state.
+- Updated the evaluation plan and compatibility matrix so live client-executed
+  `tool_search` is no longer listed as a missing eval gap; hosted connector
+  search and large-catalog quality/latency evals remain on the roadmap.
+- Validation:
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Live `responses-tool-search-client` passed 1/1 against
+    `deepseek-v4-pro`; latency 3333 ms, usage 955 input / 103 output / 1058
+    total tokens, `tool_search_call_count:1`,
+    `input_tool_search_output_count:1`, `loaded_chat_tool_count:1`, and the
+    final function call was `shipping.get_shipping_eta` with
+    `order_id:"order_42"`.
+  - `npm test`: passed 243/243.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1251 ms, P95 latency 1299 ms, and 99 total tokens.
+
 ## 2026-06-16 Streaming Tool Search Name Remapping
 
 - Closed the local `tool_search` streaming name-leak boundary for deferred
