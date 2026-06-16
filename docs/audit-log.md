@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat Streaming N Choice Fan-Out Compatibility
+
+- Rechecked the official OpenAI Chat Completions schema through the OpenAI
+  developer docs MCP/OpenAPI spec. OpenAI documents streamed Chat completions
+  as `chat.completion.chunk` objects; each chunk in one stream has the same
+  completion id, `choices` can contain multiple elements when `n>1`, and the
+  final usage-bearing chunk can contain empty `choices` when
+  `stream_options.include_usage` is enabled.
+- Closed the streaming gap left by the previous Direct Chat `n` fan-out pass:
+  - DeepSeek-compatible direct Chat `stream:true,n>1` requests now remove `n`
+    before every upstream provider call;
+  - the bridge sequentially fans out bounded single-choice upstream streams;
+  - caller-facing SSE frames are normalized to one logical
+    `chat.completion.chunk` stream with a single generated completion id;
+  - upstream choice indexes are remapped to the requested fan-out indexes;
+  - per-call usage chunks are suppressed from the public stream and replaced
+    with one combined usage chunk when usage is available;
+  - streamed local `store:true` records reconstruct a terminal
+    `chat.completion` with every generated choice and
+    `metadata.compatibility.chat_passthrough.n.emulated:"local_stream_fanout"`.
+- Updated compatibility docs, deployment flags, and evaluation criteria so
+  Direct Chat `n>1` local emulation covers both non-streaming and streaming
+  modes.
+- Added a regression proving direct `/v1/chat/completions` streaming fan-out:
+  - performs two upstream streaming provider calls for `n:2`;
+  - strips `n` while preserving `stream:true` and filtered
+    `stream_options.include_usage`;
+  - emits one logical public completion id;
+  - remaps streamed choice indexes to `0` and `1`;
+  - emits exactly one combined usage chunk;
+  - stores and replays both assistant choices through the local stored Chat
+    completion lifecycle.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js --test-name-pattern "streams n choices|emulates n choices|normalizes OpenAI Chat fields"`:
+    passed 207/207.
+  - `npm test`: passed 251/251.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1118 ms, P95 latency 1120 ms, and 116 total
+    tokens.
+  - Live localhost direct `/v1/chat/completions` streaming smoke with
+    `stream:true`, `n:2`, `store:true`, `stream_options.include_usage:true`,
+    and `reasoning_effort:"none"` against `deepseek-v4-pro` returned HTTP
+    200, `text/event-stream`, 16 SSE frames, one logical completion id, choice
+    indexes `[0,1]`, visible content `ok-stream-n-live` for both choices, one
+    combined usage chunk with 40 total tokens, stored completion metadata
+    `emulated:"local_stream_fanout"`, `request_count:2`,
+    `actual_choice_count:2`, and two stored assistant output messages.
+
 ## 2026-06-16 Direct Chat N Choice Fan-Out Compatibility
 
 - Rechecked the official OpenAI Chat Completions schema through the OpenAI

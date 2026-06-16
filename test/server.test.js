@@ -18207,6 +18207,121 @@ test("POST /v1/chat/completions emulates n choices with local provider fan-out",
   });
 });
 
+test("POST /v1/chat/completions streams n choices with local provider fan-out", async () => {
+  let providerCalls = 0;
+  await withMockProvider(async (_req, res, call) => {
+    providerCalls += 1;
+    assert.equal(call.body.n, undefined);
+    assert.equal(call.body.stream, true);
+    assert.deepEqual(call.body.stream_options, { include_usage: true });
+    const suffix = providerCalls === 1 ? "one" : "two";
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: `chatcmpl_direct_stream_n_${suffix}`,
+      object: "chat.completion.chunk",
+      created: 1700000418 + providerCalls,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: { role: "assistant", content: `stream-${suffix}-` },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: `chatcmpl_direct_stream_n_${suffix}`,
+      object: "chat.completion.chunk",
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: { content: "ok" },
+        finish_reason: "stop",
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: `chatcmpl_direct_stream_n_${suffix}`,
+      object: "chat.completion.chunk",
+      model: "mock-model",
+      choices: [],
+      usage: {
+        prompt_tokens: 9 + providerCalls,
+        completion_tokens: 1 + providerCalls,
+        total_tokens: 10 + (2 * providerCalls),
+      },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        stream: true,
+        metadata: { suite: "direct-chat-stream-n-fanout" },
+        messages: [{ role: "user", content: "Stream two fanout choices." }],
+        n: 2,
+        stream_options: { include_usage: true },
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type"), /text\/event-stream/);
+    const events = parseSseEvents(await response.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+    const chunks = events.slice(0, -1).map((event) => event.data);
+    assert.equal(providerCalls, 2);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map((request) => request.body.n), [undefined, undefined]);
+    assert.deepEqual(requests.map((request) => request.body.stream), [true, true]);
+    assert.equal(new Set(chunks.map((chunk) => chunk.id)).size, 1);
+    const completionId = chunks[0].id;
+    assert.match(completionId, /^chatcmpl_/);
+    const choiceChunks = chunks.filter((chunk) => chunk.choices?.length);
+    assert.deepEqual(choiceChunks.flatMap((chunk) => chunk.choices.map((choice) => choice.index)), [0, 0, 1, 1]);
+    assert.equal(
+      choiceChunks.flatMap((chunk) => chunk.choices).filter((choice) => choice.index === 0).map((choice) => choice.delta?.content || "").join(""),
+      "stream-one-ok",
+    );
+    assert.equal(
+      choiceChunks.flatMap((chunk) => chunk.choices).filter((choice) => choice.index === 1).map((choice) => choice.delta?.content || "").join(""),
+      "stream-two-ok",
+    );
+    const usageChunks = chunks.filter((chunk) => chunk.usage);
+    assert.equal(usageChunks.length, 1);
+    assert.deepEqual(usageChunks[0].choices, []);
+    assert.deepEqual(usageChunks[0].usage, { prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 });
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/${completionId}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.deepEqual(fetchedJson.choices.map((choice) => choice.index), [0, 1]);
+    assert.deepEqual(fetchedJson.choices.map((choice) => choice.message.content), ["stream-one-ok", "stream-two-ok"]);
+    assert.deepEqual(fetchedJson.usage, { prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 });
+    assert.deepEqual(fetchedJson.metadata.compatibility.chat_passthrough.n, {
+      source: "n",
+      value: 2,
+      forwarded: false,
+      emulated: "local_stream_fanout",
+      request_count: 2,
+      reason: "provider_unsupported_local_stream_fanout",
+      actual_choice_count: 2,
+    });
+    assert.equal(fetchedJson.metadata.compatibility.chat_passthrough.chat_native_fields, undefined);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${completionId}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.deepEqual(
+      messagesJson.data.filter((message) => message.direction === "output").map((message) => message.content),
+      ["stream-one-ok", "stream-two-ok"],
+    );
+  }, {
+    forwardChatNativeFields: false,
+    streamOptionFields: ["include_usage"],
+  });
+});
+
 test("POST /v1/chat/completions downgrades json_schema response_format for DeepSeek-compatible providers", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.response_format, { type: "json_object" });

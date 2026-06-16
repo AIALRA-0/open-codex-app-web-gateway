@@ -4294,6 +4294,12 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     compatibility = Object.keys(nextCompatibility).length ? nextCompatibility : null;
   }
   const nFanoutCount = chatPassthroughNFanoutCount(compatibility);
+  if (nFanoutCount > 1 && body.stream) {
+    await handleChatPassthroughNStreamFanout(res, config, upstreamBody, req.headers, body, store, compatibility, {
+      localWebSearch,
+    });
+    return;
+  }
   if (nFanoutCount > 1 && !body.stream) {
     const fanout = await fetchChatPassthroughNFanout(config, upstreamBody, req.headers, nFanoutCount);
     if (!fanout.ok) {
@@ -4439,6 +4445,153 @@ function chatPassthroughNFanoutCount(compatibility) {
   const count = Number(compatibility?.n?.request_count);
   if (!Number.isInteger(count) || count <= 1) return 0;
   return count;
+}
+
+async function handleChatPassthroughNStreamFanout(
+  res,
+  config,
+  upstreamBody,
+  incomingHeaders,
+  request,
+  store,
+  compatibility,
+  contexts = {},
+) {
+  const count = chatPassthroughNFanoutCount(compatibility);
+  const accumulator = createChatStreamAccumulator(request);
+  const streamState = {
+    id: prefixedId("chatcmpl"),
+    created: nowSeconds(),
+    model: request.model || config.defaultModel || "unknown",
+  };
+  const usages = [];
+  let headersWritten = false;
+
+  try {
+    for (let index = 0; index < count; index += 1) {
+      const requestBody = clone(upstreamBody);
+      delete requestBody.n;
+      requestBody.stream = true;
+      const upstream = await fetchProvider(config, config.chatCompletionsPath, requestBody, incomingHeaders);
+      if (!upstream.ok || !isEventStreamResponse(upstream)) {
+        const text = await upstream.text();
+        const json = parseJsonOrNull(text);
+        const payload = json || openAiError(text || `upstream provider returned HTTP ${upstream.status}`, {
+          type: "upstream_provider_error",
+          code: upstream.status,
+        });
+        if (!headersWritten) {
+          sendJson(res, upstream.ok ? 502 : upstream.status, payload);
+        } else {
+          res.write(`data: ${JSON.stringify(payload)}\n\n`);
+          res.write("data: [DONE]\n\n");
+        }
+        return;
+      }
+      if (!headersWritten) {
+        res.writeHead(upstream.status, proxyResponseHeaders(upstream));
+        headersWritten = true;
+      }
+      for await (const payload of iterateSseJson(upstream.body)) {
+        if (payload === "[DONE]") break;
+        const chunk = normalizeChatPassthroughNStreamFanoutChunk(payload, index, streamState, usages);
+        if (!chunk) continue;
+        applyChatCompletionStreamChunk(accumulator, chunk);
+        res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+      }
+    }
+
+    const usageChunk = chatPassthroughNStreamFanoutUsageChunk(streamState, usages);
+    if (usageChunk) {
+      applyChatCompletionStreamChunk(accumulator, usageChunk);
+      if (!headersWritten) {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-store",
+          "connection": "keep-alive",
+          "x-accel-buffering": "no",
+        });
+        headersWritten = true;
+      }
+      res.write(`data: ${JSON.stringify(usageChunk)}\n\n`);
+    }
+
+    if (!headersWritten) {
+      res.writeHead(200, {
+        "content-type": "text/event-stream; charset=utf-8",
+        "cache-control": "no-store",
+        "connection": "keep-alive",
+        "x-accel-buffering": "no",
+      });
+      headersWritten = true;
+    }
+    res.write("data: [DONE]\n\n");
+
+    const completion = finalizeChatStreamCompletion(accumulator);
+    if (isPlainObject(compatibility?.n)) {
+      compatibility.n.actual_choice_count = completion?.choices?.length || 0;
+    }
+    if (completion?.id) {
+      annotateChatWebSearchCompletion(completion, contexts.localWebSearch);
+      attachChatPassthroughCompatibility(completion, request, compatibility);
+      if (request.store === true) {
+        store.put(completion.id, {
+          chat_completion: completion,
+          chat_messages: normalizeStoredChatMessages(request.messages, completion),
+          chat_request: sanitizeChatRequest(request),
+        });
+      }
+      recordOrganizationUsage(config, { headers: incomingHeaders }, "completions", {
+        endpoint: "/v1/chat/completions",
+        request,
+        created_at: completion.created,
+        model: completion.model || request.model,
+        service_tier: completion.service_tier || request.service_tier,
+        usage: completion.usage,
+      });
+      recordLocalHostedToolUsage(config, { headers: incomingHeaders }, request, {
+        localWebSearch: contexts.localWebSearch,
+      }, {
+        endpoint: "/v1/chat/completions",
+        created_at: completion.created,
+        model: completion.model || request.model,
+      });
+    }
+  } finally {
+    res.end();
+  }
+}
+
+function normalizeChatPassthroughNStreamFanoutChunk(payload, choiceIndex, streamState, usages) {
+  if (!isPlainObject(payload)) return null;
+  if (isPlainObject(payload.usage)) usages.push(payload.usage);
+  const chunk = clone(payload);
+  chunk.id = streamState.id;
+  chunk.object = "chat.completion.chunk";
+  chunk.created = streamState.created;
+  chunk.model = chunk.model || streamState.model;
+  streamState.model = chunk.model || streamState.model;
+  delete chunk.usage;
+  const firstChoice = Array.isArray(chunk.choices) ? chunk.choices.find(isPlainObject) : null;
+  if (!firstChoice) return null;
+  chunk.choices = [{
+    ...clone(firstChoice),
+    index: choiceIndex,
+  }];
+  return chunk;
+}
+
+function chatPassthroughNStreamFanoutUsageChunk(streamState, usages) {
+  const filtered = usages.filter(isPlainObject);
+  if (!filtered.length) return null;
+  return {
+    id: streamState.id,
+    object: "chat.completion.chunk",
+    created: streamState.created,
+    model: streamState.model,
+    choices: [],
+    usage: combineChatUsage(filtered),
+  };
 }
 
 async function fetchChatPassthroughNFanout(config, upstreamBody, incomingHeaders, count) {
@@ -4688,12 +4841,16 @@ function normalizeChatPassthroughN(upstreamBody, config = {}) {
     };
   }
   if (upstreamBody.stream) {
+    const max = Math.max(1, Math.min(Number(config.chatNEmulationMax || DEFAULT_CHAT_N_EMULATION_MAX), 50));
+    const requestCount = Math.min(value, max);
     return {
       source: "n",
       value,
       forwarded: false,
-      emulated: false,
-      reason: "streaming_fanout_not_implemented",
+      emulated: "local_stream_fanout",
+      request_count: requestCount,
+      ...(requestCount !== value ? { capped_to: requestCount } : {}),
+      reason: requestCount === value ? "provider_unsupported_local_stream_fanout" : "provider_unsupported_local_stream_fanout_capped",
     };
   }
   const max = Math.max(1, Math.min(Number(config.chatNEmulationMax || DEFAULT_CHAT_N_EMULATION_MAX), 50));
