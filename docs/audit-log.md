@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Batch Create Contract Tightening
+
+- Rechecked the official OpenAI Batch create OpenAPI schema through the
+  OpenAI developer-docs MCP and the official `openai/openai-openapi` schema.
+  Current Batch create requires `input_file_id`, `endpoint`, and
+  `completion_window`, accepts official string `metadata`, and accepts
+  `output_expires_after` with `anchor:"created_at"` and `seconds` between
+  3600 and 2592000.
+- Tightened local `/v1/batches` create validation before file lookup or provider
+  calls:
+  - required fields must be non-empty strings;
+  - user-supplied `metadata` must follow the official 16 key/value pair,
+    64-character key, string-only 512-character value contract;
+  - `metadata:null` is rejected for Batch create because the current Batch
+    schema references Metadata directly;
+  - `output_expires_after` is validated against the official file-expiration
+    shape and stored on the local Batch object.
+- Kept existing local Batch endpoint extensions for regression coverage:
+  `/v1/audio/transcriptions`, `/v1/audio/translations`, and
+  `/v1/images/variations` remain supported locally and are documented as
+  compatibility extensions outside the current official Batch endpoint enum.
+- Validation:
+  - `npm test -- --test-name-pattern "...Batch..."`: passed 339/339 because
+    the command executed the full Node test suite in this shell.
+  - `npm test`: passed 339/339.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository search excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public `healthz` returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Local and public `POST /v1/batches` smoke with
+    `output_expires_after.seconds:3599` returned HTTP 400 with
+    `param:"output_expires_after.seconds"` and
+    `code:"invalid_request_parameter"`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Goal Reconfirmation and UI Smoke
 
 - Reconfirmed the active product goal is only the CodexApp web gateway:

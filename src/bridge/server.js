@@ -199,6 +199,8 @@ const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const OPENAI_STRING_METADATA_MAX_PAIRS = 16;
 const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
+const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS = 3600;
+const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS = 2592000;
 const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
 const OPENAI_LEGACY_LOGPROBS_MIN = 0;
@@ -11115,14 +11117,8 @@ function validateBatchCreateRequest(body) {
     };
   }
   for (const field of ["input_file_id", "endpoint", "completion_window"]) {
-    if (!body[field]) {
-      return {
-        ok: false,
-        status: 400,
-        message: `${field} is required`,
-        details: { type: "invalid_request_error", code: "missing_required_parameter", param: field },
-      };
-    }
+    const error = validateOpenAIRequiredStringParameter(body, field);
+    if (error) return batchCreateValidationError(error);
   }
   if (body.completion_window !== "24h") {
     return {
@@ -11132,7 +11128,54 @@ function validateBatchCreateRequest(body) {
       details: { type: "invalid_request_error", code: "unsupported_completion_window", param: "completion_window" },
     };
   }
+  if (Object.prototype.hasOwnProperty.call(body, "metadata") && body.metadata == null) {
+    return batchCreateValidationError(metadataValidationError("metadata must be an object", "metadata"));
+  }
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) return batchCreateValidationError(metadataError);
+  const outputExpiresAfterError = validateBatchOutputExpiresAfter(body);
+  if (outputExpiresAfterError) return batchCreateValidationError(outputExpiresAfterError);
   return { ok: true };
+}
+
+function batchCreateValidationError(error) {
+  return {
+    ok: false,
+    status: 400,
+    message: error.message,
+    details: error,
+  };
+}
+
+function validateBatchOutputExpiresAfter(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "output_expires_after")) return null;
+  const policy = body.output_expires_after;
+  if (!isPlainObject(policy)) {
+    return requestValidationError("output_expires_after must be an object", "output_expires_after");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "anchor") || policy.anchor == null || policy.anchor === "") {
+    return requestValidationError("output_expires_after.anchor is required", "output_expires_after.anchor");
+  }
+  if (typeof policy.anchor !== "string") {
+    return requestValidationError("output_expires_after.anchor must be a string", "output_expires_after.anchor");
+  }
+  if (policy.anchor !== "created_at") {
+    return requestValidationError("output_expires_after.anchor must be created_at", "output_expires_after.anchor");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "seconds") || policy.seconds == null) {
+    return requestValidationError("output_expires_after.seconds is required", "output_expires_after.seconds");
+  }
+  if (
+    !Number.isInteger(policy.seconds)
+    || policy.seconds < OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS
+    || policy.seconds > OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS
+  ) {
+    return requestValidationError(
+      `output_expires_after.seconds must be an integer between ${OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS} and ${OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS}`,
+      "output_expires_after.seconds",
+    );
+  }
+  return null;
 }
 
 function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {

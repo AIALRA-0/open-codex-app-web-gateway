@@ -25478,6 +25478,107 @@ test("local Batch API executes Responses JSONL and exposes output and error file
   });
 });
 
+test("local Batch API validates create metadata and output expiration policy", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local batch create validation or embeddings");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const required = {
+      input_file_id: "file_missing",
+      endpoint: "/v1/embeddings",
+      completion_window: "24h",
+    };
+    const invalidCases = [
+      {
+        name: "body-shape",
+        body: [],
+        message: "batch request body must be a JSON object",
+        param: null,
+      },
+      {
+        name: "endpoint-type",
+        body: { ...required, endpoint: 42 },
+        message: "endpoint must be a string",
+        param: "endpoint",
+      },
+      {
+        name: "metadata-null",
+        body: { ...required, metadata: null },
+        message: "metadata must be an object",
+        param: "metadata",
+      },
+      {
+        name: "metadata-value-type",
+        body: { ...required, metadata: { suite: "batch", owner: 7 } },
+        message: "metadata values must be strings",
+        param: "metadata.owner",
+      },
+      {
+        name: "output-expiration-anchor",
+        body: { ...required, output_expires_after: { anchor: "completed_at", seconds: 3600 } },
+        message: "output_expires_after.anchor must be created_at",
+        param: "output_expires_after.anchor",
+      },
+      {
+        name: "output-expiration-seconds",
+        body: { ...required, output_expires_after: { anchor: "created_at", seconds: 3599 } },
+        message: "output_expires_after.seconds must be an integer between 3600 and 2592000",
+        param: "output_expires_after.seconds",
+      },
+    ];
+
+    for (const testCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.name);
+      const json = await response.json();
+      assert.equal(json.error.message, testCase.message, testCase.name);
+      assert.equal(json.error.param, testCase.param, testCase.name);
+    }
+
+    const jsonl = `${JSON.stringify({
+      custom_id: "embedding-ok",
+      method: "POST",
+      url: "/v1/embeddings",
+      body: { model: "text-embedding-3-small", input: "batch expiration policy", dimensions: 8 },
+    })}\n`;
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "batch-expiration-policy.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/embeddings",
+        completion_window: "24h",
+        metadata: { suite: "batch-expiration-policy" },
+        output_expires_after: { anchor: "created_at", seconds: 3600 },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.deepEqual(batch.output_expires_after, { anchor: "created_at", seconds: 3600 });
+    assert.equal(batch.metadata.suite, "batch-expiration-policy");
+    assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/embeddings"), true);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Batch API executes Responses image_generation JSONL", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

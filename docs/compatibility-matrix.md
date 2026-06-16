@@ -868,20 +868,25 @@ OpenAI-compatible surfaces without adding a separate job runner.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/batches` | Implemented locally | Requires `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File |
+| `POST /v1/batches` | Implemented locally | Requires string `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates user-supplied `metadata` against the official string Metadata limits and validates `output_expires_after:{anchor:"created_at",seconds:3600..2592000}` before file lookup or provider calls; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File |
 | `GET /v1/batches` | Implemented locally | Lists local batch records with `limit`, `after`, `before`, and `order` pagination |
 | `GET /v1/batches/{batch_id}` | Implemented locally | Returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id` |
 | `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary |
 
-Local Batch execution currently accepts `/v1/responses`,
-`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
-`/v1/audio/transcriptions`, `/v1/audio/translations`,
-`/v1/images/generations`, `/v1/images/edits`,
-`/v1/images/variations`, `/v1/videos`, and `/v1/moderations`, because those
-surfaces are implemented by the bridge. Batch
-output lines preserve upstream JSON response bodies and upstream
+Local Batch execution currently accepts the official Batch endpoints
+`/v1/responses`, `/v1/chat/completions`, `/v1/completions`,
+`/v1/embeddings`, `/v1/images/generations`, `/v1/images/edits`,
+`/v1/videos`, and `/v1/moderations`. It also accepts local compatibility
+extensions `/v1/audio/transcriptions`, `/v1/audio/translations`, and
+`/v1/images/variations`, because those surfaces are implemented by the bridge
+and are useful for local regression coverage even though they are outside the
+current OpenAI Batch endpoint enum. Batch output lines preserve upstream JSON
+response bodies and upstream
 `x-request-id` values when a proxied Chat provider supplies them; otherwise a
 local `req_*` id is generated for auditability.
+The `output_expires_after` policy is stored on the local Batch object and
+validated against the official file-expiration shape; it is not yet enforced by
+a background TTL cleanup worker for generated output/error files.
 Streaming (`stream:true`) and
 background Responses (`background:true`) requests are rejected per JSONL line
 and written to the error file because a completed Batch output file cannot
