@@ -5535,7 +5535,9 @@ function base64url(buffer) {
 async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, localToolSearch = null, conversationStore = null, conversation = null, toolBudget = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
-  const state = createStreamState(response, compatibility);
+  const state = createStreamState(response, compatibility, {
+    includeObfuscation: responseStreamIncludeObfuscation(request),
+  });
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -5932,11 +5934,12 @@ function emitError(res, state, message, status) {
   }));
 }
 
-function createStreamState(response, compatibility) {
+function createStreamState(response, compatibility, options = {}) {
   return {
     response,
     compatibility,
     sequenceNumber: 0,
+    includeObfuscation: options.includeObfuscation === true,
     choices: new Map(),
     finishReasons: [],
     outputDone: new Set(),
@@ -5978,7 +5981,28 @@ function terminalEventForResponseStatus(status) {
 
 function sequence(state, event) {
   state.sequenceNumber += 1;
-  return { sequence_number: state.sequenceNumber, ...event };
+  const sequenced = { sequence_number: state.sequenceNumber, ...event };
+  if (shouldAddResponseStreamObfuscation(state, sequenced)) {
+    sequenced.obfuscation = responseStreamObfuscation();
+  }
+  return sequenced;
+}
+
+function responseStreamIncludeObfuscation(request = {}) {
+  return request.stream_options?.include_obfuscation !== false;
+}
+
+function shouldAddResponseStreamObfuscation(state, event) {
+  return state?.includeObfuscation === true
+    && typeof event?.type === "string"
+    && event.type.startsWith("response.")
+    && event.type.endsWith(".delta")
+    && typeof event.delta === "string"
+    && event.obfuscation === undefined;
+}
+
+function responseStreamObfuscation() {
+  return crypto.randomBytes(12).toString("base64url");
 }
 
 function emitWebSearchStreamItems(res, state, context) {
@@ -13503,7 +13527,10 @@ const STORED_RESPONSE_STREAM_POLL_INTERVAL_MS = 25;
 
 async function writeStoredResponseEventStream(res, response, url, options = {}) {
   const startingAfter = queryIntegerFromUrl(url, "starting_after", 0);
-  const state = { sequenceNumber: 0 };
+  const state = {
+    sequenceNumber: 0,
+    includeObfuscation: queryBooleanFromUrl(url, "include_obfuscation", true),
+  };
   const emit = (event, payload) => {
     const sequenced = sequence(state, payload);
     if (!res.destroyed && sequenced.sequence_number > startingAfter) writeSse(res, event, sequenced);

@@ -1,5 +1,38 @@
 # Audit Log
 
+## 2026-06-17 Response Stream Obfuscation
+
+- Rechecked the official OpenAI Responses stream option schema through the
+  official `openai/openai-openapi` spec. `include_obfuscation` defaults to
+  adding random characters on streaming delta events, and callers can set it to
+  `false` to optimize bandwidth on trusted links.
+- Implemented local Responses SSE obfuscation:
+  - streamed Responses create events add `obfuscation` to bridge-generated
+    `response.*.delta` events by default;
+  - stored response retrieve streams add `obfuscation` to replayed delta events
+    by default;
+  - `stream_options.include_obfuscation:false` on create streams and
+    `include_obfuscation=false` on stored response retrieve streams omit the
+    field.
+- Updated tests and the compatibility matrix for default and disabled
+  obfuscation behavior.
+- Validation:
+  - targeted Responses streaming and stored response retrieve-stream tests pass;
+  - `npm test` passes: 341 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional `sk-...` pattern scan has no repository matches;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after bridge restart;
+  - local smoke against `http://127.0.0.1:12912` confirms live Responses create
+    streams and stored response retrieve streams include `obfuscation` by
+    default, while `include_obfuscation=false` omits it;
+  - public smoke against `https://opencodexapp.aialra.online` confirms the same
+    default and disabled obfuscation behavior.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Background Stream Options Drop
 
 - Reproduced a real DeepSeek-compatible provider failure for

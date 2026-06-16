@@ -6818,6 +6818,7 @@ test("POST /v1/responses streams Chat chunks as typed Responses events", async (
     assert.match(text, /"logprobs":\[\{"token":"hel","logprob":-0\.1/);
     assert.match(text, /\{"token":"lo","logprob":-0\.2/);
     const events = parseSseEvents(text);
+    assert.equal(events.find((event) => event.event === "response.output_text.delta").data.obfuscation, undefined);
     const completed = events.find((event) => event.event === "response.completed").data.response;
     assert.equal(completed.service_tier, "flex");
     assert.deepEqual(completed.output[0].content[0].annotations, [{
@@ -6901,6 +6902,8 @@ test("POST /v1/responses streams encrypted reasoning content when requested", as
     const text = await response.text();
     assert.match(text, /event: response\.reasoning_summary_text\.delta/);
     const events = parseSseEvents(text);
+    assert.equal(typeof events.find((event) => event.event === "response.reasoning_summary_text.delta").data.obfuscation, "string");
+    assert.equal(typeof events.find((event) => event.event === "response.output_text.delta").data.obfuscation, "string");
     const reasoningDone = events
       .filter((event) => event.event === "response.output_item.done")
       .map((event) => event.data.item)
@@ -15354,6 +15357,7 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     ]);
     assert.deepEqual(streamEvents.map((event) => event.data.sequence_number), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
     assert.equal(streamEvents[4].data.delta, "stored response");
+    assert.equal(typeof streamEvents[4].data.obfuscation, "string");
     assert.equal(streamEvents[8].data.response.id, createdJson.id);
 
     const resumed = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&starting_after=4&include_obfuscation=false`);
@@ -15361,6 +15365,7 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     const resumedEvents = parseSseEvents(await resumed.text());
     assert.equal(resumedEvents[0].event, "response.output_text.delta");
     assert.equal(resumedEvents[0].data.sequence_number, 5);
+    assert.equal(resumedEvents[0].data.obfuscation, undefined);
     assert.equal(resumedEvents.at(-1).event, "response.completed");
 
     const invalidStream = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=eventually`);
