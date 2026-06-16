@@ -5338,6 +5338,132 @@ test("POST /v1/responses normalizes computer action aliases", async () => {
   });
 });
 
+test("POST /v1/responses emulates hosted tool_search for deferred namespace functions", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    if (call.body.messages.some((message) => message.role === "tool")) {
+      const loadedTool = call.body.tools.find((tool) => tool.function?.name === "list_open_orders");
+      assert.ok(loadedTool);
+      assert.deepEqual(loadedTool.function.parameters.properties.customer_id, { type: "string" });
+      assert.ok(call.body.messages.some((message) => /loaded_tool_count/.test(message.content || "")));
+      res.end(JSON.stringify({
+        id: "chatcmpl_tool_search_final",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_orders",
+              type: "function",
+              function: {
+                name: "list_open_orders",
+                arguments: "{\"customer_id\":\"CUST-123\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+      }));
+      return;
+    }
+
+    assert.equal(call.body.tools.length, 1);
+    const searchToolName = call.body.tools[0].function.name;
+    assert.match(searchToolName, /^local_tool_search/);
+    assert.equal(
+      call.body.tools.some((tool) => tool.function?.parameters?.properties?.customer_id),
+      false,
+    );
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Local Responses tool_search compatibility is active/);
+    assert.match(prompt, /Searchable namespaces:\n- crm:/);
+    res.end(JSON.stringify({
+      id: "chatcmpl_tool_search",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_search",
+            type: "function",
+            function: {
+              name: searchToolName,
+              arguments: "{\"paths\":[\"crm\"],\"query\":\"open orders\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "List open orders for customer CUST-123.",
+        tools: [
+          { type: "tool_search" },
+          {
+            type: "namespace",
+            name: "crm",
+            description: "CRM tools for customer lookup and order management.",
+            tools: [{
+              type: "function",
+              name: "list_open_orders",
+              description: "List open orders for a customer ID.",
+              defer_loading: true,
+              parameters: {
+                type: "object",
+                properties: { customer_id: { type: "string" } },
+                required: ["customer_id"],
+                additionalProperties: false,
+              },
+            }],
+          },
+        ],
+        parallel_tool_calls: false,
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(requests.length, 2);
+    const json = await response.json();
+    assert.deepEqual(json.output.map((item) => item.type), [
+      "tool_search_call",
+      "tool_search_output",
+      "function_call",
+    ]);
+    assert.equal(json.output[0].execution, "server");
+    assert.equal(json.output[0].call_id, null);
+    assert.deepEqual(json.output[0].arguments.paths, ["crm"]);
+    assert.equal(json.output[1].tools[0].type, "namespace");
+    assert.equal(json.output[1].tools[0].name, "crm");
+    assert.equal(json.output[1].tools[0].tools[0].name, "list_open_orders");
+    assert.equal(json.output[2].name, "list_open_orders");
+    assert.equal(json.output[2].namespace, "crm");
+    assert.equal(json.output[2].arguments, "{\"customer_id\":\"CUST-123\"}");
+    assert.equal(json.metadata.compatibility.local_tool_search.provider, "local");
+    assert.equal(json.metadata.compatibility.local_tool_search.deferred_tool_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.search_call_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.loaded_tool_count, 1);
+    assert.equal(json.usage.input_tokens, 18);
+    assert.equal(json.usage.output_tokens, 5);
+    assert.equal(json.usage.total_tokens, 23);
+  });
+});
+
 test("POST /v1/responses imports remote MCP tools/list over Streamable HTTP", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-list";
   const mcpRequests = [];

@@ -428,10 +428,13 @@ function mapResponsesTools(tools = [], options = {}) {
   const mapped = [];
   const unsupported = [];
   const localHostedTools = new Set(options.localHostedTools || []);
+  const deferFunctionTools = localHostedTools.has("tool_search")
+    && (tools || []).some((tool) => isPlainObject(tool) && tool.type === "tool_search");
 
   for (const tool of tools || []) {
     if (!isPlainObject(tool)) continue;
     if (tool.type === "function") {
+      if (deferFunctionTools && tool.defer_loading) continue;
       mapped.push({
         type: "function",
         function: {
@@ -1426,6 +1429,7 @@ function appendToolCallOutputs(response, toolCalls) {
       type: "function_call",
       call_id: toolCall.id || prefixedId("call"),
       name: toolCall.function?.name,
+      ...(toolCall.function?.namespace ? { namespace: toolCall.function.namespace } : {}),
       arguments: stringifyContent(toolCall.function?.arguments ?? ""),
       status: "completed",
     });
@@ -1439,6 +1443,7 @@ function appendLegacyFunctionCallOutput(response, functionCall, callId) {
     type: "function_call",
     call_id: callId,
     name: functionCall.name,
+    ...(functionCall.namespace ? { namespace: functionCall.namespace } : {}),
     arguments: stringifyContent(functionCall.arguments ?? ""),
     status: "completed",
   });

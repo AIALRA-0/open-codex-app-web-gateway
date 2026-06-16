@@ -92,6 +92,18 @@ const {
   suppressMcpChatToolCalls,
 } = require("./local_mcp");
 const {
+  attachToolSearchOutput,
+  executeToolSearchChatToolCalls,
+  injectToolSearchChatTools,
+  injectToolSearchMessages,
+  localToolSearchToolTypes,
+  prepareToolSearchContext,
+  remapToolSearchChatToolCalls,
+  suppressToolSearchChatToolCalls,
+  toolSearchCompatibility,
+  toolSearchOutputItems,
+} = require("./local_tool_search");
+const {
   attachImageGenerationOutput,
   createImagesEditEventStream,
   createImagesEditResponse,
@@ -404,6 +416,8 @@ function loadConfig(overrides = {}) {
     mcpMaxTools: numberFromEnv("CODEXCOMPAT_MCP_MAX_TOOLS", 128, 1, 1000),
     mcpProtocolVersion: process.env.CODEXCOMPAT_MCP_PROTOCOL_VERSION || "2025-03-26",
     mcpClientName: process.env.CODEXCOMPAT_MCP_CLIENT_NAME || "open-codex-responses-bridge",
+    toolSearchProvider: process.env.CODEXCOMPAT_TOOL_SEARCH_PROVIDER || "local",
+    toolSearchMaxLoadedTools: numberFromEnv("CODEXCOMPAT_TOOL_SEARCH_MAX_LOADED_TOOLS", 10, 1, 100),
     audioProvider: process.env.CODEXCOMPAT_AUDIO_PROVIDER || "placeholder",
     audioSpeechModel: process.env.CODEXCOMPAT_AUDIO_SPEECH_MODEL || "gpt-4o-mini-tts",
     audioTranscriptionModel: process.env.CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL || "gpt-4o-transcribe",
@@ -634,6 +648,7 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
 }
 
 async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, localMcp, toolBudget, options = {}) {
+  const localToolSearch = options.localToolSearch || null;
   const usageParts = [];
   let current = await fetchProviderJson(config, chat, incomingHeaders, options);
   if (!current.ok) return current;
@@ -641,6 +656,20 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
 
   const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
   for (let round = 0; round < maxRounds; round += 1) {
+    const toolSearchExecution = await executeToolSearchChatToolCalls(localToolSearch, current.json, config, { toolBudget, chat });
+    if (toolSearchExecution.executed) {
+      if (toolSearchExecution.client_requested) {
+        current.json = suppressToolSearchChatToolCalls(current.json, localToolSearch);
+        break;
+      }
+      chat.messages.push(...toolSearchExecution.messages);
+      if (round + 1 >= maxRounds) chat.tool_choice = "none";
+      current = await fetchProviderJson(config, chat, incomingHeaders, options);
+      if (!current.ok) return current;
+      if (current.json?.usage) usageParts.push(current.json.usage);
+      continue;
+    }
+
     const execution = await executeMcpChatToolCalls(localMcp, current.json, config, { toolBudget });
     if (!execution.executed) break;
     if (execution.approval_requested) {
@@ -721,6 +750,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     ...localShellToolTypes(request.tools || [], config),
     ...localComputerToolTypes(request.tools || [], config),
     ...localMcpToolTypes(request.tools || [], config),
+    ...localToolSearchToolTypes(request.tools || [], config),
     ...localImageGenerationToolTypes(request.tools || [], config),
   ];
   const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
@@ -761,6 +791,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     applyLocalMcpToChat(chat, compatibility, localMcp, config);
     if (!approvedMcp.handled) injectMcpChatTools(chat, localMcp, config, { toolBudget });
   }
+  const localToolSearch = await prepareToolSearchContext(request, config, { previousResponse });
+  if (localToolSearch) {
+    applyLocalToolSearchToChat(chat, compatibility, localToolSearch, config);
+  }
   const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget });
   if (localImageGeneration) {
     applyLocalImageGenerationToChat(chat, compatibility, localImageGeneration, config);
@@ -784,22 +818,23 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     await handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, {
       ...compatibility,
       ...(conversation ? { local_conversation: { id: conversation.id, replayed_item_count: conversation.items.length } } : {}),
-    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, localMcp, conversationStore, conversation, toolBudget);
+    }, localWebSearch, localFileSearch, localShell, localComputer, localImageGeneration, localMcp, localToolSearch, conversationStore, conversation, toolBudget);
     return;
   }
 
-  const providerResult = await fetchProviderWithMcpToolLoop(config, chat, request, req.headers, localMcp, toolBudget);
+  const providerResult = await fetchProviderWithMcpToolLoop(config, chat, request, req.headers, localMcp, toolBudget, { localToolSearch });
   if (!providerResult.ok) {
     sendJson(res, providerResult.status, providerResult.json || { error: { message: providerResult.text } });
     return;
   }
-  let upstreamJson = providerResult.json;
+  let upstreamJson = remapToolSearchChatToolCalls(providerResult.json, localToolSearch);
   const computerExecution = executeComputerChatToolCalls(localComputer, upstreamJson, config, { toolBudget });
   if (computerExecution.executed) {
     upstreamJson = suppressComputerChatToolCalls(upstreamJson, localComputer);
   }
   mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
   mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
+  mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
   Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
@@ -807,6 +842,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
   attachMcpOutput(response, localMcp);
+  attachToolSearchOutput(response, localToolSearch);
   attachImageGenerationOutput(response, localImageGeneration);
   attachWebSearchOutput(response, localWebSearch, { includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
@@ -884,6 +920,21 @@ function mergeLocalMcpCompatibility(target, source) {
   };
   for (const [key, value] of Object.entries(source)) {
     if (key !== "local_mcp") target[key] = value;
+  }
+  return target;
+}
+
+function mergeLocalToolSearchCompatibility(target, source) {
+  if (!isPlainObject(source?.local_tool_search)) {
+    Object.assign(target, source || {});
+    return target;
+  }
+  target.local_tool_search = {
+    ...(isPlainObject(target.local_tool_search) ? target.local_tool_search : {}),
+    ...source.local_tool_search,
+  };
+  for (const [key, value] of Object.entries(source)) {
+    if (key !== "local_tool_search") target[key] = value;
   }
   return target;
 }
@@ -974,7 +1025,7 @@ function startBackgroundJob(params) {
   return job;
 }
 
-const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "mcp", "image_generation", "web_search", "file_search", "truncation"];
+const BACKGROUND_PREPARE_STEPS = ["input_files", "shell", "computer", "mcp", "tool_search", "image_generation", "web_search", "file_search", "truncation"];
 
 async function runBackgroundResponse({ config, store, backgroundJobs, job, request, chat, responseId, compatibility, incomingHeaders, previousMessages = [], fileSearchStore, imageGenerationStore, containerStore, conversationStore, conversation, toolBudget, skillStore, prepared = false, localOutputItems = [], preparationState = null }) {
   try {
@@ -1156,6 +1207,16 @@ async function runBackgroundPrepareStep(step, { config, store, job, request, pre
     return {};
   }
 
+  if (step === "tool_search") {
+    const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
+    const localToolSearch = await prepareToolSearchContext(request, config, { previousResponse });
+    runtime.contexts.tool_search = localToolSearch;
+    if (localToolSearch) {
+      runtime.compatibility = applyLocalToolSearchToChat(runtime.chat, { ...runtime.compatibility }, localToolSearch, config);
+    }
+    return {};
+  }
+
   if (step === "image_generation") {
     const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
     const localImageGeneration = await prepareImageGenerationContext(request, config, { fileSearchStore, imageGenerationStore, previousResponse, toolBudget: runtime.toolBudget });
@@ -1231,6 +1292,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
     ...shellOutputItems(contexts.shell, { includeCodeInterpreterOutputs: true }),
     ...computerOutputItems(contexts.computer),
     ...mcpOutputItems(contexts.mcp),
+    ...toolSearchOutputItems(contexts.tool_search),
     ...imageGenerationOutputItems(contexts.image_generation),
     ...webSearchOutputItems(contexts.web_search, { includeSources: true }),
     ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
@@ -1257,6 +1319,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     onTimeout: () => {
       job.timed_out = true;
     },
+    localToolSearch: contexts?.tool_search,
   });
   if (job.deleted) return;
   if (job.controller.signal.aborted) {
@@ -1269,7 +1332,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     return;
   }
 
-  let upstreamJson = providerResult.json;
+  let upstreamJson = remapToolSearchChatToolCalls(providerResult.json, contexts?.tool_search);
   if (contexts?.computer) {
     const computerExecution = executeComputerChatToolCalls(contexts.computer, upstreamJson, config, { toolBudget });
     if (computerExecution.executed) {
@@ -1280,6 +1343,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
   const finalCompatibility = { ...(compatibility || {}) };
   if (contexts?.computer) mergeLocalComputerCompatibility(finalCompatibility, computerCompatibility(contexts.computer));
   if (contexts?.mcp) mergeLocalMcpCompatibility(finalCompatibility, mcpCompatibility(contexts.mcp));
+  if (contexts?.tool_search) mergeLocalToolSearchCompatibility(finalCompatibility, toolSearchCompatibility(contexts.tool_search));
   Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
 
   const response = chatCompletionToResponse(upstreamJson, request, { responseId });
@@ -1958,6 +2022,13 @@ function applyLocalMcpToChat(chat, compatibility, localMcp, config) {
       deepseek_thinking: "disabled_for_local_mcp",
     };
   }
+  return compatibility;
+}
+
+function applyLocalToolSearchToChat(chat, compatibility, localToolSearch, config) {
+  injectToolSearchMessages(chat, localToolSearch);
+  injectToolSearchChatTools(chat, localToolSearch, config);
+  mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
   return compatibility;
 }
 
@@ -3142,7 +3213,7 @@ function base64url(buffer) {
   return Buffer.from(buffer).toString("base64url");
 }
 
-async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, conversationStore = null, conversation = null, toolBudget = null) {
+async function handleStreamingResponse(req, res, config, store, request, chat, previousMessages, responseId, compatibility, localWebSearch = null, localFileSearch = null, localShell = null, localComputer = null, localImageGeneration = null, localMcp = null, localToolSearch = null, conversationStore = null, conversation = null, toolBudget = null) {
   const response = createResponseSkeleton(request, { id: responseId, model: chat.model });
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility);
@@ -3164,10 +3235,11 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   emitFileSearchStreamItems(res, state, localFileSearch);
 
   try {
-    if (canRunStreamingLocalToolLoop(localMcp, localComputer, config)) {
+    if (canRunStreamingLocalToolLoop(localMcp, localComputer, localToolSearch, config)) {
       const localToolStreamResult = await streamProviderWithLocalToolLoop(res, state, config, chat, req.headers, {
         localMcp,
         localComputer,
+        localToolSearch,
         toolBudget,
       });
       if (!localToolStreamResult.ok) {
@@ -3195,6 +3267,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     annotateFileSearchResponse(response, localFileSearch);
     mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
     mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
+    mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
     Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
     syncStreamTextFromResponse(state);
     const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config);
@@ -3283,13 +3356,18 @@ function canRunStreamingComputerActionLoop(localComputer) {
   return !!localComputer?.chat_action_tool_name;
 }
 
-function canRunStreamingLocalToolLoop(localMcp, localComputer, config = {}) {
+function canRunStreamingToolSearchLoop(localToolSearch) {
+  return !!localToolSearch?.chat_search_tool_name;
+}
+
+function canRunStreamingLocalToolLoop(localMcp, localComputer, localToolSearch, config = {}) {
   return canRunStreamingComputerActionLoop(localComputer)
+    || canRunStreamingToolSearchLoop(localToolSearch)
     || canRunStreamingMcpToolLoop(localMcp, config);
 }
 
 async function streamProviderWithLocalToolLoop(res, state, config, chat, incomingHeaders, contexts = {}) {
-  const { localMcp = null, localComputer = null, toolBudget = null } = contexts;
+  const { localMcp = null, localComputer = null, localToolSearch = null, toolBudget = null } = contexts;
   const usageParts = [];
   const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
 
@@ -3297,6 +3375,20 @@ async function streamProviderWithLocalToolLoop(res, state, config, chat, incomin
     const current = await collectProviderStreamCompletion(config, chat, incomingHeaders);
     if (!current.ok) return current;
     if (current.completion?.usage) usageParts.push(current.completion.usage);
+
+    const toolSearchExecution = round < maxRounds
+      ? await executeToolSearchChatToolCalls(localToolSearch, current.completion, config, { toolBudget, chat })
+      : { executed: false };
+    if (toolSearchExecution.executed) {
+      emitToolSearchExecutionStreamItems(res, state, toolSearchExecution.output_items || []);
+      if (toolSearchExecution.client_requested) {
+        applyCombinedStreamUsage(state, usageParts);
+        return { ok: true };
+      }
+      chat.messages.push(...(toolSearchExecution.messages || []));
+      if (round + 1 >= maxRounds) chat.tool_choice = "none";
+      continue;
+    }
 
     const computerExecution = executeComputerChatToolCalls(localComputer, current.completion, config, { toolBudget });
     if (computerExecution.executed) {
@@ -3370,6 +3462,19 @@ function applyCombinedStreamUsage(state, usageParts = []) {
   const usage = usable.length > 1 ? combineChatUsage(usable) : clone(usable[0]);
   state.chatUsage = usage;
   state.usage = mapUsage(usage);
+}
+
+function emitToolSearchExecutionStreamItems(res, state, items = []) {
+  for (const rawItem of items) {
+    const item = clone(rawItem);
+    state.response.output.push(item);
+    writeSse(res, "response.output_item.added", sequence(state, {
+      type: "response.output_item.added",
+      response_id: state.response.id,
+      output_index: state.response.output.length - 1,
+      item: clone(item),
+    }));
+  }
 }
 
 function emitMcpExecutionStreamItems(res, state, items = []) {

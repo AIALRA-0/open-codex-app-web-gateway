@@ -306,6 +306,58 @@ test("can reserve image_generation for local bridge execution", () => {
   assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
 });
 
+test("can reserve tool_search and hide deferred function schemas for local bridge execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Find the billing tool.",
+    tools: [
+      { type: "tool_search" },
+      {
+        type: "function",
+        name: "billing_lookup_invoice",
+        description: "Look up invoices.",
+        defer_loading: true,
+        parameters: { type: "object", properties: { invoice_id: { type: "string" } } },
+      },
+      {
+        type: "function",
+        name: "always_ready",
+        parameters: { type: "object", properties: {} },
+      },
+    ],
+  }, [], { localHostedTools: ["tool_search"] });
+
+  assert.equal(chat.tools.length, 1);
+  assert.equal(chat.tools[0].function.name, "always_ready");
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.ok(!chat.messages.some((message) => /billing_lookup_invoice/.test(message.content || "")));
+});
+
+test("can reserve namespace tools for local tool_search execution", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Use CRM tools.",
+    tools: [
+      { type: "tool_search" },
+      {
+        type: "namespace",
+        name: "crm",
+        description: "CRM account tools.",
+        tools: [{
+          type: "function",
+          name: "list_open_orders",
+          defer_loading: true,
+          parameters: { type: "object", properties: { customer_id: { type: "string" } } },
+        }],
+      },
+    ],
+  }, [], { localHostedTools: ["tool_search", "namespace"] });
+
+  assert.equal(chat.tools, undefined);
+  assert.deepEqual(compatibility.unsupported_tools, []);
+  assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+});
+
 test("maps computer_call_output input to readable chat context", () => {
   const messages = responseInputToChatMessages([{
     type: "computer_call_output",

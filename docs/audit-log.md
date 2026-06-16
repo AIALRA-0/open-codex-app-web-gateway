@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-16 Local Tool Search Deferred Function Loading
+
+- Checked the official OpenAI tool-search guide through the OpenAI developer
+  docs MCP. The guide defines `tools:[{type:"tool_search"}]`,
+  `defer_loading:true`, hosted output items `tool_search_call` and
+  `tool_search_output`, client-executed first-call behavior, namespace
+  grouping, and later availability of `tool_search_output.tools`.
+- Added a local `tool_search` adapter for Chat-only providers:
+  - top-level deferred function schemas are hidden from the initial Chat tools
+    list when local `tool_search` is active;
+  - namespace tools are treated as searchable local surfaces, with only the
+    namespace summary visible before search;
+  - a generated `local_tool_search` Chat function lets the model request
+    deferred tool loading, then the bridge emits public `tool_search_call` and
+    `tool_search_output` Responses items;
+  - loaded function schemas are injected into a follow-up Chat request and
+    final function calls are remapped back to the original Responses name and
+    `namespace`;
+  - previously returned `tool_search_output.tools` can be replayed from input
+    or `previous_response_id`;
+  - non-streaming, streaming, and active background provider paths share the
+    same local tool-search loop and shared `max_tool_calls` budget.
+- Added configuration knobs `CODEXCOMPAT_TOOL_SEARCH_PROVIDER` and
+  `CODEXCOMPAT_TOOL_SEARCH_MAX_LOADED_TOOLS`.
+- Updated compatibility docs and the evaluation plan with the new adapter,
+  emitted item shapes, metadata boundary, and remaining gaps around remote MCP
+  / connector search and collision-safe streaming name remapping.
+- Validation:
+  - `node --check src/bridge/local_tool_search.js src/bridge/server.js src/bridge/translator.js`:
+    passed.
+  - `node --test test/translator.test.js --test-name-pattern 'tool_search|namespace tools|function tools'`:
+    passed 39/39 tests, including new local reservation coverage.
+  - `node --test test/server.test.js --test-name-pattern 'tool_search|normalizes computer action aliases'`:
+    passed 189/189 tests, including the hosted namespace `tool_search`
+    double-request regression.
+  - Full `npm test`: passed 231/231 tests.
+  - `git diff --check`, `npm run secret-scan`, and an exact search for the
+    user-provided test key in tracked files all passed with no tracked secret
+    matches.
+  - `npm run eval:protocol` reached the local deployed bridge, but both live
+    DeepSeek cases returned HTTP 402 `Insufficient Balance`; no live
+    model-quality assertion was possible on this run.
+
 ## 2026-06-16 Computer Use Action Alias Normalization
 
 - Continued tightening the local Computer Use action-loop adapter against the

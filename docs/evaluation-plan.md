@@ -140,6 +140,15 @@ remote `tools/call` execution through generated Chat function tools. The
 background call case also forces the original MCP tool name through
 `tool_choice` so the harness catches regressions in generated-function-name
 mapping.
+Tool-search coverage verifies the hosted Responses function/namespace
+`defer_loading` flow against a mock Chat provider: the first upstream request
+sees only the generated search function and namespace summary, the model's
+search call becomes public `tool_search_call` / `tool_search_output` items,
+the follow-up upstream request receives the loaded function schema, and the
+final Chat function call is remapped back to the original Responses
+`namespace`. Follow-up eval work should add live bridge cases for
+`tool_search`, collision-heavy streaming function names, and large catalogs to
+measure latency, token savings, and tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The
@@ -157,6 +166,7 @@ Useful commands:
 ```bash
 npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
+node --test test/server.test.js --test-name-pattern 'tool_search'
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-conversation-lifecycle --timeout-ms 90000 --verbose
