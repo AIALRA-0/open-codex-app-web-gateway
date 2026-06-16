@@ -4672,6 +4672,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const reasoningEffort = normalizeChatPassthroughReasoningEffort(upstreamBody, config);
   if (reasoningEffort) compatibility.reasoning_effort = reasoningEffort;
 
+  const legacyFunctions = normalizeChatPassthroughLegacyFunctions(upstreamBody, config);
+  if (legacyFunctions) compatibility.legacy_functions = legacyFunctions;
+
   const customTools = filterChatPassthroughCustomTools(upstreamBody, config);
   if (customTools) compatibility.custom_tools = customTools;
 
@@ -5222,6 +5225,115 @@ function normalizeChatPassthroughReasoningEffort(upstreamBody, config = {}, opti
   }
 
   return null;
+}
+
+function normalizeChatPassthroughLegacyFunctions(upstreamBody, config = {}) {
+  if (config.forwardChatNativeFields !== false) return null;
+  const hasFunctions = Object.prototype.hasOwnProperty.call(upstreamBody, "functions") && upstreamBody.functions !== undefined;
+  const hasFunctionCall = Object.prototype.hasOwnProperty.call(upstreamBody, "function_call") && upstreamBody.function_call !== undefined;
+  if (!hasFunctions && !hasFunctionCall) return null;
+
+  const compatibility = {};
+
+  if (hasFunctions) {
+    const converted = legacyFunctionsToChatTools(upstreamBody.functions);
+    const existingTools = Array.isArray(upstreamBody.tools) ? upstreamBody.tools : [];
+    const nextTools = [...existingTools, ...converted.tools];
+    if (nextTools.length) upstreamBody.tools = nextTools;
+    else if (Array.isArray(upstreamBody.tools)) upstreamBody.tools = nextTools;
+    delete upstreamBody.functions;
+    compatibility.functions = {
+      source: "functions",
+      target: "tools",
+      forwarded: false,
+      mapped: converted.validSource,
+      function_count: converted.originalCount,
+      mapped_count: converted.tools.length,
+      ...(converted.filteredCount ? { filtered_count: converted.filteredCount } : {}),
+      reason: converted.validSource
+        ? converted.filteredCount
+          ? "legacy_functions_partially_mapped"
+          : "legacy_functions_mapped"
+        : "invalid_legacy_functions_filtered",
+    };
+  }
+
+  if (hasFunctionCall) {
+    const value = upstreamBody.function_call;
+    const mapped = legacyFunctionCallToToolChoice(value);
+    const hasMappedTools = Array.isArray(upstreamBody.tools) && upstreamBody.tools.length > 0;
+    const canUseMappedChoice = mapped !== undefined
+      && upstreamBody.tool_choice === undefined
+      && (mapped === "none" || hasMappedTools);
+    delete upstreamBody.function_call;
+    if (canUseMappedChoice) {
+      upstreamBody.tool_choice = mapped;
+      compatibility.function_call = {
+        source: "function_call",
+        target: "tool_choice",
+        forwarded: false,
+        mapped: true,
+        value: legacyFunctionCallCompatibilityValue(value),
+        reason: "legacy_function_call_mapped",
+      };
+    } else {
+      compatibility.function_call = {
+        source: "function_call",
+        target: "tool_choice",
+        forwarded: false,
+        mapped: false,
+        value: legacyFunctionCallCompatibilityValue(value),
+        reason: upstreamBody.tool_choice !== undefined
+          ? "tool_choice_precedence"
+          : mapped === undefined
+            ? "invalid_legacy_function_call_filtered"
+            : "no_mapped_tools",
+      };
+    }
+  }
+
+  return Object.keys(compatibility).length ? compatibility : null;
+}
+
+function legacyFunctionsToChatTools(functions) {
+  if (!Array.isArray(functions)) {
+    return { tools: [], originalCount: 0, filteredCount: 0, validSource: false };
+  }
+  const tools = [];
+  let filteredCount = 0;
+  for (const fn of functions) {
+    if (!isPlainObject(fn)) {
+      filteredCount += 1;
+      continue;
+    }
+    tools.push({ type: "function", function: clone(fn) });
+  }
+  return {
+    tools,
+    originalCount: functions.length,
+    filteredCount,
+    validSource: true,
+  };
+}
+
+function legacyFunctionCallToToolChoice(functionCall) {
+  if (typeof functionCall === "string") {
+    return ["auto", "none"].includes(functionCall) ? functionCall : undefined;
+  }
+  if (isPlainObject(functionCall) && functionCall.name) {
+    return {
+      type: "function",
+      function: { name: stringifyContent(functionCall.name) },
+    };
+  }
+  return undefined;
+}
+
+function legacyFunctionCallCompatibilityValue(functionCall) {
+  if (isPlainObject(functionCall)) {
+    return functionCall.name ? { name: stringifyContent(functionCall.name) } : {};
+  }
+  return stringifyContent(functionCall);
 }
 
 function normalizeChatPassthroughToolChoiceThinking(upstreamBody, config = {}) {

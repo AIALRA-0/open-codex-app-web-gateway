@@ -571,7 +571,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   messages.push(...responseInputToChatMessages(request.input, options));
 
-  const { mapped: tools, unsupported } = mapResponsesTools(request.tools || [], options);
+  let { mapped: tools, unsupported } = mapResponsesTools(request.tools || [], options);
   const compatibilityMessage = makeCompatibilityMessage(unsupported);
   if (compatibilityMessage) messages.unshift(compatibilityMessage);
 
@@ -603,12 +603,20 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
   const verbosityCompatibility = mapVerbosity(request, chat, options);
   const contextManagementCompatibility = mapContextManagement(request);
+  let toolChoice = mapToolChoice(request.tool_choice);
+  const legacyFunctionsCompatibility = mapLegacyChatFunctions(request, tools, toolChoice, options);
+  if (legacyFunctionsCompatibility?.tools) tools = legacyFunctionsCompatibility.tools;
+  if (Object.prototype.hasOwnProperty.call(legacyFunctionsCompatibility || {}, "toolChoice")) {
+    toolChoice = legacyFunctionsCompatibility.toolChoice;
+  }
   const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, {
     ...options,
-    mappedNativeFields: deepseekUserIdCompatibility?.source ? [deepseekUserIdCompatibility.source] : [],
+    mappedNativeFields: [
+      ...(deepseekUserIdCompatibility?.source ? [deepseekUserIdCompatibility.source] : []),
+      ...(legacyFunctionsCompatibility?.mappedFields || []),
+    ],
   });
 
-  const toolChoice = mapToolChoice(request.tool_choice);
   if (tools.length) {
     chat.tools = tools;
     if (toolChoice !== undefined) chat.tool_choice = toolChoice;
@@ -653,9 +661,113 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(maxTokensCompatibility || {}),
       ...(verbosityCompatibility ? { verbosity: verbosityCompatibility } : {}),
       ...(contextManagementCompatibility ? { context_management: contextManagementCompatibility } : {}),
+      ...(legacyFunctionsCompatibility?.compatibility ? { legacy_functions: legacyFunctionsCompatibility.compatibility } : {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
+}
+
+function mapLegacyChatFunctions(request = {}, tools = [], toolChoice, options = {}) {
+  if (options.forwardChatNativeFields !== false) return null;
+  const hasFunctions = Object.prototype.hasOwnProperty.call(request, "functions") && request.functions !== undefined;
+  const hasFunctionCall = Object.prototype.hasOwnProperty.call(request, "function_call") && request.function_call !== undefined;
+  if (!hasFunctions && !hasFunctionCall) return null;
+
+  const nextTools = Array.isArray(tools) ? [...tools] : [];
+  let nextToolChoice = toolChoice;
+  const mappedFields = [];
+  const compatibility = {};
+
+  if (hasFunctions) {
+    const converted = legacyFunctionsToChatTools(request.functions);
+    nextTools.push(...converted.tools);
+    mappedFields.push("functions");
+    compatibility.functions = {
+      source: "functions",
+      target: "tools",
+      forwarded: false,
+      mapped: Array.isArray(request.functions),
+      function_count: Array.isArray(request.functions) ? request.functions.length : 0,
+      mapped_count: converted.tools.length,
+      ...(converted.filteredCount ? { filtered_count: converted.filteredCount } : {}),
+      reason: Array.isArray(request.functions)
+        ? converted.filteredCount
+          ? "legacy_functions_partially_mapped"
+          : "legacy_functions_mapped"
+        : "invalid_legacy_functions_filtered",
+    };
+  }
+
+  if (hasFunctionCall) {
+    const mapped = legacyFunctionCallToToolChoice(request.function_call);
+    const canUseMappedChoice = mapped !== undefined && nextToolChoice === undefined && (mapped === "none" || nextTools.length > 0);
+    mappedFields.push("function_call");
+    if (canUseMappedChoice) {
+      nextToolChoice = mapped;
+      compatibility.function_call = {
+        source: "function_call",
+        target: "tool_choice",
+        forwarded: false,
+        mapped: true,
+        value: legacyFunctionCallCompatibilityValue(request.function_call),
+        reason: "legacy_function_call_mapped",
+      };
+    } else {
+      compatibility.function_call = {
+        source: "function_call",
+        target: "tool_choice",
+        forwarded: false,
+        mapped: false,
+        value: legacyFunctionCallCompatibilityValue(request.function_call),
+        reason: nextToolChoice !== undefined
+          ? "tool_choice_precedence"
+          : mapped === undefined
+            ? "invalid_legacy_function_call_filtered"
+            : "no_mapped_tools",
+      };
+    }
+  }
+
+  return {
+    tools: nextTools,
+    toolChoice: nextToolChoice,
+    mappedFields,
+    compatibility,
+  };
+}
+
+function legacyFunctionsToChatTools(functions) {
+  if (!Array.isArray(functions)) return { tools: [], filteredCount: 0 };
+  const tools = [];
+  let filteredCount = 0;
+  for (const fn of functions) {
+    if (!isPlainObject(fn)) {
+      filteredCount += 1;
+      continue;
+    }
+    tools.push({ type: "function", function: clone(fn) });
+  }
+  return { tools, filteredCount };
+}
+
+function legacyFunctionCallToToolChoice(functionCall) {
+  if (typeof functionCall === "string") {
+    return ["auto", "none"].includes(functionCall) ? functionCall : undefined;
+  }
+  if (isPlainObject(functionCall) && functionCall.name) {
+    return {
+      type: "function",
+      function: { name: stringifyContent(functionCall.name) },
+    };
+  }
+  return undefined;
+}
+
+function legacyFunctionCallCompatibilityValue(functionCall) {
+  if (isPlainObject(functionCall)) {
+    return functionCall.name ? { name: stringifyContent(functionCall.name) } : {};
+  }
+  return stringifyContent(functionCall);
 }
 
 function mapContextManagement(request = {}) {

@@ -563,6 +563,11 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `delta.tool_calls` in live provider tests and legacy Chat
   `delta.function_call` in mock-provider regression tests, including stored
   replay as Chat `tool_calls` for follow-up `function_call_output` turns.
+- Deprecated Chat `functions` / `function_call` request compatibility must be
+  tested on both `/v1/responses` Chat-native alias handling and direct
+  `/v1/chat/completions`: providers that do not accept the legacy fields should
+  receive modern `tools` / `tool_choice` instead, with mapped-field metadata
+  recorded rather than generic dropped-field metadata.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.

@@ -17984,6 +17984,14 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.web_search_options, undefined);
     assert.equal(call.body.functions, undefined);
     assert.equal(call.body.function_call, undefined);
+    assert.deepEqual(call.body.tools, [{
+      type: "function",
+      function: { name: "legacy_noop", parameters: { type: "object", properties: {} } },
+    }]);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: "legacy_noop" },
+    });
     assert.equal(call.body.logprobs, true);
     assert.equal(call.body.top_logprobs, 3);
     assert.equal(call.body.stream_options, undefined);
@@ -18075,6 +18083,25 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
       "provider_unsupported_prompt_instruction",
     );
     assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.prompt_instruction, "injected");
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.legacy_functions, {
+      functions: {
+        source: "functions",
+        target: "tools",
+        forwarded: false,
+        mapped: true,
+        function_count: 1,
+        mapped_count: 1,
+        reason: "legacy_functions_mapped",
+      },
+      function_call: {
+        source: "function_call",
+        target: "tool_choice",
+        forwarded: false,
+        mapped: true,
+        value: { name: "legacy_noop" },
+        reason: "legacy_function_call_mapped",
+      },
+    });
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
     assert.equal(json.metadata.compatibility.chat_passthrough.stored_chat_fields.reason, "provider_unsupported_local_semantics");
     assert.deepEqual(
@@ -18085,8 +18112,6 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
       json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
       [
         "audio",
-        "function_call",
-        "functions",
         "logit_bias",
         "modalities",
         "moderation",

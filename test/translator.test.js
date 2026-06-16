@@ -659,6 +659,65 @@ test("filters Chat-native request fields for unsupported providers", () => {
   assert.equal(compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
 });
 
+test("maps legacy Chat functions to modern tools for unsupported providers", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Use the legacy function.",
+    functions: [{
+      name: "legacy_lookup",
+      description: "Look up a value.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    }],
+    function_call: { name: "legacy_lookup" },
+  }, [], { forwardChatNativeFields: false });
+
+  assert.equal(chat.functions, undefined);
+  assert.equal(chat.function_call, undefined);
+  assert.deepEqual(chat.tools, [{
+    type: "function",
+    function: {
+      name: "legacy_lookup",
+      description: "Look up a value.",
+      parameters: {
+        type: "object",
+        properties: { query: { type: "string" } },
+        required: ["query"],
+      },
+    },
+  }]);
+  assert.deepEqual(chat.tool_choice, {
+    type: "function",
+    function: { name: "legacy_lookup" },
+  });
+  assert.deepEqual(compatibility.legacy_functions, {
+    functions: {
+      source: "functions",
+      target: "tools",
+      forwarded: false,
+      mapped: true,
+      function_count: 1,
+      mapped_count: 1,
+      reason: "legacy_functions_mapped",
+    },
+    function_call: {
+      source: "function_call",
+      target: "tool_choice",
+      forwarded: false,
+      mapped: true,
+      value: { name: "legacy_lookup" },
+      reason: "legacy_function_call_mapped",
+    },
+  });
+  assert.deepEqual(compatibility.chat_native_fields.mapped.sort(), [
+    "function_call",
+    "functions",
+  ].sort());
+});
+
 test("records Responses context management without forwarding it to Chat providers", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "mock-model",

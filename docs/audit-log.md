@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-16 Legacy Chat Function Request Mapping
+
+- Rechecked the current official OpenAI Chat Completions create schema through
+  the OpenAI developer docs MCP/OpenAPI spec before changing compatibility
+  behavior. The relevant request fields are deprecated `functions` /
+  `function_call` and modern `tools` / `tool_choice`; Chat providers such as
+  DeepSeek are more likely to support the modern tool-call shape.
+- Added provider-aware legacy Chat function request mapping:
+  - direct `/v1/chat/completions` requests with `functions` now send modern
+    `tools:[{type:"function",function:{...}}]` upstream when Chat-native fields
+    are not forwarded;
+  - compatible legacy `function_call` values now map to modern `tool_choice`
+    when no explicit modern `tool_choice` already exists;
+  - `/v1/responses` requests that include Chat-native `functions` /
+    `function_call` aliases use the same mapping before the upstream Chat
+    request is built;
+  - mapped legacy fields are recorded in
+    `metadata.compatibility.legacy_functions` for Responses translation and
+    `metadata.compatibility.chat_passthrough.legacy_functions` for direct Chat,
+    instead of being reported as generic dropped fields.
+- Kept OpenAI-compatible provider behavior unchanged when native Chat field
+  forwarding is enabled: legacy fields can still pass through as legacy fields
+  for providers that explicitly support them.
+- Added regression coverage for:
+  - translator-level Responses alias handling that proves legacy `functions` /
+    `function_call` become modern `tools` / `tool_choice`;
+  - direct Chat mock-provider behavior that proves DeepSeek-compatible
+    passthrough sends modern tool fields upstream and records the mapping in
+    `chat_passthrough.legacy_functions`.
+- Updated the compatibility matrix and evaluation plan so future tests treat
+  deprecated Chat function request fields as a compatibility mapping surface,
+  not as unsupported provider noise.
+- Validation:
+  - `node --check src/bridge/translator.js`, `src/bridge/server.js`,
+    `test/translator.test.js`, and `test/server.test.js`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "legacy Chat functions|Chat-native request fields"`:
+    passed 44/44.
+  - `node --test test/server.test.js --test-name-pattern "normalizes OpenAI Chat fields|legacy Chat functions"`:
+    passed 209/209; the current Node test runner executed the whole server test
+    file.
+  - `npm test`: passed 257/257.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public direct Chat smoke through
+    `https://opencodexapp.aialra.online/v1/chat/completions`: HTTP 200, content
+    `ok-legacy-functions`, `legacy_functions.functions.reason` was
+    `legacy_functions_mapped`, and `legacy_functions.function_call.reason` was
+    `legacy_function_call_mapped`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses Context Management Boundary
 
 - Rechecked the current official OpenAI Responses create schema through the
