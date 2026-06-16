@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-16 Official Seed Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Chat Completions `seed` is an integer/null field with the official
+  `-9223372036854776000` through `9223372036854776000` range; legacy
+  Completions `seed` is an integer/null int64-compatible field.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-integer and out-of-official-range
+    Chat-native `seed` values before Responses-to-Chat translation or upstream
+    provider calls.
+  - local `POST /v1/responses/input_tokens` applies the same `seed` validation
+    before building the prompt-token probe.
+  - `POST /v1/chat/completions` now rejects invalid `seed` values before
+    direct Chat passthrough or provider-specific normalization.
+  - `POST /v1/completions` now rejects invalid legacy `seed` values before
+    prompt-to-Chat mapping, non-streaming provider calls, or streaming provider
+    calls.
+  - Invalid strings, floats, arrays, objects, and out-of-range numbers now
+    return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and `param:"seed"` locally with zero
+    upstream provider calls.
+- Preserved existing compatibility behavior for valid values: Responses
+  Chat-native seeds, local input-token probes, direct Chat requests, and legacy
+  Completions requests continue forwarding valid integer seeds through the
+  bridge.
+- Added regression coverage proving invalid `seed` values fail locally with
+  zero upstream calls on Responses create, Responses input-token probes, direct
+  Chat, and legacy Completions; valid seeds continue through provider-aware
+  passthrough.
+- Updated the compatibility matrix and evaluation plan so deterministic
+  sampling parity tracks official `seed` validation in addition to field
+  forwarding.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "validates seed|maps legacy prompts|normalizes OpenAI Chat fields"`:
+    passed 250/250; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 299/299.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"seed"` for `seed:"42"`; public `/v1/responses/input_tokens`
+    returned HTTP 400 with `param:"seed"` for `seed:1e21`; public
+    `/v1/chat/completions` returned HTTP 400 with `param:"seed"` for
+    `seed:123.5`; public `/v1/completions` returned HTTP 400 with
+    `param:"seed"` for `seed:-1e21`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 7.5G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Token Limit Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

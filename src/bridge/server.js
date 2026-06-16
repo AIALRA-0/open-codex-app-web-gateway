@@ -205,6 +205,8 @@ const OPENAI_LEGACY_LOGPROBS_MIN = 0;
 const OPENAI_LEGACY_LOGPROBS_MAX = 5;
 const OPENAI_RESPONSES_MAX_OUTPUT_TOKENS_MIN = 16;
 const OPENAI_LEGACY_MAX_TOKENS_MIN = 0;
+const OPENAI_SEED_MIN = -9223372036854776000;
+const OPENAI_SEED_MAX = 9223372036854776000;
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -824,6 +826,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const chatMaxTokensError = validateOpenAIChatMaxTokenAliases(request);
   if (chatMaxTokensError) {
     sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
+    return;
+  }
+  const seedError = validateOpenAISeed(request);
+  if (seedError) {
+    sendError(res, 400, seedError.message, seedError);
     return;
   }
   const samplingError = validateOpenAISamplingParameters(request);
@@ -2465,6 +2472,13 @@ function validateOpenAILegacyMaxTokens(body = {}) {
   });
 }
 
+function validateOpenAISeed(body = {}) {
+  return validateIntegerParameter(body, "seed", {
+    min: OPENAI_SEED_MIN,
+    max: OPENAI_SEED_MAX,
+  });
+}
+
 function validateOpenAIChoiceCount(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "n") || body.n == null) return null;
   if (!Number.isInteger(body.n) || body.n < OPENAI_N_MIN || body.n > OPENAI_N_MAX) {
@@ -2637,8 +2651,21 @@ function validateIntegerParameter(body = {}, field, options = {}) {
   if (!Number.isInteger(body[field])) {
     return requestValidationError(`${field} must be an integer`, field);
   }
+  if (
+    options.min != null
+    && options.max != null
+    && (body[field] < options.min || body[field] > options.max)
+  ) {
+    return requestValidationError(`${field} must be an integer between ${options.min} and ${options.max}`, field);
+  }
   if (options.min != null && body[field] < options.min) {
     return requestValidationError(`${field} must be an integer greater than or equal to ${options.min}`, field);
+  }
+  if (options.max != null && body[field] > options.max) {
+    const message = options.min == null
+      ? `${field} must be an integer less than or equal to ${options.max}`
+      : `${field} must be an integer between ${options.min} and ${options.max}`;
+    return requestValidationError(message, field);
   }
   return null;
 }
@@ -2841,6 +2868,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   const chatMaxTokensError = validateOpenAIChatMaxTokenAliases(request);
   if (chatMaxTokensError) {
     sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
+    return;
+  }
+  const seedError = validateOpenAISeed(request);
+  if (seedError) {
+    sendError(res, 400, seedError.message, seedError);
     return;
   }
   const conversation = prepareConversationContext(request, conversationStore, config);
@@ -4784,6 +4816,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
     return;
   }
+  const seedError = validateOpenAISeed(body);
+  if (seedError) {
+    sendError(res, 400, seedError.message, seedError);
+    return;
+  }
   const samplingError = validateOpenAISamplingParameters(body);
   if (samplingError) {
     sendError(res, 400, samplingError.message, samplingError);
@@ -6236,6 +6273,11 @@ async function handleLegacyCompletions(req, res, config) {
   const legacyMaxTokensError = validateOpenAILegacyMaxTokens(request);
   if (legacyMaxTokensError) {
     sendError(res, 400, legacyMaxTokensError.message, legacyMaxTokensError);
+    return;
+  }
+  const seedError = validateOpenAISeed(request);
+  if (seedError) {
+    sendError(res, 400, seedError.message, seedError);
     return;
   }
   const choiceCountError = validateOpenAIChoiceCount(request);
