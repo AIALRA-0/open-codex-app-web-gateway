@@ -40,6 +40,14 @@
     clean.
   - `npm run eval:protocol`: still blocked by upstream DeepSeek `402
     Insufficient Balance` on both live protocol-smoke cases.
+  - Pushed commit `4ca11ec` to `origin/main`.
+  - Runtime code was unchanged in this coverage-only turn, so no service
+    restart was required.
+  - Real Open CodexApp services
+    `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are all `active`.
+  - Local bridge `/healthz` returned `ok:true` with DeepSeek provider base, and
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
   - Storage check: `/` has 11 GB available; repo path is 118 MB,
     `/srv/aialra/data/opencodexapp` is 136 KB, and
     `/srv/aialra/logs/opencodexapp` is 30 MB.
