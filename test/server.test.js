@@ -17684,10 +17684,22 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(call.body.user, undefined);
     assert.match(call.body.user_id, /^sha256_[a-f0-9]{64}$/);
     assert.equal(call.body.service_tier, undefined);
+    assert.equal(call.body.logit_bias, undefined);
     assert.equal(call.body.modalities, undefined);
+    assert.equal(call.body.audio, undefined);
+    assert.equal(call.body.prediction, undefined);
     assert.equal(call.body.moderation, undefined);
     assert.equal(call.body.n, undefined);
     assert.equal(call.body.parallel_tool_calls, undefined);
+    assert.equal(call.body.prompt_cache_key, undefined);
+    assert.equal(call.body.prompt_cache_retention, undefined);
+    assert.equal(call.body.safety_identifier, undefined);
+    assert.equal(call.body.verbosity, undefined);
+    assert.equal(call.body.web_search_options, undefined);
+    assert.equal(call.body.functions, undefined);
+    assert.equal(call.body.function_call, undefined);
+    assert.equal(call.body.logprobs, true);
+    assert.equal(call.body.top_logprobs, 3);
     assert.equal(call.body.stream_options, undefined);
     assert.equal(call.body.max_tokens, 32);
     assert.equal(call.body.max_completion_tokens, undefined);
@@ -17722,11 +17734,23 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
           { role: "user", content: "Return chat-developer-ok." },
         ],
         user: "developer-user@example.com",
+        safety_identifier: "safety/user@example.com",
+        prompt_cache_key: "prompt-cache/user@example.com",
+        prompt_cache_retention: "24h",
         service_tier: "flex",
+        logit_bias: { "42": -100 },
         modalities: ["text"],
+        audio: { voice: "alloy", format: "mp3" },
+        prediction: { type: "content", content: "chat-developer-ok" },
         moderation: { input: true },
         n: 2,
         parallel_tool_calls: false,
+        verbosity: "low",
+        web_search_options: { search_context_size: "low" },
+        functions: [{ name: "legacy_noop", parameters: { type: "object", properties: {} } }],
+        function_call: { name: "legacy_noop" },
+        logprobs: true,
+        top_logprobs: 3,
         stream_options: { include_usage: true },
         max_completion_tokens: 32,
         max_tokens: 96,
@@ -17738,7 +17762,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.choices[0].message.content, "chat-developer-ok");
     assert.equal(json.metadata.suite, "chat-developer-compat");
     assert.equal(json.metadata.compatibility.chat_passthrough.developer_role.count, 1);
-    assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.source, "user");
+    assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.source, "safety_identifier");
     assert.equal(json.metadata.compatibility.chat_passthrough.deepseek_user_id.normalized, "sha256");
     assert.equal(json.metadata.compatibility.chat_passthrough.max_completion_tokens.target, "max_tokens");
     assert.equal(json.metadata.compatibility.chat_passthrough.max_completion_tokens.value, 32);
@@ -17759,7 +17783,22 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     );
     assert.deepEqual(
       json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
-      ["modalities", "moderation", "n", "parallel_tool_calls"].sort(),
+      [
+        "audio",
+        "function_call",
+        "functions",
+        "logit_bias",
+        "modalities",
+        "moderation",
+        "n",
+        "parallel_tool_calls",
+        "prediction",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "verbosity",
+        "web_search_options",
+      ].sort(),
     );
     assert.equal(json.moderation.input.results[0].flagged, false);
 

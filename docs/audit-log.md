@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat DeepSeek Field Matrix Regression
+
+- Rechecked current OpenAI Chat Completions create-field coverage with the
+  OpenAI developer docs MCP/OpenAPI endpoint for `/chat/completions`, including
+  `safety_identifier`, `prompt_cache_key`, `prompt_cache_retention`,
+  `modalities`, `audio`, `prediction`, `parallel_tool_calls`, `verbosity`,
+  `web_search_options`, legacy `functions` / `function_call`, `logprobs`, and
+  `top_logprobs`.
+- Rechecked the official DeepSeek Chat Completion documentation. The DeepSeek
+  API documents `user_id`, `stream_options.include_usage`, `logprobs`, and
+  `top_logprobs`, while OpenAI-only request fields such as
+  `safety_identifier`, prompt-cache hints, audio-output controls, and legacy
+  function fields should remain bridge-local or provider-filtered.
+- Expanded the direct `/v1/chat/completions` DeepSeek compatibility regression:
+  - verifies `safety_identifier` takes priority over `prompt_cache_key` and
+    `user` when deriving DeepSeek `user_id`;
+  - verifies invalid DeepSeek user-id characters are converted to a stable
+    `sha256_` identifier;
+  - verifies OpenAI-only Chat fields are not sent upstream to DeepSeek and are
+    recorded in `metadata.compatibility.chat_passthrough.chat_native_fields`;
+  - verifies DeepSeek-supported `logprobs:true` and `top_logprobs:3` still pass
+    through.
+- Updated deployment and compatibility docs so the provider-field boundary is
+  explicit instead of relying on the shorter "prompt-cache hints" wording.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern "normalizes OpenAI Chat fields for DeepSeek-compatible providers"`:
+    passed 201/201.
+  - Live localhost `/v1/chat/completions` field-matrix smoke against
+    `deepseek-v4-pro` returned HTTP 200 with visible `ok-live.` output,
+    `finish_reason:"stop"`, `safety_identifier` mapped to a SHA-256
+    DeepSeek `user_id`, OpenAI-only fields filtered from the upstream request,
+    `reasoning_effort:"none"` mapped to `thinking:{type:"disabled"}`, and
+    provider `logprobs` present.
+  - `node --check test/server.test.js`: passed.
+  - `npm test`: passed 245/245.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1175 ms, P95 latency 1216 ms, and 99 total tokens.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Eight-Namespace Tool Search Sweep
 
 - Rechecked the official OpenAI deployment checklist guidance through the

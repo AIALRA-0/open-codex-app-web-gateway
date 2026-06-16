@@ -456,9 +456,12 @@ semantics and filtered for DeepSeek upstream calls, `service_tier` is filtered
 when unsupported, `stream_options` are removed on non-streaming requests,
 provider-unsupported streaming subfields are filtered by
 `CODEXCOMPAT_STREAM_OPTION_FIELDS`, and configured OpenAI-only Chat fields such
-as `modalities`, `moderation`, `n`,
-`prediction`, `parallel_tool_calls`, and legacy `functions` / `function_call`
-are filtered instead of being sent to the provider. Non-streaming JSON
+as `logit_bias`, `modalities`, `audio`, `moderation`, `n`, `prediction`,
+`parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`,
+`safety_identifier`, `verbosity`, `web_search_options`, and legacy
+`functions` / `function_call` are filtered instead of being sent to the
+provider. DeepSeek-supported Chat log-probability controls such as `logprobs`
+and `top_logprobs` remain pass-through. Non-streaming JSON
 responses and stored reconstructed streaming responses record these actions under
 `metadata.compatibility.chat_passthrough`, while stored Chat messages preserve
 the original client request shape for `/messages` retrieval.
