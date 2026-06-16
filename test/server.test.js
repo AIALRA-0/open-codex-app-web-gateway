@@ -6173,6 +6173,293 @@ test("POST /v1/responses loads deferred remote MCP tools through hosted tool_sea
   ]);
 });
 
+test("POST /v1/responses requests approval for deferred remote MCP loaded through hosted tool_search", async () => {
+  const authValue = "redaction-fixture-value-for-tool-search-mcp-approval";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_tool_search_mcp_approval_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "tool-search-mcp-approval-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(req.headers["mcp-session-id"], "sess_tool_search_mcp_approval_test");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after tool_search loads this approval-required MCP schema.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unexpected approval tool_search MCP method: ${body.method}` }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    let providerCallCount = 0;
+    let mcpChatToolName = "";
+    await withMockProvider(async (_req, res, call) => {
+      providerCallCount += 1;
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+
+      if (providerCallCount === 1) {
+        assert.equal(call.body.tools.length, 1);
+        const searchTool = call.body.tools[0];
+        assert.match(searchTool.function.name, /^local_tool_search/);
+        assert.ok(searchTool.function.parameters.properties.server_labels);
+        assert.match(prompt, /Searchable MCP servers:/);
+        assert.match(prompt, /approval_dice/);
+        assert.equal(call.body.tools.some((tool) => /^mcp_approval_dice_roll_/.test(tool.function?.name || "")), false);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_tool_search_mcp_approval_search",
+          object: "chat.completion",
+          created: 100,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call_search_approval_mcp",
+                type: "function",
+                function: {
+                  name: searchTool.function.name,
+                  arguments: "{\"server_labels\":[\"approval_dice\"],\"query\":\"approval dice roller\"}",
+                },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+        }));
+        return;
+      }
+
+      if (providerCallCount === 2) {
+        const toolMessage = call.body.messages.find((message) => (
+          message.role === "tool" && /mcp_loaded_tool_count/.test(message.content || "")
+        ));
+        assert.ok(toolMessage);
+        assert.equal(JSON.parse(toolMessage.content).mcp_loaded_tool_count, 1);
+        const mcpTool = call.body.tools.find((tool) => /^mcp_approval_dice_roll_/.test(tool.function?.name || ""));
+        assert.ok(mcpTool, JSON.stringify(call.body.tools.map((tool) => tool.function?.name || "")));
+        mcpChatToolName = mcpTool.function.name;
+        assert.equal(mcpTool.function.parameters.properties.diceRollExpression.type, "string");
+        assert.equal(call.body.tools.some((tool) => /^local_tool_search/.test(tool.function?.name || "")), true);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_tool_search_mcp_approval_request",
+          object: "chat.completion",
+          created: 101,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call_tool_search_approval_roll",
+                type: "function",
+                function: {
+                  name: mcpChatToolName,
+                  arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+                },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        }));
+        return;
+      }
+
+      assert.equal(providerCallCount, 3);
+      assert.equal(call.body.tools, undefined);
+      assert.match(prompt, /MCP call output items produced by the bridge/);
+      assert.match(prompt, /output: 7/);
+      assert.match(prompt, /MCP context items supplied by the client/);
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_tool_search_mcp_approval_final",
+        object: "chat.completion",
+        created: 102,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "approved-tool-search-mcp-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+      const mcpTool = {
+        type: "mcp",
+        server_label: "approval_dice",
+        server_description: "Dice roller server requiring approval.",
+        server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+        authorization: authValue,
+        require_approval: "always",
+        allowed_tools: ["roll"],
+        defer_loading: true,
+      };
+
+      const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Find the approval dice MCP tool and request a roll of 2d4+1.",
+          tools: [
+            { type: "tool_search" },
+            mcpTool,
+          ],
+          max_tool_calls: 2,
+        }),
+      });
+
+      assert.equal(firstResponse.status, 200);
+      assert.equal(requests.length, 2);
+      const first = await firstResponse.json();
+      assert.deepEqual(first.output.map((item) => item.type), [
+        "tool_search_call",
+        "mcp_list_tools",
+        "mcp_approval_request",
+      ]);
+      assert.deepEqual(first.output[0].arguments.server_labels, ["approval_dice"]);
+      assert.equal(first.output[1].server_label, "approval_dice");
+      assert.equal(first.output[1].tools[0].name, "roll");
+      assert.equal(first.output[2].server_label, "approval_dice");
+      assert.equal(first.output[2].name, "roll");
+      assert.equal(first.output[2].arguments, "{\"diceRollExpression\":\"2d4+1\"}");
+      assert.equal(first.output.some((item) => item.type === "mcp_call"), false);
+      assert.equal(first.metadata.compatibility.local_tool_search.search_call_count, 1);
+      assert.equal(first.metadata.compatibility.local_tool_search.mcp_list_tools_loaded_count, 1);
+      assert.equal(first.metadata.compatibility.local_tool_search.mcp_loaded_tool_count, 1);
+      assert.equal(first.metadata.compatibility.local_mcp.tool_search_list_tools_loaded_count, 1);
+      assert.equal(first.metadata.compatibility.local_mcp.remote_approval_request_count, 1);
+      assert.equal(first.metadata.compatibility.local_mcp.remote_call_attempt_count, 0);
+      assert.equal(first.metadata.compatibility.local_mcp.boundary, "tool_search_mcp_list_tools_with_approval_request");
+      assert.deepEqual(first.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(first), new RegExp(authValue));
+
+      const approval = first.output[2];
+      const secondResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          previous_response_id: first.id,
+          input: [{
+            type: "mcp_approval_response",
+            approve: true,
+            approval_request_id: approval.id,
+          }],
+          tools: [mcpTool],
+          max_tool_calls: 1,
+          store: false,
+        }),
+      });
+
+      assert.equal(secondResponse.status, 200);
+      assert.equal(requests.length, 3);
+      const second = await secondResponse.json();
+      assert.deepEqual(second.output.map((item) => item.type), ["mcp_call", "message"]);
+      assert.equal(second.output[0].approval_request_id, approval.id);
+      assert.equal(second.output[0].server_label, "approval_dice");
+      assert.equal(second.output[0].name, "roll");
+      assert.equal(second.output[0].output, "7");
+      assert.equal(second.output[0].error, null);
+      assert.equal(second.output[1].content[0].text, "approved-tool-search-mcp-ok");
+      assert.equal(second.metadata.compatibility.local_mcp.input_list_tools_loaded_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_import_attempt_count, 0);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_approval_response_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_approval_approved_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(second.metadata.compatibility.local_mcp.boundary, "input_mcp_list_tools_and_call_execution");
+      assert.deepEqual(second.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 1,
+        used: 1,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.doesNotMatch(JSON.stringify(second), new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000, mcpMaxCallRounds: 2 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  const methods = mcpRequests.map((request) => request.body.method);
+  assert.deepEqual(methods.slice(0, 3), ["initialize", "notifications/initialized", "tools/list"]);
+  assert.equal(methods.filter((method) => method === "tools/list").length, 1);
+  assert.equal(methods.filter((method) => method === "tools/call").length, 1);
+  assert.equal(methods.at(-1), "tools/call");
+});
+
 test("POST /v1/responses streams deferred remote MCP tools loaded through hosted tool_search", async () => {
   const mcpRequests = [];
   const mcpServer = http.createServer(async (req, res) => {

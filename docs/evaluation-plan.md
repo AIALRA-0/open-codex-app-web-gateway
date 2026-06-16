@@ -159,13 +159,19 @@ server starts as a searchable group, the model calls the generated
 `local_tool_search` function, the bridge imports remote `tools/list`, emits
 `mcp_list_tools`, injects the imported MCP schema into a follow-up Chat request,
 executes the returned remote `tools/call`, and records
-`tool_search_mcp_list_tools_and_call_execution`. The streaming regression for
-the same path also verifies `response.output_item.added` for the search and MCP
-list items, MCP argument delta/done/progress events, combined streaming usage,
-and suppression of bridge-internal Chat `function_call` stream items. Follow-up
-eval work should add live bridge cases for `tool_search`, collision-heavy
-streaming function names, hosted connectors, and large catalogs to measure
-latency, token savings, and tool-selection quality.
+`tool_search_mcp_list_tools_and_call_execution`. Approval coverage verifies the
+same deferred MCP loading path with `require_approval:"always"`: the first
+response emits `tool_search_call`, `mcp_list_tools`, and `mcp_approval_request`
+without running `tools/call`; the continuation uses `previous_response_id` plus
+`mcp_approval_response` to reuse that `mcp_list_tools` context, skip a second
+remote `tools/list`, execute the approved `tools/call`, and redact
+authorization from provider prompts and public Responses output. The streaming
+regression for the same path also verifies `response.output_item.added` for the
+search and MCP list items, MCP argument delta/done/progress events, combined
+streaming usage, and suppression of bridge-internal Chat `function_call` stream
+items. Follow-up eval work should add live bridge cases for `tool_search`,
+collision-heavy streaming function names, hosted connectors, and large catalogs
+to measure latency, token savings, and tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The

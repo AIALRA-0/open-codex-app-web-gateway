@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-16 Tool Search MCP Approval Continuation Coverage
+
+- Re-confirmed the official OpenAI MCP/connectors guidance through the OpenAI
+  developer docs MCP:
+  - deferred MCP servers can set `defer_loading:true` and be loaded only after
+    hosted `tool_search` selects them;
+  - a returned `mcp_list_tools` item should stay in conversation context so a
+    later request does not need to fetch the MCP tool list again;
+  - approval-required MCP calls emit `mcp_approval_request`, then a later
+    request can send `mcp_approval_response` with `previous_response_id`.
+- Added a mock-provider regression for the approval-required deferred MCP
+  tool-search path:
+  - first Chat turn sees only the generated `local_tool_search` function and
+    the searchable MCP server summary;
+  - the bridge imports remote MCP `tools/list`, emits public
+    `tool_search_call` and `mcp_list_tools`, injects the loaded MCP schema, and
+    maps the model's returned MCP proxy call to `mcp_approval_request` without
+    executing remote `tools/call`;
+  - the continuation sends `mcp_approval_response approve:true` with
+    `previous_response_id`, reuses the prior `mcp_list_tools` item, skips a
+    second remote `tools/list`, executes the approved remote `tools/call`, and
+    emits `mcp_call` plus final text;
+  - provider prompts and public Responses output are checked for redacted MCP
+    authorization.
+- Updated `docs/evaluation-plan.md` and `docs/compatibility-matrix.md` so the
+  deferred MCP tool-search approval continuation is recorded beside the
+  auto-approved and streaming tool-search MCP flows.
+- Validation:
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "requests approval for deferred remote MCP loaded through hosted tool_search" test/server.test.js`:
+    passed.
+  - `node --test --test-name-pattern "loads deferred remote MCP tools through hosted tool_search|requests approval for deferred remote MCP loaded through hosted tool_search|streams deferred remote MCP tools loaded through hosted tool_search|requests approval then executes approved remote MCP call|reuses input mcp_list_tools" test/server.test.js`:
+    passed 5/5 tests.
+  - `git diff --check`: passed.
+  - `npm test`: passed 239/239 tests.
+  - `npm run secret-scan`: passed.
+  - exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: still blocked by upstream DeepSeek `402
+    Insufficient Balance` on both live protocol-smoke cases.
+  - Storage check: `/` has 11 GB available; repo path is 118 MB,
+    `/srv/aialra/data/opencodexapp` is 136 KB, and
+    `/srv/aialra/logs/opencodexapp` is 30 MB.
+
 ## 2026-06-16 Streaming Tool Search MCP Coverage
 
 - Re-confirmed the official OpenAI `tool_search` deployment guidance through
