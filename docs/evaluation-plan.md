@@ -79,6 +79,11 @@ larger agent evaluations.
 | `bridge-soak` | Repeated stored Responses turns, `/input_items` checks, DELETE cleanup, latency, token usage, and state directory growth |
 | `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
+The bridge regression track also explicitly covers Responses `instructions`
+request validation across create, `/input_tokens`, and `/compact`, ensuring
+malformed values fail locally before any Chat provider call while valid strings
+continue to map into model-visible system guidance.
+
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
 `file_search` adds vector-store PDF text-layer and OCR tests. These tests force

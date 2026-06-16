@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-16 Responses `instructions` Request Validation
+
+- Rechecked the official OpenAI Responses create reference through the
+  developer docs index:
+  - `https://developers.openai.com/api/reference/resources/responses/methods/create`
+  The current request body documents `instructions` as the system/developer
+  message inserted into model context and notes that it does not carry over from
+  a previous response when `previous_response_id` is used.
+- Added shared local request validation for Responses `instructions` before
+  Chat translation or provider calls:
+  - `/v1/responses` now rejects non-string `instructions` values with
+    OpenAI-style `400 invalid_request_error`, `param:"instructions"`;
+  - `/v1/responses/input_tokens` applies the same validation before token-probe
+    Chat calls;
+  - `/v1/responses/compact` applies the same validation before compaction Chat
+    calls.
+- Kept valid string behavior unchanged: `responsesToChatRequest()` still maps
+  `instructions` into the leading Chat `system` message for DeepSeek and other
+  OpenAI-compatible Chat providers.
+- Updated the compatibility matrix and evaluation plan so this boundary remains
+  visible in future bridge-regression passes.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "Responses instructions"
+    test/server.test.js`: passed 1/1.
+  - `npm test`: passed 334/334.
+  - Restarted `aialra-opencodexapp-bridge.service`; local and public healthz
+    returned `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS invalid-request smoke tests returned HTTP 400 with
+    `param:"instructions"` for `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`.
+  - Local and public HTTPS valid-string smoke tests returned HTTP 200
+    `status:"completed"` with exact output `instructions-ok`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses and Chat `moderation` Config Validation
 
 - Rechecked the official OpenAI generated references:

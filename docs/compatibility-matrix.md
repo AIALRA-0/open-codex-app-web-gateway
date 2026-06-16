@@ -150,7 +150,7 @@ requests.
 | Responses field | Chat Completions field | Status |
 | --- | --- | --- |
 | `model` | `model` | Direct after required string request validation on public Responses, direct Chat, and legacy Completions create calls |
-| `instructions` | leading `system` message | Direct for DeepSeek/OpenAI-compatible providers |
+| `instructions` | leading `system` message | Direct for DeepSeek/OpenAI-compatible providers after Responses create, `/input_tokens`, and `/compact` validate the field as a string/null before provider calls |
 | string `input` | `messages: [{role:"user"}]` | Direct |
 | input message item | chat message | Direct |
 | `input_text` | chat text content part | Direct |

@@ -16386,6 +16386,41 @@ test("Responses truncation values validate before provider calls", async () => {
   });
 });
 
+test("Responses instructions validate before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid instructions");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { endpoint: "/v1/responses", instructions: { role: "system", content: "bad" } },
+      { endpoint: "/v1/responses/input_tokens", instructions: ["bad"] },
+      { endpoint: "/v1/responses/compact", instructions: 123 },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}${invalidCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Validate instructions before provider calls.",
+          instructions: invalidCase.instructions,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.endpoint);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "instructions must be a string",
+          type: "invalid_request_error",
+          param: "instructions",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses conversation references return 404 when the local conversation is missing", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

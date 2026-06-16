@@ -898,6 +898,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, metadataError.message, metadataError);
     return;
   }
+  const instructionsError = validateOpenAIResponsesInstructions(request);
+  if (instructionsError) {
+    sendError(res, 400, instructionsError.message, instructionsError);
+    return;
+  }
   const logprobsFlagError = validateOpenAIChatLogprobsFlag(request);
   if (logprobsFlagError) {
     sendError(res, 400, logprobsFlagError.message, logprobsFlagError);
@@ -4003,6 +4008,10 @@ function validateOpenAIStringParameter(body = {}, field, options = {}) {
   return null;
 }
 
+function validateOpenAIResponsesInstructions(body = {}) {
+  return validateOpenAIStringParameter(body, "instructions");
+}
+
 function validateOpenAIRequiredParameter(body = {}, field) {
   if (!body || typeof body !== "object" || !Object.prototype.hasOwnProperty.call(body, field)) {
     return requestValidationError(`${field} is required`, field);
@@ -4266,6 +4275,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, styleError.message, styleError);
     return;
   }
+  const instructionsError = validateOpenAIResponsesInstructions(request);
+  if (instructionsError) {
+    sendError(res, 400, instructionsError.message, instructionsError);
+    return;
+  }
   const personalityError = validateResponsesInputTokensPersonality(request);
   if (personalityError) {
     sendError(res, 400, personalityError.message, personalityError);
@@ -4392,6 +4406,11 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
     sendError(res, 400, modelError.message, modelError);
+    return;
+  }
+  const instructionsError = validateOpenAIResponsesInstructions(request);
+  if (instructionsError) {
+    sendError(res, 400, instructionsError.message, instructionsError);
     return;
   }
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
