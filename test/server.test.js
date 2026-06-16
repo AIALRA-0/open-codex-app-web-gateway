@@ -5931,6 +5931,248 @@ test("POST /v1/responses reuses input mcp_list_tools for deferred remote MCP cal
   assert.deepEqual(mcpRequests.map((request) => request.body.method), ["tools/call"]);
 });
 
+test("POST /v1/responses loads deferred remote MCP tools through hosted tool_search", async () => {
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_tool_search_mcp_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "tool-search-mcp-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      assert.equal(req.headers["mcp-session-id"], "sess_tool_search_mcp_test");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after tool_search loads this MCP schema.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers["mcp-session-id"], "sess_tool_search_mcp_test");
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unexpected tool_search MCP method: ${body.method}` }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    let providerCallCount = 0;
+    let mcpChatToolName = "";
+    await withMockProvider(async (_req, res, call) => {
+      providerCallCount += 1;
+      const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+
+      if (providerCallCount === 1) {
+        assert.equal(call.body.tools.length, 1);
+        const searchTool = call.body.tools[0];
+        assert.match(searchTool.function.name, /^local_tool_search/);
+        assert.ok(searchTool.function.parameters.properties.server_labels);
+        assert.match(prompt, /Searchable MCP servers:/);
+        assert.match(prompt, /dice_server/);
+        assert.equal(call.body.tools.some((tool) => /^mcp_dice_server_roll_/.test(tool.function?.name || "")), false);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_tool_search_mcp_search",
+          object: "chat.completion",
+          created: 100,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call_search_mcp",
+                type: "function",
+                function: {
+                  name: searchTool.function.name,
+                  arguments: "{\"server_labels\":[\"dice_server\"],\"query\":\"dice roller\"}",
+                },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+        }));
+        return;
+      }
+
+      if (providerCallCount === 2) {
+        const toolMessage = call.body.messages.find((message) => (
+          message.role === "tool" && /mcp_loaded_tool_count/.test(message.content || "")
+        ));
+        assert.ok(toolMessage);
+        assert.equal(JSON.parse(toolMessage.content).mcp_loaded_tool_count, 1);
+        const mcpTool = call.body.tools.find((tool) => /^mcp_dice_server_roll_/.test(tool.function?.name || ""));
+        assert.ok(mcpTool, JSON.stringify(call.body.tools.map((tool) => tool.function?.name || "")));
+        mcpChatToolName = mcpTool.function.name;
+        assert.equal(mcpTool.function.parameters.properties.diceRollExpression.type, "string");
+        assert.equal(call.body.tools.some((tool) => /^local_tool_search/.test(tool.function?.name || "")), true);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_tool_search_mcp_call",
+          object: "chat.completion",
+          created: 101,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call_tool_search_roll",
+                type: "function",
+                function: {
+                  name: mcpChatToolName,
+                  arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+                },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        }));
+        return;
+      }
+
+      assert.equal(providerCallCount, 3);
+      assert.equal(call.body.tool_choice, "none");
+      assert.ok(call.body.messages.some((message) => message.role === "tool" && message.content === "7"));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_tool_search_mcp_final",
+        object: "chat.completion",
+        created: 102,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "tool-search-mcp-ok" },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Find the dice MCP tool, roll 2d4+1, and return tool-search-mcp-ok.",
+          tools: [
+            { type: "tool_search" },
+            {
+              type: "mcp",
+              server_label: "dice_server",
+              server_description: "Dice roller server.",
+              server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+              require_approval: "never",
+              allowed_tools: ["roll"],
+              defer_loading: true,
+            },
+          ],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(requests.length, 3);
+      const json = await response.json();
+      assert.deepEqual(json.output.map((item) => item.type), [
+        "tool_search_call",
+        "mcp_list_tools",
+        "mcp_call",
+        "message",
+      ]);
+      assert.deepEqual(json.output[0].arguments.server_labels, ["dice_server"]);
+      assert.equal(json.output[1].server_label, "dice_server");
+      assert.equal(json.output[1].tools[0].name, "roll");
+      assert.equal(json.output[1].tools[0].input_schema.properties.diceRollExpression.type, "string");
+      assert.equal(json.output[2].server_label, "dice_server");
+      assert.equal(json.output[2].name, "roll");
+      assert.equal(json.output[2].output, "7");
+      assert.equal(json.output[3].content[0].text, "tool-search-mcp-ok");
+      assert.equal(json.metadata.compatibility.local_tool_search.searchable_mcp_server_count, 1);
+      assert.equal(json.metadata.compatibility.local_tool_search.search_call_count, 1);
+      assert.equal(json.metadata.compatibility.local_tool_search.mcp_list_tools_loaded_count, 1);
+      assert.equal(json.metadata.compatibility.local_tool_search.mcp_loaded_tool_count, 1);
+      assert.equal(json.metadata.compatibility.local_tool_search.boundary, "deferred_mcp_tool_search_and_load");
+      assert.equal(json.metadata.compatibility.local_mcp.tool_search_list_tools_loaded_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.tool_search_loaded_tool_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_import_attempt_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_import_success_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_call_tool_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.boundary, "tool_search_mcp_list_tools_and_call_execution");
+      assert.deepEqual(json.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000, mcpMaxCallRounds: 2 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+  ]);
+});
+
 test("POST /v1/responses executes auto-approved remote MCP tools/call through Chat tool calls", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-call";
   const mcpRequests = [];
@@ -6538,7 +6780,7 @@ test("POST /v1/responses background executes auto-approved remote MCP tools/call
         if (finalJson.status === "completed") break;
       }
 
-      assert.equal(finalJson.status, "completed");
+      assert.equal(finalJson.status, "completed", JSON.stringify(finalJson.error || finalJson.metadata || finalJson));
       assert.equal(requests.length, 2);
       assert.equal(finalJson.output[0].type, "mcp_list_tools");
       assert.equal(finalJson.output[1].type, "mcp_call");

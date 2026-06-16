@@ -153,9 +153,15 @@ final Chat function call is remapped back to the original Responses
 `namespace`. Mock-provider coverage also verifies client-executed second turns
 that pass `tool_search_output.tools` in `input` without repeating the `tools`
 array, plus `additional_tools` input items that inject function definitions
-without leaking raw protocol items into the prompt. Follow-up eval work should
-add live bridge cases for `tool_search`, collision-heavy streaming function
-names, and large catalogs to measure latency, token savings, and
+without leaking raw protocol items into the prompt. MCP tool-search coverage
+verifies the official "group by MCP servers" guidance: a deferred remote MCP
+server starts as a searchable group, the model calls the generated
+`local_tool_search` function, the bridge imports remote `tools/list`, emits
+`mcp_list_tools`, injects the imported MCP schema into a follow-up Chat request,
+executes the returned remote `tools/call`, and records
+`tool_search_mcp_list_tools_and_call_execution`. Follow-up eval work should add
+live bridge cases for `tool_search`, collision-heavy streaming function names,
+hosted connectors, and large catalogs to measure latency, token savings, and
 tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
@@ -177,6 +183,7 @@ npm run eval:bridge -- --timeout-ms 45000
 node --test test/server.test.js --test-name-pattern 'tool_search'
 node --test test/server.test.js --test-name-pattern 'additional_tools'
 node --test test/server.test.js --test-name-pattern 'mcp_list_tools'
+node --test test/server.test.js --test-name-pattern 'loads deferred remote MCP tools through hosted tool_search'
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-conversation-lifecycle --timeout-ms 90000 --verbose

@@ -47,6 +47,7 @@ function prepareToolSearchContext(request = {}, config = {}, options = {}) {
       ...(searchTools.length ? ["tool_search"] : []),
       ...(inputTools.tool_search_output_count ? ["tool_search_output"] : []),
       ...(inputTools.additional_tools_count ? ["additional_tools"] : []),
+      ...(options.mcpToolSearchEntries?.length ? ["mcp"] : []),
     ],
     execution: searchTools.length
       ? normalizeExecution(searchTools[0].execution)
@@ -54,6 +55,7 @@ function prepareToolSearchContext(request = {}, config = {}, options = {}) {
     requested_tool_choice: normalizeToolSearchToolChoice(request.tool_choice),
     search_tool_definition: clone(searchTools[0] || {}),
     namespaces: [],
+    searchable_mcp_servers: normalizeMcpToolSearchEntries(options.mcpToolSearchEntries),
     deferred_tools: [],
     immediate_namespace_tools: [],
     loaded_tools: [],
@@ -89,7 +91,12 @@ function prepareToolSearchContext(request = {}, config = {}, options = {}) {
   context.loaded_tools.push(...inputTools.tools);
 
   preloadForcedToolChoice(context);
-  if (!context.deferred_tools.length && !context.immediate_namespace_tools.length && !context.loaded_tools.length) {
+  if (
+    !context.deferred_tools.length
+    && !context.immediate_namespace_tools.length
+    && !context.loaded_tools.length
+    && !context.searchable_mcp_servers.length
+  ) {
     context.status = "empty";
   }
   return context;
@@ -156,6 +163,20 @@ function normalizeNamespace(tool) {
     },
     tools,
   };
+}
+
+function normalizeMcpToolSearchEntries(entries = []) {
+  if (!Array.isArray(entries)) return [];
+  return entries
+    .filter(isPlainObject)
+    .map((entry) => ({
+      type: "mcp_server",
+      server_label: stringifyContent(entry.server_label || "").trim(),
+      description: stringifyContent(entry.description || "").trim(),
+      server_url_host: stringifyContent(entry.server_url_host || "").trim(),
+      allowed_tools: stringArray(entry.allowed_tools).slice(0, 100),
+    }))
+    .filter((entry) => entry.server_label);
 }
 
 function responseFunctionTool(definition) {
@@ -246,7 +267,7 @@ function injectToolSearchChatTools(chat, context, config = {}) {
     addFunctionTool(chat, context, definition, usedNames);
   }
 
-  if (context.deferred_tools.length) {
+  if (context.deferred_tools.length || context.searchable_mcp_servers.length) {
     const searchName = uniqueFunctionName(DEFAULT_SEARCH_TOOL_NAME, usedNames);
     usedNames.add(searchName);
     context.chat_search_tool_name = searchName;
@@ -302,7 +323,12 @@ function hostedSearchParameters() {
       paths: {
         type: "array",
         items: { type: "string" },
-        description: "Optional namespace names, function names, or namespace.function paths to load.",
+        description: "Optional namespace names, MCP server labels, function names, or namespace.function paths to load.",
+      },
+      server_labels: {
+        type: "array",
+        items: { type: "string" },
+        description: "Optional exact MCP server labels to load.",
       },
       tool_names: {
         type: "array",
@@ -381,6 +407,9 @@ async function executeToolSearchChatToolCalls(context, chatCompletion, config = 
   let loadedCount = 0;
   let skippedCount = 0;
   let failedCount = 0;
+  let mcpLoadedServerCount = 0;
+  let mcpLoadedToolCount = 0;
+  let mcpFailedServerCount = 0;
   let clientRequested = false;
 
   const usedNames = new Set((options.chat?.tools || [])
@@ -427,7 +456,15 @@ async function executeToolSearchChatToolCalls(context, chatCompletion, config = 
     }
 
     const selected = error ? [] : selectDeferredTools(context, parsedArguments, config);
-    const outputItem = {
+    const mcpLoad = !error && typeof options.loadMcpTools === "function"
+      ? await options.loadMcpTools(parsedArguments)
+      : null;
+    const mcpOutputItems = Array.isArray(mcpLoad?.output_items) ? mcpLoad.output_items : [];
+    const shouldEmitToolSearchOutput = !!error
+      || selected.length > 0
+      || mcpOutputItems.length === 0
+      || (context.deferred_tools || []).length > 0;
+    const outputItem = shouldEmitToolSearchOutput ? {
       id: prefixedId("tso"),
       type: "tool_search_output",
       execution: "server",
@@ -435,19 +472,27 @@ async function executeToolSearchChatToolCalls(context, chatCompletion, config = 
       status: error ? "failed" : "completed",
       tools: toolsForOutput(selected),
       ...(error ? { error } : {}),
-    };
-    outputItems.push(outputItem);
+    } : null;
+    if (outputItem) outputItems.push(outputItem);
+    outputItems.push(...mcpOutputItems.map(clone));
     for (const definition of selected) {
       addFunctionTool(options.chat, context, definition, usedNames);
     }
     loadedCount += selected.length;
+    mcpLoadedServerCount += mcpLoad?.loaded_server_count || 0;
+    mcpLoadedToolCount += mcpLoad?.loaded_tool_count || 0;
+    mcpFailedServerCount += mcpLoad?.failed_server_count || 0;
     toolMessages.push({
       role: "tool",
       tool_call_id: callId,
       content: JSON.stringify({
-        status: outputItem.status,
+        status: error ? "failed" : "completed",
         loaded_tool_count: selected.length,
         tools: toolsForPrompt(selected),
+        mcp_loaded_server_count: mcpLoad?.loaded_server_count || 0,
+        mcp_loaded_tool_count: mcpLoad?.loaded_tool_count || 0,
+        ...(mcpLoad?.failed_server_count ? { mcp_failed_server_count: mcpLoad.failed_server_count } : {}),
+        ...(mcpLoad?.prompt_tools?.length ? { mcp_tools: mcpLoad.prompt_tools } : {}),
         ...(error ? { error } : {}),
       }),
     });
@@ -457,12 +502,18 @@ async function executeToolSearchChatToolCalls(context, chatCompletion, config = 
   context.loaded_tool_count = (context.loaded_tool_count || 0) + loadedCount;
   context.skipped_count = (context.skipped_count || 0) + skippedCount;
   context.failed_count = (context.failed_count || 0) + failedCount;
+  context.mcp_list_tools_loaded_count = (context.mcp_list_tools_loaded_count || 0) + mcpLoadedServerCount;
+  context.mcp_loaded_tool_count = (context.mcp_loaded_tool_count || 0) + mcpLoadedToolCount;
+  context.mcp_list_tools_failed_count = (context.mcp_list_tools_failed_count || 0) + mcpFailedServerCount;
   context.output_items.push(...outputItems.map(clone));
   context.execution_items.push(...outputItems.map(clone));
 
   return {
     executed: true,
     client_requested: clientRequested,
+    mcp_loaded_server_count: mcpLoadedServerCount,
+    mcp_loaded_tool_count: mcpLoadedToolCount,
+    mcp_failed_server_count: mcpFailedServerCount,
     output_items: outputItems,
     messages: clientRequested ? [] : [assistantMessage, ...toolMessages],
   };
@@ -476,9 +527,11 @@ function parseArguments(rawArguments) {
 
 function publicSearchArguments(args) {
   const paths = stringArray(args.paths || args.path || args.tool_names || args.tool_name);
+  const serverLabels = stringArray(args.server_labels || args.server_label);
   const query = stringifyContent(args.query || args.goal || args.description || "").trim();
   return {
     ...(paths.length ? { paths } : {}),
+    ...(serverLabels.length ? { server_labels: serverLabels } : {}),
     ...(query ? { query } : {}),
   };
 }
@@ -632,6 +685,7 @@ function toolSearchCompatibility(context) {
       tool_types: context.tool_types || [],
       namespace_count: context.namespaces?.length || 0,
       deferred_tool_count: context.deferred_tools?.length || 0,
+      searchable_mcp_server_count: context.searchable_mcp_servers?.length || 0,
       immediate_namespace_tool_count: context.immediate_namespace_tools?.length || 0,
       loaded_input_tool_count: context.input_loaded_tool_count || context.loaded_tools?.length || 0,
       input_tool_search_output_count: context.input_tool_search_output_count || 0,
@@ -639,20 +693,25 @@ function toolSearchCompatibility(context) {
       forced_preload_count: context.forced_preload_count || 0,
       search_call_count: context.search_call_count || 0,
       loaded_tool_count: context.loaded_tool_count || 0,
+      mcp_list_tools_loaded_count: context.mcp_list_tools_loaded_count || 0,
+      mcp_loaded_tool_count: context.mcp_loaded_tool_count || 0,
+      mcp_list_tools_failed_count: context.mcp_list_tools_failed_count || 0,
       loaded_chat_tool_count: Object.keys(context.chat_tool_map || {}).length,
       skipped_count: context.skipped_count || 0,
       failed_count: context.failed_count || 0,
       ...(context.chat_search_tool_name ? { chat_search_tool_name: context.chat_search_tool_name } : {}),
       ...(context.tool_choice_mapping ? { tool_choice: clone(context.tool_choice_mapping) } : {}),
       boundary: context.search_call_count
-        ? "deferred_tool_search_and_load"
+        ? context.mcp_list_tools_loaded_count
+          ? "deferred_mcp_tool_search_and_load"
+          : "deferred_tool_search_and_load"
         : context.input_tool_search_output_count
           ? "loaded_from_tool_search_output_input"
           : context.input_additional_tools_count
             ? "loaded_from_additional_tools_input"
             : context.loaded_tools?.length
               ? "loaded_from_input_tools"
-          : context.deferred_tools?.length
+          : context.deferred_tools?.length || context.searchable_mcp_servers?.length
             ? "deferred_tools_hidden_until_search"
             : "no_deferred_tools",
       ...(context.warnings?.length ? { warnings: context.warnings.slice(0, 5) } : {}),
@@ -669,6 +728,15 @@ function toolSearchPrompt(context) {
     lines.push("Searchable namespaces:");
     for (const namespace of context.namespaces) {
       lines.push(`- ${namespace.name}: ${truncate(namespace.description || "No description.", 400)} deferred_tools=${namespace.deferred_tool_count}`);
+    }
+  }
+  if (context.searchable_mcp_servers?.length) {
+    lines.push("Searchable MCP servers:");
+    for (const server of context.searchable_mcp_servers) {
+      lines.push([
+        `- ${server.server_label}: ${truncate(server.description || server.server_url_host || "No description.", 400)}`,
+        server.allowed_tools?.length ? `allowed_tools=${server.allowed_tools.join(", ")}` : null,
+      ].filter(Boolean).join(" "));
     }
   }
   const direct = (context.deferred_tools || []).filter((tool) => !tool.namespace);

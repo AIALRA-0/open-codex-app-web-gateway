@@ -1,5 +1,58 @@
 # Audit Log
 
+## 2026-06-16 Hosted Tool Search Loads Deferred MCP
+
+- Re-checked the official OpenAI deployment checklist through the OpenAI
+  developer docs MCP. The `Use tool_search` section says deferred tool
+  definitions marked `defer_loading:true` should be hidden at request start,
+  loaded only after the model runs tool search, and grouped by user intent with
+  namespaces or MCP servers when possible.
+- Closed the next deferred MCP parity gap for Chat-only providers:
+  - deferred remote MCP servers now appear in the local `tool_search` prompt as
+    searchable server groups without importing full tool catalogs at request
+    start;
+  - a model call to the generated `local_tool_search` function can select an
+    MCP server by `server_labels`, `paths`, allowed tool names, or scored query
+    text;
+  - the bridge then performs bounded remote MCP `initialize` / `tools/list`,
+    emits a public `mcp_list_tools` item as part of the tool-search execution
+    output, and injects the imported MCP schemas as generated Chat function
+    tools for the follow-up request;
+  - returned generated Chat tool calls can execute remote MCP `tools/call` in
+    the same Responses request when `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` permits a
+    search round and an MCP call round;
+  - preparation-time deferred MCP servers no longer consume an empty
+    `mcp_list_tools` budget slot before tool search has selected them.
+- Kept the conservative default `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS=1`; the new
+  same-request search-plus-call regression sets `mcpMaxCallRounds:2`
+  explicitly.
+- Added compatibility metadata for
+  `local_tool_search.searchable_mcp_server_count`,
+  `local_tool_search.mcp_list_tools_loaded_count`,
+  `local_tool_search.mcp_loaded_tool_count`,
+  `local_mcp.tool_search_list_tools_loaded_count`,
+  `local_mcp.tool_search_loaded_tool_count`, and
+  `boundary=tool_search_mcp_list_tools_and_call_execution`.
+- Added mock-provider coverage for `tool_search -> remote MCP tools/list ->
+  generated MCP Chat function -> remote MCP tools/call -> final answer`, plus
+  adjacent regression coverage for function/namespace tool search, deferred
+  input `mcp_list_tools`, non-streaming remote MCP calls, streaming remote MCP
+  calls, and active background remote MCP calls.
+- Validation:
+  - `node --check src/bridge/local_mcp.js src/bridge/local_tool_search.js src/bridge/server.js test/server.test.js`:
+    passed.
+  - `node --test --test-name-pattern "loads deferred remote MCP tools through hosted tool_search" test/server.test.js`:
+    passed.
+  - `node --test --test-name-pattern "emulates hosted tool_search|loads client-executed tool_search_output|imports remote MCP tools/list|reuses input mcp_list_tools|loads deferred remote MCP tools through hosted tool_search|executes auto-approved remote MCP tools/call|streams auto-approved remote MCP tools/call|background executes auto-approved remote MCP tools/call" test/server.test.js`:
+    passed 8/8 tests.
+  - `git diff --check`: passed.
+  - `npm test`: passed 237/237 tests.
+  - `npm run secret-scan`: passed.
+  - exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: still blocked by upstream DeepSeek `402
+    Insufficient Balance` on both live protocol-smoke cases.
+
 ## 2026-06-16 Deferred MCP Input List Loading
 
 - Checked the official OpenAI MCP/connectors guide through the OpenAI developer

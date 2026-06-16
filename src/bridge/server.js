@@ -85,9 +85,11 @@ const {
   executeMcpChatToolCalls,
   injectMcpChatTools,
   injectMcpMessages,
+  loadMcpToolsForToolSearch,
   localMcpToolTypes,
   mcpCompatibility,
   mcpOutputItems,
+  mcpToolSearchCatalog,
   prepareMcpContext,
   suppressMcpChatToolCalls,
 } = require("./local_mcp");
@@ -656,11 +658,20 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
 
   const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
   for (let round = 0; round < maxRounds; round += 1) {
-    const toolSearchExecution = await executeToolSearchChatToolCalls(localToolSearch, current.json, config, { toolBudget, chat });
+    const toolSearchExecution = await executeToolSearchChatToolCalls(localToolSearch, current.json, config, {
+      toolBudget,
+      chat,
+      loadMcpTools: localMcp
+        ? (args) => loadMcpToolsForToolSearch(localMcp, args, config)
+        : null,
+    });
     if (toolSearchExecution.executed) {
       if (toolSearchExecution.client_requested) {
         current.json = suppressToolSearchChatToolCalls(current.json, localToolSearch);
         break;
+      }
+      if (toolSearchExecution.mcp_loaded_server_count && localMcp) {
+        injectMcpChatTools(chat, localMcp, config, { toolBudget });
       }
       chat.messages.push(...toolSearchExecution.messages);
       if (round + 1 >= maxRounds) chat.tool_choice = "none";
@@ -791,7 +802,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     applyLocalMcpToChat(chat, compatibility, localMcp, config);
     if (!approvedMcp.handled) injectMcpChatTools(chat, localMcp, config, { toolBudget });
   }
-  const localToolSearch = await prepareToolSearchContext(request, config, { previousResponse });
+  const localToolSearch = await prepareToolSearchContext(request, config, {
+    previousResponse,
+    mcpToolSearchEntries: mcpToolSearchCatalog(localMcp),
+  });
   if (localToolSearch) {
     applyLocalToolSearchToChat(chat, compatibility, localToolSearch, config);
   }
@@ -1209,7 +1223,10 @@ async function runBackgroundPrepareStep(step, { config, store, job, request, pre
 
   if (step === "tool_search") {
     const previousResponse = request.previous_response_id ? store.get(request.previous_response_id)?.response : null;
-    const localToolSearch = await prepareToolSearchContext(request, config, { previousResponse });
+    const localToolSearch = await prepareToolSearchContext(request, config, {
+      previousResponse,
+      mcpToolSearchEntries: mcpToolSearchCatalog(runtime.contexts.mcp),
+    });
     runtime.contexts.tool_search = localToolSearch;
     if (localToolSearch) {
       runtime.compatibility = applyLocalToolSearchToChat(runtime.chat, { ...runtime.compatibility }, localToolSearch, config);
@@ -3377,13 +3394,22 @@ async function streamProviderWithLocalToolLoop(res, state, config, chat, incomin
     if (current.completion?.usage) usageParts.push(current.completion.usage);
 
     const toolSearchExecution = round < maxRounds
-      ? await executeToolSearchChatToolCalls(localToolSearch, current.completion, config, { toolBudget, chat })
+      ? await executeToolSearchChatToolCalls(localToolSearch, current.completion, config, {
+        toolBudget,
+        chat,
+        loadMcpTools: localMcp
+          ? (args) => loadMcpToolsForToolSearch(localMcp, args, config)
+          : null,
+      })
       : { executed: false };
     if (toolSearchExecution.executed) {
       emitToolSearchExecutionStreamItems(res, state, toolSearchExecution.output_items || []);
       if (toolSearchExecution.client_requested) {
         applyCombinedStreamUsage(state, usageParts);
         return { ok: true };
+      }
+      if (toolSearchExecution.mcp_loaded_server_count && localMcp) {
+        injectMcpChatTools(chat, localMcp, config, { toolBudget });
       }
       chat.messages.push(...(toolSearchExecution.messages || []));
       if (round + 1 >= maxRounds) chat.tool_choice = "none";

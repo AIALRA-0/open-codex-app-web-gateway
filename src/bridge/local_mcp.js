@@ -11,6 +11,7 @@ const MCP_CONTEXT_ITEM_TYPES = new Set([
   "mcp_approval_response",
 ]);
 const MCP_INPUT_LIST_TOOLS_SOURCE = "input_mcp_list_tools";
+const MCP_TOOL_SEARCH_LIST_TOOLS_SOURCE = "tool_search_remote_tools_list";
 const MAX_PROMPT_TEXT = 4000;
 const DEFAULT_MCP_TIMEOUT_MS = 5000;
 const DEFAULT_MCP_MAX_RESPONSE_BYTES = 1024 * 1024;
@@ -62,6 +63,10 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
     execution_items: [],
     skipped_calls: [],
     input_list_tools_loaded_count: 0,
+    tool_search_list_tools_loaded_count: 0,
+    tool_search_loaded_tool_count: 0,
+    tool_search_list_tools_failed_count: 0,
+    tool_search_list_tools_cached_count: 0,
     warnings: [],
   };
   const labels = new Set();
@@ -90,6 +95,10 @@ async function prepareMcpContext(request = {}, config = {}, options = {}) {
       server.import_error = null;
       server.input_list_tools_item_id = inputListTools.id;
       context.input_list_tools_loaded_count += 1;
+      continue;
+    }
+
+    if (server.defer_loading) {
       continue;
     }
 
@@ -190,6 +199,198 @@ function shouldImportRemoteTools(tool, server, config = {}) {
     && !tool.connector_id
     && !server.defer_loading
     && !server.explicit_tool_count;
+}
+
+function mcpToolSearchCatalog(context) {
+  if (!context) return [];
+  return (context.servers || [])
+    .filter((server) => (
+      server.server_kind === "remote_mcp"
+      && server.defer_loading
+      && !!server._remote_tool_config?.server_url
+      && !server.imported_tools?.length
+    ))
+    .map((server) => ({
+      type: "mcp_server",
+      server_label: server.server_label,
+      description: server.server_description || "",
+      server_url_host: server.server_url_host || "",
+      allowed_tools: Array.isArray(server.allowed_tools) ? server.allowed_tools.slice(0, 100) : [],
+    }));
+}
+
+async function loadMcpToolsForToolSearch(context, args = {}, config = {}) {
+  if (!context) {
+    return emptyMcpToolSearchLoad();
+  }
+
+  const servers = selectMcpServersForToolSearch(context, args, config);
+  if (!servers.length) {
+    return emptyMcpToolSearchLoad();
+  }
+
+  const outputItems = [];
+  let loadedServerCount = 0;
+  let failedServerCount = 0;
+  let cachedServerCount = 0;
+  let loadedToolCount = 0;
+
+  for (const server of servers) {
+    if (Array.isArray(server.imported_tools) && server.imported_tools.length) {
+      cachedServerCount += 1;
+      loadedServerCount += 1;
+    } else if (!server._remote_tool_config?.server_url) {
+      failedServerCount += 1;
+      server.imported_tools = [];
+      server.import_source = "tool_search_remote_tools_list_failed";
+      server.import_error = {
+        code: "mcp_server_location_missing",
+        message: "mcp tool requires server_url for hosted tool_search loading",
+      };
+    } else {
+      const remoteImport = await importRemoteMcpTools(server._remote_tool_config, server, config);
+      server.remote_import_attempted = true;
+      server.remote_import_via_tool_search = true;
+      server.remote_import_status = remoteImport.status;
+      server.remote_import_protocol_version = remoteImport.protocol_version || "";
+      server.remote_import_remote_tool_count = remoteImport.remote_tool_count || 0;
+      server.remote_import_session = remoteImport.session ? "established" : "";
+      if (remoteImport.session_id) server._remote_session_id = remoteImport.session_id;
+
+      if (remoteImport.ok) {
+        server.imported_tools = remoteImport.tools;
+        server.import_source = MCP_TOOL_SEARCH_LIST_TOOLS_SOURCE;
+        server.import_error = null;
+        loadedServerCount += 1;
+      } else {
+        failedServerCount += 1;
+        server.imported_tools = [];
+        server.import_source = "tool_search_remote_tools_list_failed";
+        server.import_error = {
+          code: remoteImport.code || "mcp_remote_list_tools_failed",
+          message: remoteImport.message || "remote MCP tools/list failed",
+        };
+        context.warnings.push(`${server.server_label} tool_search remote tools/list failed: ${server.import_error.code}`);
+      }
+    }
+
+    loadedToolCount += server.imported_tools?.length || 0;
+    outputItems.push({
+      id: prefixedId("mcpl"),
+      type: "mcp_list_tools",
+      server_label: server.server_label,
+      tools: (server.imported_tools || []).map((toolDefinition) => clone(toolDefinition)),
+      ...(server.import_error ? { error: clone(server.import_error) } : {}),
+    });
+  }
+
+  context.tool_search_list_tools_loaded_count = (context.tool_search_list_tools_loaded_count || 0) + loadedServerCount;
+  context.tool_search_loaded_tool_count = (context.tool_search_loaded_tool_count || 0) + loadedToolCount;
+  context.tool_search_list_tools_failed_count = (context.tool_search_list_tools_failed_count || 0) + failedServerCount;
+  context.tool_search_list_tools_cached_count = (context.tool_search_list_tools_cached_count || 0) + cachedServerCount;
+  if (context.warnings.length && context.status === "completed") context.status = "warning";
+
+  return {
+    selected_server_count: servers.length,
+    loaded_server_count: loadedServerCount,
+    failed_server_count: failedServerCount,
+    cached_server_count: cachedServerCount,
+    loaded_tool_count: loadedToolCount,
+    output_items: outputItems,
+    prompt_tools: mcpToolsForToolSearchPrompt(servers),
+  };
+}
+
+function emptyMcpToolSearchLoad() {
+  return {
+    selected_server_count: 0,
+    loaded_server_count: 0,
+    failed_server_count: 0,
+    cached_server_count: 0,
+    loaded_tool_count: 0,
+    output_items: [],
+    prompt_tools: [],
+  };
+}
+
+function selectMcpServersForToolSearch(context, args = {}, config = {}) {
+  const maxServers = boundedNumber(config.toolSearchMaxMcpServers || 3, 3, 1, 25);
+  const available = (context.servers || [])
+    .filter((server) => (
+      server.server_kind === "remote_mcp"
+      && server.defer_loading
+      && !!server._remote_tool_config?.server_url
+    ));
+  if (!available.length) return [];
+
+  const requested = [
+    ...stringArray(args.paths || args.path),
+    ...stringArray(args.server_labels || args.server_label),
+    ...stringArray(args.tool_names || args.tool_name || args.names || args.name),
+  ].map((item) => item.toLowerCase());
+
+  const exact = [];
+  if (requested.length) {
+    for (const server of available) {
+      const keys = [
+        server.server_label,
+        server.server_url_host,
+        ...(server.allowed_tools || []),
+      ].filter(Boolean).map((item) => stringifyOptional(item).toLowerCase());
+      if (requested.some((value) => keys.includes(value))) exact.push(server);
+    }
+  }
+  if (exact.length) return uniqueServersByLabel(exact).slice(0, maxServers);
+
+  const query = stringifyOptional(args.query || args.goal || args.description || requested.join(" ")).toLowerCase();
+  const tokens = query.split(/[^a-z0-9_./-]+/).filter((token) => token.length >= 2);
+  const scored = available
+    .map((server) => ({ server, score: scoreMcpServerForToolSearch(server, tokens, query) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .map((item) => item.server);
+  if (scored.length) return uniqueServersByLabel(scored).slice(0, maxServers);
+  return available.length === 1 ? available.slice(0, 1) : [];
+}
+
+function scoreMcpServerForToolSearch(server, tokens = [], query = "") {
+  const haystack = [
+    server.server_label,
+    server.server_description || "",
+    server.server_url_host || "",
+    ...(server.allowed_tools || []),
+  ].join(" ").toLowerCase();
+  let score = query && haystack.includes(query) ? 5 : 0;
+  for (const token of tokens) {
+    if (haystack.includes(token)) score += 1;
+  }
+  return score;
+}
+
+function uniqueServersByLabel(servers = []) {
+  const seen = new Set();
+  const result = [];
+  for (const server of servers || []) {
+    if (!server?.server_label || seen.has(server.server_label)) continue;
+    seen.add(server.server_label);
+    result.push(server);
+  }
+  return result;
+}
+
+function mcpToolsForToolSearchPrompt(servers = []) {
+  return (servers || []).map((server) => ({
+    server_label: server.server_label,
+    tool_count: server.imported_tools?.length || 0,
+    tools: (server.imported_tools || []).map((tool) => ({
+      name: tool.name,
+      description: tool.description || "",
+      input_schema: isPlainObject(tool.input_schema)
+        ? clone(tool.input_schema)
+        : { type: "object", additionalProperties: true },
+    })),
+    ...(server.import_error ? { error: clone(server.import_error) } : {}),
+  }));
 }
 
 function findInputMcpListTools(items = [], serverLabel = "") {
@@ -479,15 +680,20 @@ function injectMcpChatTools(chat, context, config = {}, options = {}) {
   if (!chat || !context || config.mcpRemoteToolCalls === false) return;
   if (options.toolBudget && options.toolBudget.used >= options.toolBudget.limit) return;
   const tools = [];
-  const map = new Map();
+  const map = context.chat_tool_map instanceof Map ? context.chat_tool_map : new Map();
   const usedNames = new Set((chat.tools || [])
     .map((tool) => tool?.function?.name)
     .filter(Boolean));
   for (const server of context.servers || []) {
     if (server.server_kind !== "remote_mcp") continue;
-    if (server.import_source !== MCP_INPUT_LIST_TOOLS_SOURCE && server.remote_import_status !== "completed") continue;
+    if (
+      server.import_source !== MCP_INPUT_LIST_TOOLS_SOURCE
+      && server.import_source !== MCP_TOOL_SEARCH_LIST_TOOLS_SOURCE
+      && server.remote_import_status !== "completed"
+    ) continue;
     if (!server._remote_tool_config?.server_url) continue;
     for (const tool of server.imported_tools || []) {
+      if (hasMcpChatToolMapping(map, server.server_label, tool.name)) continue;
       const approvalMode = mcpApprovalModeForTool(server.require_approval, tool.name);
       const functionName = mcpChatFunctionName(server.server_label, tool.name, usedNames);
       usedNames.add(functionName);
@@ -516,8 +722,16 @@ function injectMcpChatTools(chat, context, config = {}, options = {}) {
   if (!Array.isArray(chat.tools)) chat.tools = [];
   chat.tools.push(...tools);
   context.chat_tool_map = map;
-  context.remote_call_tool_count = tools.length;
+  context.remote_call_tool_count = map.size;
   applyMcpChatToolChoice(chat, context);
+}
+
+function hasMcpChatToolMapping(map, serverLabel, toolName) {
+  if (!(map instanceof Map)) return false;
+  for (const mapping of map.values()) {
+    if (mapping.server_label === serverLabel && mapping.tool_name === toolName) return true;
+  }
+  return false;
 }
 
 function normalizeMcpRequestedToolChoice(toolChoice) {
@@ -1053,6 +1267,12 @@ function boundedNumber(value, fallback, min, max) {
   return Math.max(min, Math.min(max, Math.trunc(parsed)));
 }
 
+function stringArray(value) {
+  if (value == null) return [];
+  const values = Array.isArray(value) ? value : [value];
+  return values.map((item) => stringifyOptional(item).trim()).filter(Boolean);
+}
+
 function safeErrorMessage(error) {
   const message = String(error?.message || error || "remote MCP tools/list failed");
   return message.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/gi, "Bearer [redacted]").slice(0, 500);
@@ -1169,6 +1389,10 @@ function mcpCompatibility(context) {
       remote_import_success_count: remoteImportAttempts.filter((server) => server.remote_import_status === "completed").length,
       remote_import_failed_count: remoteImportAttempts.filter((server) => server.remote_import_status === "failed").length,
       input_list_tools_loaded_count: context.input_list_tools_loaded_count || 0,
+      tool_search_list_tools_loaded_count: context.tool_search_list_tools_loaded_count || 0,
+      tool_search_loaded_tool_count: context.tool_search_loaded_tool_count || 0,
+      tool_search_list_tools_failed_count: context.tool_search_list_tools_failed_count || 0,
+      tool_search_list_tools_cached_count: context.tool_search_list_tools_cached_count || 0,
       remote_call_tool_count: context.remote_call_tool_count || 0,
       remote_approval_request_count: context.remote_approval_request_count || 0,
       remote_approval_response_count: context.remote_approval_response_count || 0,
@@ -1183,18 +1407,26 @@ function mcpCompatibility(context) {
       skipped_count: context.skipped_calls?.length || 0,
       ...(context.tool_choice_mapping ? { tool_choice: clone(context.tool_choice_mapping) } : {}),
       boundary: context.remote_call_attempt_count
-        ? context.input_list_tools_loaded_count
+        ? context.tool_search_list_tools_loaded_count
+          ? "tool_search_mcp_list_tools_and_call_execution"
+          : context.input_list_tools_loaded_count
           ? "input_mcp_list_tools_and_call_execution"
           : "remote_list_tools_and_call_execution"
         : context.remote_approval_request_count
-          ? context.input_list_tools_loaded_count
+          ? context.tool_search_list_tools_loaded_count
+            ? "tool_search_mcp_list_tools_with_approval_request"
+            : context.input_list_tools_loaded_count
             ? "input_mcp_list_tools_with_approval_request"
             : "remote_list_tools_with_approval_request"
           : context.remote_approval_response_count
-            ? context.input_list_tools_loaded_count
+            ? context.tool_search_list_tools_loaded_count
+              ? "tool_search_mcp_list_tools_with_approval_response"
+              : context.input_list_tools_loaded_count
               ? "input_mcp_list_tools_with_approval_response"
               : "remote_list_tools_with_approval_response"
-            : context.input_list_tools_loaded_count
+            : context.tool_search_list_tools_loaded_count
+              ? "tool_search_mcp_list_tools_without_call_execution"
+              : context.input_list_tools_loaded_count
               ? "input_mcp_list_tools_without_call_execution"
               : remoteImportAttempts.length
                 ? "remote_list_tools_without_call_execution"
@@ -1384,9 +1616,11 @@ module.exports = {
   executeMcpChatToolCalls,
   injectMcpMessages,
   injectMcpChatTools,
+  loadMcpToolsForToolSearch,
   localMcpToolTypes,
   mcpCompatibility,
   mcpOutputItems,
+  mcpToolSearchCatalog,
   prepareMcpContext,
   suppressMcpChatToolCalls,
 };
