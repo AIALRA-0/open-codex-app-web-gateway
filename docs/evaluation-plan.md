@@ -668,6 +668,15 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   coverage proves invalid values produce zero upstream calls while valid
   DeepSeek-compatible direct Chat requests continue through local web-search
   emulation with source annotations and compatibility metadata.
+- Direct Chat requests validate the `messages` request envelope locally before
+  provider calls: `messages` must be a non-empty array, roles are constrained
+  to the OpenAI Chat message roles, content arrays are role-specific, user
+  content accepts official multimodal/file parts plus bridge-supported aliases,
+  assistant `tool_calls` / deprecated `function_call` messages must carry
+  valid call payloads, and tool/function replay messages must include their
+  required identifiers. Regression coverage must prove invalid message shapes
+  produce zero upstream calls while valid multimodal and tool-replay messages
+  still pass through to capable providers.
 - Direct Chat requests that include `tools` or `tool_choice` validate the
   official Chat create request contract locally before provider calls:
   `tools` must contain function or custom tools with valid function names,

@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-16 Official Chat Message Validation
+
+- Rechecked the official OpenAI Chat Completions request contract through the
+  OpenAI developer docs MCP result and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateChatCompletionRequest` requires a non-empty `messages` array, uses
+  role-specific message variants for `developer`, `system`, `user`,
+  `assistant`, `tool`, and deprecated `function`, supports text, image, input
+  audio, file, and refusal content parts in the documented roles, and requires
+  assistant tool calls to carry typed function/custom call payloads.
+- Added local request validation before provider calls:
+  - Direct `POST /v1/chat/completions` now validates `messages` before
+    provider-aware passthrough, DeepSeek role normalization, multimodal/file
+    fallback preparation, stored-chat handling, local web search, or upstream
+    Chat requests.
+  - Developer/system/tool messages accept string or text-part content; user
+    messages accept string content plus official multimodal/file parts and
+    the bridge's already-supported direct Chat aliases (`input_text`,
+    `input_image`, `image_file`, `audio`, and `input_file`).
+  - Assistant messages require content unless a valid `tool_calls` array or
+    deprecated `function_call` object is present; tool and deprecated function
+    replay messages require their linking fields.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant nested `param`
+    locally with zero upstream provider calls.
+- Preserved valid compatibility behavior: existing direct Chat image, audio,
+  and file fallback paths still accept their supported content aliases; valid
+  tool-replay messages are forwarded unchanged to capable Chat providers.
+- Added regression coverage proving invalid `messages` shape, unsupported
+  roles, role-incompatible content parts, malformed image/audio content,
+  assistant tool-call payloads, and missing tool/function replay identifiers
+  fail locally with zero upstream calls, while a valid developer/user/
+  assistant/tool/function replay request reaches the provider unchanged.
+- Updated the compatibility matrix and evaluation plan so direct Chat
+  `messages` are tracked as an OpenAI-boundary validated field instead of only
+  generic provider passthrough.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "validates messages before provider calls|normalizes OpenAI Chat fields|falls back to text markers for direct Chat image inputs|falls back to text markers for direct Chat audio inputs|extracts direct Chat file content" test/server.test.js`:
+    passed 5/5.
+  - `npm test`: passed 317/317.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/chat/completions` returned HTTP 400
+    with params `messages`, `messages.0.content.0.image_url.url`, and
+    `messages.0.tool_calls.0.function.arguments`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 7.9G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Chat Tool Field Validation
 
 - Rechecked the official OpenAI Chat Completions request contract through the

@@ -20653,6 +20653,185 @@ test("POST /v1/completions streams Chat chunks as legacy completion chunks", asy
   }, { streamOptionFields: ["include_usage"] });
 });
 
+test("POST /v1/chat/completions validates messages before provider calls", async () => {
+  const validMessages = [
+    { role: "developer", content: [{ type: "text", text: "Use terse answers." }] },
+    {
+      role: "user",
+      name: "alice",
+      content: [
+        { type: "text", text: "Look at this." },
+        {
+          type: "image_url",
+          image_url: { url: "https://example.test/image.png", detail: "low" },
+        },
+        {
+          type: "input_audio",
+          input_audio: { data: "UklGRg==", format: "wav" },
+        },
+        {
+          type: "file",
+          file: { filename: "note.txt", file_data: "SGVsbG8=" },
+        },
+      ],
+    },
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: "call_1",
+        type: "function",
+        function: { name: "lookup_weather", arguments: "{\"city\":\"SF\"}" },
+      }],
+    },
+    { role: "tool", tool_call_id: "call_1", content: [{ type: "text", text: "sunny" }] },
+    { role: "function", name: "legacy_lookup", content: null },
+  ];
+
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.messages, validMessages);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_messages_boundary",
+      object: "chat.completion",
+      created: 1700000299,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat messages ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: {},
+        param: "messages",
+        message: "messages is required",
+      },
+      {
+        body: { messages: "hello" },
+        param: "messages",
+        message: "messages must be an array",
+      },
+      {
+        body: { messages: [] },
+        param: "messages",
+        message: "messages must contain at least 1 item",
+      },
+      {
+        body: { messages: [null] },
+        param: "messages.0",
+        message: "messages.0 must be an object",
+      },
+      {
+        body: { messages: [{ role: "critic", content: "x" }] },
+        param: "messages.0.role",
+        message: "messages.0.role must be one of: developer, system, user, assistant, tool, function",
+      },
+      {
+        body: { messages: [{ role: "user" }] },
+        param: "messages.0.content",
+        message: "messages.0.content is required",
+      },
+      {
+        body: {
+          messages: [{
+            role: "system",
+            content: [{ type: "image_url", image_url: { url: "https://example.test/a.png" } }],
+          }],
+        },
+        param: "messages.0.content.0.type",
+        message: "messages.0.content.0.type must be one of: text, input_text",
+      },
+      {
+        body: {
+          messages: [{
+            role: "user",
+            content: [{ type: "image_url", image_url: { detail: "ultra" } }],
+          }],
+        },
+        param: "messages.0.content.0.image_url.url",
+        message: "messages.0.content.0.image_url.url must be a string",
+      },
+      {
+        body: {
+          messages: [{
+            role: "user",
+            content: [{ type: "input_audio", input_audio: { data: "abc", format: "flac" } }],
+          }],
+        },
+        param: "messages.0.content.0.input_audio.format",
+        message: "messages.0.content.0.input_audio.format must be one of: wav, mp3",
+      },
+      {
+        body: { messages: [{ role: "assistant" }] },
+        param: "messages.0.content",
+        message: "messages.0.content is required unless tool_calls or function_call is specified",
+      },
+      {
+        body: {
+          messages: [{
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_1",
+              type: "function",
+              function: { name: "lookup" },
+            }],
+          }],
+        },
+        param: "messages.0.tool_calls.0.function.arguments",
+        message: "messages.0.tool_calls.0.function.arguments must be a string",
+      },
+      {
+        body: { messages: [{ role: "tool", content: "ok" }] },
+        param: "messages.0.tool_call_id",
+        message: "messages.0.tool_call_id must be a string",
+      },
+      {
+        body: { messages: [{ role: "function", content: "ok" }] },
+        param: "messages.0.name",
+        message: "messages.0.name must be a string",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: validMessages,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat messages ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/chat/completions validates official string metadata limits", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

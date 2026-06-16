@@ -233,6 +233,23 @@ const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", 
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
+const OPENAI_CHAT_MESSAGE_ROLES = Object.freeze(["developer", "system", "user", "assistant", "tool", "function"]);
+const OPENAI_CHAT_TEXT_ONLY_CONTENT_PART_TYPES = Object.freeze(["text", "input_text"]);
+const OPENAI_CHAT_USER_CONTENT_PART_TYPES = Object.freeze([
+  "text",
+  "input_text",
+  "image_url",
+  "input_image",
+  "image_file",
+  "input_audio",
+  "audio",
+  "file",
+  "input_file",
+]);
+const OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES = Object.freeze(["text", "refusal"]);
+const OPENAI_CHAT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high"]);
+const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
+const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_CHOICE_VALUES = Object.freeze(["none", "auto", "required"]);
 const OPENAI_CHAT_TOOL_CHOICE_OBJECT_TYPES = Object.freeze(["function", "custom", "allowed_tools"]);
@@ -2621,6 +2638,412 @@ function validateOpenAILogitBias(body = {}) {
         `logit_bias.${tokenId}`,
       );
     }
+  }
+  return null;
+}
+
+function validateOpenAIChatMessages(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "messages")) {
+    return requestValidationError("messages is required", "messages");
+  }
+  if (!Array.isArray(body.messages)) {
+    return requestValidationError("messages must be an array", "messages");
+  }
+  if (body.messages.length < 1) {
+    return requestValidationError("messages must contain at least 1 item", "messages");
+  }
+  for (const [index, message] of body.messages.entries()) {
+    const error = validateOpenAIChatMessage(message, `messages.${index}`);
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateOpenAIChatMessage(message, param) {
+  if (!isPlainObject(message)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof message.role !== "string" || !OPENAI_CHAT_MESSAGE_ROLES.includes(message.role)) {
+    return requestValidationError(
+      `${param}.role must be one of: ${OPENAI_CHAT_MESSAGE_ROLES.join(", ")}`,
+      `${param}.role`,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(message, "name")
+    && message.name != null
+    && typeof message.name !== "string"
+  ) {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+
+  if (message.role === "developer" || message.role === "system") {
+    return validateOpenAIChatRequiredContent(message, param, OPENAI_CHAT_TEXT_ONLY_CONTENT_PART_TYPES);
+  }
+  if (message.role === "user") {
+    return validateOpenAIChatRequiredContent(message, param, OPENAI_CHAT_USER_CONTENT_PART_TYPES);
+  }
+  if (message.role === "assistant") {
+    return validateOpenAIChatAssistantMessage(message, param);
+  }
+  if (message.role === "tool") {
+    return validateOpenAIChatToolMessage(message, param);
+  }
+  return validateOpenAIChatFunctionMessage(message, param);
+}
+
+function validateOpenAIChatRequiredContent(message, param, allowedPartTypes) {
+  if (!Object.prototype.hasOwnProperty.call(message, "content")) {
+    return requestValidationError(`${param}.content is required`, `${param}.content`);
+  }
+  return validateOpenAIChatMessageContent(message.content, `${param}.content`, allowedPartTypes);
+}
+
+function validateOpenAIChatAssistantMessage(message, param) {
+  if (
+    Object.prototype.hasOwnProperty.call(message, "refusal")
+    && message.refusal != null
+    && typeof message.refusal !== "string"
+  ) {
+    return requestValidationError(`${param}.refusal must be a string or null`, `${param}.refusal`);
+  }
+  if (Object.prototype.hasOwnProperty.call(message, "audio") && message.audio != null) {
+    if (!isPlainObject(message.audio)) {
+      return requestValidationError(`${param}.audio must be an object or null`, `${param}.audio`);
+    }
+    if (typeof message.audio.id !== "string") {
+      return requestValidationError(`${param}.audio.id must be a string`, `${param}.audio.id`);
+    }
+  }
+
+  const toolCallsError = Object.prototype.hasOwnProperty.call(message, "tool_calls")
+    ? validateOpenAIChatMessageToolCalls(message.tool_calls, `${param}.tool_calls`)
+    : null;
+  if (toolCallsError) return toolCallsError;
+
+  const functionCallError = Object.prototype.hasOwnProperty.call(message, "function_call")
+    ? validateOpenAIChatMessageFunctionCall(message.function_call, `${param}.function_call`)
+    : null;
+  if (functionCallError) return functionCallError;
+
+  const hasToolCalls = Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+  const hasFunctionCall = isPlainObject(message.function_call);
+  if (!Object.prototype.hasOwnProperty.call(message, "content")) {
+    if (!hasToolCalls && !hasFunctionCall) {
+      return requestValidationError(
+        `${param}.content is required unless tool_calls or function_call is specified`,
+        `${param}.content`,
+      );
+    }
+    return null;
+  }
+  if (message.content == null) {
+    if (!hasToolCalls && !hasFunctionCall) {
+      return requestValidationError(
+        `${param}.content is required unless tool_calls or function_call is specified`,
+        `${param}.content`,
+      );
+    }
+    return null;
+  }
+  return validateOpenAIChatMessageContent(
+    message.content,
+    `${param}.content`,
+    OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES,
+  );
+}
+
+function validateOpenAIChatToolMessage(message, param) {
+  if (typeof message.tool_call_id !== "string") {
+    return requestValidationError(`${param}.tool_call_id must be a string`, `${param}.tool_call_id`);
+  }
+  return validateOpenAIChatRequiredContent(message, param, OPENAI_CHAT_TEXT_ONLY_CONTENT_PART_TYPES);
+}
+
+function validateOpenAIChatFunctionMessage(message, param) {
+  if (typeof message.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(message, "content")) {
+    return requestValidationError(`${param}.content is required`, `${param}.content`);
+  }
+  if (message.content != null && typeof message.content !== "string") {
+    return requestValidationError(`${param}.content must be a string or null`, `${param}.content`);
+  }
+  return null;
+}
+
+function validateOpenAIChatMessageContent(content, param, allowedPartTypes) {
+  if (typeof content === "string") return null;
+  if (!Array.isArray(content) || content.length < 1) {
+    return requestValidationError(
+      `${param} must be a string or a non-empty array of content parts`,
+      param,
+    );
+  }
+  for (const [index, part] of content.entries()) {
+    const error = validateOpenAIChatContentPart(part, `${param}.${index}`, allowedPartTypes);
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateOpenAIChatContentPart(part, param, allowedPartTypes) {
+  if (!isPlainObject(part)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof part.type !== "string" || !allowedPartTypes.includes(part.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${allowedPartTypes.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (part.type === "text" || part.type === "input_text") {
+    if (typeof part.text !== "string") {
+      return requestValidationError(`${param}.text must be a string`, `${param}.text`);
+    }
+    return null;
+  }
+  if (part.type === "refusal") {
+    if (typeof part.refusal !== "string") {
+      return requestValidationError(`${param}.refusal must be a string`, `${param}.refusal`);
+    }
+    return null;
+  }
+  if (part.type === "image_url") {
+    return validateOpenAIChatImageUrlPart(part, param);
+  }
+  if (part.type === "input_image" || part.type === "image_file") {
+    return validateOpenAIChatInputImageAliasPart(part, param);
+  }
+  if (part.type === "input_audio") {
+    return validateOpenAIChatInputAudioPart(part, param);
+  }
+  if (part.type === "audio") {
+    return validateOpenAIChatAudioAliasPart(part, param);
+  }
+  if (part.type === "file") {
+    return validateOpenAIChatFilePart(part, param);
+  }
+  return validateOpenAIChatInputFileAliasPart(part, param);
+}
+
+function validateOpenAIChatImageUrlPart(part, param) {
+  if (!Object.prototype.hasOwnProperty.call(part, "image_url")) {
+    return requestValidationError(`${param}.image_url is required`, `${param}.image_url`);
+  }
+  const imageUrl = part.image_url;
+  if (typeof imageUrl === "string") return null;
+  if (!isPlainObject(imageUrl)) {
+    return requestValidationError(`${param}.image_url must be an object`, `${param}.image_url`);
+  }
+  if (typeof imageUrl.url !== "string") {
+    return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
+  }
+  return validateOpenAIChatImageDetail(imageUrl.detail, `${param}.image_url.detail`);
+}
+
+function validateOpenAIChatInputImageAliasPart(part, param) {
+  if (part.type === "image_file") {
+    if (!isPlainObject(part.image_file)) {
+      return requestValidationError(`${param}.image_file must be an object`, `${param}.image_file`);
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(part.image_file, "file_id")
+      && typeof part.image_file.file_id !== "string"
+    ) {
+      return requestValidationError(`${param}.image_file.file_id must be a string`, `${param}.image_file.file_id`);
+    }
+    return validateOpenAIChatImageDetail(part.image_file.detail, `${param}.image_file.detail`);
+  }
+  if (Object.prototype.hasOwnProperty.call(part, "image_url")) {
+    const error = validateOpenAIChatImageUrlPart(part, param);
+    if (error) return error;
+  } else {
+    const sourceFields = ["file_id", "file_data", "data", "image_data", "url"];
+    const hasSource = sourceFields.some((field) => Object.prototype.hasOwnProperty.call(part, field));
+    if (!hasSource) {
+      return requestValidationError(
+        `${param} requires file_id, image_url, file_data, or data`,
+        param,
+      );
+    }
+    for (const field of sourceFields) {
+      if (
+        Object.prototype.hasOwnProperty.call(part, field)
+        && part[field] != null
+        && typeof part[field] !== "string"
+      ) {
+        return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+      }
+    }
+  }
+  return validateOpenAIChatImageDetail(part.detail, `${param}.detail`);
+}
+
+function validateOpenAIChatImageDetail(detail, param) {
+  if (detail == null) return null;
+  if (typeof detail !== "string" || !OPENAI_CHAT_IMAGE_DETAIL_VALUES.includes(detail)) {
+    return requestValidationError(
+      `${param} must be one of: ${OPENAI_CHAT_IMAGE_DETAIL_VALUES.join(", ")}`,
+      param,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIChatInputAudioPart(part, param) {
+  if (!isPlainObject(part.input_audio)) {
+    return requestValidationError(`${param}.input_audio must be an object`, `${param}.input_audio`);
+  }
+  if (typeof part.input_audio.data !== "string") {
+    return requestValidationError(`${param}.input_audio.data must be a string`, `${param}.input_audio.data`);
+  }
+  if (
+    typeof part.input_audio.format !== "string"
+    || !OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES.includes(part.input_audio.format)
+  ) {
+    return requestValidationError(
+      `${param}.input_audio.format must be one of: ${OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES.join(", ")}`,
+      `${param}.input_audio.format`,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIChatAudioAliasPart(part, param) {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  const data = source.data ?? source.audio_data ?? source.file_data ?? source.content_base64;
+  if (data != null && typeof data !== "string") {
+    return requestValidationError(`${param}.data must be a string`, `${param}.data`);
+  }
+  if (source.format != null && typeof source.format !== "string") {
+    return requestValidationError(`${param}.format must be a string`, `${param}.format`);
+  }
+  if (source.filename != null && typeof source.filename !== "string") {
+    return requestValidationError(`${param}.filename must be a string`, `${param}.filename`);
+  }
+  if (source.transcript != null && typeof source.transcript !== "string") {
+    return requestValidationError(`${param}.transcript must be a string`, `${param}.transcript`);
+  }
+  if (data == null) {
+    return requestValidationError(`${param} requires data, audio_data, file_data, or content_base64`, param);
+  }
+  return null;
+}
+
+function validateOpenAIChatFilePart(part, param) {
+  if (!isPlainObject(part.file)) {
+    return requestValidationError(`${param}.file must be an object`, `${param}.file`);
+  }
+  return validateOpenAIChatFileSourceFields(part.file, `${param}.file`, ["filename", "file_data", "file_id"]);
+}
+
+function validateOpenAIChatInputFileAliasPart(part, param) {
+  if (isPlainObject(part.file)) {
+    const error = validateOpenAIChatFileSourceFields(part.file, `${param}.file`, [
+      "filename",
+      "file_data",
+      "file_id",
+      "mime_type",
+    ]);
+    if (error) return error;
+  }
+  const sourceFields = ["filename", "file_data", "file_id", "file_url", "data", "content_base64", "mime_type"];
+  const error = validateOpenAIChatFileSourceFields(part, param, sourceFields);
+  if (error) return error;
+  if (!isPlainObject(part.file)) {
+    const hasSource = ["file_data", "file_id", "file_url", "data", "content_base64"].some((field) => (
+      Object.prototype.hasOwnProperty.call(part, field)
+    ));
+    if (!hasSource) {
+      return requestValidationError(
+        `${param} requires file_id, file_data, file_url, data, or content_base64`,
+        param,
+      );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIChatFileSourceFields(source, param, fields) {
+  for (const field of fields) {
+    if (
+      Object.prototype.hasOwnProperty.call(source, field)
+      && source[field] != null
+      && typeof source[field] !== "string"
+    ) {
+      return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIChatMessageToolCalls(toolCalls, param) {
+  if (!Array.isArray(toolCalls)) {
+    return requestValidationError(`${param} must be an array`, param);
+  }
+  for (const [index, toolCall] of toolCalls.entries()) {
+    const callParam = `${param}.${index}`;
+    if (!isPlainObject(toolCall)) {
+      return requestValidationError(`${callParam} must be an object`, callParam);
+    }
+    if (typeof toolCall.id !== "string") {
+      return requestValidationError(`${callParam}.id must be a string`, `${callParam}.id`);
+    }
+    if (
+      typeof toolCall.type !== "string"
+      || !OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES.includes(toolCall.type)
+    ) {
+      return requestValidationError(
+        `${callParam}.type must be one of: ${OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES.join(", ")}`,
+        `${callParam}.type`,
+      );
+    }
+    const error = toolCall.type === "function"
+      ? validateOpenAIChatMessageFunctionToolCall(toolCall.function, `${callParam}.function`)
+      : validateOpenAIChatMessageCustomToolCall(toolCall.custom, `${callParam}.custom`);
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateOpenAIChatMessageFunctionToolCall(fn, param) {
+  if (!isPlainObject(fn)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof fn.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (typeof fn.arguments !== "string") {
+    return requestValidationError(`${param}.arguments must be a string`, `${param}.arguments`);
+  }
+  return null;
+}
+
+function validateOpenAIChatMessageCustomToolCall(custom, param) {
+  if (!isPlainObject(custom)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof custom.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (typeof custom.input !== "string") {
+    return requestValidationError(`${param}.input must be a string`, `${param}.input`);
+  }
+  return null;
+}
+
+function validateOpenAIChatMessageFunctionCall(functionCall, param) {
+  if (functionCall == null) return null;
+  if (!isPlainObject(functionCall)) {
+    return requestValidationError(`${param} must be an object or null`, param);
+  }
+  if (typeof functionCall.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (typeof functionCall.arguments !== "string") {
+    return requestValidationError(`${param}.arguments must be a string`, `${param}.arguments`);
   }
   return null;
 }
@@ -5358,6 +5781,11 @@ async function* iterateSseJson(stream) {
 
 async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const body = await readJson(req);
+  const messagesError = validateOpenAIChatMessages(body);
+  if (messagesError) {
+    sendError(res, 400, messagesError.message, messagesError);
+    return;
+  }
   const metadataError = validateOpenAIStringMetadata(body);
   if (metadataError) {
     sendError(res, 400, metadataError.message, metadataError);
