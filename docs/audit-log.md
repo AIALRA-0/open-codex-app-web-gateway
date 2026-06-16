@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-16 Official Logprobs And Echo Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Chat Completions `logprobs` is a nullable boolean-style request flag,
+  Chat `top_logprobs` is an integer from 0 through 20 and requires
+  `logprobs:true`, legacy Completions `echo` is nullable boolean, and legacy
+  Completions `logprobs` is an integer from 0 through 5.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-boolean Chat-native `logprobs`
+    aliases before Responses-to-Chat translation or upstream provider calls.
+  - `POST /v1/chat/completions` now rejects non-boolean `logprobs` values
+    before direct Chat passthrough and before evaluating `top_logprobs`.
+  - `POST /v1/completions` now rejects non-boolean `echo` and non-integer or
+    out-of-range `logprobs` values before prompt-to-Chat mapping, non-streaming
+    provider calls, or streaming provider calls.
+  - Invalid strings, numbers, arrays, and objects now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    the relevant `param` locally with zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values:
+  - Responses `top_logprobs` and logprob includes still automatically request
+    upstream Chat `logprobs:true`;
+  - direct Chat `logprobs:false` remains pass-through when supported;
+  - legacy Completions `logprobs:0..5` still maps to Chat `logprobs:true` plus
+    bounded `top_logprobs` where applicable;
+  - legacy `echo:false` returns only generated text, while `echo:true` still
+    prefixes prompt text on non-streaming and streaming legacy responses.
+- Added regression coverage proving invalid Responses/direct Chat `logprobs`,
+  invalid legacy `echo`, and invalid legacy `logprobs` fail locally with zero
+  upstream calls; valid `logprobs:false`, valid legacy `echo:false`, and valid
+  legacy `logprobs:5` continue through the compatibility bridge.
+- Updated the compatibility matrix and evaluation plan so log-probability and
+  legacy echo parity track official request validation as a first-class
+  contract.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "validates Chat logprobs flag|validates logprobs flag|validates echo and logprobs"`:
+    passed 242/242; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 291/291.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"logprobs"` for `logprobs:"true"`; public
+    `/v1/chat/completions` returned HTTP 400 with `param:"logprobs"` for
+    `logprobs:"true"`; public `/v1/completions` returned HTTP 400 with
+    `param:"echo"` for `echo:"false"` and `param:"logprobs"` for
+    `logprobs:6`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 4.2G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Storage Flag Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

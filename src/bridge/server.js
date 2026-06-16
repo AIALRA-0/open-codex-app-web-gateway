@@ -201,6 +201,8 @@ const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
+const OPENAI_LEGACY_LOGPROBS_MIN = 0;
+const OPENAI_LEGACY_LOGPROBS_MAX = 5;
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -800,6 +802,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const metadataError = validateOpenAIStringMetadata(request);
   if (metadataError) {
     sendError(res, 400, metadataError.message, metadataError);
+    return;
+  }
+  const logprobsFlagError = validateOpenAIChatLogprobsFlag(request);
+  if (logprobsFlagError) {
+    sendError(res, 400, logprobsFlagError.message, logprobsFlagError);
     return;
   }
   const topLogprobsError = validateOpenAITopLogprobs(request);
@@ -2401,6 +2408,29 @@ function validateOpenAIStoreFlag(body = {}) {
 
 function validateOpenAIBackgroundFlag(body = {}) {
   return validateOpenAIBooleanParameter(body, "background");
+}
+
+function validateOpenAIChatLogprobsFlag(body = {}) {
+  return validateOpenAIBooleanParameter(body, "logprobs");
+}
+
+function validateOpenAILegacyEcho(body = {}) {
+  return validateOpenAIBooleanParameter(body, "echo");
+}
+
+function validateOpenAILegacyLogprobs(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "logprobs") || body.logprobs == null) return null;
+  if (
+    !Number.isInteger(body.logprobs)
+    || body.logprobs < OPENAI_LEGACY_LOGPROBS_MIN
+    || body.logprobs > OPENAI_LEGACY_LOGPROBS_MAX
+  ) {
+    return requestValidationError(
+      `logprobs must be an integer between ${OPENAI_LEGACY_LOGPROBS_MIN} and ${OPENAI_LEGACY_LOGPROBS_MAX}`,
+      "logprobs",
+    );
+  }
+  return null;
 }
 
 function validateOpenAIChoiceCount(body = {}) {
@@ -4686,6 +4716,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, metadataError.message, metadataError);
     return;
   }
+  const logprobsFlagError = validateOpenAIChatLogprobsFlag(body);
+  if (logprobsFlagError) {
+    sendError(res, 400, logprobsFlagError.message, logprobsFlagError);
+    return;
+  }
   const topLogprobsError = validateOpenAITopLogprobs(body, { requireChatLogprobsTrue: true });
   if (topLogprobsError) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
@@ -6128,6 +6163,16 @@ async function handleLegacyCompletions(req, res, config) {
   const streamError = validateOpenAIStreamFlag(request);
   if (streamError) {
     sendError(res, 400, streamError.message, streamError);
+    return;
+  }
+  const echoError = validateOpenAILegacyEcho(request);
+  if (echoError) {
+    sendError(res, 400, echoError.message, echoError);
+    return;
+  }
+  const legacyLogprobsError = validateOpenAILegacyLogprobs(request);
+  if (legacyLogprobsError) {
+    sendError(res, 400, legacyLogprobsError.message, legacyLogprobsError);
     return;
   }
   const choiceCountError = validateOpenAIChoiceCount(request);

@@ -1238,6 +1238,61 @@ test("POST /v1/responses validates top_logprobs range before provider calls", as
   });
 });
 
+test("POST /v1/responses validates Chat logprobs flag before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, false);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_logprobs_flag",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "logprobs flag ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 3, completion_tokens: 2, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const value of ["false", 1, [], {}]) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check logprobs validation.",
+          logprobs: value,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "logprobs must be a boolean",
+          type: "invalid_request_error",
+          param: "logprobs",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check logprobs false.",
+        logprobs: false,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "logprobs flag ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses validates sampling parameter ranges before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.temperature, 0);
@@ -18862,6 +18917,99 @@ test("POST /v1/completions validates logit_bias before provider calls", async ()
   });
 });
 
+test("POST /v1/completions validates echo and logprobs before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, true);
+    assert.equal(call.body.top_logprobs, 5);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_echo_logprobs_boundary",
+      object: "chat.completion",
+      created: 1700000125,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy logprobs ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { echo: "false" }, param: "echo", message: "echo must be a boolean" },
+      { body: { echo: 1 }, param: "echo", message: "echo must be a boolean" },
+      { body: { echo: [] }, param: "echo", message: "echo must be a boolean" },
+      { body: { echo: {} }, param: "echo", message: "echo must be a boolean" },
+      {
+        body: { logprobs: -1 },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+      {
+        body: { logprobs: 6 },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+      {
+        body: { logprobs: 1.5 },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+      {
+        body: { logprobs: "5" },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+      {
+        body: { logprobs: [] },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+      {
+        body: { logprobs: {} },
+        param: "logprobs",
+        message: "logprobs must be an integer between 0 and 5",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy echo and logprobs validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Echo boundary: ",
+        echo: false,
+        logprobs: 5,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.choices[0].text, "legacy logprobs ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates n before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.n, 128);
@@ -19144,6 +19292,60 @@ test("POST /v1/chat/completions validates top_logprobs contract before provider 
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat logprobs ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates logprobs flag before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.logprobs, false);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_logprobs_flag",
+      object: "chat.completion",
+      created: 1700000301,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat logprobs flag ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const value of ["false", 1, [], {}]) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          logprobs: value,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "logprobs must be a boolean",
+          type: "invalid_request_error",
+          param: "logprobs",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        logprobs: false,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat logprobs flag ok");
     assert.equal(requests.length, 1);
   });
 });
