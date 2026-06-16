@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-17 Active Background Retrieve Stream Alignment
+
+- Rechecked the official OpenAI `GET /v1/responses/{response_id}` query
+  contract through the official `openai/openai-openapi` schema. The official
+  retrieve endpoint accepts `stream`, `starting_after`, and
+  `include_obfuscation`; `stream:true` streams response data as it is generated.
+- Tightened local stored response streaming:
+  - terminal stored responses still replay as typed Responses SSE events without
+    re-calling the provider;
+  - active in-process background responses now emit `response.created` and
+    `response.in_progress`, keep the SSE connection open, wait for the stored
+    response to reach a terminal state, then replay the final output and
+    official terminal stream event when one exists;
+  - cancelled background streams close after progress events because the
+    official Responses stream event union does not define a
+    `response.cancelled` SSE terminal event.
+- Updated tests and the compatibility matrix for active background retrieve
+  streams.
+- Validation:
+  - targeted server tests for stored response replay, active background retrieve
+    streaming, and background cancellation pass;
+  - `npm test` passes: 341 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional `sk-...` pattern scan has no repository matches;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after bridge restart;
+  - local smoke against `http://127.0.0.1:12912` created an active background
+    response, retrieved it with `stream=true`, observed the expected
+    `response.created` -> `response.in_progress` -> output events ->
+    `response.completed` sequence, confirmed the stored response completed, and
+    deleted the smoke record;
+  - public smoke against `https://opencodexapp.aialra.online` created an active
+    background response, retrieved it with `stream=true`, observed the expected
+    `response.created` -> `response.in_progress` -> output events ->
+    `response.completed` sequence, confirmed the stored response completed, and
+    deleted the smoke record.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Response Delete Marker Alignment
 
 - Rechecked the official OpenAI `DELETE /v1/responses/{response_id}` example

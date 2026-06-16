@@ -13450,7 +13450,7 @@ function handleBatchCancel(res, store, batchId) {
   sendJson(res, 200, batch);
 }
 
-function handleResponseGet(res, store, responseId, url) {
+async function handleResponseGet(res, store, responseId, url, backgroundJobs = null) {
   const queryError = validateResponseRetrieveQuery(url);
   if (queryError) {
     sendError(res, 400, queryError.message, queryError);
@@ -13465,7 +13465,11 @@ function handleResponseGet(res, store, responseId, url) {
 
   const response = projectResponseForIncludes(record.response, url);
   if (queryBooleanFromUrl(url, "stream", false)) {
-    writeStoredResponseEventStream(res, response, url);
+    await writeStoredResponseEventStream(res, response, url, {
+      store,
+      responseId,
+      backgroundJobs,
+    });
     return;
   }
 
@@ -13482,13 +13486,22 @@ function validateResponseRetrieveQuery(url) {
   return validateOpenAIQueryInteger(url, "starting_after", { min: 0 });
 }
 
-function writeStoredResponseEventStream(res, response, url) {
+const RESPONSE_TERMINAL_STATUSES = new Set(["completed", "failed", "incomplete", "cancelled"]);
+const RESPONSE_STREAM_TERMINAL_EVENT_STATUSES = new Set(["completed", "failed", "incomplete"]);
+const STORED_RESPONSE_STREAM_POLL_INTERVAL_MS = 25;
+
+async function writeStoredResponseEventStream(res, response, url, options = {}) {
   const startingAfter = queryIntegerFromUrl(url, "starting_after", 0);
   const state = { sequenceNumber: 0 };
   const emit = (event, payload) => {
     const sequenced = sequence(state, payload);
-    if (sequenced.sequence_number > startingAfter) writeSse(res, event, sequenced);
+    if (!res.destroyed && sequenced.sequence_number > startingAfter) writeSse(res, event, sequenced);
   };
+  let closed = false;
+  res.on("close", () => {
+    closed = true;
+  });
+  const isClosed = () => closed || res.destroyed || res.writableEnded;
 
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
@@ -13508,16 +13521,65 @@ function writeStoredResponseEventStream(res, response, url) {
   emit("response.created", { type: "response.created", response: clone(progressResponse) });
   emit("response.in_progress", { type: "response.in_progress", response: clone(progressResponse) });
 
-  for (const [event, payload] of storedResponseOutputStreamEvents(response)) {
-    emit(event, payload);
-  }
+  try {
+    const streamResponse = await storedResponseForStreamOutput(response, {
+      ...options,
+      url,
+      isClosed,
+    });
+    if (!streamResponse || isClosed()) return;
 
-  if (["completed", "failed", "incomplete"].includes(response.status)) {
-    const terminalEvent = terminalEventForResponseStatus(response.status);
-    emit(terminalEvent, { type: terminalEvent, response: clone(response) });
-  }
+    for (const [event, payload] of storedResponseOutputStreamEvents(streamResponse)) {
+      emit(event, payload);
+    }
 
-  res.end();
+    if (responseStatusHasStreamTerminalEvent(streamResponse.status)) {
+      const terminalEvent = terminalEventForResponseStatus(streamResponse.status);
+      emit(terminalEvent, { type: terminalEvent, response: clone(streamResponse) });
+    }
+  } finally {
+    if (!res.destroyed && !res.writableEnded) res.end();
+  }
+}
+
+async function storedResponseForStreamOutput(response, options = {}) {
+  if (isResponseTerminalStatus(response?.status) || !shouldWaitForStoredResponseStream(response, options)) {
+    return response;
+  }
+  const finalResponse = await waitForStoredResponseTerminal(options.store, options.responseId, options);
+  return finalResponse || response;
+}
+
+function shouldWaitForStoredResponseStream(response, options = {}) {
+  return response?.status === "in_progress"
+    && response.background === true
+    && typeof options.store?.get === "function"
+    && typeof options.responseId === "string"
+    && !!options.backgroundJobs?.has?.(options.responseId);
+}
+
+async function waitForStoredResponseTerminal(store, responseId, options = {}) {
+  const pollIntervalMs = Math.max(5, Math.min(
+    Number(options.pollIntervalMs || STORED_RESPONSE_STREAM_POLL_INTERVAL_MS) || STORED_RESPONSE_STREAM_POLL_INTERVAL_MS,
+    1000,
+  ));
+  while (!options.isClosed?.()) {
+    const record = store.get(responseId);
+    const response = record?.response;
+    if (!response) return null;
+    if (isResponseTerminalStatus(response.status)) return projectResponseForIncludes(response, options.url || new URL("http://localhost/"));
+    if (!options.backgroundJobs?.has?.(responseId)) return projectResponseForIncludes(response, options.url || new URL("http://localhost/"));
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  return null;
+}
+
+function isResponseTerminalStatus(status) {
+  return RESPONSE_TERMINAL_STATUSES.has(String(status || ""));
+}
+
+function responseStatusHasStreamTerminalEvent(status) {
+  return RESPONSE_STREAM_TERMINAL_EVENT_STATUSES.has(String(status || ""));
 }
 
 function storedResponseOutputStreamEvents(response) {
@@ -18384,7 +18446,7 @@ function createServer(config = loadConfig()) {
         const responseId = decodeURIComponent(responseRoute[1]);
         const action = responseRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleResponseGet(res, store, responseId, url);
+          await handleResponseGet(res, store, responseId, url, backgroundJobs);
           return;
         }
         if (!action && req.method === "POST") {

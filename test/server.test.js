@@ -15518,7 +15518,35 @@ test("POST /v1/responses with background true returns in_progress and later comp
     assert.equal(updatedJson.metadata.state, "in_progress");
     assert.equal(updatedJson.metadata.compatibility.background, "local_store_forced");
 
+    const streamed = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&include_obfuscation=false`);
+    assert.equal(streamed.status, 200);
+    assert.match(streamed.headers.get("content-type") || "", /^text\/event-stream\b/);
+    const streamTextPromise = streamed.text();
+    let streamSettled = false;
+    streamTextPromise.then(
+      () => { streamSettled = true; },
+      () => { streamSettled = true; },
+    );
+    await sleep(30);
+    assert.equal(streamSettled, false);
+
     releaseProvider();
+    const streamEvents = parseSseEvents(await streamTextPromise);
+    assert.deepEqual(streamEvents.map((event) => event.event), [
+      "response.created",
+      "response.in_progress",
+      "response.output_item.added",
+      "response.content_part.added",
+      "response.output_text.delta",
+      "response.output_text.done",
+      "response.content_part.done",
+      "response.output_item.done",
+      "response.completed",
+    ]);
+    assert.deepEqual(streamEvents.map((event) => event.data.sequence_number), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    assert.equal(streamEvents[4].data.delta, "background done");
+    assert.equal(streamEvents[8].data.response.metadata.suite, "background-update");
+
     let finalJson = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       await sleep(20);
@@ -15630,11 +15658,20 @@ test("POST /v1/responses/{id}/cancel cancels an in-progress background response"
     const createdJson = await created.json();
     assert.equal(createdJson.status, "in_progress");
 
+    const streamed = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true`);
+    assert.equal(streamed.status, 200);
+    const streamTextPromise = streamed.text();
+
     const cancelled = await fetch(`${baseUrl}/v1/responses/${createdJson.id}/cancel`, { method: "POST" });
     assert.equal(cancelled.status, 200);
     const cancelledJson = await cancelled.json();
     assert.equal(cancelledJson.status, "cancelled");
     assert.match(cancelledJson.metadata.compatibility_cancel, /background job/);
+    const streamEvents = parseSseEvents(await streamTextPromise);
+    assert.deepEqual(streamEvents.map((event) => event.event), [
+      "response.created",
+      "response.in_progress",
+    ]);
 
     await sleep(240);
     const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
