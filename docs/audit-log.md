@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat N Choice Fan-Out Compatibility
+
+- Rechecked the official OpenAI Chat Completions schema through the OpenAI
+  developer docs MCP. The Chat create operation documents `n` as the number of
+  Chat completion choices generated for each input message, with token charges
+  applying across all choices.
+- Extended DeepSeek-compatible direct `/v1/chat/completions` passthrough so
+  request-side `n` is no longer only treated as a generic unsupported
+  Chat-native field when native Chat fields are disabled:
+  - `n:1` is removed from the upstream DeepSeek request as the single-choice
+    provider default and recorded in
+    `metadata.compatibility.chat_passthrough.n`;
+  - non-streaming `n>1` is emulated with local provider fan-out, making bounded
+    repeated upstream Chat calls without forwarding `n`;
+  - returned Chat `choices` are merged with contiguous indexes;
+  - upstream `usage` objects are aggregated so local usage accounting reflects
+    the total fan-out cost;
+  - local `store:true` Chat completion records and
+    `/v1/chat/completions/{id}/messages` preserve every merged assistant
+    choice;
+  - `CODEXCOMPAT_CHAT_N_EMULATION_MAX` caps the fan-out width, defaulting to
+    10 and hard-bounded to 50;
+  - streaming request-side fan-out remains intentionally unimplemented and is
+    audited with `reason:"streaming_fanout_not_implemented"`.
+- Updated compatibility docs, deployment flags, and the evaluation plan so
+  Direct Chat `n` is tracked as a dedicated compatibility path instead of a
+  plain filtered-field case.
+- Added a regression proving direct `/v1/chat/completions`:
+  - strips `n` from each provider fan-out request;
+  - performs two upstream calls for `n:2`;
+  - merges two choices with stable indexes;
+  - aggregates usage totals;
+  - records `metadata.compatibility.chat_passthrough.n`;
+  - stores and replays both assistant choices through the local stored Chat
+    messages endpoint.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/server.test.js`: passed 206/206.
+  - `npm test`: passed 250/250.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1339 ms, P95 latency 1384 ms, and 116 total
+    tokens.
+  - Live localhost direct `/v1/chat/completions` smoke with `n:2`,
+    `store:true`, and `reasoning_effort:"none"` against `deepseek-v4-pro`
+    returned HTTP 200, two choices, merged usage of 36 total tokens,
+    `metadata.compatibility.chat_passthrough.n.emulated:"local_fanout"`,
+    `request_count:2`, `actual_choice_count:2`, and two stored assistant
+    output messages from `/v1/chat/completions/{id}/messages`.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Direct Chat Web Search Options Compatibility
 
 - Rechecked the official OpenAI Chat Completions OpenAPI schema through the

@@ -154,6 +154,7 @@ const {
 } = require("./web_search");
 
 const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
+const DEFAULT_CHAT_N_EMULATION_MAX = 10;
 const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/responses",
   "/v1/chat/completions",
@@ -385,6 +386,7 @@ function loadConfig(overrides = {}) {
     chatImageInputMode: normalizeChatImageInputMode(process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE, deepseekProvider),
     chatAudioInputMode: normalizeChatAudioInputMode(process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE, deepseekProvider),
     chatFileInputMode: normalizeChatFileInputMode(process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE, deepseekProvider),
+    chatNEmulationMax: numberFromEnv("CODEXCOMPAT_CHAT_N_EMULATION_MAX", DEFAULT_CHAT_N_EMULATION_MAX, 1, 50),
     webSearchProvider,
     webSearchMaxResults: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_MAX_RESULTS", 5, 1, 10),
     webSearchTimeoutMs: numberFromEnv("CODEXCOMPAT_WEB_SEARCH_TIMEOUT_MS", 10 * 1000, 1000, 60 * 1000),
@@ -4291,6 +4293,48 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     applyLocalWebSearchToChat(upstreamBody, nextCompatibility, localWebSearch, config);
     compatibility = Object.keys(nextCompatibility).length ? nextCompatibility : null;
   }
+  const nFanoutCount = chatPassthroughNFanoutCount(compatibility);
+  if (nFanoutCount > 1 && !body.stream) {
+    const fanout = await fetchChatPassthroughNFanout(config, upstreamBody, req.headers, nFanoutCount);
+    if (!fanout.ok) {
+      sendJson(res, fanout.status, fanout.json || { error: { message: fanout.text || "chat n fan-out provider call failed" } });
+      return;
+    }
+    const json = fanout.json;
+    if (isPlainObject(compatibility?.n)) {
+      compatibility.n.actual_choice_count = Array.isArray(json?.choices) ? json.choices.length : 0;
+    }
+    if (json?.usage) {
+      recordOrganizationUsage(config, req, "completions", {
+        endpoint: "/v1/chat/completions",
+        request: body,
+        created_at: json.created,
+        model: json.model || body.model,
+        service_tier: json.service_tier || body.service_tier,
+        usage: json.usage,
+      });
+    }
+    recordLocalHostedToolUsage(config, req, body, {
+      localWebSearch,
+    }, {
+      endpoint: "/v1/chat/completions",
+      created_at: json?.created,
+      model: json?.model || body.model,
+    });
+    annotateChatWebSearchCompletion(json, localWebSearch);
+    attachLocalChatInlineModeration(json, body, config);
+    attachChatPassthroughCompatibility(json, body, compatibility);
+    if (json?.id && body.store === true) {
+      store.put(json.id, {
+        chat_completion: json,
+        chat_messages: normalizeStoredChatMessages(body.messages, json),
+        chat_request: sanitizeChatRequest(body),
+      });
+    }
+    res.writeHead(fanout.status, fanout.headers);
+    res.end(`${JSON.stringify(json)}\n`);
+    return;
+  }
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
   if (body.stream && upstream.ok && isEventStreamResponse(upstream)) {
@@ -4391,6 +4435,70 @@ function chatPassthroughWebSearchInput(body = {}) {
   return messages;
 }
 
+function chatPassthroughNFanoutCount(compatibility) {
+  const count = Number(compatibility?.n?.request_count);
+  if (!Number.isInteger(count) || count <= 1) return 0;
+  return count;
+}
+
+async function fetchChatPassthroughNFanout(config, upstreamBody, incomingHeaders, count) {
+  const completions = [];
+  let headers = { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" };
+  let status = 200;
+  for (let index = 0; index < count; index += 1) {
+    const requestBody = clone(upstreamBody);
+    delete requestBody.n;
+    const upstream = await fetchProvider(config, config.chatCompletionsPath, requestBody, incomingHeaders);
+    if (index === 0) {
+      headers = proxyResponseHeaders(upstream);
+      status = upstream.status;
+    }
+    const text = await upstream.text();
+    const json = parseJsonOrNull(text);
+    if (!upstream.ok) {
+      return { ok: false, status: upstream.status, headers: proxyResponseHeaders(upstream), text, json };
+    }
+    if (!isPlainObject(json)) {
+      return {
+        ok: false,
+        status: 502,
+        headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" },
+        json: openAiError("chat n fan-out provider returned a non-JSON response", {
+          type: "upstream_provider_error",
+          code: "invalid_provider_response",
+        }),
+      };
+    }
+    completions.push(json);
+  }
+  return {
+    ok: true,
+    status,
+    headers,
+    json: mergeChatPassthroughNFanoutCompletions(completions, count),
+  };
+}
+
+function mergeChatPassthroughNFanoutCompletions(completions, requestedCount) {
+  const first = completions.find(isPlainObject) || {};
+  const merged = clone(first);
+  const choices = [];
+  for (const completion of completions) {
+    for (const choice of Array.isArray(completion?.choices) ? completion.choices : []) {
+      if (choices.length >= requestedCount) break;
+      choices.push({
+        ...clone(choice),
+        index: choices.length,
+      });
+    }
+    if (choices.length >= requestedCount) break;
+  }
+  merged.choices = choices;
+  const usages = completions.map((completion) => completion?.usage).filter(Boolean);
+  if (usages.length) merged.usage = combineChatUsage(usages);
+  return merged;
+}
+
 function chatPassthroughUpstreamBody(body, config) {
   if (!isPlainObject(body)) return { upstreamBody: body, compatibility: null };
   const upstreamBody = clone(body);
@@ -4436,6 +4544,9 @@ function chatPassthroughUpstreamBody(body, config) {
 
   const verbosity = normalizeChatPassthroughVerbosity(upstreamBody, config);
   if (verbosity) compatibility.verbosity = verbosity;
+
+  const choiceCount = normalizeChatPassthroughN(upstreamBody, config);
+  if (choiceCount) compatibility.n = choiceCount;
 
   const webSearchOptions = normalizeChatPassthroughWebSearchOptions(upstreamBody, config);
   if (webSearchOptions) compatibility.web_search_options = webSearchOptions;
@@ -4551,6 +4662,51 @@ function chatPassthroughVerbosityInstruction(value) {
     return "Verbosity compatibility: answer with thorough detail. Include relevant context, caveats, and examples when useful.";
   }
   return null;
+}
+
+function normalizeChatPassthroughN(upstreamBody, config = {}) {
+  if (upstreamBody.n === undefined || config.forwardChatNativeFields !== false) return null;
+  const rawValue = upstreamBody.n;
+  const value = Number(rawValue);
+  delete upstreamBody.n;
+  if (!Number.isInteger(value) || value < 1) {
+    return {
+      source: "n",
+      value: stringifyContent(rawValue),
+      forwarded: false,
+      emulated: false,
+      reason: "invalid_choice_count_filtered",
+    };
+  }
+  if (value === 1) {
+    return {
+      source: "n",
+      value,
+      forwarded: false,
+      emulated: false,
+      reason: "single_choice_default",
+    };
+  }
+  if (upstreamBody.stream) {
+    return {
+      source: "n",
+      value,
+      forwarded: false,
+      emulated: false,
+      reason: "streaming_fanout_not_implemented",
+    };
+  }
+  const max = Math.max(1, Math.min(Number(config.chatNEmulationMax || DEFAULT_CHAT_N_EMULATION_MAX), 50));
+  const requestCount = Math.min(value, max);
+  return {
+    source: "n",
+    value,
+    forwarded: false,
+    emulated: "local_fanout",
+    request_count: requestCount,
+    ...(requestCount !== value ? { capped_to: requestCount } : {}),
+    reason: requestCount === value ? "provider_unsupported_local_fanout" : "provider_unsupported_local_fanout_capped",
+  };
 }
 
 function normalizeChatPassthroughWebSearchOptions(upstreamBody, config = {}) {

@@ -478,7 +478,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   requests by default,
   filtering unsupported OpenAI-only Chat fields such as
   `parallel_tool_calls`, preserving local `store`/`metadata` behavior while
-  filtering those unsupported upstream fields, mapping stable user identity into `user_id`, and
+  filtering those unsupported upstream fields, locally emulating unsupported
+  non-streaming `n>1` requests with merged `choices`, aggregated `usage`, and
+  stored Chat messages, mapping stable user identity into `user_id`, and
   recording the compatibility action in returned/stored metadata.
 - Local ChatKit coverage creates and cancels beta-style sessions, creates,
   lists, updates, and deletes local threads, appends and lists thread items with

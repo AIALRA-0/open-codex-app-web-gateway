@@ -17964,7 +17964,7 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         audio: { voice: "alloy", format: "mp3" },
         prediction: { type: "content", content: "chat-developer-ok" },
         moderation: { input: true },
-        n: 2,
+        n: 1,
         parallel_tool_calls: false,
         verbosity: "low",
         web_search_options: { search_context_size: "low" },
@@ -17996,6 +17996,13 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.reason, "deepseek_thinking_disabled");
     assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.n, {
+      source: "n",
+      value: 1,
+      forwarded: false,
+      emulated: false,
+      reason: "single_choice_default",
+    });
     assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.value, "low");
     assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.forwarded, false);
     assert.equal(
@@ -18018,7 +18025,6 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         "logit_bias",
         "modalities",
         "moderation",
-        "n",
         "parallel_tool_calls",
         "prediction",
         "prompt_cache_key",
@@ -18130,6 +18136,74 @@ test("POST /v1/chat/completions emulates web_search_options locally for DeepSeek
       url: "https://example.test/direct-chat-search",
       snippet: "The direct Chat web_search_options fixture found this result.",
     }],
+  });
+});
+
+test("POST /v1/chat/completions emulates n choices with local provider fan-out", async () => {
+  let providerCalls = 0;
+  await withMockProvider(async (_req, res, call) => {
+    providerCalls += 1;
+    assert.equal(call.body.n, undefined);
+    assert.equal(call.body.stream, undefined);
+    const suffix = providerCalls === 1 ? "one" : "two";
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_direct_n_${suffix}`,
+      object: "chat.completion",
+      created: 1700000412 + providerCalls,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: `choice-${suffix}` },
+        finish_reason: "stop",
+      }],
+      usage: {
+        prompt_tokens: 9 + providerCalls,
+        completion_tokens: 1 + providerCalls,
+        total_tokens: 10 + (2 * providerCalls),
+      },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-n-fanout" },
+        messages: [{ role: "user", content: "Return two fanout choices." }],
+        n: 2,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(providerCalls, 2);
+    assert.equal(requests.length, 2);
+    assert.deepEqual(requests.map((request) => request.body.n), [undefined, undefined]);
+    assert.deepEqual(json.choices.map((choice) => choice.index), [0, 1]);
+    assert.deepEqual(json.choices.map((choice) => choice.message.content), ["choice-one", "choice-two"]);
+    assert.deepEqual(json.usage, { prompt_tokens: 21, completion_tokens: 5, total_tokens: 26 });
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.n, {
+      source: "n",
+      value: 2,
+      forwarded: false,
+      emulated: "local_fanout",
+      request_count: 2,
+      reason: "provider_unsupported_local_fanout",
+      actual_choice_count: 2,
+    });
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_native_fields, undefined);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.deepEqual(
+      messagesJson.data.filter((message) => message.direction === "output").map((message) => message.content),
+      ["choice-one", "choice-two"],
+    );
+  }, {
+    forwardChatNativeFields: false,
   });
 });
 
@@ -20636,6 +20710,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   const previousChatImageInputMode = process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   const previousChatAudioInputMode = process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   const previousChatFileInputMode = process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
+  const previousChatNEmulationMax = process.env.CODEXCOMPAT_CHAT_N_EMULATION_MAX;
   const previousUploadRetainPartData = process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
   delete process.env.CODEXCOMPAT_FORWARD_SERVICE_TIER;
   delete process.env.CODEXCOMPAT_FORWARD_STORED_CHAT_FIELDS;
@@ -20645,6 +20720,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
   delete process.env.CODEXCOMPAT_CHAT_IMAGE_INPUT_MODE;
   delete process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE;
   delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
+  delete process.env.CODEXCOMPAT_CHAT_N_EMULATION_MAX;
   delete process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
   try {
     const deepseekConfig = loadConfig({ providerBaseUrl: "https://api.deepseek.com" });
@@ -20656,6 +20732,7 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     assert.equal(deepseekConfig.chatImageInputMode, "text");
     assert.equal(deepseekConfig.chatAudioInputMode, "text");
     assert.equal(deepseekConfig.chatFileInputMode, "text");
+    assert.equal(deepseekConfig.chatNEmulationMax, 10);
     assert.equal(deepseekConfig.uploadRetainPartData, false);
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com", uploadRetainPartData: true }).uploadRetainPartData, true);
 
@@ -20687,6 +20764,9 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = "text";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.openai-compatible.test" }).chatFileInputMode, "text");
 
+    process.env.CODEXCOMPAT_CHAT_N_EMULATION_MAX = "3";
+    assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).chatNEmulationMax, 3);
+
     process.env.CODEXCOMPAT_STREAM_OPTION_FIELDS = "*";
     assert.equal(loadConfig({ providerBaseUrl: "https://api.deepseek.com" }).streamOptionFields, null);
 
@@ -20715,6 +20795,8 @@ test("loadConfig filters provider-specific Chat fields for DeepSeek providers by
     else process.env.CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE = previousChatAudioInputMode;
     if (previousChatFileInputMode === undefined) delete process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE;
     else process.env.CODEXCOMPAT_CHAT_FILE_INPUT_MODE = previousChatFileInputMode;
+    if (previousChatNEmulationMax === undefined) delete process.env.CODEXCOMPAT_CHAT_N_EMULATION_MAX;
+    else process.env.CODEXCOMPAT_CHAT_N_EMULATION_MAX = previousChatNEmulationMax;
     if (previousUploadRetainPartData === undefined) delete process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA;
     else process.env.CODEXCOMPAT_UPLOAD_RETAIN_PART_DATA = previousUploadRetainPartData;
   }
