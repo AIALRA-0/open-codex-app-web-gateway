@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Goal Reconfirmation and UI Smoke
+
+- Reconfirmed the active product goal is only the CodexApp web gateway:
+  1:1 CodexApp web deployment at `opencodexapp.aialra.online`, a universal
+  OpenAI Responses API / Chat Completions compatibility layer for DeepSeek and
+  other Chat providers, version control through
+  `AIALRA-0/open-codex-app-web-gateway.git`, deployment under
+  `/srv/aialra/apps`, long-running evaluation, and strict no-secret commits.
+- Discarded the uncommitted reader/literature-management prototype changes
+  from the working tree because they were not part of this goal. No commit,
+  push, or deployment was made for that abandoned direction.
+- Verified repository and deployment state:
+  - `git status --short`: clean before this audit entry was added.
+  - local HEAD: `8a0caa3`.
+  - `origin/main`: `8a0caa3be407b15151827825afec3cc3b081e037`.
+  - `aialra-opencodexapp-web.service`,
+    `aialra-opencodexapp-bridge.service`, and
+    `aialra-opencodexapp-app-server.service`: active.
+  - local and public `/health`: HTTP 200 `{"ok":true}`.
+  - local and public `/healthz`: HTTP 200 with
+    `service:"open-codex-responses-bridge"`,
+    `provider_base_url:"https://api.deepseek.com"`,
+    `default_model:"deepseek-v4-pro"`, and `has_provider_key:true`.
+- Verified the latest bridge-regression report:
+  - `output/bridge-regression-latest.json`: passed 108/108.
+  - average latency: 1293 ms; P95 latency: 3283 ms.
+  - token usage: 22,947 input, 1,998 output, 24,945 total.
+- Ran the public UI smoke against `https://opencodexapp.aialra.online`:
+  - command: `npm run smoke:ui -- --timeout-ms 180000 --output-dir output/playwright/goal-reset-ui-smoke`
+  - result: `ok:true`.
+  - covered: load/authentication, sidebar controls, plugins/automation/mobile
+    navigation, project dialog, browser file upload and verification, project
+    writable-root add/clear, new conversation prompt submission, completed-turn
+    copy/edit/branch controls, reload persistence, generated image artifact
+    display, saved-project create/reopen/cleanup, console errors, and
+    screenshot capture.
+  - console errors: none.
+  - screenshot:
+    `output/playwright/goal-reset-ui-smoke/ui-smoke-2026-06-16T22-06-29-368Z.png`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+  - `npm run secret-scan`: passed.
+
 ## 2026-06-16 Responses Multimodal Detail Validation
 
 - Rechecked the official OpenAI Responses create OpenAPI schema through the
