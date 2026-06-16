@@ -131,6 +131,21 @@ function annotateWebSearchResponse(response, context) {
   return response;
 }
 
+function annotateChatWebSearchCompletion(completion, context) {
+  if (!context?.results?.length || !Array.isArray(completion?.choices)) return completion;
+  for (const choice of completion.choices) {
+    const message = choice?.message;
+    if (!message || typeof message.content !== "string") continue;
+    const withSources = ensureSourceMarkers(message.content, context.results);
+    message.content = withSources.text;
+    message.annotations = [
+      ...(Array.isArray(message.annotations) ? message.annotations : []),
+      ...withSources.annotations,
+    ];
+  }
+  return completion;
+}
+
 function webSearchOutputItems(context, options = {}) {
   const includeSources = options.includeSources ?? context?.include_action_sources ?? false;
   return (context?.calls || []).map((call) => {
@@ -689,8 +704,10 @@ function decodeHtml(value) {
 
 module.exports = {
   WEB_SEARCH_TOOL_TYPES,
+  annotateChatWebSearchCompletion,
   annotateWebSearchResponse,
   attachWebSearchOutput,
+  canUseLocalWebSearch,
   injectWebSearchMessages,
   localWebSearchToolTypes,
   prepareWebSearchContext,

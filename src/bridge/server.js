@@ -142,8 +142,10 @@ const {
   stringifyContent,
 } = require("./translator");
 const {
+  annotateChatWebSearchCompletion,
   annotateWebSearchResponse,
   attachWebSearchOutput,
+  canUseLocalWebSearch,
   injectWebSearchMessages,
   localWebSearchToolTypes,
   prepareWebSearchContext,
@@ -4277,16 +4279,24 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const body = await readJson(req);
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);
   const localInputFiles = await prepareChatPassthroughInputFileContext(body, config, fileSearchStore);
+  const localWebSearch = await prepareChatPassthroughWebSearchContext(body, config);
   let compatibility = passthroughCompatibility;
   if (localInputFiles) {
     const nextCompatibility = isPlainObject(compatibility) ? { ...compatibility } : {};
     applyInputFilesToChat(upstreamBody, nextCompatibility, localInputFiles, config);
     compatibility = Object.keys(nextCompatibility).length ? nextCompatibility : null;
   }
+  if (localWebSearch) {
+    const nextCompatibility = isPlainObject(compatibility) ? { ...compatibility } : {};
+    applyLocalWebSearchToChat(upstreamBody, nextCompatibility, localWebSearch, config);
+    compatibility = Object.keys(nextCompatibility).length ? nextCompatibility : null;
+  }
   const upstream = await fetchProvider(config, config.chatCompletionsPath, upstreamBody, req.headers);
   const headers = proxyResponseHeaders(upstream);
   if (body.stream && upstream.ok && isEventStreamResponse(upstream)) {
-    await handleChatStreamPassthrough(res, upstream, headers, body, store, compatibility, config, req.headers);
+    await handleChatStreamPassthrough(res, upstream, headers, body, store, compatibility, config, req.headers, {
+      localWebSearch,
+    });
     return;
   }
 
@@ -4301,6 +4311,7 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   if (shouldInspectJson) {
     const text = await upstream.text();
     const json = parseJsonOrNull(text);
+    if (upstream.ok) annotateChatWebSearchCompletion(json, localWebSearch);
     const localModeration = upstream.ok ? attachLocalChatInlineModeration(json, body, config) : null;
     const attachedCompatibility = upstream.ok ? attachChatPassthroughCompatibility(json, body, compatibility) : false;
     if (upstream.ok && json?.id && body.store === true) {
@@ -4318,6 +4329,15 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
         model: json.model || body.model,
         service_tier: json.service_tier || body.service_tier,
         usage: json.usage,
+      });
+    }
+    if (upstream.ok) {
+      recordLocalHostedToolUsage(config, req, body, {
+        localWebSearch,
+      }, {
+        endpoint: "/v1/chat/completions",
+        created_at: json.created,
+        model: json.model || body.model,
       });
     }
     if ((localModeration || attachedCompatibility) && isPlainObject(json)) {
@@ -4341,6 +4361,34 @@ async function prepareChatPassthroughInputFileContext(body, config = {}, fileSea
   const mode = String(config.chatFileInputMode || "file").toLowerCase() === "text" ? "text" : "file";
   if (mode !== "text" || !Array.isArray(body?.messages)) return null;
   return await prepareInputFileContext({ input: body.messages }, config, fileSearchStore);
+}
+
+async function prepareChatPassthroughWebSearchContext(body, config = {}) {
+  if (
+    !isPlainObject(body)
+    || body.web_search_options === undefined
+    || config.forwardChatNativeFields !== false
+    || !canUseLocalWebSearch(config)
+  ) {
+    return null;
+  }
+  return await prepareWebSearchContext({
+    input: chatPassthroughWebSearchInput(body),
+    web_search_options: clone(body.web_search_options),
+    tools: [{
+      type: "web_search_preview",
+      web_search_options: clone(body.web_search_options),
+    }],
+  }, config);
+}
+
+function chatPassthroughWebSearchInput(body = {}) {
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (isPlainObject(message) && message.role === "user") return message.content ?? message;
+  }
+  return messages;
 }
 
 function chatPassthroughUpstreamBody(body, config) {
@@ -4388,6 +4436,9 @@ function chatPassthroughUpstreamBody(body, config) {
 
   const verbosity = normalizeChatPassthroughVerbosity(upstreamBody, config);
   if (verbosity) compatibility.verbosity = verbosity;
+
+  const webSearchOptions = normalizeChatPassthroughWebSearchOptions(upstreamBody, config);
+  if (webSearchOptions) compatibility.web_search_options = webSearchOptions;
 
   const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config);
   if (nativeFields) compatibility.chat_native_fields = nativeFields;
@@ -4500,6 +4551,27 @@ function chatPassthroughVerbosityInstruction(value) {
     return "Verbosity compatibility: answer with thorough detail. Include relevant context, caveats, and examples when useful.";
   }
   return null;
+}
+
+function normalizeChatPassthroughWebSearchOptions(upstreamBody, config = {}) {
+  if (
+    upstreamBody.web_search_options === undefined
+    || config.forwardChatNativeFields !== false
+    || !canUseLocalWebSearch(config)
+  ) {
+    return null;
+  }
+  const options = isPlainObject(upstreamBody.web_search_options) ? upstreamBody.web_search_options : {};
+  const searchContextSize = stringifyOptional(options.search_context_size || options.context_level);
+  const hasUserLocation = Object.prototype.hasOwnProperty.call(options, "user_location");
+  delete upstreamBody.web_search_options;
+  return {
+    source: "web_search_options",
+    forwarded: false,
+    reason: "provider_unsupported_local_web_search",
+    ...(searchContextSize ? { search_context_size: searchContextSize } : {}),
+    ...(hasUserLocation ? { user_location: "received" } : {}),
+  };
 }
 
 function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {
@@ -5048,7 +5120,17 @@ function attachChatPassthroughCompatibility(completion, request, compatibility) 
   return true;
 }
 
-async function handleChatStreamPassthrough(res, upstream, headers, request, store, compatibility = null, config = {}, incomingHeaders = {}) {
+async function handleChatStreamPassthrough(
+  res,
+  upstream,
+  headers,
+  request,
+  store,
+  compatibility = null,
+  config = {},
+  incomingHeaders = {},
+  contexts = {},
+) {
   const accumulator = createChatStreamAccumulator(request);
   res.writeHead(upstream.status, headers);
 
@@ -5064,6 +5146,7 @@ async function handleChatStreamPassthrough(res, upstream, headers, request, stor
 
     const completion = finalizeChatStreamCompletion(accumulator);
     if (completion?.id) {
+      annotateChatWebSearchCompletion(completion, contexts.localWebSearch);
       attachChatPassthroughCompatibility(completion, request, compatibility);
       if (request.store === true) {
         store.put(completion.id, {
@@ -5079,6 +5162,13 @@ async function handleChatStreamPassthrough(res, upstream, headers, request, stor
         model: completion.model || request.model,
         service_tier: completion.service_tier || request.service_tier,
         usage: completion.usage,
+      });
+      recordLocalHostedToolUsage(config, { headers: incomingHeaders }, request, {
+        localWebSearch: contexts.localWebSearch,
+      }, {
+        endpoint: "/v1/chat/completions",
+        created_at: completion.created,
+        model: completion.model || request.model,
       });
     }
   } finally {

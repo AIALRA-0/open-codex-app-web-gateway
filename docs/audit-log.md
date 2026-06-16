@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-16 Direct Chat Web Search Options Compatibility
+
+- Rechecked the official OpenAI Chat Completions OpenAPI schema through the
+  OpenAI developer docs MCP. The Chat create operation documents
+  `web_search_options` as the Chat web-search request surface and says the web
+  search tool searches relevant web results for use in a response.
+- Extended DeepSeek-compatible direct `/v1/chat/completions` passthrough so
+  unsupported `web_search_options` is no longer only listed under the generic
+  Chat-native field filter when local web search is enabled:
+  - the upstream DeepSeek request removes `web_search_options`;
+  - the bridge builds a local `web_search_preview` context from the latest user
+    message, reusing the existing bounded local web-search adapter;
+  - search result context is injected into the upstream Chat request as a
+    system message;
+  - non-streaming Chat completion messages are annotated with OpenAI-compatible
+    `url_citation` entries when source markers are present, or receive an
+    appended source list when the model did not cite sources itself;
+  - streaming stored Chat completions are annotated before local persistence;
+  - compatibility metadata records
+    `metadata.compatibility.chat_passthrough.web_search_options` and
+    `metadata.compatibility.chat_passthrough.local_web_search`;
+  - local organization usage accounting records direct Chat web-search calls
+    through the existing `web_search_calls` ledger when usage storage is
+    configured.
+- Preserved provider-aware behavior: capable providers can still receive native
+  `web_search_options`; DeepSeek-compatible providers use local emulation when
+  local search is enabled; if local web search is disabled, the field remains
+  in the generic filtered Chat-native field list.
+- Updated the compatibility matrix to move `web_search_options` out of the
+  plain filtered-field row and document the direct Chat local-search fallback.
+- Added a regression proving direct `/v1/chat/completions`:
+  - strips `web_search_options` from the provider request;
+  - injects local search context into upstream Chat messages;
+  - disables DeepSeek thinking for local web search;
+  - annotates returned Chat messages with `url_citation`;
+  - stores/replays the original caller input message;
+  - excludes `web_search_options` from the generic filtered field list when the
+    local compatibility path handles it.
+- Validation:
+  - `node --check src/bridge/web_search.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "web_search_options|normalizes OpenAI Chat fields|local web_search"`:
+    passed 205/205.
+  - `npm test`: passed 249/249.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1636 ms, P95 latency 1699 ms, and 116 total
+    tokens.
+  - Live localhost direct `/v1/chat/completions` smoke with
+    `web_search_options.search_context_size:"low"` against `deepseek-v4-pro`
+    returned HTTP 200, visible content `ok-chat-web-live [1].`, a
+    `url_citation` for `https://en.wikipedia.org/wiki/OpenAI`, and metadata
+    showing `web_search_options.forwarded:false`,
+    `reason:"provider_unsupported_local_web_search"`, local provider
+    `wikipedia`, `result_count:5`, and
+    `deepseek_thinking:"disabled_for_local_web_search"`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Verbosity Prompt Instruction Compatibility
 
 - Rechecked the official OpenAI Chat Completions OpenAPI schema through the

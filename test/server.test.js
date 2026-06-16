@@ -18045,6 +18045,91 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     forwardStoredChatFields: false,
     forwardChatNativeFields: false,
     forwardServiceTier: false,
+    webSearchProvider: "disabled",
+  });
+});
+
+test("POST /v1/chat/completions emulates web_search_options locally for DeepSeek-compatible providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.web_search_options, undefined);
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user", "system"]);
+    assert.equal(call.body.messages[0].content, "Search for direct Chat bridge result and answer direct-chat-web-ok [1].");
+    assert.match(call.body.messages[1].content, /Local Responses web_search compatibility results follow/);
+    assert.match(call.body.messages[1].content, /Provider: static/);
+    assert.match(call.body.messages[1].content, /Direct Chat Search Result/);
+    assert.match(call.body.messages[1].content, /direct Chat web_search_options fixture/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_direct_chat_web_search",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "direct-chat-web-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 31, completion_tokens: 5, total_tokens: 36 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "direct-chat-web-search" },
+        messages: [{ role: "user", content: "Search for direct Chat bridge result and answer direct-chat-web-ok [1]." }],
+        web_search_options: {
+          search_context_size: "low",
+          user_location: { type: "approximate", country: "US" },
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.choices[0].message.content, "direct-chat-web-ok [1]");
+    assert.equal(json.choices[0].message.annotations.length, 1);
+    const markerStart = json.choices[0].message.content.indexOf("[1]");
+    assert.deepEqual(json.choices[0].message.annotations[0], {
+      type: "url_citation",
+      start_index: markerStart,
+      end_index: markerStart + 3,
+      url: "https://example.test/direct-chat-search",
+      title: "Direct Chat Search Result",
+    });
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.web_search_options, {
+      source: "web_search_options",
+      forwarded: false,
+      reason: "provider_unsupported_local_web_search",
+      search_context_size: "low",
+      user_location: "received",
+    });
+    assert.equal(json.metadata.compatibility.chat_passthrough.local_web_search.provider, "static");
+    assert.equal(json.metadata.compatibility.chat_passthrough.local_web_search.result_count, 1);
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.local_web_search.tool_types, ["web_search_preview"]);
+    assert.equal(
+      json.metadata.compatibility.chat_passthrough.local_web_search.deepseek_thinking,
+      "disabled_for_local_web_search",
+    );
+    assert.equal(json.metadata.compatibility.chat_passthrough.chat_native_fields, undefined);
+    assert.equal(requests.length, 1);
+
+    const messages = await fetch(`${baseUrl}/v1/chat/completions/${json.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
+    assert.equal(inputMessage.content, "Search for direct Chat bridge result and answer direct-chat-web-ok [1].");
+  }, {
+    forwardChatNativeFields: false,
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Direct Chat Search Result",
+      url: "https://example.test/direct-chat-search",
+      snippet: "The direct Chat web_search_options fixture found this result.",
+    }],
   });
 });
 
