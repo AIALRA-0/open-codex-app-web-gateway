@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-16 Official Choice Count Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Chat Completions and legacy Completions both define request `n` as a nullable
+  integer with minimum `1`, maximum `128`, and default `1`.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now validates the Chat-native `n` alias before
+    Responses-to-Chat translation.
+  - `POST /v1/chat/completions` now validates direct Chat `n` before provider
+    passthrough, local DeepSeek `n>1` fan-out, or stored Chat handling.
+  - `POST /v1/completions` now validates legacy Completions `n` before the
+    prompt-to-Chat compatibility path.
+  - Non-integer values and values outside `1..128` now return
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"n"` locally with no upstream provider call.
+- Preserved existing compatibility behavior for valid values:
+  - provider-supported profiles can still forward `n`;
+  - DeepSeek-compatible direct Chat requests with native field forwarding
+    disabled still record `n:1` as the single-choice default;
+  - valid `n>1` requests still use bounded non-streaming or streaming local
+    fan-out through `CODEXCOMPAT_CHAT_N_EMULATION_MAX`.
+- Added regression coverage proving invalid zero, out-of-range, fractional,
+  string, array, and object values fail locally with zero upstream calls on
+  Responses, direct Chat, and legacy Completions; valid `n:128` still reaches
+  the existing mock upstream path unchanged.
+- Updated the compatibility matrix and evaluation plan so choice-count parity
+  tracks official request-contract validation as well as DeepSeek local fan-out
+  behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "validates n|emulates n choices|streams n choices|maps Chat-native aliases|maps legacy prompts|normalizes OpenAI Chat fields"`:
+    passed 279/279; the current Node test runner executed both selected test
+    files except unrelated cases filtered by the name pattern.
+  - `npm test`: passed 283/283.
+  - `git diff --check`: passed.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `n` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses`,
+    `/v1/chat/completions`, and `/v1/completions` all returned HTTP 400 with
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"n"` when `n:129` was sent.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 5.4G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Parallel Tool Calls Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

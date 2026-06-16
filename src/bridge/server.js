@@ -208,6 +208,8 @@ const OPENAI_TOP_P_MAX = 1;
 const OPENAI_PENALTY_MIN = -2;
 const OPENAI_PENALTY_MAX = 2;
 const OPENAI_STOP_MAX_SEQUENCES = 4;
+const OPENAI_N_MIN = 1;
+const OPENAI_N_MAX = 128;
 const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
 const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
@@ -813,6 +815,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const stopError = validateOpenAIStopSequences(request);
   if (stopError) {
     sendError(res, 400, stopError.message, stopError);
+    return;
+  }
+  const choiceCountError = validateOpenAIChoiceCount(request);
+  if (choiceCountError) {
+    sendError(res, 400, choiceCountError.message, choiceCountError);
     return;
   }
   const parallelToolCallsError = validateOpenAIParallelToolCalls(request);
@@ -2367,6 +2374,14 @@ function validateOpenAIStopSequences(body = {}) {
 
 function validateOpenAIParallelToolCalls(body = {}) {
   return validateOpenAIBooleanParameter(body, "parallel_tool_calls");
+}
+
+function validateOpenAIChoiceCount(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "n") || body.n == null) return null;
+  if (!Number.isInteger(body.n) || body.n < OPENAI_N_MIN || body.n > OPENAI_N_MAX) {
+    return requestValidationError(`n must be an integer between ${OPENAI_N_MIN} and ${OPENAI_N_MAX}`, "n");
+  }
+  return null;
 }
 
 function validateOpenAILogitBias(body = {}) {
@@ -4659,6 +4674,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, stopError.message, stopError);
     return;
   }
+  const choiceCountError = validateOpenAIChoiceCount(body);
+  if (choiceCountError) {
+    sendError(res, 400, choiceCountError.message, choiceCountError);
+    return;
+  }
   const parallelToolCallsError = validateOpenAIParallelToolCalls(body);
   if (parallelToolCallsError) {
     sendError(res, 400, parallelToolCallsError.message, parallelToolCallsError);
@@ -6068,6 +6088,11 @@ function parseJsonOrNull(text) {
 
 async function handleLegacyCompletions(req, res, config) {
   const request = await readJson(req);
+  const choiceCountError = validateOpenAIChoiceCount(request);
+  if (choiceCountError) {
+    sendError(res, 400, choiceCountError.message, choiceCountError);
+    return;
+  }
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
