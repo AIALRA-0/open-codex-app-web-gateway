@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-16 Official Reasoning Effort Validation
+
+- Rechecked the official OpenAI create request surface through the OpenAI
+  developer docs MCP and official OpenAPI endpoint metadata:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  The current request enum for reasoning effort is `none`, `minimal`, `low`,
+  `medium`, `high`, and `xhigh`; provider-specific aliases such as DeepSeek
+  `max` are not valid OpenAI-compatible request values.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now validates `reasoning` as an object when present
+    and `reasoning.effort` against the official enum when supplied.
+  - `POST /v1/chat/completions` now validates top-level `reasoning_effort`,
+    validates the compatibility `reasoning` object shape when present, and
+    validates `reasoning.effort` against the same enum.
+  - Existing DeepSeek compatibility mapping remains unchanged for valid OpenAI
+    values: `none` disables DeepSeek thinking, `minimal`/`low`/`medium` map to
+    `high`, and `xhigh` maps to DeepSeek `max`.
+- Added regression coverage proving invalid Responses reasoning shapes and
+  invalid direct Chat `reasoning_effort` / `reasoning.effort` values fail
+  locally with zero upstream calls, while valid `xhigh` values still reach the
+  existing DeepSeek-compatible mapping path.
+- Updated the compatibility matrix and evaluation plan so reasoning parity
+  tracks request-contract validation as well as provider-specific mapping.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "reasoning_effort|reasoning object|reasoning effort|normalizes OpenAI Chat fields|reasoning.effort"`:
+    passed 274/274; the current Node test runner executed both selected test
+    files except unrelated cases filtered by the name pattern.
+  - `npm test`: passed 278/278.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public reasoning-effort smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses request used `reasoning.effort:"turbo"` and returned
+    `param:"reasoning.effort"`, while the Chat request used DeepSeek-only
+    `reasoning_effort:"max"` and returned `param:"reasoning_effort"`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` remained tight but usable at roughly 6.0G free
+  after tests and smoke checks.
+
 ## 2026-06-16 Official Response Format Validation
 
 - Rechecked the official OpenAI Chat Completions and Responses create request

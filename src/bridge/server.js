@@ -212,6 +212,7 @@ const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
 const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
 const OPENAI_RESPONSE_FORMAT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
@@ -822,6 +823,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const textError = validateOpenAIResponsesText(request);
   if (textError) {
     sendError(res, 400, textError.message, textError);
+    return;
+  }
+  const reasoningError = validateOpenAIResponsesReasoning(request);
+  if (reasoningError) {
+    sendError(res, 400, reasoningError.message, reasoningError);
     return;
   }
   const serviceTierError = validateOpenAIServiceTier(request);
@@ -2395,6 +2401,36 @@ function validateOpenAIResponsesText(body = {}) {
 function validateOpenAIChatResponseFormat(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "response_format") || body.response_format == null) return null;
   return validateOpenAIResponseFormatObject(body.response_format, "response_format", { chatResponseFormat: true });
+}
+
+function validateOpenAIResponsesReasoning(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "reasoning") || body.reasoning == null) return null;
+  if (!isPlainObject(body.reasoning)) {
+    return requestValidationError("reasoning must be an object", "reasoning");
+  }
+  return validateOpenAIReasoningEffort(body.reasoning, "reasoning.effort");
+}
+
+function validateOpenAIChatReasoning(body = {}) {
+  const topLevelError = validateOpenAIReasoningEffort(body, "reasoning_effort");
+  if (topLevelError) return topLevelError;
+  if (!Object.prototype.hasOwnProperty.call(body, "reasoning") || body.reasoning == null) return null;
+  if (!isPlainObject(body.reasoning)) {
+    return requestValidationError("reasoning must be an object", "reasoning");
+  }
+  return validateOpenAIReasoningEffort(body.reasoning, "reasoning.effort");
+}
+
+function validateOpenAIReasoningEffort(container = {}, param) {
+  const key = param.split(".").at(-1);
+  if (!Object.prototype.hasOwnProperty.call(container, key) || container[key] == null) return null;
+  if (typeof container[key] !== "string" || !OPENAI_REASONING_EFFORT_VALUES.includes(container[key])) {
+    return requestValidationError(
+      `${param} must be one of: ${OPENAI_REASONING_EFFORT_VALUES.join(", ")}`,
+      param,
+    );
+  }
+  return null;
 }
 
 function validateOpenAIResponseFormatObject(format, param, options = {}) {
@@ -4614,6 +4650,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const responseFormatError = validateOpenAIChatResponseFormat(body);
   if (responseFormatError) {
     sendError(res, 400, responseFormatError.message, responseFormatError);
+    return;
+  }
+  const reasoningError = validateOpenAIChatReasoning(body);
+  if (reasoningError) {
+    sendError(res, 400, reasoningError.message, reasoningError);
     return;
   }
   const serviceTierError = validateOpenAIServiceTier(body);

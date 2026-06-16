@@ -627,6 +627,87 @@ test("POST /v1/responses validates text.format response formats before provider 
   });
 });
 
+test("POST /v1/responses validates reasoning effort before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning_effort, "max");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_reasoning_effort_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "reasoning effort ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        reasoning: "high",
+        error: { message: "reasoning must be an object", param: "reasoning" },
+      },
+      {
+        reasoning: { effort: "max" },
+        error: {
+          message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning.effort",
+        },
+      },
+      {
+        reasoning: { effort: "" },
+        error: {
+          message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning.effort",
+        },
+      },
+      {
+        reasoning: { effort: 1 },
+        error: {
+          message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning.effort",
+        },
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check reasoning effort validation.",
+          reasoning: invalidCase.reasoning,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.error.message,
+          type: "invalid_request_error",
+          param: invalidCase.error.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check reasoning effort boundary.",
+        reasoning: { effort: "xhigh" },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "reasoning effort ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps reasoning effort none to DeepSeek non-thinking mode", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.reasoning_effort, undefined);
@@ -19151,6 +19232,103 @@ test("POST /v1/chat/completions validates response_format before provider calls"
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat response format ok");
     assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates reasoning effort before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.reasoning_effort, "max");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_reasoning_effort_boundary",
+      object: "chat.completion",
+      created: 1700000307,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat reasoning effort ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { reasoning_effort: "max" },
+        error: {
+          message: "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning_effort",
+        },
+      },
+      {
+        body: { reasoning_effort: "HIGH" },
+        error: {
+          message: "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning_effort",
+        },
+      },
+      {
+        body: { reasoning_effort: 1 },
+        error: {
+          message: "reasoning_effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning_effort",
+        },
+      },
+      {
+        body: { reasoning: "high" },
+        error: { message: "reasoning must be an object", param: "reasoning" },
+      },
+      {
+        body: { reasoning: { effort: "max" } },
+        error: {
+          message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning.effort",
+        },
+      },
+      {
+        body: { reasoning: { effort: "" } },
+        error: {
+          message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
+          param: "reasoning.effort",
+        },
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.error.message,
+          type: "invalid_request_error",
+          param: invalidCase.error.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        reasoning_effort: "xhigh",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat reasoning effort ok");
+    assert.equal(requests.length, 1);
+  }, {
+    deepseekReasoningEffortCompat: true,
   });
 });
 

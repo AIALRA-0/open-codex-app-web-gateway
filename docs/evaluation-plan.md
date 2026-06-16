@@ -471,7 +471,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,
   mapping OpenAI Chat `reasoning_effort` values to DeepSeek
-  `reasoning_effort` / `thinking`,
+  `reasoning_effort` / `thinking` after validating the OpenAI
+  `none` / `minimal` / `low` / `medium` / `high` / `xhigh` enum before
+  provider calls,
   filtering OpenAI Chat custom tools for function-only providers while
   preserving function tools and auditing incompatible `tool_choice` values,
   disabling DeepSeek thinking for direct Chat function-tool `tool_choice`
@@ -593,6 +595,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   stores, and mounted file resources.
 - Responses compatibility requests that include Chat-native `stop` sequences validate the official string-or-up-to-4-strings shape locally, forward valid values to upstream Chat providers, and verify the stop marker is omitted from visible output.
 - Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-number bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
+- Responses and direct Chat requests that include `reasoning.effort`,
+  direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
+  the current OpenAI reasoning-effort enum locally before provider calls; valid
+  OpenAI values still reach the existing DeepSeek `reasoning_effort` /
+  `thinking` compatibility mapper, while provider-only aliases such as
+  DeepSeek `max` fail at the OpenAI-compatible boundary.
 - Legacy `/v1/completions` requests that include `logit_bias` use the same local object/value contract validation before non-streaming or streaming Chat-backed execution, with regression coverage for zero upstream calls on invalid values and boundary passthrough for valid values.
 - Responses and direct Chat requests that include Chat-native `verbosity` validate the official `low` / `medium` / `high` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, empty strings, and non-string values producing zero upstream calls while valid values still feed the provider-aware passthrough or prompt-instruction compatibility path.
 - Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
