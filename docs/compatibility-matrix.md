@@ -766,7 +766,7 @@ Chat-only providers.
 | `POST /v1/conversations/{conversation_id}` | Implemented locally | Updates local conversation `metadata`; requires official string Metadata and rejects empty bodies, `metadata:null`, and unsupported fields before storage |
 | `DELETE /v1/conversations/{conversation_id}` | Implemented locally | Deletes the local conversation and its items |
 | `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
-| `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends one item, `{item}`, or `{items:[...]}` to the local conversation |
+| `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends official `{items:[...]}` payloads to the local conversation, validates `items` as an array with the official 20-item limit, and keeps legacy local extensions for one raw item object or `{item}` |
 | `GET /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Retrieves a local conversation item; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
 | `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Deletes a local conversation item |
 

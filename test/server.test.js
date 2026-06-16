@@ -16529,6 +16529,90 @@ test("local Conversations API validates metadata and request contracts", async (
     assert.match(conversation.id, /^conv_/);
     assert.deepEqual(conversation.metadata, {});
 
+    const itemCreateCases = [
+      {
+        name: "item-create-body-shape",
+        body: [],
+        message: "conversation items request body must be a JSON object",
+        param: null,
+      },
+      {
+        name: "item-create-missing-items",
+        body: { metadata: { topic: "demo" } },
+        message: "items is required",
+        param: "items",
+      },
+      {
+        name: "item-create-items-null",
+        body: { items: null },
+        message: "items must be an array",
+        param: "items",
+      },
+      {
+        name: "item-create-items-shape",
+        body: { items: { type: "message", role: "user", content: "hello" } },
+        message: "items must be an array",
+        param: "items",
+      },
+      {
+        name: "item-create-items-max",
+        body: {
+          items: Array.from({ length: 21 }, (_, index) => ({
+            type: "message",
+            role: "user",
+            content: `item ${index}`,
+          })),
+        },
+        message: "items must contain at most 20 items",
+        param: "items",
+      },
+      {
+        name: "item-create-local-item-extension-shape",
+        body: { item: [{ type: "message", role: "user", content: "hello" }] },
+        message: "item must be a conversation item object or string",
+        param: "item",
+      },
+    ];
+
+    for (const testCase of itemCreateCases) {
+      const response = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.name);
+      const json = await response.json();
+      assert.equal(json.error.message, testCase.message, testCase.name);
+      assert.equal(json.error.param, testCase.param, testCase.name);
+    }
+
+    const officialItems = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [
+          { type: "message", role: "user", content: "official item 1" },
+          { type: "message", role: "user", content: "official item 2" },
+        ],
+      }),
+    });
+    assert.equal(officialItems.status, 200);
+    const officialItemsJson = await officialItems.json();
+    assert.equal(officialItemsJson.object, "list");
+    assert.equal(officialItemsJson.data.length, 2);
+    assert.equal(officialItemsJson.data[0].content, "official item 1");
+
+    const localItemExtension = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ item: "legacy item extension" }),
+    });
+    assert.equal(localItemExtension.status, 200);
+    const localItemExtensionJson = await localItemExtension.json();
+    assert.equal(localItemExtensionJson.type, "message");
+    assert.equal(localItemExtensionJson.role, "user");
+    assert.equal(localItemExtensionJson.content, "legacy item extension");
+
     const updateCases = [
       {
         name: "update-body-shape",

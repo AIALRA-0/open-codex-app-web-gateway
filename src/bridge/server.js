@@ -202,6 +202,7 @@ const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS = 3600;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS = 2592000;
 const OPENAI_CONVERSATION_CREATE_MAX_ITEMS = 20;
+const OPENAI_CONVERSATION_ITEMS_CREATE_MAX_ITEMS = 20;
 const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
 const OPENAI_LEGACY_LOGPROBS_MIN = 0;
@@ -13779,17 +13780,58 @@ function handleConversationDelete(res, conversationStore, conversationId) {
 
 async function handleConversationItemsCreate(req, res, conversationStore, conversationId) {
   const body = await readJson(req);
-  const inputItems = Object.prototype.hasOwnProperty.call(body, "items")
-    ? body.items
-    : Object.prototype.hasOwnProperty.call(body, "item")
-      ? body.item
-      : body;
+  const validationError = validateConversationItemsCreateRequest(body);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
+    return;
+  }
+  const inputItems = getConversationItemsCreateInput(body);
   const items = conversationStore.appendItems(conversationId, inputItems);
   if (!items) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
     return;
   }
   sendJson(res, 200, Array.isArray(inputItems) ? paginateList(items, new URL("http://local/?limit=100")) : items[0]);
+}
+
+function validateConversationItemsCreateRequest(body = {}) {
+  if (!isPlainObject(body)) {
+    return requestValidationError("conversation items request body must be a JSON object", null);
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "items")) {
+    if (!Array.isArray(body.items)) {
+      return requestValidationError("items must be an array", "items");
+    }
+    if (body.items.length > OPENAI_CONVERSATION_ITEMS_CREATE_MAX_ITEMS) {
+      return requestValidationError(
+        `items must contain at most ${OPENAI_CONVERSATION_ITEMS_CREATE_MAX_ITEMS} items`,
+        "items",
+      );
+    }
+    return null;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "item")) {
+    if (!isValidLocalConversationItemExtension(body.item)) {
+      return requestValidationError("item must be a conversation item object or string", "item");
+    }
+    return null;
+  }
+  if (!isValidLocalConversationItemExtension(body)) {
+    return requestValidationError("items is required", "items");
+  }
+  return null;
+}
+
+function getConversationItemsCreateInput(body) {
+  if (Object.prototype.hasOwnProperty.call(body, "items")) return body.items;
+  if (Object.prototype.hasOwnProperty.call(body, "item")) return body.item;
+  return body;
+}
+
+function isValidLocalConversationItemExtension(value) {
+  if (typeof value === "string") return true;
+  if (!isPlainObject(value)) return false;
+  return ["type", "role", "content", "id", "call_id"].some((field) => Object.prototype.hasOwnProperty.call(value, field));
 }
 
 function handleConversationItemsList(res, conversationStore, conversationId, url) {

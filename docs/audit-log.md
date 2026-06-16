@@ -1,5 +1,41 @@
 # Audit Log
 
+## 2026-06-17 Conversation Items Create Contract Tightening
+
+- Rechecked the official OpenAI
+  `POST /v1/conversations/{conversation_id}/items` schema through the OpenAI
+  developer-docs MCP and the official `openai/openai-openapi` schema. Current
+  create-items requires an object body with `items` as an array and allows up
+  to 20 items per request.
+- Tightened local Conversation item creation before storage:
+  - official `{items:[...]}` payloads now reject non-array `items` and more
+    than 20 items;
+  - non-object request bodies are rejected;
+  - legacy local extensions remain available for a single raw item object or
+    `{item}`, but the item must look like a Conversation item or be a string.
+- Updated the compatibility matrix to distinguish the official create-items
+  payload from local legacy extensions.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'local Conversations API'`:
+    passed 289/289 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 340/340.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public `healthz` returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Local and public `POST /v1/conversations/{id}/items` smoke returned HTTP
+    400 with `param:"items"` for non-array `items`, and HTTP 200 list output
+    for official `{items:[...]}` payloads.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversations Contract Tightening
 
 - Rechecked the official OpenAI Conversations create/update schema through the
