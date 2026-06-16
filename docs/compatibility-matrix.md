@@ -1528,6 +1528,13 @@ function-tool proxy calls:
   `tools/list` pagination cursors up to local caps, preserves returned
   `annotations`, `description`, `name`, and `input_schema`, and filters the
   imported list by `allowed_tools`;
+- when `defer_loading:true` and a matching prior `mcp_list_tools` item is
+  supplied in `input` or via `previous_response_id`, reuses those cached tool
+  definitions without issuing another remote `tools/list`, preserves
+  `annotations`, `description`, `name`, and `input_schema`, exposes the loaded
+  remote tools as Chat function tools, and records
+  `metadata.compatibility.local_mcp.input_list_tools_loaded_count` plus an
+  `input_mcp_list_tools_*` boundary;
 - when a non-streaming, streaming, or active background request has imported
   remote tools, exposes those remote tools to the upstream Chat provider as
   generated function tools. For
@@ -1568,11 +1575,14 @@ function-tool proxy calls:
   request only, carries returned `mcp-session-id` values on later remote list
   and call requests, and enforces timeout, response-byte, maximum-tool, call
   round, and tool-output caps;
-- preserves caller-supplied MCP input items as Chat-visible context so a model
-  can reason over previous MCP list/call/approval state;
+- preserves caller-supplied MCP input items as adapter-managed Chat-visible
+  context so a model can reason over previous MCP list/call/approval state,
+  while skipping the generic raw JSON fallback for those protocol items when the
+  local MCP adapter is active;
 - consumes one shared `max_tool_calls` budget slot per emitted local
-  `mcp_list_tools` item and per executed remote `mcp_call`, and records
-  skipped local MCP work in
+  `mcp_list_tools` item and per executed remote `mcp_call`; reusing an
+  input-provided deferred `mcp_list_tools` item does not consume a new list
+  budget slot. The bridge records skipped local MCP work in
   `metadata.compatibility.local_tool_budget`;
 - records `metadata.compatibility.local_mcp` counts for remote servers,
   connectors, imported tools, remote import attempts/successes/failures,
@@ -1609,6 +1619,10 @@ OAuth consent flows, persist per-request MCP authorization after background
 restart, or persist hosted connector approval state. Full parity requires
 connector credential sidecars, restart-resumable connector credentials,
 stronger egress/secret policies, and broader multi-turn call replay tests.
+Input `mcp_list_tools` reuse is currently scoped to deferred remote MCP servers;
+non-deferred remote servers still perform a fresh local `initialize` /
+`tools/list` import so existing session-bound approval flows retain their
+session headers.
 
 ## Image Generation
 

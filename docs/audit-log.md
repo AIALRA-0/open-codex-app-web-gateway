@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-16 Deferred MCP Input List Loading
+
+- Checked the official OpenAI MCP/connectors guide through the OpenAI developer
+  docs MCP. The guide documents `tools:[{type:"mcp"}]`,
+  `server_url`/`connector_id`, `allowed_tools`, approval request/response
+  items, and `defer_loading:true` for MCP servers used with tool search.
+- Closed a deferred MCP continuation gap for Chat-only providers:
+  - when a request has `tools:[{type:"mcp",defer_loading:true,...}]` and a
+    matching `mcp_list_tools` item appears in current `input` or the previous
+    response output, the bridge now reuses that cached list instead of issuing a
+    fresh remote `tools/list`;
+  - cached MCP tool definitions preserve `annotations`, `description`, `name`,
+    and `input_schema`, and are exposed upstream as generated Chat function
+    tools for remote `server_url` MCP servers;
+  - auto-approved generated Chat tool calls are mapped to remote MCP
+    `tools/call` and public Responses `mcp_call` output items;
+  - compatibility metadata records
+    `local_mcp.input_list_tools_loaded_count` and
+    `boundary=input_mcp_list_tools_and_call_execution` for the executed path.
+- Kept non-deferred remote MCP behavior unchanged so existing
+  `initialize`/`tools/list` session headers continue to support approval flows.
+- Prevented raw MCP protocol item leakage by skipping `mcp_list_tools`,
+  `mcp_call`, `mcp_approval_request`, and `mcp_approval_response` in the generic
+  Responses-input-to-Chat fallback when the local MCP adapter is active; the
+  MCP adapter prompt remains responsible for surfacing the bounded context.
+- Added mock-provider regressions for deferred input-loaded `mcp_list_tools`
+  remote calls and translator skipping of local MCP protocol input items.
+- Validation:
+  - `node --check src/bridge/local_mcp.js src/bridge/translator.js test/server.test.js test/translator.test.js`:
+    passed.
+  - `node --test test/translator.test.js --test-name-pattern 'MCP protocol input items'`:
+    passed 41/41 tests.
+  - `node --test test/server.test.js --test-name-pattern 'reuses input mcp_list_tools|requests approval then executes approved remote MCP call|streams approved remote MCP approval response execution|background executes approved remote MCP approval response|handles denied remote MCP approval'`:
+    passed 192/192 tests.
+  - `git diff --check`: passed.
+  - `npm test`: passed 236/236 tests.
+  - `npm run secret-scan`: passed.
+  - exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: blocked by upstream DeepSeek `402 Insufficient
+    Balance` on both live cases; mock-provider protocol and bridge regressions
+    remain green.
+
 ## 2026-06-16 Tool Search Input-Loaded Tools
 
 - Continued the local `tool_search` parity work against the official OpenAI

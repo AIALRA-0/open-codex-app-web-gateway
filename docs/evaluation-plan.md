@@ -139,7 +139,11 @@ Remote MCP coverage verifies non-streaming, streaming, and active background
 remote `tools/call` execution through generated Chat function tools. The
 background call case also forces the original MCP tool name through
 `tool_choice` so the harness catches regressions in generated-function-name
-mapping.
+mapping. Mock-provider coverage also verifies the official deferred-loading
+continuation shape where a request supplies a matching `mcp_list_tools` item in
+`input`: the bridge skips a new remote `tools/list`, preserves the cached
+schema as Chat function parameters, executes the remote `tools/call`, and avoids
+leaking raw MCP protocol JSON into Chat messages.
 Tool-search coverage verifies the hosted Responses function/namespace
 `defer_loading` flow against a mock Chat provider: the first upstream request
 sees only the generated search function and namespace summary, the model's
@@ -172,6 +176,7 @@ npm run eval:protocol
 npm run eval:bridge -- --timeout-ms 45000
 node --test test/server.test.js --test-name-pattern 'tool_search'
 node --test test/server.test.js --test-name-pattern 'additional_tools'
+node --test test/server.test.js --test-name-pattern 'mcp_list_tools'
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-conversation-lifecycle --timeout-ms 90000 --verbose

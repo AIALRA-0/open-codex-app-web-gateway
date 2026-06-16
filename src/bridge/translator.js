@@ -253,6 +253,9 @@ function inputItemToChatMessages(item, options = {}) {
   if (item.type === "tool_search_call" || item.type === "tool_search_output" || item.type === "additional_tools") {
     return [];
   }
+  if (isLocalMcpContextItem(item) && new Set(options.localHostedTools || []).has("mcp")) {
+    return [];
+  }
 
   if (item.type === "message" || item.role) {
     const role = normalizeChatRole(item.role, options);
@@ -315,6 +318,13 @@ function inputItemToChatMessages(item, options = {}) {
   }
 
   return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+function isLocalMcpContextItem(item) {
+  return item?.type === "mcp_list_tools"
+    || item?.type === "mcp_call"
+    || item?.type === "mcp_approval_request"
+    || item?.type === "mcp_approval_response";
 }
 
 function decodeCompactionItem(item, options = {}) {

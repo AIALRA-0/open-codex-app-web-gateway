@@ -385,6 +385,38 @@ test("skips local tool-definition input items that are handled by the bridge", (
   assert.deepEqual(messages, [{ role: "user", content: "Use the loaded tool." }]);
 });
 
+test("skips MCP protocol input items when the local MCP adapter is active", () => {
+  const messages = responseInputToChatMessages([
+    {
+      type: "mcp_list_tools",
+      server_label: "dmcp",
+      tools: [{ name: "roll", description: "Roll dice" }],
+    },
+    {
+      type: "mcp_call",
+      server_label: "dmcp",
+      name: "roll",
+      arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+      output: "4",
+    },
+    {
+      type: "mcp_approval_request",
+      id: "mcpr_cached",
+      server_label: "dmcp",
+      name: "roll",
+      arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+    },
+    {
+      type: "mcp_approval_response",
+      approval_request_id: "mcpr_cached",
+      approve: true,
+    },
+    { role: "user", content: "Use the cached MCP context." },
+  ], { localHostedTools: ["mcp"] });
+
+  assert.deepEqual(messages, [{ role: "user", content: "Use the cached MCP context." }]);
+});
+
 test("maps computer_call_output input to readable chat context", () => {
   const messages = responseInputToChatMessages([{
     type: "computer_call_output",
