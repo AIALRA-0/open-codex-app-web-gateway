@@ -201,6 +201,7 @@ const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS = 3600;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS = 2592000;
+const OPENAI_CONVERSATION_CREATE_MAX_ITEMS = 20;
 const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
 const OPENAI_LEGACY_LOGPROBS_MIN = 0;
@@ -13687,6 +13688,11 @@ function handleChatCompletionMessages(res, store, completionId, url) {
 
 async function handleConversationCreate(req, res, conversationStore) {
   const body = await readJson(req);
+  const validationError = validateConversationCreateRequest(body);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
+    return;
+  }
   sendJson(res, 200, conversationStore.create(body));
 }
 
@@ -13706,14 +13712,9 @@ function handleConversationGet(res, conversationStore, conversationId) {
 
 async function handleConversationUpdate(req, res, conversationStore, conversationId) {
   const body = await readJson(req);
-  const keys = Object.keys(isPlainObject(body) ? body : {});
-  const unsupported = keys.filter((key) => key !== "metadata");
-  if (unsupported.length || (keys.length && !isPlainObject(body.metadata))) {
-    sendError(res, 400, "only metadata updates are supported for conversations", {
-      type: "invalid_request_error",
-      param: unsupported[0] || "metadata",
-      code: "unsupported_conversation_update",
-    });
+  const validationError = validateConversationUpdateRequest(body);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
     return;
   }
   const conversation = conversationStore.update(conversationId, body);
@@ -13722,6 +13723,49 @@ async function handleConversationUpdate(req, res, conversationStore, conversatio
     return;
   }
   sendJson(res, 200, conversation);
+}
+
+function validateConversationCreateRequest(body = {}) {
+  if (!isPlainObject(body)) {
+    return requestValidationError("conversation request body must be a JSON object", null);
+  }
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) return metadataError;
+  if (Object.prototype.hasOwnProperty.call(body, "items") && body.items != null) {
+    if (!Array.isArray(body.items)) {
+      return requestValidationError("items must be an array or null", "items");
+    }
+    if (body.items.length > OPENAI_CONVERSATION_CREATE_MAX_ITEMS) {
+      return requestValidationError(
+        `items must contain at most ${OPENAI_CONVERSATION_CREATE_MAX_ITEMS} items`,
+        "items",
+      );
+    }
+  }
+  return null;
+}
+
+function validateConversationUpdateRequest(body = {}) {
+  if (!isPlainObject(body)) {
+    return requestValidationError("conversation update body must be a JSON object", null);
+  }
+  const keys = Object.keys(body);
+  const unsupported = keys.filter((key) => key !== "metadata");
+  if (unsupported.length) {
+    return {
+      message: "only metadata updates are supported for conversations",
+      type: "invalid_request_error",
+      param: unsupported[0],
+      code: "unsupported_conversation_update",
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, "metadata")) {
+    return requestValidationError("metadata is required", "metadata");
+  }
+  if (body.metadata == null) {
+    return metadataValidationError("metadata must be an object", "metadata");
+  }
+  return validateOpenAIStringMetadata(body);
 }
 
 function handleConversationDelete(res, conversationStore, conversationId) {

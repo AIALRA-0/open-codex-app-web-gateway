@@ -761,9 +761,9 @@ Chat-only providers.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/conversations` | Implemented locally | Creates `object:"conversation"` with metadata and optional initial items |
+| `POST /v1/conversations` | Implemented locally | Creates `object:"conversation"` with metadata and optional initial items; validates the official create contract before storage, including object request body, nullable string Metadata, `items` as array/null, and the 20 initial-item limit |
 | `GET /v1/conversations/{conversation_id}` | Implemented locally | Retrieves local conversation metadata |
-| `POST /v1/conversations/{conversation_id}` | Implemented locally | Updates local conversation `metadata` |
+| `POST /v1/conversations/{conversation_id}` | Implemented locally | Updates local conversation `metadata`; requires official string Metadata and rejects empty bodies, `metadata:null`, and unsupported fields before storage |
 | `DELETE /v1/conversations/{conversation_id}` | Implemented locally | Deletes the local conversation and its items |
 | `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
 | `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends one item, `{item}`, or `{items:[...]}` to the local conversation |

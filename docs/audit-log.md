@@ -1,5 +1,40 @@
 # Audit Log
 
+## 2026-06-17 Conversations Contract Tightening
+
+- Rechecked the official OpenAI Conversations create/update schema through the
+  OpenAI developer-docs MCP and the official `openai/openai-openapi` schema.
+  Current create accepts an optional object body, nullable string Metadata, and
+  `items` as an array/null with at most 20 initial items. Current update
+  requires string Metadata.
+- Tightened local `/v1/conversations` validation before local storage:
+  - create rejects non-object bodies, invalid Metadata, non-array `items`, and
+    more than 20 initial items;
+  - update rejects non-object bodies, empty bodies, `metadata:null`,
+    non-string Metadata values, and unsupported fields.
+- Updated the compatibility matrix to document the stricter local
+  Conversation create/update contract.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'local Conversations API'`:
+    passed 289/289 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 340/340.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository search excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public `healthz` returned `ok:true`, DeepSeek provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Local and public `POST /v1/conversations` smoke with non-array `items`
+    returned HTTP 400 with `param:"items"` and
+    `code:"invalid_request_parameter"`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Batch Create Contract Tightening
 
 - Rechecked the official OpenAI Batch create OpenAPI schema through the

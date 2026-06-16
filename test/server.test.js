@@ -16469,6 +16469,122 @@ test("local Conversations API persists items and feeds Responses conversation co
   });
 });
 
+test("local Conversations API validates metadata and request contracts", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local conversation validation");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createCases = [
+      {
+        name: "body-shape",
+        body: [],
+        message: "conversation request body must be a JSON object",
+        param: null,
+      },
+      {
+        name: "metadata-value-type",
+        body: { metadata: { topic: "demo", owner: 7 } },
+        message: "metadata values must be strings",
+        param: "metadata.owner",
+      },
+      {
+        name: "items-shape",
+        body: { items: { type: "message", role: "user", content: "hello" } },
+        message: "items must be an array or null",
+        param: "items",
+      },
+      {
+        name: "items-max",
+        body: {
+          items: Array.from({ length: 21 }, (_, index) => ({
+            type: "message",
+            role: "user",
+            content: `item ${index}`,
+          })),
+        },
+        message: "items must contain at most 20 items",
+        param: "items",
+      },
+    ];
+
+    for (const testCase of createCases) {
+      const response = await fetch(`${baseUrl}/v1/conversations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.name);
+      const json = await response.json();
+      assert.equal(json.error.message, testCase.message, testCase.name);
+      assert.equal(json.error.param, testCase.param, testCase.name);
+    }
+
+    const created = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: null, items: null }),
+    });
+    assert.equal(created.status, 200);
+    const conversation = await created.json();
+    assert.match(conversation.id, /^conv_/);
+    assert.deepEqual(conversation.metadata, {});
+
+    const updateCases = [
+      {
+        name: "update-body-shape",
+        body: [],
+        message: "conversation update body must be a JSON object",
+        param: null,
+      },
+      {
+        name: "update-missing-metadata",
+        body: {},
+        message: "metadata is required",
+        param: "metadata",
+      },
+      {
+        name: "update-metadata-null",
+        body: { metadata: null },
+        message: "metadata must be an object",
+        param: "metadata",
+      },
+      {
+        name: "update-metadata-value-type",
+        body: { metadata: { topic: "demo", owner: 7 } },
+        message: "metadata values must be strings",
+        param: "metadata.owner",
+      },
+      {
+        name: "update-unsupported-field",
+        body: { metadata: { topic: "demo" }, items: [] },
+        message: "only metadata updates are supported for conversations",
+        param: "items",
+      },
+    ];
+
+    for (const testCase of updateCases) {
+      const response = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.name);
+      const json = await response.json();
+      assert.equal(json.error.message, testCase.message, testCase.name);
+      assert.equal(json.error.param, testCase.param, testCase.name);
+    }
+
+    const updated = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { topic: "validated" } }),
+    });
+    assert.equal(updated.status, 200);
+    assert.deepEqual((await updated.json()).metadata, { topic: "validated" });
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses truncation auto drops oldest replay messages before upstream Chat", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n");
