@@ -523,6 +523,62 @@ test("POST /v1/responses validates service_tier values before provider calls", a
   });
 });
 
+test("POST /v1/responses validates required model before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.model, "mock-model");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_model_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses model ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { input: "Check model." }, message: "model is required" },
+      { body: { model: null, input: "Check model." }, message: "model is required" },
+      { body: { model: "", input: "Check model." }, message: "model is required" },
+      { body: { model: 42, input: "Check model." }, message: "model must be a string" },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: "model",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check model boundary.",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses model ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses validates text.format response formats before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.response_format, { type: "json_object" });
@@ -19807,6 +19863,84 @@ test("POST /v1/completions maps legacy prompts to Chat Completions", async () =>
   });
 });
 
+test("POST /v1/completions validates required fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.model, "mock-model");
+    assert.deepEqual(call.body.messages, [{ role: "user", content: "Check required fields." }]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_required_boundary",
+      object: "chat.completion",
+      created: 1700000124,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy required ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { prompt: "Check required fields." },
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: null, prompt: "Check required fields." },
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: "", prompt: "Check required fields." },
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: 42, prompt: "Check required fields." },
+        param: "model",
+        message: "model must be a string",
+      },
+      {
+        body: { model: "mock-model" },
+        param: "prompt",
+        message: "prompt is required",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check required fields.",
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy required ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates logit_bias before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.logit_bias, { "11": -100, "12": 100 });
@@ -20651,6 +20785,64 @@ test("POST /v1/completions streams Chat chunks as legacy completion chunks", asy
     assert.equal(chunks[1].choices[0].finish_reason, "stop");
     assert.deepEqual(chunks[1].usage, { prompt_tokens: 3, completion_tokens: 5, total_tokens: 8 });
   }, { streamOptionFields: ["include_usage"] });
+});
+
+test("POST /v1/chat/completions validates required model before provider calls", async () => {
+  const messages = [{ role: "user", content: "Check model." }];
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.model, "mock-model");
+    assert.deepEqual(call.body.messages, messages);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_required_model_boundary",
+      object: "chat.completion",
+      created: 1700000298,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat model ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { messages }, message: "model is required" },
+      { body: { model: null, messages }, message: "model is required" },
+      { body: { model: "", messages }, message: "model is required" },
+      { body: { model: 42, messages }, message: "model must be a string" },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: "model",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat model ok");
+    assert.equal(requests.length, 1);
+  });
 });
 
 test("POST /v1/chat/completions validates messages before provider calls", async () => {

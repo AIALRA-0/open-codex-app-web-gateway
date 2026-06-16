@@ -838,6 +838,11 @@ function clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch) {
 
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
   const request = await readJson(req);
+  const modelError = validateOpenAIRequiredStringParameter(request, "model");
+  if (modelError) {
+    sendError(res, 400, modelError.message, modelError);
+    return;
+  }
   const metadataError = validateOpenAIStringMetadata(request);
   if (metadataError) {
     sendError(res, 400, metadataError.message, metadataError);
@@ -3619,6 +3624,22 @@ function validateOpenAIStringParameter(body = {}, field, options = {}) {
   return null;
 }
 
+function validateOpenAIRequiredParameter(body = {}, field) {
+  if (!body || typeof body !== "object" || !Object.prototype.hasOwnProperty.call(body, field)) {
+    return requestValidationError(`${field} is required`, field);
+  }
+  return null;
+}
+
+function validateOpenAIRequiredStringParameter(body = {}, field, options = {}) {
+  const missingError = validateOpenAIRequiredParameter(body, field);
+  if (missingError) return missingError;
+  if (body[field] == null || body[field] === "") {
+    return requestValidationError(`${field} is required`, field);
+  }
+  return validateOpenAIStringParameter(body, field, options);
+}
+
 function validateIntegerParameter(body = {}, field, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
   if (!Number.isInteger(body[field])) {
@@ -5781,6 +5802,11 @@ async function* iterateSseJson(stream) {
 
 async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const body = await readJson(req);
+  const modelError = validateOpenAIRequiredStringParameter(body, "model");
+  if (modelError) {
+    sendError(res, 400, modelError.message, modelError);
+    return;
+  }
   const messagesError = validateOpenAIChatMessages(body);
   if (messagesError) {
     sendError(res, 400, messagesError.message, messagesError);
@@ -7270,6 +7296,16 @@ function parseJsonOrNull(text) {
 
 async function handleLegacyCompletions(req, res, config) {
   const request = await readJson(req);
+  const modelError = validateOpenAIRequiredStringParameter(request, "model");
+  if (modelError) {
+    sendError(res, 400, modelError.message, modelError);
+    return;
+  }
+  const promptError = validateOpenAIRequiredParameter(request, "prompt");
+  if (promptError) {
+    sendError(res, 400, promptError.message, promptError);
+    return;
+  }
   const samplingError = validateOpenAISamplingParameters(request);
   if (samplingError) {
     sendError(res, 400, samplingError.message, samplingError);

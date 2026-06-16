@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-16 Official Required Create Field Validation
+
+- Rechecked the current official OpenAI request schema through the OpenAI
+  developer docs MCP/OpenAPI endpoint metadata and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://api.openai.com/v1/completions`, and
+  `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateModelResponseProperties` requires `model`, so both Responses create
+  and Chat Completions create inherit a required model field; Chat create also
+  requires `messages`; legacy `CreateCompletionRequest` requires both `model`
+  and `prompt`. The current OpenAPI `CreateResponse` object exposes `input`
+  but does not add it to a `required` array, so this pass only enforces
+  Responses `model`.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` rejects missing, null, empty, or non-string `model`
+    before translation, local tool execution, storage, or upstream Chat calls.
+  - Direct `POST /v1/chat/completions` now requires a non-empty string
+    `model` before the already-covered `messages` validation and direct
+    provider passthrough.
+  - Legacy `POST /v1/completions` now requires a non-empty string `model` and
+    a present `prompt` field before prompt-to-Chat mapping.
+  - Internal fallback defaults remain available after the public boundary for
+    local compatibility paths that already provide a validated model.
+- Added regression coverage proving invalid required fields fail locally with
+  `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, the
+  correct `param`, and zero upstream provider calls; valid create requests
+  still reach the mock Chat provider.
+- Updated the compatibility matrix and evaluation plan so required create-field
+  validation is tracked as a protocol-correctness invariant.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "validates required model before provider calls|validates required fields before provider calls|validates messages before provider calls|maps legacy prompts to Chat Completions|maps to /v1/chat/completions" test/server.test.js`:
+    passed 6/6.
+  - `npm test`: passed 320/320.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses`,
+    `/v1/chat/completions`, and `/v1/completions` returned HTTP 400 with
+    params `model`, `model`, `model`, and `prompt` for missing required
+    create fields.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 7.1G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Chat Message Validation
 
 - Rechecked the official OpenAI Chat Completions request contract through the

@@ -8,6 +8,7 @@ Primary sources:
 - OpenAI Responses reference: https://developers.openai.com/api/reference/responses/overview
 - OpenAI Responses create reference: https://developers.openai.com/api/reference/resources/responses/methods/create
 - OpenAI Responses streaming events: https://developers.openai.com/api/reference/resources/responses/streaming-events
+- OpenAI official OpenAPI schema: https://github.com/openai/openai-openapi/blob/master/openapi.yaml
 - OpenAI encrypted reasoning guidance: https://developers.openai.com/api/docs/guides/migrate-to-responses#4-decide-when-to-use-statefulness
 - OpenAI reasoning effort guide: https://developers.openai.com/api/docs/guides/reasoning#reasoning-effort
 - OpenAI conversation state guide: https://developers.openai.com/api/docs/guides/conversation-state
@@ -136,9 +137,17 @@ implementations for those tools.
 
 ## Request Mapping
 
+Public create endpoints validate required OpenAI request fields before any
+provider call: `POST /v1/responses` requires a non-empty string `model`, direct
+`POST /v1/chat/completions` requires a non-empty string `model` plus the
+validated non-empty `messages` array, and legacy `POST /v1/completions`
+requires a non-empty string `model` plus a present `prompt` field. These checks
+prevent the bridge's internal default model from hiding malformed public SDK
+requests.
+
 | Responses field | Chat Completions field | Status |
 | --- | --- | --- |
-| `model` | `model` | Direct |
+| `model` | `model` | Direct after required string request validation on public Responses, direct Chat, and legacy Completions create calls |
 | `instructions` | leading `system` message | Direct for DeepSeek/OpenAI-compatible providers |
 | string `input` | `messages: [{role:"user"}]` | Direct |
 | input message item | chat message | Direct |

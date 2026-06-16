@@ -11,6 +11,9 @@ Codex/OpenAI Responses behavior.
 - Unit tests for every request and response mapping in `src/bridge/translator.js`.
 - Mock-upstream SSE tests for text, reasoning, function calls, errors, and usage.
 - Golden fixtures for real Codex request shapes captured with secrets removed.
+- Public create endpoints must reject missing or malformed OpenAI required
+  fields locally before provider calls, including Responses/Chat `model`, Chat
+  `messages`, and legacy Completions `model` plus present `prompt`.
 
 2. UI and workflow correctness
 
