@@ -2426,6 +2426,102 @@ test("POST /v1/responses validates parallel_tool_calls before provider calls", a
   });
 });
 
+test("POST /v1/responses and input_tokens validate Responses tools before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid Responses tool fields");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const endpoints = ["/v1/responses", "/v1/responses/input_tokens"];
+    const invalidCases = [
+      {
+        body: { tools: "lookup" },
+        param: "tools",
+        message: "tools must be an array",
+      },
+      {
+        body: { tools: [null] },
+        param: "tools.0",
+        message: "tools.0 must be an object",
+      },
+      {
+        body: { tools: [{ type: "unknown" }] },
+        param: "tools.0.type",
+        message: /^tools\.0\.type must be one of:/,
+      },
+      {
+        body: { tools: [{ type: "function", name: "bad name" }] },
+        param: "tools.0.name",
+        message: "tools.0.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tools: [{ type: "function", name: "lookup", parameters: [] }] },
+        param: "tools.0.parameters",
+        message: "tools.0.parameters must be an object or null",
+      },
+      {
+        body: { tools: [{ type: "function", name: "lookup", strict: "true" }] },
+        param: "tools.0.strict",
+        message: "tools.0.strict must be a boolean or null",
+      },
+      {
+        body: { tools: [{ type: "mcp" }] },
+        param: "tools.0.server_label",
+        message: "tools.0.server_label must be a string",
+      },
+      {
+        body: { tool_choice: "force" },
+        param: "tool_choice",
+        message: "tool_choice must be one of: none, auto, required",
+      },
+      {
+        body: { tool_choice: 1 },
+        param: "tool_choice",
+        message: "tool_choice must be one of: none, auto, required, or an object",
+      },
+      {
+        body: { tool_choice: { type: "function" } },
+        param: "tool_choice.name",
+        message: "tool_choice.name must be a string",
+      },
+      {
+        body: { tool_choice: { type: "mcp", server_label: "docs", name: 7 } },
+        param: "tool_choice.name",
+        message: "tool_choice.name must be a string or null",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "all", tools: [] } },
+        param: "tool_choice.mode",
+        message: "tool_choice.mode must be one of: auto, required",
+      },
+    ];
+
+    for (const endpoint of endpoints) {
+      for (const invalidCase of invalidCases) {
+        const response = await fetch(`${baseUrl}${endpoint}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "mock-model",
+            input: "Check invalid Responses tool fields.",
+            ...invalidCase.body,
+          }),
+        });
+        assert.equal(response.status, 400, `${endpoint} ${invalidCase.param}`);
+        const json = await response.json();
+        assert.equal(json.error.type, "invalid_request_error");
+        assert.equal(json.error.param, invalidCase.param);
+        assert.equal(json.error.code, "invalid_request_parameter");
+        if (invalidCase.message instanceof RegExp) {
+          assert.match(json.error.message, invalidCase.message);
+        } else {
+          assert.equal(json.error.message, invalidCase.message);
+        }
+      }
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses validates Chat-native n before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.n, 128);

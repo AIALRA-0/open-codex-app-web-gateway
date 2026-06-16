@@ -686,6 +686,16 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   required identifiers. Regression coverage must prove invalid message shapes
   produce zero upstream calls while valid multimodal and tool-replay messages
   still pass through to capable providers.
+- Responses create and local `/v1/responses/input_tokens` requests that include
+  native `tools` or `tool_choice` validate the Responses tool envelope before
+  provider calls: `tools` must be an array/null of typed tool objects,
+  function/custom names and schemas must be structurally valid, MCP tools must
+  include `server_label`, namespace tools must contain function/custom child
+  tools, and `tool_choice` must be an official string mode, hosted-tool
+  selector, `allowed_tools`, or named function/custom/MCP selector. Regression
+  coverage proves invalid structures produce zero upstream calls while valid
+  function tools still map to Chat tools and local hosted tools remain
+  bridge-owned.
 - Direct Chat requests that include `tools` or `tool_choice` validate the
   official Chat create request contract locally before provider calls:
   `tools` must contain function or custom tools with valid function names,

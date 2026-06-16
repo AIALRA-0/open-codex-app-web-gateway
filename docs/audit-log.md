@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-16 Responses Native Tool Request Validation
+
+- Rechecked the official OpenAI Responses tool schemas through the OpenAI
+  developer docs MCP and the official OpenAPI source:
+  `https://api.openai.com/v1/responses/input_tokens` and
+  `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `TokenCountsBody.tools` references the shared Responses `Tool` union and
+  `TokenCountsBody.tool_choice` references `ToolChoiceParam`; Responses create
+  uses the same native tool envelope. The official union includes function,
+  file search, computer, web search, MCP, code interpreter, image generation,
+  shell, custom, namespace, tool search, and apply-patch style tool entries,
+  while `ToolChoiceParam` includes string modes, allowed-tool sets, hosted-tool
+  selectors, named function/custom/MCP selectors, and shell/apply-patch
+  selectors.
+- Added local Responses-native request validation before conversation replay,
+  local hosted-tool preparation, Chat translation, token probing, or provider
+  calls:
+  - `tools` must be an array/null, and each item must be a typed object from
+    the official or bridge-owned Responses tool type set.
+  - `function` and `custom` tool names must use the OpenAI-compatible function
+    name shape; `parameters` must be object/null when present; `strict` and
+    `defer_loading` must be booleans/null as appropriate.
+  - MCP tools require a string `server_label`.
+  - Namespace tools require non-empty `name`, `description`, and function/custom
+    child tool definitions.
+  - `tool_choice` must be an official mode string or a recognized selector
+    object; named function/custom/MCP choices validate their required names, and
+    `allowed_tools` validates `mode` plus the top-level tool list shape.
+- Preserved existing CodexApp hosted-tool behavior by keeping
+  `tool_choice:{type:"tool_search"}` as a bridge-owned selector for local
+  deferred tool loading. The first full test run exposed this compatibility
+  edge; the validator was adjusted and the tool-search regression subset passed
+  before re-running the full suite.
+- Updated the compatibility matrix and evaluation plan to distinguish
+  Responses-native flat tool definitions from direct Chat nested tool
+  definitions.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "Responses tools" test/server.test.js`:
+    passed 1/1.
+  - `node --test --test-name-pattern "tool_search" test/server.test.js`:
+    passed 10/10 after preserving the local `tool_search` selector.
+  - `npm test`: passed 327/327.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/responses/input_tokens` returned HTTP 400 with params `tools`,
+    `tools.0.name`, and `tool_choice.name` for invalid values.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 5.0G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Responses Input Tokens Official Field Validation
 
 - Rechecked the official OpenAI `/v1/responses/input_tokens` endpoint through
