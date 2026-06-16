@@ -816,10 +816,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   endpoints, multi-image `n` handling, and local Batch JSONL execution over
   direct image-generation, image-edit, and image-variation requests.
 - Direct Audio API evaluation covers `/v1/audio/speech` placeholder bytes,
-  `/v1/audio/transcriptions` multipart, JSON/base64, verbose JSON, and SSE
-  paths, `/v1/audio/translations` multipart and JSON/base64 paths, custom
-  voice consent/voice metadata lifecycle, and local Batch JSONL execution over
-  audio transcription and translation requests.
+  official speech `stream_format` validation, `/v1/audio/transcriptions`
+  multipart, JSON/base64, verbose JSON, logprob include, timestamp
+  granularities, official validation failures, and SSE paths,
+  `/v1/audio/translations` multipart and JSON/base64 paths, custom voice
+  consent/voice metadata lifecycle, and local Batch JSONL execution over audio
+  transcription and translation requests.
 - Direct Videos API evaluation covers `/v1/videos` create, `GET
   /v1/videos/{video_id}`, `GET /v1/videos/{video_id}/content`, list, delete,
   `/v1/videos/characters` create/retrieve/delete, `characters` references on

@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Audio Request Schema Validation Tightening
+
+- Rechecked the official OpenAI OpenAPI schemas for request-based Audio APIs:
+  - `CreateSpeechRequest` requires `model`, `input`, and `voice`, limits
+    `input` and `instructions` to 4096 characters, uses
+    `response_format` values `mp3`, `opus`, `aac`, `flac`, `wav`, and `pcm`,
+    and accepts `stream_format` values `audio` and `sse`;
+  - `CreateTranscriptionRequest` requires `file` and `model`, accepts
+    `include:["logprobs"]`, timestamp granularities `word` and `segment`,
+    `chunking_strategy:"auto"` or `server_vad`, and up to four known speaker
+    names/references;
+  - `CreateTranslationRequest` requires `file` and `model`, with translation
+    response formats `json`, `text`, `srt`, `verbose_json`, and `vtt`.
+- Closed local request-contract gaps before provider or placeholder handling:
+  - `/v1/audio/speech` now rejects missing `model` or `voice`, overlong
+    `input`/`instructions`, invalid custom voice objects, and invalid
+    `stream_format` values;
+  - `/v1/audio/transcriptions` now rejects invalid `include`,
+    `timestamp_granularities`, stream booleans, `chunking_strategy`, and
+    known-speaker list shapes before local transcription handling;
+  - valid transcription `include:["logprobs"]` returns placeholder
+    `logprobs:[]`, and valid verbose timestamp requests return placeholder
+    word timestamps plus compatibility metadata.
+- Documentation updated:
+  - compatibility matrix Audio rows now list the stricter official validation
+    behavior and valid placeholder response fields;
+  - deployment docs now mark the old Audio model/voice environment defaults as
+    legacy config presets rather than permission to omit official required
+    request fields;
+  - evaluation plan now covers speech stream-format validation, transcription
+    logprobs, timestamp granularities, and official validation failures.
+- Validation:
+  - targeted direct Audio server tests pass for speech bytes/SSE, official
+    validation failures, transcription multipart/JSON/SSE, translation
+    multipart/JSON, and custom voice lifecycle;
+  - targeted direct Audio Batch JSONL tests pass;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional credential-pattern scan only matched a local test fixture bearer
+    token string;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local smoke against `http://127.0.0.1:12912` confirms invalid
+    `stream_format:"websocket"` returns `400 invalid_request_parameter`,
+    valid speech SSE emits `speech.audio.delta` and `speech.audio.done`, and
+    valid transcription `include:["logprobs"]` returns `logprobs:[]`;
+  - public smoke against `https://opencodexapp.aialra.online` confirms the
+    same Audio validation and placeholder response behavior.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Service Tier Scale Enum Validation
 
 - Rechecked the official OpenAI `ServiceTierEnum` through the official

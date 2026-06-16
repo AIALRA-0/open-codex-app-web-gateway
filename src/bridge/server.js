@@ -177,6 +177,11 @@ const AUDIO_SPEECH_CONTENT_TYPES = Object.freeze({
   pcm: "application/octet-stream",
   wav: "audio/wav",
 });
+const OPENAI_AUDIO_SPEECH_TEXT_MAX_CHARS = 4096;
+const OPENAI_AUDIO_SPEECH_STREAM_FORMAT_VALUES = Object.freeze(["audio", "sse"]);
+const OPENAI_AUDIO_TRANSCRIPTION_INCLUDE_VALUES = Object.freeze(["logprobs"]);
+const OPENAI_AUDIO_TIMESTAMP_GRANULARITY_VALUES = Object.freeze(["word", "segment"]);
+const OPENAI_AUDIO_KNOWN_SPEAKER_MAX_ITEMS = 4;
 const AUDIO_CUSTOM_VOICE_EXTENSIONS = new Set(["aac", "flac", "m4a", "mp3", "mp4", "mpeg", "oga", "ogg", "wav", "webm"]);
 const AUDIO_CUSTOM_VOICE_CONTENT_TYPES = new Set([
   "audio/aac",
@@ -9091,25 +9096,79 @@ function normalizeAudioSpeechRequest(request = {}, config = {}) {
       code: "invalid_request_body",
     });
   }
-  const input = stringifyContent(request.input).trim();
+  const input = normalizeRequiredAudioString(request.input, "input", {
+    maxLength: OPENAI_AUDIO_SPEECH_TEXT_MAX_CHARS,
+  });
+  const model = normalizeRequiredAudioString(request.model, "model");
   if (!input) {
     throw requestError("input is required", {
       code: "missing_required_parameter",
       param: "input",
     });
   }
+  const instructions = normalizeOptionalAudioString(request.instructions, "instructions", {
+    maxLength: OPENAI_AUDIO_SPEECH_TEXT_MAX_CHARS,
+  });
   const responseFormat = normalizeAudioSpeechFormat(request.response_format || request.format || "mp3");
   const speed = normalizeAudioSpeed(request.speed);
-  const voice = normalizeAudioVoice(request.voice || config.audioDefaultVoice || "alloy");
+  const voice = normalizeAudioVoice(request.voice);
+  const streamFormat = normalizeAudioSpeechStreamFormat(request.stream_format);
   return {
     input,
-    model: stringifyContent(request.model || config.audioSpeechModel || "gpt-4o-mini-tts"),
+    model,
     voice,
     response_format: responseFormat,
     speed,
-    instructions: stringifyContent(request.instructions || ""),
-    stream: request.stream === true || String(request.stream_format || "").toLowerCase() === "sse",
+    instructions,
+    stream: request.stream === true || streamFormat === "sse",
+    stream_format: streamFormat,
   };
+}
+
+function normalizeRequiredAudioString(value, param, options = {}) {
+  if (value === undefined || value === null || value === "") {
+    throw requestError(`${param} is required`, {
+      code: "missing_required_parameter",
+      param,
+    });
+  }
+  if (typeof value !== "string") {
+    throw requestError(`${param} must be a string`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  const text = value.trim();
+  if (!text) {
+    throw requestError(`${param} is required`, {
+      code: "missing_required_parameter",
+      param,
+    });
+  }
+  if (options.maxLength && text.length > options.maxLength) {
+    throw requestError(`${param} must be ${options.maxLength} characters or fewer`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return text;
+}
+
+function normalizeOptionalAudioString(value, param, options = {}) {
+  if (value === undefined || value === null) return "";
+  if (typeof value !== "string") {
+    throw requestError(`${param} must be a string`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  if (options.maxLength && value.length > options.maxLength) {
+    throw requestError(`${param} must be ${options.maxLength} characters or fewer`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return value;
 }
 
 function normalizeAudioSpeechFormat(value) {
@@ -9134,8 +9193,29 @@ function normalizeAudioSpeed(value) {
 }
 
 function normalizeAudioVoice(value) {
-  if (isPlainObject(value) && value.id) return stringifyContent(value.id);
-  const voice = stringifyContent(value || "alloy").trim();
+  if (value === undefined || value === null || value === "") {
+    throw requestError("voice is required", {
+      code: "missing_required_parameter",
+      param: "voice",
+    });
+  }
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value);
+    if (keys.length !== 1 || keys[0] !== "id" || typeof value.id !== "string" || !value.id.trim()) {
+      throw requestError("voice must be a string or a custom voice object with string id", {
+        code: "invalid_request_parameter",
+        param: "voice",
+      });
+    }
+    return value.id.trim();
+  }
+  if (typeof value !== "string") {
+    throw requestError("voice must be a string or a custom voice object with string id", {
+      code: "invalid_request_parameter",
+      param: "voice",
+    });
+  }
+  const voice = value.trim();
   if (!voice) {
     throw requestError("voice is required", {
       code: "missing_required_parameter",
@@ -9143,6 +9223,16 @@ function normalizeAudioVoice(value) {
     });
   }
   return voice;
+}
+
+function normalizeAudioSpeechStreamFormat(value) {
+  if (value === undefined || value === null || value === "") return "audio";
+  const streamFormat = String(value).trim().toLowerCase();
+  if (OPENAI_AUDIO_SPEECH_STREAM_FORMAT_VALUES.includes(streamFormat)) return streamFormat;
+  throw requestError(`stream_format must be one of: ${OPENAI_AUDIO_SPEECH_STREAM_FORMAT_VALUES.join(", ")}`, {
+    code: "invalid_request_parameter",
+    param: "stream_format",
+  });
 }
 
 function placeholderSpeechContent(speech = {}) {
@@ -9246,19 +9336,44 @@ function normalizeAudioTranscriptRequest(request = {}, config = {}, task = "tran
     });
   }
   const file = resolveAudioRequestFile(request, config);
-  const model = stringifyContent(request.model || (task === "translate" ? config.audioTranslationModel : config.audioTranscriptionModel) || "whisper-1");
+  const model = normalizeRequiredAudioString(request.model, "model");
   const responseFormat = normalizeAudioTranscriptFormat(request.response_format, task);
+  const include = task === "translate"
+    ? []
+    : normalizeAudioEnumArrayField(request.include, "include", OPENAI_AUDIO_TRANSCRIPTION_INCLUDE_VALUES);
+  const timestampGranularities = task === "translate"
+    ? []
+    : normalizeAudioEnumArrayField(
+      request.timestamp_granularities || request["timestamp_granularities[]"],
+      "timestamp_granularities",
+      OPENAI_AUDIO_TIMESTAMP_GRANULARITY_VALUES,
+    );
+  validateAudioTranscriptOptions({
+    request,
+    model,
+    responseFormat,
+    include,
+    timestampGranularities,
+    task,
+  });
   return {
     task,
     model,
     file,
-    prompt: stringifyContent(request.prompt || ""),
-    language: stringifyContent(request.language || ""),
+    prompt: normalizeOptionalAudioString(request.prompt, "prompt"),
+    language: task === "translate" ? "" : normalizeOptionalAudioString(request.language, "language"),
     response_format: responseFormat,
     stream: task === "transcribe" && (request.stream === true || String(request.stream || "").toLowerCase() === "true"),
     temperature: request.temperature,
-    include: normalizeArrayField(request.include),
-    timestamp_granularities: normalizeArrayField(request.timestamp_granularities || request["timestamp_granularities[]"]),
+    include,
+    timestamp_granularities: timestampGranularities,
+    chunking_strategy: task === "translate" ? null : request.chunking_strategy ?? null,
+    known_speaker_names: task === "translate" ? [] : normalizeAudioStringList(request.known_speaker_names, "known_speaker_names", {
+      maxItems: OPENAI_AUDIO_KNOWN_SPEAKER_MAX_ITEMS,
+    }),
+    known_speaker_references: task === "translate" ? [] : normalizeAudioStringList(request.known_speaker_references, "known_speaker_references", {
+      maxItems: OPENAI_AUDIO_KNOWN_SPEAKER_MAX_ITEMS,
+    }),
   };
 }
 
@@ -9385,6 +9500,124 @@ function normalizeArrayField(value) {
   return String(value).split(",").map((item) => item.trim()).filter(Boolean);
 }
 
+function normalizeAudioEnumArrayField(value, param, allowedValues) {
+  const items = normalizeArrayField(value);
+  for (const item of items) {
+    if (!allowedValues.includes(item)) {
+      throw requestError(`${param} items must be one of: ${allowedValues.join(", ")}`, {
+        code: "invalid_request_parameter",
+        param,
+      });
+    }
+  }
+  return items;
+}
+
+function normalizeAudioStringList(value, param, options = {}) {
+  if (value === undefined || value === null || value === "") return [];
+  const items = Array.isArray(value) ? value : [value];
+  if (options.maxItems && items.length > options.maxItems) {
+    throw requestError(`${param} must contain at most ${options.maxItems} items`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return items.map((item) => {
+    if (typeof item !== "string" || !item.trim()) {
+      throw requestError(`${param} items must be non-empty strings`, {
+        code: "invalid_request_parameter",
+        param,
+      });
+    }
+    return item.trim();
+  });
+}
+
+function validateAudioTranscriptOptions({ request = {}, model = "", responseFormat = "json", include = [], timestampGranularities = [], task = "transcribe" }) {
+  if (request.temperature !== undefined && request.temperature !== null && request.temperature !== "") {
+    const temperature = Number(request.temperature);
+    if (!Number.isFinite(temperature)) {
+      throw requestError("temperature must be a number", {
+        code: "invalid_request_parameter",
+        param: "temperature",
+      });
+    }
+  }
+  if (request.stream !== undefined && request.stream !== null && request.stream !== "") {
+    const streamType = typeof request.stream;
+    const streamText = String(request.stream).toLowerCase();
+    if (!["boolean", "string"].includes(streamType) || (streamType === "string" && !["true", "false"].includes(streamText))) {
+      throw requestError("stream must be a boolean", {
+        code: "invalid_request_parameter",
+        param: "stream",
+      });
+    }
+  }
+  if (task === "translate") return;
+  if (include.includes("logprobs") && responseFormat !== "json") {
+    throw requestError("include logprobs requires response_format json", {
+      code: "invalid_request_parameter",
+      param: "include",
+    });
+  }
+  if (timestampGranularities.length && responseFormat !== "verbose_json") {
+    throw requestError("timestamp_granularities requires response_format verbose_json", {
+      code: "invalid_request_parameter",
+      param: "timestamp_granularities",
+    });
+  }
+  if (model === "gpt-4o-transcribe-diarize" && request.prompt !== undefined && request.prompt !== null && request.prompt !== "") {
+    throw requestError("prompt is not supported with gpt-4o-transcribe-diarize", {
+      code: "invalid_request_parameter",
+      param: "prompt",
+    });
+  }
+  validateAudioChunkingStrategy(request.chunking_strategy);
+}
+
+function validateAudioChunkingStrategy(value) {
+  if (value === undefined || value === null || value === "") return;
+  if (value === "auto") return;
+  if (!isPlainObject(value)) {
+    throw requestError("chunking_strategy must be auto or an object", {
+      code: "invalid_request_parameter",
+      param: "chunking_strategy",
+    });
+  }
+  const allowed = new Set(["type", "prefix_padding_ms", "silence_duration_ms", "threshold"]);
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw requestError("chunking_strategy contains unsupported fields", {
+        code: "invalid_request_parameter",
+        param: "chunking_strategy",
+      });
+    }
+  }
+  if (value.type !== "server_vad") {
+    throw requestError("chunking_strategy.type must be server_vad", {
+      code: "invalid_request_parameter",
+      param: "chunking_strategy.type",
+    });
+  }
+  for (const key of ["prefix_padding_ms", "silence_duration_ms"]) {
+    if (value[key] !== undefined && (!Number.isInteger(Number(value[key])) || Number(value[key]) < 0)) {
+      throw requestError(`chunking_strategy.${key} must be a non-negative integer`, {
+        code: "invalid_request_parameter",
+        param: `chunking_strategy.${key}`,
+      });
+    }
+  }
+  if (value.threshold !== undefined) {
+    const threshold = Number(value.threshold);
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      throw requestError("chunking_strategy.threshold must be a number between 0 and 1", {
+        code: "invalid_request_parameter",
+        param: "chunking_strategy.threshold",
+      });
+    }
+  }
+}
+
 function placeholderAudioTranscriptText(normalized = {}, task = "transcribe") {
   const action = task === "translate" ? "translation in English" : "transcription";
   const prompt = normalized.prompt ? ` Prompt hint: ${normalized.prompt}` : "";
@@ -9407,17 +9640,21 @@ function createAudioTranscriptResponse(normalized = {}, text = "", task = "trans
   }
 
   if (format === "verbose_json") {
+    const body = {
+      task,
+      language: task === "translate" ? "english" : (normalized.language || "unknown"),
+      duration,
+      text,
+      segments: [verboseAudioSegment(text, duration)],
+      usage,
+      compatibility,
+    };
+    if (normalized.timestamp_granularities?.includes("word")) {
+      body.words = audioWords(text, duration);
+    }
     return {
       kind: "json",
-      body: {
-        task,
-        language: task === "translate" ? "english" : (normalized.language || "unknown"),
-        duration,
-        text,
-        segments: [verboseAudioSegment(text, duration)],
-        usage,
-        compatibility,
-      },
+      body,
     };
   }
 
@@ -9442,18 +9679,22 @@ function createAudioTranscriptResponse(normalized = {}, text = "", task = "trans
     };
   }
 
+  const body = {
+    text,
+    usage,
+    compatibility,
+  };
+  if (normalized.include?.includes("logprobs")) {
+    body.logprobs = [];
+  }
   return {
     kind: "json",
-    body: {
-      text,
-      usage,
-      compatibility,
-    },
+    body,
   };
 }
 
 function audioTranscriptCompatibility(normalized = {}, task = "transcribe") {
-  return {
+  const compatibility = {
     provider: "local",
     operation: task === "translate" ? "audio_translation" : "audio_transcription",
     model: normalized.model,
@@ -9463,6 +9704,17 @@ function audioTranscriptCompatibility(normalized = {}, task = "transcribe") {
       content_type: normalized.file?.content_type || "application/octet-stream",
     },
   };
+  if (normalized.include?.length) compatibility.include = normalized.include;
+  if (normalized.timestamp_granularities?.length) compatibility.timestamp_granularities = normalized.timestamp_granularities;
+  if (normalized.chunking_strategy) compatibility.chunking_strategy = normalized.chunking_strategy;
+  if (normalized.known_speaker_names?.length) compatibility.known_speaker_names = normalized.known_speaker_names;
+  if (normalized.known_speaker_references?.length) {
+    compatibility.known_speaker_references = normalized.known_speaker_references.map((item) => ({
+      bytes: Buffer.byteLength(item),
+      sha256: crypto.createHash("sha256").update(item).digest("hex"),
+    }));
+  }
+  return compatibility;
 }
 
 function verboseAudioSegment(text, duration) {
@@ -9478,6 +9730,17 @@ function verboseAudioSegment(text, duration) {
     compression_ratio: 1,
     no_speech_prob: 0,
   };
+}
+
+function audioWords(text = "", duration = 1) {
+  const words = String(text).trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return [];
+  const step = duration / words.length;
+  return words.map((word, index) => ({
+    word,
+    start: Number((step * index).toFixed(3)),
+    end: Number((step * (index + 1)).toFixed(3)),
+  }));
 }
 
 function estimateAudioDuration(file = {}) {

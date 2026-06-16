@@ -3858,6 +3858,24 @@ test("POST /v1/audio/speech returns local speech bytes", async () => {
     assert.ok(audio.length > 44);
     assert.equal(requests.length, 0);
 
+    const streamedSpeech = await fetch(`${baseUrl}/v1/audio/speech`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        input: "Stream the protocol marker.",
+        voice: { id: "voice_local" },
+        response_format: "pcm",
+        stream_format: "sse",
+      }),
+    });
+    assert.equal(streamedSpeech.status, 200);
+    assert.match(streamedSpeech.headers.get("content-type"), /^text\/event-stream/);
+    const speechEvents = parseSseEvents(await streamedSpeech.text());
+    assert.equal(speechEvents[0].event, "speech.audio.delta");
+    assert.equal(speechEvents[0].data.format, "pcm");
+    assert.equal(speechEvents[1].event, "speech.audio.done");
+
     const missing = await fetch(`${baseUrl}/v1/audio/speech`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -3867,6 +3885,133 @@ test("POST /v1/audio/speech returns local speech bytes", async () => {
     const error = await missing.json();
     assert.equal(error.error.param, "input");
     assert.equal(error.error.code, "missing_required_parameter");
+  });
+});
+
+test("POST /v1/audio endpoints validate official request fields before local handling", async () => {
+  await withMockProvider(async () => {
+    assert.fail("chat provider should not be called for local audio validation");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const speechInvalidCases = [
+      {
+        body: { model: "gpt-4o-mini-tts", input: "hello" },
+        param: "voice",
+        message: "voice is required",
+        code: "missing_required_parameter",
+      },
+      {
+        body: { model: "gpt-4o-mini-tts", input: "x".repeat(4097), voice: "alloy" },
+        param: "input",
+        message: "input must be 4096 characters or fewer",
+        code: "invalid_request_parameter",
+      },
+      {
+        body: { model: "gpt-4o-mini-tts", input: "hello", voice: "alloy", stream_format: "websocket" },
+        param: "stream_format",
+        message: "stream_format must be one of: audio, sse",
+        code: "invalid_request_parameter",
+      },
+      {
+        body: { model: "gpt-4o-mini-tts", input: "hello", voice: { id: "voice_local", extra: true } },
+        param: "voice",
+        message: "voice must be a string or a custom voice object with string id",
+        code: "invalid_request_parameter",
+      },
+    ];
+    for (const invalidCase of speechInvalidCases) {
+      const response = await fetch(`${baseUrl}/v1/audio/speech`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: invalidCase.code,
+        },
+      });
+    }
+
+    const audioData = `data:audio/wav;base64,${Buffer.from("validation audio", "utf8").toString("base64")}`;
+    const transcriptionInvalidCases = [
+      {
+        body: { file: { data: audioData, filename: "invalid.wav" } },
+        param: "model",
+        message: "model is required",
+        code: "missing_required_parameter",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, include: ["tokens"] },
+        param: "include",
+        message: "include items must be one of: logprobs",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, response_format: "verbose_json", include: ["logprobs"] },
+        param: "include",
+        message: "include logprobs requires response_format json",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, timestamp_granularities: ["word"] },
+        param: "timestamp_granularities",
+        message: "timestamp_granularities requires response_format verbose_json",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, response_format: "verbose_json", timestamp_granularities: ["chapter"] },
+        param: "timestamp_granularities",
+        message: "timestamp_granularities items must be one of: word, segment",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, known_speaker_names: ["a", "b", "c", "d", "e"] },
+        param: "known_speaker_names",
+        message: "known_speaker_names must contain at most 4 items",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, chunking_strategy: { type: "client_vad" } },
+        param: "chunking_strategy.type",
+        message: "chunking_strategy.type must be server_vad",
+      },
+      {
+        body: { model: "gpt-4o-transcribe", file: { data: audioData, filename: "invalid.wav" }, stream: "maybe" },
+        param: "stream",
+        message: "stream must be a boolean",
+      },
+    ];
+    for (const invalidCase of transcriptionInvalidCases) {
+      const response = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: invalidCase.code || "invalid_request_parameter",
+        },
+      });
+    }
+
+    const missingTranslationModel = await fetch(`${baseUrl}/v1/audio/translations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file: { data: audioData, filename: "invalid.wav" } }),
+    });
+    assert.equal(missingTranslationModel.status, 400);
+    assert.deepEqual(await missingTranslationModel.json(), {
+      error: {
+        message: "model is required",
+        type: "invalid_request_error",
+        param: "model",
+        code: "missing_required_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
   });
 });
 
@@ -3896,6 +4041,50 @@ test("POST /v1/audio/transcriptions accepts multipart, verbose JSON, and streams
     assert.equal(json.compatibility.provider, "local");
     assert.equal(json.compatibility.model, "gpt-4o-transcribe");
     assert.equal(json.compatibility.file.filename, "source.wav");
+
+    const logprobAudioData = Buffer.from("logprob audio", "utf8").toString("base64");
+    const logprobResponse = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-transcribe",
+        file: {
+          data: `data:audio/wav;base64,${logprobAudioData}`,
+          filename: "logprobs.wav",
+        },
+        response_format: "json",
+        include: ["logprobs"],
+      }),
+    });
+    assert.equal(logprobResponse.status, 200);
+    const logprobJson = await logprobResponse.json();
+    assert.deepEqual(logprobJson.logprobs, []);
+    assert.deepEqual(logprobJson.compatibility.include, ["logprobs"]);
+
+    const timestampAudioData = Buffer.from("timestamp audio", "utf8").toString("base64");
+    const timestampResponse = await fetch(`${baseUrl}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-transcribe",
+        file: {
+          data: `data:audio/wav;base64,${timestampAudioData}`,
+          filename: "timestamps.wav",
+        },
+        response_format: "verbose_json",
+        timestamp_granularities: ["word", "segment"],
+        chunking_strategy: "auto",
+        known_speaker_names: ["agent"],
+        known_speaker_references: [`data:audio/wav;base64,${timestampAudioData}`],
+      }),
+    });
+    assert.equal(timestampResponse.status, 200);
+    const timestampJson = await timestampResponse.json();
+    assert.ok(timestampJson.words.length > 0);
+    assert.deepEqual(timestampJson.compatibility.timestamp_granularities, ["word", "segment"]);
+    assert.equal(timestampJson.compatibility.chunking_strategy, "auto");
+    assert.deepEqual(timestampJson.compatibility.known_speaker_names, ["agent"]);
+    assert.equal(timestampJson.compatibility.known_speaker_references.length, 1);
 
     const audioData = Buffer.from("stream audio", "utf8").toString("base64");
     const streamed = await fetch(`${baseUrl}/v1/audio/transcriptions`, {

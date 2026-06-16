@@ -134,10 +134,10 @@ Useful bridge flags:
 | `CODEXCOMPAT_CHAT_AUDIO_INPUT_MODE` | `text` for DeepSeek, `audio` otherwise | `auto`, `audio`, or `text`; DeepSeek defaults to safe text markers because current DeepSeek Chat does not accept `input_audio` content parts |
 | `CODEXCOMPAT_CHAT_FILE_INPUT_MODE` | `text` for DeepSeek, `file` otherwise | `auto`, `file`, or `text`; DeepSeek defaults to safe text markers and bounded local extraction for direct Chat `file` / `input_file` content parts |
 | `CODEXCOMPAT_AUDIO_PROVIDER` | `placeholder` | Local request-based Audio API compatibility provider for `/v1/audio/speech`, `/v1/audio/transcriptions`, and `/v1/audio/translations`; use `disabled` to reject local Audio requests |
-| `CODEXCOMPAT_AUDIO_SPEECH_MODEL` | `gpt-4o-mini-tts` | Default model id returned/recorded by local speech synthesis compatibility when a client omits `model` |
-| `CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | Default model id for local transcription compatibility when a client omits `model` |
-| `CODEXCOMPAT_AUDIO_TRANSLATION_MODEL` | `whisper-1` | Default model id for local translation compatibility when a client omits `model` |
-| `CODEXCOMPAT_AUDIO_DEFAULT_VOICE` | `alloy` | Default speech voice when `/v1/audio/speech` omits `voice` |
+| `CODEXCOMPAT_AUDIO_SPEECH_MODEL` | `gpt-4o-mini-tts` | Legacy local preset retained for config compatibility; OpenAI-compatible `/v1/audio/speech` requests must still send `model` |
+| `CODEXCOMPAT_AUDIO_TRANSCRIPTION_MODEL` | `gpt-4o-transcribe` | Legacy local preset retained for config compatibility; OpenAI-compatible `/v1/audio/transcriptions` requests must still send `model` |
+| `CODEXCOMPAT_AUDIO_TRANSLATION_MODEL` | `whisper-1` | Legacy local preset retained for config compatibility; OpenAI-compatible `/v1/audio/translations` requests must still send `model` |
+| `CODEXCOMPAT_AUDIO_DEFAULT_VOICE` | `alloy` | Legacy local preset retained for config compatibility; OpenAI-compatible `/v1/audio/speech` requests must still send `voice` |
 | `CODEXCOMPAT_AUDIO_MAX_INPUT_BYTES` | `26214400` | Maximum multipart or JSON-base64 audio input bytes accepted by local transcription/translation compatibility |
 | `CODEXCOMPAT_AUDIO_VOICE_STATE_DIR` | `${CODEXCOMPAT_STATE_DIR}/local-audio-voices` | Local JSON metadata store for request-based custom voice consent and voice compatibility; keep outside Git |
 | `CODEXCOMPAT_AUDIO_VOICE_MAX_VOICES` | `20` | Local custom voice cap, matching the documented OpenAI organization limit |
