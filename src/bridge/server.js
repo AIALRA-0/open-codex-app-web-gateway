@@ -101,6 +101,7 @@ const {
   injectToolSearchMessages,
   localToolSearchToolTypes,
   prepareToolSearchContext,
+  promoteToolSearchTextToolCalls,
   remapToolSearchChatToolCalls,
   remapToolSearchResponseOutput,
   suppressToolSearchChatToolCalls,
@@ -676,6 +677,7 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
         injectMcpChatTools(chat, localMcp, config, { toolBudget });
       }
       chat.messages.push(...toolSearchExecution.messages);
+      clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch);
       if (round + 1 >= maxRounds) chat.tool_choice = "none";
       current = await fetchProviderJson(config, chat, incomingHeaders, options);
       if (!current.ok) return current;
@@ -744,8 +746,26 @@ function combineChatUsage(usages = []) {
 
 function localToolLoopMaxRounds(config = {}, contexts = {}) {
   const configured = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
-  const neededForDeferredMcpSearch = contexts.localMcp && contexts.localToolSearch ? 2 : 1;
-  return Math.max(configured, neededForDeferredMcpSearch);
+  const hostedToolSearchNeedsFollowup = contexts.localToolSearch
+    && contexts.localToolSearch.execution !== "client"
+    && ((contexts.localToolSearch.deferred_tools?.length || 0)
+      || (contexts.localToolSearch.searchable_mcp_servers?.length || 0))
+    ? 2
+    : 1;
+  return Math.max(configured, hostedToolSearchNeedsFollowup);
+}
+
+function clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch) {
+  const mappedSearchName = localToolSearch?.tool_choice_mapping?.requested_type === "tool_search"
+    ? localToolSearch.tool_choice_mapping.chat_name
+    : null;
+  if (
+    mappedSearchName
+    && chat?.tool_choice?.type === "function"
+    && chat.tool_choice.function?.name === mappedSearchName
+  ) {
+    delete chat.tool_choice;
+  }
 }
 
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
@@ -849,7 +869,8 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendJson(res, providerResult.status, providerResult.json || { error: { message: providerResult.text } });
     return;
   }
-  let upstreamJson = remapToolSearchChatToolCalls(providerResult.json, localToolSearch);
+  let upstreamJson = promoteToolSearchTextToolCalls(providerResult.json, localToolSearch);
+  upstreamJson = remapToolSearchChatToolCalls(upstreamJson, localToolSearch);
   const computerExecution = executeComputerChatToolCalls(localComputer, upstreamJson, config, { toolBudget });
   if (computerExecution.executed) {
     upstreamJson = suppressComputerChatToolCalls(upstreamJson, localComputer);
@@ -1358,7 +1379,8 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
     return;
   }
 
-  let upstreamJson = remapToolSearchChatToolCalls(providerResult.json, contexts?.tool_search);
+  let upstreamJson = promoteToolSearchTextToolCalls(providerResult.json, contexts?.tool_search);
+  upstreamJson = remapToolSearchChatToolCalls(upstreamJson, contexts?.tool_search);
   if (contexts?.computer) {
     const computerExecution = executeComputerChatToolCalls(contexts.computer, upstreamJson, config, { toolBudget });
     if (computerExecution.executed) {
@@ -3423,6 +3445,7 @@ async function streamProviderWithLocalToolLoop(res, state, config, chat, incomin
         injectMcpChatTools(chat, localMcp, config, { toolBudget });
       }
       chat.messages.push(...(toolSearchExecution.messages || []));
+      clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch);
       if (round + 1 >= maxRounds) chat.tool_choice = "none";
       continue;
     }
@@ -3439,6 +3462,13 @@ async function streamProviderWithLocalToolLoop(res, state, config, chat, incomin
       ? await executeMcpChatToolCalls(localMcp, current.completion, config, { toolBudget })
       : { executed: false };
     if (!execution.executed) {
+      const textToolCallCount = localToolSearch?.text_tool_call_count || 0;
+      const promotedCompletion = promoteToolSearchTextToolCalls(current.completion, localToolSearch);
+      if ((localToolSearch?.text_tool_call_count || 0) > textToolCallCount) {
+        emitChatCompletionToolCallsAsStreamEvents(res, state, promotedCompletion);
+        applyCombinedStreamUsage(state, usageParts);
+        return { ok: true };
+      }
       replayBufferedChatStreamEvents(res, state, current.payloads);
       applyCombinedStreamUsage(state, usageParts);
       return { ok: true };
@@ -3490,6 +3520,53 @@ function replayBufferedChatStreamEvents(res, state, payloads = []) {
   for (const payload of payloads) {
     const events = applyChatStreamChunk(state, payload);
     for (const event of events) writeSse(res, event.type, sequence(state, event));
+  }
+}
+
+function emitChatCompletionToolCallsAsStreamEvents(res, state, completion) {
+  for (const choice of completion?.choices || []) {
+    const toolCalls = Array.isArray(choice.message?.tool_calls) ? choice.message.tool_calls : [];
+    if (!toolCalls.length) continue;
+    const index = choice.index ?? 0;
+    const chunk = {
+      id: completion.id || prefixedId("chatcmpl"),
+      object: "chat.completion.chunk",
+      created: completion.created || nowSeconds(),
+      model: completion.model || state.response.model || "unknown",
+      choices: [{
+        index,
+        delta: {
+          role: "assistant",
+          tool_calls: toolCalls.map((call, toolIndex) => ({
+            index: toolIndex,
+            id: call.id || prefixedId("call"),
+            type: call.type || "function",
+            function: {
+              name: call.function?.name || "",
+              arguments: stringifyContent(call.function?.arguments || ""),
+            },
+          })),
+        },
+        finish_reason: null,
+      }],
+    };
+    for (const event of applyChatStreamChunk(state, chunk)) {
+      writeSse(res, event.type, sequence(state, event));
+    }
+    const finishChunk = {
+      id: chunk.id,
+      object: "chat.completion.chunk",
+      created: chunk.created,
+      model: chunk.model,
+      choices: [{
+        index,
+        delta: {},
+        finish_reason: choice.finish_reason || "tool_calls",
+      }],
+    };
+    for (const event of applyChatStreamChunk(state, finishChunk)) {
+      writeSse(res, event.type, sequence(state, event));
+    }
   }
 }
 

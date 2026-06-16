@@ -12,6 +12,7 @@ const { createServer, loadConfig } = require("../src/bridge/server");
 const { FileResponseStore } = require("../src/bridge/store");
 const { unzipFiles } = require("../src/bridge/local_skills");
 const { sanitizeMcpAssistantOutput } = require("../src/bridge/local_mcp");
+const { promoteToolSearchTextToolCalls } = require("../src/bridge/local_tool_search");
 const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
 function listen(server) {
@@ -5345,6 +5346,7 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
     if (call.body.messages.some((message) => message.role === "tool")) {
       const loadedTool = call.body.tools.find((tool) => tool.function?.name === "list_open_orders");
       assert.ok(loadedTool);
+      assert.equal(call.body.tool_choice, undefined);
       assert.deepEqual(loadedTool.function.parameters.properties.customer_id, { type: "string" });
       assert.ok(call.body.messages.some((message) => /loaded_tool_count/.test(message.content || "")));
       res.end(JSON.stringify({
@@ -5376,6 +5378,10 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
     assert.equal(call.body.tools.length, 1);
     const searchToolName = call.body.tools[0].function.name;
     assert.match(searchToolName, /^local_tool_search/);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "function",
+      function: { name: searchToolName },
+    });
     assert.equal(
       call.body.tools.some((tool) => tool.function?.parameters?.properties?.customer_id),
       false,
@@ -5433,6 +5439,7 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
             }],
           },
         ],
+        tool_choice: { type: "tool_search" },
         parallel_tool_calls: false,
         store: false,
       }),
@@ -5463,6 +5470,161 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
     assert.equal(json.usage.output_tokens, 5);
     assert.equal(json.usage.total_tokens, 23);
   });
+});
+
+test("POST /v1/responses promotes text tool_search function calls after hosted load", async () => {
+  let providerCallCount = 0;
+
+  await withMockProvider(async (_req, res, call) => {
+    providerCallCount += 1;
+    res.writeHead(200, { "content-type": "application/json" });
+
+    if (providerCallCount === 1) {
+      const searchTool = call.body.tools.find((tool) => /^local_tool_search/.test(tool.function?.name || ""));
+      assert.ok(searchTool);
+      res.end(JSON.stringify({
+        id: "chatcmpl_text_tool_search_search",
+        object: "chat.completion",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: null,
+            tool_calls: [{
+              id: "call_search_returns",
+              type: "function",
+              function: {
+                name: searchTool.function.name,
+                arguments: "{\"paths\":[\"returns\"],\"query\":\"return label\"}",
+              },
+            }],
+          },
+          finish_reason: "tool_calls",
+        }],
+        usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+      }));
+      return;
+    }
+
+    assert.equal(providerCallCount, 2);
+    assert.equal(call.body.tool_choice, undefined);
+    assert.ok(call.body.tools.some((tool) => tool.function?.name === "create_return_label"));
+    res.end(JSON.stringify({
+      id: "chatcmpl_text_tool_search_final",
+      object: "chat.completion",
+      created: 101,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: [
+            "<｜｜DSML｜｜tool_calls>",
+            "<｜｜DSML｜｜invoke name=\"returns\">",
+            "<｜｜DSML｜｜parameter name=\"method\" string=\"true\">create_return_label</｜｜DSML｜｜parameter>",
+            "<｜｜DSML｜｜parameter name=\"params\" string=\"false\">{\"rma_id\":\"RMA-42\",\"format\":\"pdf\"}</｜｜DSML｜｜parameter>",
+            "</｜｜DSML｜｜invoke>",
+            "</｜｜DSML｜｜tool_calls>",
+          ].join("\n"),
+        },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Create a PDF return label for RMA-42.",
+        tools: [
+          { type: "tool_search" },
+          {
+            type: "namespace",
+            name: "returns",
+            description: "Returns and RMA tools.",
+            tools: [{
+              type: "function",
+              name: "create_return_label",
+              description: "Create a return label.",
+              defer_loading: true,
+              parameters: {
+                type: "object",
+                properties: {
+                  rma_id: { type: "string" },
+                  format: { type: "string" },
+                },
+                required: ["rma_id", "format"],
+                additionalProperties: false,
+              },
+            }],
+          },
+        ],
+        tool_choice: { type: "tool_search" },
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(requests.length, 2);
+    const json = await response.json();
+    assert.deepEqual(json.output.map((item) => item.type), [
+      "tool_search_call",
+      "tool_search_output",
+      "function_call",
+    ]);
+    assert.equal(json.output[2].name, "create_return_label");
+    assert.equal(json.output[2].namespace, "returns");
+    assert.equal(json.output[2].arguments, "{\"rma_id\":\"RMA-42\",\"format\":\"pdf\"}");
+    assert.equal(json.metadata.compatibility.local_tool_search.text_tool_call_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.text_suppressed_count, 1);
+    assert.doesNotMatch(JSON.stringify(json), /DSML/);
+  });
+});
+
+test("local tool_search promotes local_tool_call text wrapper", () => {
+  const context = {
+    chat_tool_map: {
+      create_return_label: {
+        name: "create_return_label",
+        namespace: "returns",
+        path: "returns.create_return_label",
+      },
+    },
+  };
+  const completion = {
+    id: "chatcmpl_text_tool_search_wrapper",
+    object: "chat.completion",
+    created: 100,
+    model: "mock-model",
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content: [
+          "<｜｜DSML｜｜tool_calls>",
+          "<｜｜DSML｜｜invoke name=\"local_tool_call\">",
+          "<｜｜DSML｜｜parameter name=\"path\" string=\"true\">returns.create_return_label</｜｜DSML｜｜parameter>",
+          "<｜｜DSML｜｜parameter name=\"input\" string=\"false\">{\"rma_id\":\"RMA-42\",\"format\":\"pdf\"}</｜｜DSML｜｜parameter>",
+          "</｜｜DSML｜｜invoke>",
+          "</｜｜DSML｜｜tool_calls>",
+        ].join("\n"),
+      },
+      finish_reason: "stop",
+    }],
+  };
+
+  const promoted = promoteToolSearchTextToolCalls(completion, context);
+
+  assert.equal(promoted.choices[0].message.content, null);
+  assert.equal(promoted.choices[0].message.tool_calls[0].function.name, "create_return_label");
+  assert.equal(promoted.choices[0].message.tool_calls[0].function.arguments, "{\"rma_id\":\"RMA-42\",\"format\":\"pdf\"}");
+  assert.equal(promoted.choices[0].finish_reason, "tool_calls");
+  assert.equal(context.text_tool_call_count, 1);
+  assert.equal(context.text_suppressed_count, 1);
 });
 
 test("POST /v1/responses remaps streaming tool_search namespace function names after Chat name collisions", async () => {

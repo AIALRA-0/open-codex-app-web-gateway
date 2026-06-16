@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-16 Large-Catalog Tool Search Regression
+
+- Rechecked the official OpenAI `Use tool_search` deployment guidance through
+  the OpenAI developer docs MCP before implementing this slice. The relevant
+  guidance says deferred tools can be loaded by hosted or client-executed
+  `tool_search`, and large catalogs should be grouped by intent/namespace or
+  MCP server rather than forwarding every tool schema up front.
+- Added live bridge-regression coverage,
+  `responses-tool-search-large-catalog`, for a large local catalog:
+  - request contains eight namespaces and 48 deferred functions;
+  - `tool_choice:{type:"tool_search"}` is mapped to the generated
+    `local_tool_search` Chat function on the first provider turn;
+  - after `tool_search` selects `returns`, the bridge emits public
+    `tool_search_call` and `tool_search_output`, injects only the six loaded
+    `returns` functions into the follow-up Chat turn, and clears the forced
+    search `tool_choice`;
+  - final output must be a standard Responses `function_call` for
+    `namespace:"returns"`, `name:"create_return_label"`, with
+    `{"rma_id":"RMA-42","format":"pdf"}` and no DSML text.
+- Hardened DeepSeek compatibility for loaded `tool_search` functions that
+  arrive as DSML/pseudo-tool text instead of native Chat `tool_calls`.
+  Supported observed forms now include:
+  - direct invocation, for example `create_return_label`;
+  - `local_tool_call` with `path` and JSON `input`;
+  - namespace wrapper invocation with `method` and JSON `params`.
+  The bridge promotes these to Chat `tool_calls` before Responses translation,
+  suppresses the pseudo text, and records
+  `local_tool_search.text_tool_call_count` /
+  `local_tool_search.text_suppressed_count` when the fallback is used.
+- Added a streaming safeguard for the same promotion path: when the bridge has
+  buffered a streaming provider response and detects loaded-function pseudo
+  text before replaying it, it emits standard Responses function-call SSE
+  events instead of replaying DSML text.
+- Updated the compatibility matrix and evaluation plan so large-catalog
+  `tool_search` is no longer an unevaluated gap; hosted connector inventories
+  and broader randomized quality/latency/token sweeps remain future work.
+- Validation:
+  - `node --check src/bridge/local_tool_search.js src/bridge/server.js
+    test/server.test.js scripts/eval-harness.mjs`: passed.
+  - `node --test test/server.test.js --test-name-pattern "hosted tool_search|promotes text tool_search|streaming tool_search"`:
+    passed 200/200 because the Node test runner executed the full server test
+    file at that point.
+  - `node --test test/server.test.js --test-name-pattern "promotes local_tool_call|promotes text tool_search"`:
+    passed 201/201 after adding both DSML wrapper variants.
+  - `npm test`: passed 245/245.
+  - Restarted `aialra-opencodexapp-bridge.service`; `/healthz` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Live `responses-tool-search-large-catalog` passed 1/1 against
+    `deepseek-v4-pro`; latency 3111 ms, usage 2305 input / 105 output / 2410
+    total tokens, namespace count 8, deferred tool count 48, loaded tool count
+    6, loaded namespace `returns`, and final function call
+    `returns.create_return_label` with `rma_id:"RMA-42"` and `format:"pdf"`.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1164 ms, P95 latency 1241 ms, and 99 total tokens.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Live Client Tool Search Regression
 
 - Rechecked the official OpenAI API deployment checklist through the OpenAI

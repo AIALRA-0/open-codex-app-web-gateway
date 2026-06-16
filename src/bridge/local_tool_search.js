@@ -646,6 +646,175 @@ function suppressToolSearchChatToolCalls(chatCompletion, context) {
   return cloned;
 }
 
+function promoteToolSearchTextToolCalls(chatCompletion, context) {
+  if (!chatCompletion || !context?.chat_tool_map || !Object.keys(context.chat_tool_map).length) {
+    return chatCompletion;
+  }
+  let cloned = null;
+  let promoted = 0;
+  let suppressed = 0;
+
+  for (let index = 0; index < (chatCompletion.choices || []).length; index += 1) {
+    const choice = chatCompletion.choices[index];
+    const message = choice?.message;
+    if (!message || (Array.isArray(message.tool_calls) && message.tool_calls.length)) continue;
+    const calls = toolSearchTextToolCallsFromContent(message.content, context);
+    if (!calls.length) continue;
+    if (!cloned) cloned = clone(chatCompletion);
+    const targetChoice = cloned.choices[index];
+    targetChoice.message.tool_calls = calls;
+    targetChoice.message.content = null;
+    if (targetChoice.finish_reason === "stop" || targetChoice.finish_reason == null) {
+      targetChoice.finish_reason = "tool_calls";
+    }
+    promoted += calls.length;
+    suppressed += 1;
+  }
+
+  if (promoted) {
+    context.text_tool_call_count = (context.text_tool_call_count || 0) + promoted;
+    context.text_suppressed_count = (context.text_suppressed_count || 0) + suppressed;
+  }
+  return cloned || chatCompletion;
+}
+
+function toolSearchTextToolCallsFromContent(content, context) {
+  const text = chatContentText(content);
+  if (!text || !/DSML|tool_calls|invoke/i.test(text)) return [];
+  const calls = [];
+  const invokePattern = /<[^>]*invoke\b([^>]*)>([\s\S]*?)<\/[^>]*invoke>/gi;
+  for (const match of text.matchAll(invokePattern)) {
+    const attrs = match[1] || "";
+    const invokeName = decodeTextToolCallValue(attributeValue(attrs, "name")).trim();
+    if (!invokeName) continue;
+    const params = textToolSearchParameters(match[2] || "");
+    const functionName = [
+      invokeName,
+      params.method && invokeName ? `${invokeName}.${params.method}` : "",
+      params.namespace && params.method ? `${params.namespace}.${params.method}` : "",
+      params.path,
+      params.name,
+      params.tool_name,
+      params.function,
+      params.method,
+    ].map((candidate) => findToolSearchChatFunctionName(context, candidate)).find(Boolean);
+    if (!functionName) continue;
+    calls.push({
+      id: prefixedId("call"),
+      type: "function",
+      function: {
+        name: functionName,
+        arguments: textToolSearchArgumentsFromParams(params),
+      },
+    });
+  }
+  return calls;
+}
+
+function findToolSearchChatFunctionName(context, emittedName) {
+  const rawName = stringifyContent(emittedName || "").trim();
+  if (!rawName || !context?.chat_tool_map) return "";
+  if (context.chat_tool_map[rawName]) return rawName;
+  const matches = [];
+  for (const [chatName, mapping] of Object.entries(context.chat_tool_map || {})) {
+    const names = [
+      mapping.path,
+      mapping.namespace && mapping.name ? `${mapping.namespace}.${mapping.name}` : "",
+      mapping.name,
+    ].filter(Boolean);
+    if (names.includes(rawName)) matches.push(chatName);
+  }
+  return matches.length === 1 ? matches[0] : "";
+}
+
+function textToolSearchParameters(text) {
+  const params = {};
+  const parameterPattern = /<[^>]*parameter\b([^>]*)>([\s\S]*?)<\/[^>]*parameter>/gi;
+  for (const match of text.matchAll(parameterPattern)) {
+    const attrs = match[1] || "";
+    const key = decodeTextToolCallValue(attributeValue(attrs, "name")).trim();
+    if (!key) continue;
+    const stringFlag = decodeTextToolCallValue(attributeValue(attrs, "string")).trim().toLowerCase();
+    const rawValue = decodeTextToolCallValue(match[2]).trim();
+    params[key] = stringFlag === "false" ? parseJsonLenient(rawValue, rawValue) : rawValue;
+  }
+  return params;
+}
+
+function textToolSearchArgumentsFromParams(params = {}) {
+  if (isPlainObject(params.params)) return JSON.stringify(params.params);
+  if (typeof params.params === "string") {
+    const parsed = parseJsonLenient(params.params, null);
+    if (isPlainObject(parsed)) return JSON.stringify(parsed);
+  }
+  if (isPlainObject(params.input)) return JSON.stringify(params.input);
+  if (typeof params.input === "string") {
+    const parsed = parseJsonLenient(params.input, null);
+    if (isPlainObject(parsed)) return JSON.stringify(parsed);
+  }
+  if (isPlainObject(params.arguments)) return JSON.stringify(params.arguments);
+  if (typeof params.arguments === "string") {
+    const parsed = parseJsonLenient(params.arguments, null);
+    if (isPlainObject(parsed)) return JSON.stringify(parsed);
+  }
+  const ignored = new Set([
+    "arguments",
+    "function",
+    "input",
+    "method",
+    "name",
+    "namespace",
+    "params",
+    "path",
+    "tool_call_id",
+    "tool_name",
+  ]);
+  const args = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (ignored.has(key)) continue;
+    args[key] = value;
+  }
+  return JSON.stringify(args);
+}
+
+function parseJsonLenient(text, fallback) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return fallback;
+  }
+}
+
+function attributeValue(attributes, name) {
+  const pattern = new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, "i");
+  const match = pattern.exec(attributes || "");
+  return match ? match[1] ?? match[2] ?? match[3] ?? "" : "";
+}
+
+function chatContentText(content) {
+  if (content == null) return "";
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content.map((part) => {
+      if (typeof part === "string") return part;
+      if (isPlainObject(part)) return stringifyContent(part.text ?? part.content ?? part.output_text ?? "");
+      return stringifyContent(part);
+    }).filter(Boolean).join("\n");
+  }
+  return stringifyContent(content);
+}
+
+function decodeTextToolCallValue(value) {
+  return stringifyContent(value || "")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#34;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
 function remapToolSearchChatToolCalls(chatCompletion, context) {
   if (!chatCompletion || !context?.chat_tool_map) return chatCompletion;
   const cloned = clone(chatCompletion);
@@ -721,6 +890,8 @@ function toolSearchCompatibility(context) {
       mcp_list_tools_failed_count: context.mcp_list_tools_failed_count || 0,
       loaded_chat_tool_count: Object.keys(context.chat_tool_map || {}).length,
       stream_remapped_tool_call_count: context.stream_remapped_tool_call_count || 0,
+      text_tool_call_count: context.text_tool_call_count || 0,
+      text_suppressed_count: context.text_suppressed_count || 0,
       skipped_count: context.skipped_count || 0,
       failed_count: context.failed_count || 0,
       ...(context.chat_search_tool_name ? { chat_search_tool_name: context.chat_search_tool_name } : {}),
@@ -832,6 +1003,7 @@ module.exports = {
   injectToolSearchMessages,
   localToolSearchToolTypes,
   prepareToolSearchContext,
+  promoteToolSearchTextToolCalls,
   remapToolSearchChatToolCalls,
   remapToolSearchResponseOutput,
   suppressToolSearchChatToolCalls,

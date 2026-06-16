@@ -3850,6 +3850,11 @@ function buildSuites(defaultModel) {
         }),
       },
       {
+        id: "responses-tool-search-large-catalog",
+        mode: "responses-tool-search-large-catalog",
+        request: largeToolSearchRequest(defaultModel),
+      },
+      {
         id: "responses-previous-response-replay",
         mode: "responses-sequence",
         steps: [
@@ -3878,6 +3883,153 @@ function buildSuites(defaultModel) {
   };
 }
 
+function largeToolSearchRequest(defaultModel) {
+  return {
+    model: defaultModel,
+    instructions: [
+      "Use hosted tool_search over the large catalog.",
+      "First call tool_search with path returns to load the returns namespace.",
+      "After the client has loaded that namespace, call returns.create_return_label with rma_id RMA-42 and format pdf.",
+      "Do not answer in prose.",
+    ].join(" "),
+    input: "From the large tool catalog, find the returns label tool and call it for RMA-42 as a PDF label.",
+    tools: [
+      { type: "tool_search" },
+      ...largeToolSearchNamespaces(),
+    ],
+    tool_choice: { type: "tool_search" },
+    reasoning: { effort: "none" },
+    max_tool_calls: 1,
+    max_output_tokens: 128,
+    store: false,
+  };
+}
+
+function largeToolSearchNamespaces() {
+  const namespaceSpecs = [
+    {
+      name: "billing",
+      description: "Billing tools for invoices, credits, taxes, and payment attempts.",
+      tools: [
+        ["lookup_invoice", "Look up invoice state and balance.", { invoice_id: "string" }],
+        ["preview_credit", "Preview a credit memo.", { account_id: "string" }],
+        ["list_payment_attempts", "List payment attempts for an invoice.", { invoice_id: "string" }],
+        ["apply_adjustment", "Apply a billing adjustment.", { invoice_id: "string", amount_cents: "number" }],
+        ["calculate_tax", "Calculate tax for a billing address.", { postal_code: "string" }],
+        ["explain_balance", "Explain an account balance.", { account_id: "string" }],
+      ],
+    },
+    {
+      name: "crm",
+      description: "CRM tools for accounts, contacts, opportunities, and health scores.",
+      tools: [
+        ["get_account", "Fetch account details.", { account_id: "string" }],
+        ["update_contact", "Update a contact record.", { contact_id: "string" }],
+        ["list_opportunities", "List sales opportunities.", { account_id: "string" }],
+        ["score_health", "Score account health.", { account_id: "string" }],
+        ["assign_owner", "Assign an account owner.", { account_id: "string", owner_id: "string" }],
+        ["get_contract", "Fetch contract metadata.", { contract_id: "string" }],
+      ],
+    },
+    {
+      name: "shipping",
+      description: "Shipping tools for delivery promises, carriers, and shipments.",
+      tools: [
+        ["get_shipping_eta", "Get a shipping ETA for an order.", { order_id: "string" }],
+        ["list_carriers", "List carriers available for an order.", { order_id: "string" }],
+        ["reroute_package", "Reroute a package.", { tracking_id: "string" }],
+        ["check_address", "Check a shipping address.", { postal_code: "string" }],
+        ["create_shipment", "Create a shipment.", { order_id: "string" }],
+        ["cancel_shipment", "Cancel a shipment.", { shipment_id: "string" }],
+      ],
+    },
+    {
+      name: "returns",
+      description: "Returns tools for labels, pickups, return approvals, and refunds.",
+      tools: [
+        ["create_return_label", "Create a return shipping label.", { rma_id: "string", format: "string" }],
+        ["inspect_return_status", "Inspect return processing status.", { rma_id: "string" }],
+        ["approve_return", "Approve a return request.", { rma_id: "string" }],
+        ["list_return_reasons", "List valid return reason codes.", { locale: "string" }],
+        ["estimate_refund", "Estimate a refund for a return.", { rma_id: "string" }],
+        ["schedule_pickup", "Schedule a return pickup.", { rma_id: "string" }],
+      ],
+    },
+    {
+      name: "inventory",
+      description: "Inventory tools for stock, reservations, warehouses, and transfers.",
+      tools: [
+        ["check_stock", "Check SKU stock.", { sku: "string" }],
+        ["reserve_sku", "Reserve inventory for an order.", { sku: "string", order_id: "string" }],
+        ["release_reservation", "Release an inventory reservation.", { reservation_id: "string" }],
+        ["forecast_stockout", "Forecast stockout risk.", { sku: "string" }],
+        ["list_warehouses", "List warehouses for a region.", { region: "string" }],
+        ["transfer_stock", "Transfer stock between warehouses.", { sku: "string" }],
+      ],
+    },
+    {
+      name: "support",
+      description: "Support tools for tickets, SLAs, macros, escalations, and tags.",
+      tools: [
+        ["create_ticket", "Create a support ticket.", { subject: "string" }],
+        ["escalate_ticket", "Escalate a support ticket.", { ticket_id: "string" }],
+        ["get_sla", "Get SLA details for a ticket.", { ticket_id: "string" }],
+        ["summarize_case", "Summarize a support case.", { ticket_id: "string" }],
+        ["list_macros", "List support macros.", { queue: "string" }],
+        ["tag_case", "Tag a support case.", { ticket_id: "string", tag: "string" }],
+      ],
+    },
+    {
+      name: "analytics",
+      description: "Analytics tools for funnels, cohorts, revenue, segments, and anomalies.",
+      tools: [
+        ["run_funnel_report", "Run a funnel report.", { funnel_id: "string" }],
+        ["export_cohort", "Export a user cohort.", { cohort_id: "string" }],
+        ["summarize_revenue", "Summarize revenue for a period.", { period: "string" }],
+        ["compare_segments", "Compare analytics segments.", { left_segment: "string", right_segment: "string" }],
+        ["detect_anomaly", "Detect metric anomalies.", { metric: "string" }],
+        ["list_dashboards", "List dashboards.", { workspace_id: "string" }],
+      ],
+    },
+    {
+      name: "security",
+      description: "Security tools for keys, login audits, roles, access reviews, and policies.",
+      tools: [
+        ["rotate_key", "Rotate an API key.", { key_id: "string" }],
+        ["audit_login_events", "Audit login events.", { user_id: "string" }],
+        ["list_roles", "List roles for an organization.", { org_id: "string" }],
+        ["disable_user", "Disable a user account.", { user_id: "string" }],
+        ["review_access", "Review user access.", { user_id: "string" }],
+        ["create_policy", "Create an access policy.", { policy_name: "string" }],
+      ],
+    },
+  ];
+
+  return namespaceSpecs.map((namespace) => ({
+    type: "namespace",
+    name: namespace.name,
+    description: namespace.description,
+    tools: namespace.tools.map(([name, description, properties]) => ({
+      type: "function",
+      name,
+      description,
+      defer_loading: true,
+      parameters: parametersForProperties(properties),
+      strict: true,
+    })),
+  }));
+}
+
+function parametersForProperties(properties = {}) {
+  const entries = Object.entries(properties);
+  return {
+    type: "object",
+    properties: Object.fromEntries(entries.map(([name, type]) => [name, { type }])),
+    required: entries.map(([name]) => name),
+    additionalProperties: false,
+  };
+}
+
 async function runCase(testCase, context) {
   const started = performance.now();
   try {
@@ -3889,6 +4041,9 @@ async function runCase(testCase, context) {
     }
     if (testCase.mode === "responses-tool-search-client") {
       return await runToolSearchClientCase(testCase, context, started);
+    }
+    if (testCase.mode === "responses-tool-search-large-catalog") {
+      return await runToolSearchLargeCatalogCase(testCase, context, started);
     }
     if (testCase.mode === "chat-lifecycle") {
       return await runChatLifecycleCase(testCase, context, started);
@@ -4266,6 +4421,71 @@ async function runToolSearchClientCase(testCase, context, started) {
   } finally {
     if (firstResponseId) await deleteJson(`${baseUrl}/v1/responses/${firstResponseId}`);
   }
+}
+
+async function runToolSearchLargeCatalogCase(testCase, context, started) {
+  const request = resolveRequest(testCase.request, {});
+  const response = await postJson(`${baseUrl}/v1/responses`, request);
+  const body = await response.text();
+  if (!response.ok) {
+    return finishResult(testCase, context, started, {
+      ok: false,
+      status: response.status,
+      error: truncate(body),
+    });
+  }
+
+  const json = parseJsonish(body);
+  const outputTypes = (json.output || []).map((item) => item.type);
+  const toolSearchCall = (json.output || []).find((item) => item.type === "tool_search_call");
+  const toolSearchOutput = (json.output || []).find((item) => item.type === "tool_search_output");
+  const functionCall = (json.output || []).find((item) => item.type === "function_call");
+  const functionArguments = parseJsonish(functionCall?.arguments);
+  const localToolSearch = json.metadata?.compatibility?.local_tool_search || {};
+  const outputNamespace = (toolSearchOutput?.tools || []).find((tool) => tool.type === "namespace");
+  const loadedToolNames = (outputNamespace?.tools || []).map((tool) => tool.name);
+  const outputText = responseOutputText(json);
+  const ok = outputTypes.includes("tool_search_call")
+    && outputTypes.includes("tool_search_output")
+    && outputTypes.includes("function_call")
+    && toolSearchCall?.execution === "server"
+    && toolSearchOutput?.execution === "server"
+    && outputNamespace?.name === "returns"
+    && loadedToolNames.includes("create_return_label")
+    && functionCall?.namespace === "returns"
+    && functionCall?.name === "create_return_label"
+    && functionArguments?.rma_id === "RMA-42"
+    && functionArguments?.format === "pdf"
+    && localToolSearch.provider === "local"
+    && localToolSearch.search_call_count === 1
+    && localToolSearch.namespace_count === 8
+    && localToolSearch.deferred_tool_count === 48
+    && localToolSearch.loaded_tool_count >= 1
+    && localToolSearch.loaded_tool_count < localToolSearch.deferred_tool_count
+    && localToolSearch.loaded_chat_tool_count >= 1
+    && localToolSearch.loaded_chat_tool_count < localToolSearch.deferred_tool_count
+    && localToolSearch.boundary === "deferred_tool_search_and_load"
+    && localToolSearch.tool_choice?.requested_type === "tool_search"
+    && !/DSML/.test(outputText);
+
+  return finishResult(testCase, context, started, {
+    ok: !!ok,
+    status: response.status,
+    usage: responseUsage(json),
+    output_text: outputText,
+    catalog_namespace_count: localToolSearch.namespace_count || 0,
+    catalog_deferred_tool_count: localToolSearch.deferred_tool_count || 0,
+    loaded_tool_count: localToolSearch.loaded_tool_count || 0,
+    loaded_chat_tool_count: localToolSearch.loaded_chat_tool_count || 0,
+    text_tool_call_count: localToolSearch.text_tool_call_count || 0,
+    text_suppressed_count: localToolSearch.text_suppressed_count || 0,
+    loaded_namespace: outputNamespace?.name,
+    loaded_tool_names: loadedToolNames,
+    function_name: functionCall?.name,
+    function_namespace: functionCall?.namespace,
+    function_arguments: functionArguments,
+    error: ok ? undefined : truncate(JSON.stringify(json)),
+  });
 }
 
 async function runAudioSpeechCase(testCase, context, started) {
