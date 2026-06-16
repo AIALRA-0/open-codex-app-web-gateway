@@ -163,12 +163,14 @@ against DeepSeek with eight namespaces and 48 deferred functions: the model
 loads only the selected `returns` namespace, receives six callable functions,
 and returns the public `returns.create_return_label` `function_call` with the
 expected `RMA-42`/`pdf` arguments. The
-`responses-tool-search-catalog-sweep` live case repeats that shape over three
-deterministically shuffled large-catalog tasks for `inventory`, `security`,
-and `support`, recording scenario pass rate, average/P95 latency, token usage,
-loaded-catalog fraction, DSML text leaks, assistant prose leaks, and final
-function-call namespaces/arguments. The sweep now fails if assistant prose is
-visible on these tool-only turns. Mock-provider coverage hardens
+`responses-tool-search-catalog-sweep` live case repeats that shape over eight
+deterministically shuffled large-catalog tasks, one for each namespace:
+`billing`, `crm`, `shipping`, `returns`, `inventory`, `security`, `support`,
+and `analytics`. It records scenario pass rate, average/P95 latency, token
+usage, loaded-catalog fraction, DSML text leaks, assistant prose leaks,
+suppressed assistant prose counts, and final function-call
+namespaces/arguments. The sweep fails if assistant prose is visible on these
+tool-only turns. Mock-provider coverage hardens
 DeepSeek-style DSML text pseudo-tool outputs for loaded functions by promoting
 direct function invocations, `local_tool_call` `path`/`input` wrappers, and
 namespace `method`/`params` wrappers into standard tool calls before public
@@ -230,7 +232,7 @@ node --test test/server.test.js --test-name-pattern 'promotes text tool_search|p
 node --test test/server.test.js --test-name-pattern 'loads deferred remote MCP tools through hosted tool_search|streams deferred remote MCP tools loaded through hosted tool_search'
 node --test --test-name-pattern 'deferred remote MCP loaded through hosted tool_search|text MCP approval emitted after hosted tool_search|suppresses pseudo tool markup' test/server.test.js
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-tool-search-large-catalog --timeout-ms 180000 --verbose
-node scripts/eval-harness.mjs --suite bridge-regression --case responses-tool-search-catalog-sweep --timeout-ms 240000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-tool-search-catalog-sweep --timeout-ms 420000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-stream-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose

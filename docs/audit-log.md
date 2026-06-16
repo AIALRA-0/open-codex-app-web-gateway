@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Eight-Namespace Tool Search Sweep
+
+- Rechecked the official OpenAI deployment checklist guidance through the
+  OpenAI developer docs MCP. The guidance recommends deferring large tool
+  catalogs with `tool_search`, grouping tools by user intent using namespaces
+  or MCP servers, and keeping each namespace small and discriminative.
+- Expanded `responses-tool-search-catalog-sweep` from a three-scenario sample
+  to an eight-namespace matrix covering every large-catalog namespace:
+  - `billing.lookup_invoice` with `{"invoice_id":"INV-900"}`;
+  - `crm.assign_owner` with
+    `{"account_id":"ACCT-77","owner_id":"USER-12"}`;
+  - `shipping.reroute_package` with `{"tracking_id":"TRK-800"}`;
+  - `returns.schedule_pickup` with `{"rma_id":"RMA-84"}`;
+  - `inventory.reserve_sku` with
+    `{"sku":"SKU-9","order_id":"ORDER-314"}`;
+  - `security.rotate_key` with `{"key_id":"KEY-77"}`;
+  - `support.escalate_ticket` with `{"ticket_id":"TICK-55"}`;
+  - `analytics.detect_anomaly` with
+    `{"metric":"checkout_conversion"}`.
+- Kept the strict public-output gate from the prior hardening: DSML text leaks
+  and visible assistant prose leaks both fail the scenario. The report also
+  records assistant text suppression counts so model-side prose drift can be
+  distinguished from public protocol leakage.
+- Updated the evaluation plan command timeout for the larger sweep and updated
+  the compatibility matrix to describe the eight-namespace coverage.
+- Validation:
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - Live `responses-tool-search-catalog-sweep` passed 1/1 against
+    `deepseek-v4-pro`; all 8/8 scenarios passed, pass rate 1.0, total latency
+    27986 ms, per-scenario average latency 3497 ms, P95 latency 4271 ms, usage
+    18055 input / 940 output / 18995 total tokens, loaded fraction average/max
+    0.125, DSML text leak count 0, assistant text leak count 0, assistant text
+    suppressed count 2, text pseudo-tool call count 0, and final function
+    calls `billing.lookup_invoice`, `crm.assign_owner`,
+    `shipping.reroute_package`, `returns.schedule_pickup`,
+    `inventory.reserve_sku`, `security.rotate_key`,
+    `support.escalate_ticket`, and `analytics.detect_anomaly`.
+  - `npm test`: passed 245/245.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1541 ms, P95 latency 1904 ms, and 99 total tokens.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Tool-Only Tool Search Prose Suppression
 
 - Rechecked the official OpenAI tools guidance through the OpenAI developer

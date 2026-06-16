@@ -3913,6 +3913,42 @@ function largeToolSearchRequest(defaultModel) {
 function toolSearchCatalogSweepScenarios(defaultModel) {
   return [
     {
+      id: "billing-lookup-invoice",
+      model: defaultModel,
+      seed: "billing-lookup-invoice-2026-06-16",
+      input: "Invoice INV-900 needs its state and balance looked up. Use the billing catalog tool for invoice lookup.",
+      expected_namespace: "billing",
+      expected_function: "lookup_invoice",
+      expected_arguments: { invoice_id: "INV-900" },
+    },
+    {
+      id: "crm-assign-owner",
+      model: defaultModel,
+      seed: "crm-assign-owner-2026-06-16",
+      input: "Assign CRM account ACCT-77 to owner USER-12. Use the catalog to call the account owner assignment tool.",
+      expected_namespace: "crm",
+      expected_function: "assign_owner",
+      expected_arguments: { account_id: "ACCT-77", owner_id: "USER-12" },
+    },
+    {
+      id: "shipping-reroute-package",
+      model: defaultModel,
+      seed: "shipping-reroute-package-2026-06-16",
+      input: "Reroute package TRK-800 through the shipping operations catalog.",
+      expected_namespace: "shipping",
+      expected_function: "reroute_package",
+      expected_arguments: { tracking_id: "TRK-800" },
+    },
+    {
+      id: "returns-schedule-pickup",
+      model: defaultModel,
+      seed: "returns-schedule-pickup-2026-06-16",
+      input: "Schedule a return pickup for RMA-84 using the returns catalog.",
+      expected_namespace: "returns",
+      expected_function: "schedule_pickup",
+      expected_arguments: { rma_id: "RMA-84" },
+    },
+    {
       id: "inventory-reserve",
       model: defaultModel,
       seed: "inventory-reserve-2026-06-16",
@@ -3938,6 +3974,15 @@ function toolSearchCatalogSweepScenarios(defaultModel) {
       expected_namespace: "support",
       expected_function: "escalate_ticket",
       expected_arguments: { ticket_id: "TICK-55" },
+    },
+    {
+      id: "analytics-detect-anomaly",
+      model: defaultModel,
+      seed: "analytics-detect-anomaly-2026-06-16",
+      input: "Detect anomalies for metric checkout_conversion using the analytics catalog.",
+      expected_namespace: "analytics",
+      expected_function: "detect_anomaly",
+      expected_arguments: { metric: "checkout_conversion" },
     },
   ];
 }
