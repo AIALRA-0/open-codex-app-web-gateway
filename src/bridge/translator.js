@@ -800,11 +800,32 @@ function parallelToolCallsInstruction() {
 }
 
 function mapContextManagement(request = {}) {
+  if (Object.prototype.hasOwnProperty.call(request, "context_management") && request.context_management != null) {
+    const entries = Array.isArray(request.context_management) ? request.context_management : [];
+    const types = Array.from(new Set(entries
+      .map((entry) => isPlainObject(entry) ? stringifyContent(entry.type || "") : "")
+      .filter(Boolean))).sort();
+    return {
+      source: "context_management",
+      forwarded: false,
+      reason: "chat_completions_no_equivalent",
+      value_type: "array",
+      entry_count: entries.length,
+      ...(types.length ? { types } : {}),
+      compact_threshold_count: entries.filter((entry) => (
+        isPlainObject(entry)
+        && Object.prototype.hasOwnProperty.call(entry, "compact_threshold")
+        && entry.compact_threshold != null
+      )).length,
+      ...(Object.prototype.hasOwnProperty.call(request, "context") ? { legacy_context_alias_present: true } : {}),
+    };
+  }
   if (!Object.prototype.hasOwnProperty.call(request, "context")) return null;
   const value = request.context;
   const valueType = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
   return {
     source: "context",
+    alias_for: "context_management",
     forwarded: false,
     reason: "chat_completions_no_equivalent",
     value_type: valueType,

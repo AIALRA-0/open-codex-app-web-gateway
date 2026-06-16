@@ -1808,9 +1808,41 @@ test("POST /v1/responses validates official string metadata limits", async () =>
   });
 });
 
-test("POST /v1/responses records context management compatibility without provider forwarding", async () => {
+test("POST /v1/responses validates context_management before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid context_management");
+  }, async ({ bridgeAddress, requests }) => {
+    const invalidCases = [
+      { context_management: {}, param: "context_management" },
+      { context_management: ["compaction"], param: "context_management.0" },
+      { context_management: [{ type: "retention_ratio" }], param: "context_management.0.type" },
+      { context_management: [{ type: "compaction", compact_threshold: "4096" }], param: "context_management.0.compact_threshold" },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "invalid context management",
+          context_management: invalidCase.context_management,
+        }),
+      });
+
+      assert.equal(response.status, 400);
+      const json = await response.json();
+      assert.equal(json.error.param, invalidCase.param);
+      assert.equal(json.error.code, "invalid_request_parameter");
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/responses records context_management compatibility without provider forwarding", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.context, undefined);
+    assert.equal(call.body.context_management, undefined);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_context_management",
@@ -1831,6 +1863,51 @@ test("POST /v1/responses records context management compatibility without provid
       body: JSON.stringify({
         model: "mock-model",
         input: "Use local context management.",
+        context_management: [
+          { type: "compaction", compact_threshold: 4096 },
+        ],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "context ok");
+    assert.deepEqual(json.metadata.compatibility.context_management, {
+      source: "context_management",
+      forwarded: false,
+      reason: "chat_completions_no_equivalent",
+      value_type: "array",
+      entry_count: 1,
+      types: ["compaction"],
+      compact_threshold_count: 1,
+    });
+    assert.equal(JSON.stringify(json.metadata.compatibility.context_management).includes("4096"), false);
+  });
+});
+
+test("POST /v1/responses preserves legacy context alias compatibility", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.context, undefined);
+    assert.equal(call.body.context_management, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_context_alias",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "context alias ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use legacy local context management.",
         context: {
           type: "retention_ratio",
           retention_ratio: 0.75,
@@ -1841,9 +1918,10 @@ test("POST /v1/responses records context management compatibility without provid
 
     assert.equal(response.status, 200);
     const json = await response.json();
-    assert.equal(json.output[0].content[0].text, "context ok");
+    assert.equal(json.output[0].content[0].text, "context alias ok");
     assert.deepEqual(json.metadata.compatibility.context_management, {
       source: "context",
+      alias_for: "context_management",
       forwarded: false,
       reason: "chat_completions_no_equivalent",
       value_type: "object",

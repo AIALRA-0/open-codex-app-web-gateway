@@ -766,11 +766,14 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `auto` / `default` / `flex` / `priority` enum. Valid prompt-cache and
   provider-supported service-tier fields must survive the local compaction Chat
   request rebuild.
-- Responses `context` request compatibility records the official
+- Responses `context_management` request compatibility records the official
   context-management field as a local boundary only: mock-provider tests must
-  prove it is not forwarded to Chat Completions providers, compatibility
-  metadata exposes only the value type and object keys, and caller-provided
-  context values do not leak into compatibility metadata.
+  prove it validates `type:"compaction"` and numeric `compact_threshold`, is not
+  forwarded to Chat Completions providers, compatibility metadata exposes only
+  entry counts/types/threshold presence, and caller-provided threshold values do
+  not leak into compatibility metadata. The older local `context` alias remains
+  covered as a non-forwarded compatibility boundary with object-key-only
+  metadata.
 - Responses `input_file` and direct Chat `file` / `input_file` text extraction works for local file IDs, completed text/PDF Uploads API files, inline base64 payloads, bounded HTTP(S) file URLs, PDF text layers, optional bounded local PDF OCR fallback, deterministic CSV/TSV/XLSX spreadsheet augmentation, and basic `.docx`/`.pptx` OOXML document text, with failed/unsupported/truncated files surfaced in compatibility metadata.
 - Local Uploads API lifecycle creates pending Upload objects, adds Parts, completes ordered `part_ids` into usable byte-preserving Files, validates optional local SHA-256 part/final checksums, rejects byte-count and checksum mismatches, records completed File checksum metadata, persists expired pending Uploads as `status:"expired"`, blocks new Parts after cancellation, completion, or expiration, prunes intermediate Part `.bin` files by default after completion/cancellation/expiration while keeping metadata/checksums, and includes Upload workdirs in runtime prune coverage.
 - Local Batch API accepts `purpose:"batch"` JSONL Files, executes supported endpoints including Responses `image_generation`, direct `/v1/audio/transcriptions`, direct `/v1/audio/translations`, direct `/v1/images/generations`, JSON-form direct `/v1/images/edits`, JSON-form direct `/v1/images/variations`, and direct `/v1/videos` requests, exposes OpenAI-style Batch objects, and writes output/error JSONL Files that can be read through `/v1/files/{file_id}/content`.

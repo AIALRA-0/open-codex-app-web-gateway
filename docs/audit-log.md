@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-16 Responses `context_management` Request Validation
+
+- Rechecked the official OpenAI Responses create contract through the OpenAI
+  developer docs MCP and the generated markdown reference at
+  `https://developers.openai.com/api/reference/resources/responses/methods/create/index.md`.
+  The current create body lists `context_management` as an optional array of
+  objects with `type` and optional `compact_threshold`; `type:"compaction"` is
+  currently the supported entry type. The `/v1/responses/input_tokens`
+  generated reference does not list `context_management`, so this validation is
+  scoped to Responses create.
+- Added local `/v1/responses` request validation before Chat translation,
+  local context preparation, or provider calls:
+  - `context_management` must be an array/null when present.
+  - Each entry must be an object with `type:"compaction"`.
+  - `compact_threshold`, when present and non-null, must be a JSON number.
+- Updated Responses-to-Chat compatibility metadata so the official
+  `context_management` field is recognized as a non-forwarded local boundary.
+  Metadata records entry count, supported types, and threshold presence, but
+  not caller-provided threshold values. The older local `context` field remains
+  accepted as a compatibility alias and records only value type/object keys.
+- Updated the compatibility matrix and evaluation plan to use the official
+  `context_management` field name while documenting the alias boundary.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - `node --test --test-name-pattern
+    "context_management|context management|legacy Responses context alias|legacy
+    context alias" test/server.test.js test/translator.test.js`: passed 5/5.
+  - `npm test`: passed 330/330 after updating a translator expectation that
+    exposed the new `alias_for:"context_management"` audit field.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS invalid-request smoke tests for
+    `context_management:[{type:"retention_ratio"}]` returned HTTP 400 with
+    param `context_management.0.type`.
+  - Public HTTPS valid-request smoke with
+    `context_management:[{type:"compaction"}]` returned HTTP 200 and recorded
+    `metadata.compatibility.context_management.forwarded:false`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses `max_tool_calls` Strict JSON Type Validation
 
 - Rechecked the OpenAI Responses create contract through the official developer

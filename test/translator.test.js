@@ -745,7 +745,29 @@ test("maps parallel_tool_calls false to a tool-use instruction for unsupported p
   assert.deepEqual(compatibility.chat_native_fields.mapped, ["parallel_tool_calls"]);
 });
 
-test("records Responses context management without forwarding it to Chat providers", () => {
+test("records Responses context_management without forwarding it to Chat providers", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "mock-model",
+    input: "Use context management.",
+    context_management: [
+      { type: "compaction", compact_threshold: 4096 },
+    ],
+  });
+
+  assert.equal(chat.context_management, undefined);
+  assert.deepEqual(compatibility.context_management, {
+    source: "context_management",
+    forwarded: false,
+    reason: "chat_completions_no_equivalent",
+    value_type: "array",
+    entry_count: 1,
+    types: ["compaction"],
+    compact_threshold_count: 1,
+  });
+  assert.equal(JSON.stringify(compatibility.context_management).includes("4096"), false);
+});
+
+test("records legacy Responses context alias without forwarding it to Chat providers", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "mock-model",
     input: "Use context management.",
@@ -759,6 +781,7 @@ test("records Responses context management without forwarding it to Chat provide
   assert.equal(chat.context, undefined);
   assert.deepEqual(compatibility.context_management, {
     source: "context",
+    alias_for: "context_management",
     forwarded: false,
     reason: "chat_completions_no_equivalent",
     value_type: "object",

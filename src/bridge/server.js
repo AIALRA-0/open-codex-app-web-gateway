@@ -224,6 +224,7 @@ const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
   "message.output_text.logprobs",
 ]);
 const OPENAI_RESPONSES_TRUNCATION_VALUES = Object.freeze(["auto", "disabled"]);
+const OPENAI_CONTEXT_MANAGEMENT_TYPE_VALUES = Object.freeze(["compaction"]);
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -914,6 +915,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
   if (stateReferenceError) {
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
+  const contextManagementError = validateOpenAIResponsesContextManagement(request);
+  if (contextManagementError) {
+    sendError(res, 400, contextManagementError.message, contextManagementError);
     return;
   }
   const truncationValueError = validateOpenAIResponsesTruncation(request);
@@ -2632,6 +2638,33 @@ function validateOpenAIResponseStateReferences(body = {}) {
       "previous_response_id cannot be used with conversation",
       "previous_response_id",
     );
+  }
+  return null;
+}
+
+function validateOpenAIResponsesContextManagement(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "context_management") || body.context_management == null) return null;
+  if (!Array.isArray(body.context_management)) {
+    return requestValidationError("context_management must be an array", "context_management");
+  }
+  for (const [index, entry] of body.context_management.entries()) {
+    const param = `context_management.${index}`;
+    if (!isPlainObject(entry)) {
+      return requestValidationError(`${param} must be an object`, param);
+    }
+    if (typeof entry.type !== "string" || !OPENAI_CONTEXT_MANAGEMENT_TYPE_VALUES.includes(entry.type)) {
+      return requestValidationError(
+        `${param}.type must be one of: ${OPENAI_CONTEXT_MANAGEMENT_TYPE_VALUES.join(", ")}`,
+        `${param}.type`,
+      );
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(entry, "compact_threshold")
+      && entry.compact_threshold != null
+      && (typeof entry.compact_threshold !== "number" || !Number.isFinite(entry.compact_threshold))
+    ) {
+      return requestValidationError(`${param}.compact_threshold must be a number`, `${param}.compact_threshold`);
+    }
   }
   return null;
 }
