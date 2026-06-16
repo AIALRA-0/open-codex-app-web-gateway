@@ -974,6 +974,7 @@ test("POST /v1/responses validates text.format response formats before provider 
 test("POST /v1/responses validates reasoning effort before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.reasoning_effort, "max");
+    assert.equal(call.body.reasoning_summary, undefined);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_responses_reasoning_effort_boundary",
@@ -1014,6 +1015,20 @@ test("POST /v1/responses validates reasoning effort before provider calls", asyn
           param: "reasoning.effort",
         },
       },
+      {
+        reasoning: { summary: "full" },
+        error: {
+          message: "reasoning.summary must be one of: auto, concise, detailed",
+          param: "reasoning.summary",
+        },
+      },
+      {
+        reasoning: { generate_summary: 1 },
+        error: {
+          message: "reasoning.generate_summary must be one of: auto, concise, detailed",
+          param: "reasoning.generate_summary",
+        },
+      },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -1043,11 +1058,19 @@ test("POST /v1/responses validates reasoning effort before provider calls", asyn
       body: JSON.stringify({
         model: "mock-model",
         input: "Check reasoning effort boundary.",
-        reasoning: { effort: "xhigh" },
+        reasoning: { effort: "xhigh", summary: "concise", generate_summary: "auto" },
       }),
     });
     assert.equal(valid.status, 200);
-    assert.equal((await valid.json()).output[0].content[0].text, "reasoning effort ok");
+    const validJson = await valid.json();
+    assert.equal(validJson.output[0].content[0].text, "reasoning effort ok");
+    assert.deepEqual(validJson.metadata.compatibility.reasoning_summary, {
+      source: "reasoning.summary",
+      value: "concise",
+      deprecated_generate_summary: "ignored_by_summary",
+      forwarded: false,
+      reason: "provider_unsupported",
+    });
     assert.equal(requests.length, 1);
   });
 });
@@ -17982,6 +18005,16 @@ test("POST /v1/responses/input_tokens validates text, reasoning, and parallel to
         param: "reasoning.effort",
         message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
       },
+      {
+        body: { reasoning: { summary: "full" } },
+        param: "reasoning.summary",
+        message: "reasoning.summary must be one of: auto, concise, detailed",
+      },
+      {
+        body: { reasoning: { generate_summary: 1 } },
+        param: "reasoning.generate_summary",
+        message: "reasoning.generate_summary must be one of: auto, concise, detailed",
+      },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
@@ -23919,6 +23952,20 @@ test("POST /v1/chat/completions validates reasoning effort before provider calls
         error: {
           message: "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh",
           param: "reasoning.effort",
+        },
+      },
+      {
+        body: { reasoning: { summary: "full" } },
+        error: {
+          message: "reasoning.summary must be one of: auto, concise, detailed",
+          param: "reasoning.summary",
+        },
+      },
+      {
+        body: { reasoning: { generate_summary: true } },
+        error: {
+          message: "reasoning.generate_summary must be one of: auto, concise, detailed",
+          param: "reasoning.generate_summary",
         },
       },
     ];

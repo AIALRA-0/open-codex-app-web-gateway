@@ -246,6 +246,7 @@ const OPENAI_FUNCTION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OPENAI_RESPONSE_MODALITY_VALUES = Object.freeze(["text", "audio"]);
 const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "flac", "opus", "pcm16"]);
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
+const OPENAI_REASONING_SUMMARY_VALUES = Object.freeze(["auto", "concise", "detailed"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
@@ -3402,7 +3403,7 @@ function validateOpenAIResponsesReasoning(body = {}) {
   if (!isPlainObject(body.reasoning)) {
     return requestValidationError("reasoning must be an object", "reasoning");
   }
-  return validateOpenAIReasoningEffort(body.reasoning, "reasoning.effort");
+  return validateOpenAIReasoningObject(body.reasoning, "reasoning");
 }
 
 function validateOpenAIChatReasoning(body = {}) {
@@ -3412,7 +3413,17 @@ function validateOpenAIChatReasoning(body = {}) {
   if (!isPlainObject(body.reasoning)) {
     return requestValidationError("reasoning must be an object", "reasoning");
   }
-  return validateOpenAIReasoningEffort(body.reasoning, "reasoning.effort");
+  return validateOpenAIReasoningObject(body.reasoning, "reasoning");
+}
+
+function validateOpenAIReasoningObject(reasoning = {}, param) {
+  const effortError = validateOpenAIReasoningEffort(reasoning, `${param}.effort`);
+  if (effortError) return effortError;
+  for (const field of ["summary", "generate_summary"]) {
+    const error = validateOpenAIReasoningSummary(reasoning, `${param}.${field}`);
+    if (error) return error;
+  }
+  return null;
 }
 
 function validateOpenAIReasoningEffort(container = {}, param) {
@@ -3421,6 +3432,18 @@ function validateOpenAIReasoningEffort(container = {}, param) {
   if (typeof container[key] !== "string" || !OPENAI_REASONING_EFFORT_VALUES.includes(container[key])) {
     return requestValidationError(
       `${param} must be one of: ${OPENAI_REASONING_EFFORT_VALUES.join(", ")}`,
+      param,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIReasoningSummary(container = {}, param) {
+  const key = param.split(".").at(-1);
+  if (!Object.prototype.hasOwnProperty.call(container, key) || container[key] == null) return null;
+  if (typeof container[key] !== "string" || !OPENAI_REASONING_SUMMARY_VALUES.includes(container[key])) {
+    return requestValidationError(
+      `${param} must be one of: ${OPENAI_REASONING_SUMMARY_VALUES.join(", ")}`,
       param,
     );
   }

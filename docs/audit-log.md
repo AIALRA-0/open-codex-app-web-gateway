@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-17 Reasoning Summary Request Validation
+
+- Rechecked the official OpenAI `Reasoning` schema through the official
+  `openai/openai-openapi` spec:
+  - `reasoning.effort` accepts `none`, `minimal`, `low`, `medium`, `high`, and
+    `xhigh`;
+  - `reasoning.summary` accepts `auto`, `concise`, `detailed`, or `null`;
+  - deprecated `reasoning.generate_summary` accepts the same summary enum.
+- Closed a request-contract gap:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and direct
+    `/v1/chat/completions` now reject invalid `reasoning.summary` and
+    `reasoning.generate_summary` values before provider calls;
+  - Responses translation now records `metadata.compatibility.reasoning_summary`
+    when a Chat-only provider cannot forward the summary request;
+  - deployments that explicitly enable reasoning-summary passthrough map
+    `reasoning.summary` or deprecated `reasoning.generate_summary` to upstream
+    `reasoning_summary`;
+  - when both `summary` and deprecated `generate_summary` are present, `summary`
+    takes precedence and metadata records that the deprecated field was ignored.
+- Validation:
+  - targeted reasoning translator tests pass;
+  - targeted server validation tests for Responses, input token counting, and
+    direct Chat reasoning fields pass;
+  - `npm test` passes: 342 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional credential-pattern scan only matched a local test fixture bearer
+    token string;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local smoke against `http://127.0.0.1:12912` confirms invalid
+    `reasoning.summary` returns `400 invalid_request_parameter`, and valid
+    summary requests return `metadata.compatibility.reasoning_summary.reason`
+    as `provider_unsupported`;
+  - public smoke against `https://opencodexapp.aialra.online` confirms the same
+    validation and compatibility metadata behavior.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Active Background Queued Stream Event
 
 - Rechecked the official OpenAI Responses stream event union through the

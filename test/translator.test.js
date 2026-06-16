@@ -503,6 +503,39 @@ test("maps reasoning effort none to DeepSeek non-thinking mode", () => {
   });
 });
 
+test("maps reasoning summary requests to compatibility metadata or passthrough", () => {
+  const filtered = responsesToChatRequest({
+    model: "deepseek-v4-pro",
+    input: "Answer with a concise reasoning summary.",
+    reasoning: { summary: "concise", generate_summary: "auto" },
+  });
+
+  assert.equal(filtered.chat.reasoning_summary, undefined);
+  assert.deepEqual(filtered.compatibility.reasoning_summary, {
+    source: "reasoning.summary",
+    value: "concise",
+    deprecated_generate_summary: "ignored_by_summary",
+    forwarded: false,
+    reason: "provider_unsupported",
+  });
+
+  const forwarded = responsesToChatRequest({
+    model: "gpt-compatible",
+    input: "Answer with a deprecated reasoning summary request.",
+    reasoning: { generate_summary: "detailed" },
+  }, [], { forwardReasoningSummary: true });
+
+  assert.equal(forwarded.chat.reasoning_summary, "detailed");
+  assert.deepEqual(forwarded.compatibility.reasoning_summary, {
+    source: "reasoning.generate_summary",
+    value: "detailed",
+    deprecated: true,
+    target: "reasoning_summary",
+    forwarded: true,
+    reason: "provider_reasoning_summary_passthrough",
+  });
+});
+
 test("maps Responses output logprobs request to Chat logprobs parameters", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

@@ -511,8 +511,28 @@ function mapReasoning(reasoning, options = {}) {
     const effort = normalizeReasoningEffort(reasoning.effort, options);
     if (effort) mapped.reasoning_effort = effort;
   }
-  if (reasoning.summary && options.forwardReasoningSummary) mapped.reasoning_summary = reasoning.summary;
+  const summary = reasoningSummaryRequest(reasoning);
+  if (summary && options.forwardReasoningSummary) mapped.reasoning_summary = summary.value;
   return mapped;
+}
+
+function reasoningSummaryRequest(reasoning) {
+  if (!isPlainObject(reasoning)) return null;
+  if (reasoning.summary != null) {
+    return {
+      source: "reasoning.summary",
+      value: reasoning.summary,
+      ...(reasoning.generate_summary != null ? { deprecated_generate_summary: "ignored_by_summary" } : {}),
+    };
+  }
+  if (reasoning.generate_summary != null) {
+    return {
+      source: "reasoning.generate_summary",
+      value: reasoning.generate_summary,
+      deprecated: true,
+    };
+  }
+  return null;
 }
 
 function normalizeReasoningEffort(effort, options = {}) {
@@ -545,6 +565,24 @@ function shouldDisableDeepSeekThinkingForReasoningNone(reasoning, options = {}) 
     && isPlainObject(reasoning)
     && reasoning.effort === "none"
   );
+}
+
+function mapReasoningSummaryCompatibility(reasoning, options = {}) {
+  const summary = reasoningSummaryRequest(reasoning);
+  if (!summary) return null;
+  if (options.forwardReasoningSummary) {
+    return {
+      ...summary,
+      target: "reasoning_summary",
+      forwarded: true,
+      reason: "provider_reasoning_summary_passthrough",
+    };
+  }
+  return {
+    ...summary,
+    forwarded: false,
+    reason: "provider_unsupported",
+  };
 }
 
 function makeCompatibilityMessage(unsupportedTools) {
@@ -634,6 +672,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   Object.assign(chat, mapReasoning(request.reasoning, options));
   const reasoningEffortCompatibility = mapReasoningEffortCompatibility(request.reasoning, options);
+  const reasoningSummaryCompatibility = mapReasoningSummaryCompatibility(request.reasoning, options);
   const disableThinkingForReasoningNone = shouldDisableDeepSeekThinkingForReasoningNone(request.reasoning, options);
   const disableThinkingForToolChoice = !!(
     options.deepseekDisableThinkingForToolChoice
@@ -657,6 +696,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
           ? { deepseek_thinking: "disabled_for_tool_choice" }
           : {}),
       ...(reasoningEffortCompatibility ? { reasoning_effort: reasoningEffortCompatibility } : {}),
+      ...(reasoningSummaryCompatibility ? { reasoning_summary: reasoningSummaryCompatibility } : {}),
       ...(logprobsRequested ? { logprobs: "chat_logprobs" } : {}),
       ...(storedChatFieldsCompatibility ? { stored_chat_fields: storedChatFieldsCompatibility } : {}),
       ...(serviceTierCompatibility ? { service_tier: serviceTierCompatibility } : {}),
