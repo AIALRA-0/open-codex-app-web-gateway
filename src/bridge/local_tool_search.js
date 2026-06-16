@@ -646,6 +646,36 @@ function suppressToolSearchChatToolCalls(chatCompletion, context) {
   return cloned;
 }
 
+function suppressToolSearchAssistantText(chatCompletion, context) {
+  if (!chatCompletion || !context?.chat_tool_map || !Object.keys(context.chat_tool_map).length) {
+    return chatCompletion;
+  }
+  let cloned = null;
+  let suppressed = 0;
+  let suppressedChars = 0;
+
+  for (let index = 0; index < (chatCompletion.choices || []).length; index += 1) {
+    const choice = chatCompletion.choices[index];
+    const message = choice?.message;
+    const calls = message?.tool_calls;
+    if (!message || !Array.isArray(calls) || !calls.length) continue;
+    const callsLoadedTool = calls.some((call) => !!context.chat_tool_map[call?.function?.name]);
+    if (!callsLoadedTool) continue;
+    const text = chatContentText(message.content).trim();
+    if (!text) continue;
+    if (!cloned) cloned = clone(chatCompletion);
+    cloned.choices[index].message.content = null;
+    suppressed += 1;
+    suppressedChars += text.length;
+  }
+
+  if (suppressed) {
+    context.assistant_text_suppressed_count = (context.assistant_text_suppressed_count || 0) + suppressed;
+    context.assistant_text_suppressed_char_count = (context.assistant_text_suppressed_char_count || 0) + suppressedChars;
+  }
+  return cloned || chatCompletion;
+}
+
 function promoteToolSearchTextToolCalls(chatCompletion, context) {
   if (!chatCompletion || !context?.chat_tool_map || !Object.keys(context.chat_tool_map).length) {
     return chatCompletion;
@@ -892,6 +922,8 @@ function toolSearchCompatibility(context) {
       stream_remapped_tool_call_count: context.stream_remapped_tool_call_count || 0,
       text_tool_call_count: context.text_tool_call_count || 0,
       text_suppressed_count: context.text_suppressed_count || 0,
+      assistant_text_suppressed_count: context.assistant_text_suppressed_count || 0,
+      assistant_text_suppressed_char_count: context.assistant_text_suppressed_char_count || 0,
       skipped_count: context.skipped_count || 0,
       failed_count: context.failed_count || 0,
       ...(context.chat_search_tool_name ? { chat_search_tool_name: context.chat_search_tool_name } : {}),
@@ -943,6 +975,7 @@ function toolSearchPrompt(context) {
   if (loaded.length) {
     lines.push("Loaded callable tools:");
     for (const tool of loaded) lines.push(`- ${tool.path}`);
+    lines.push("When calling a loaded tool, emit only the function call. Do not include assistant prose in the same turn.");
   }
   return lines.join("\n");
 }
@@ -1006,6 +1039,7 @@ module.exports = {
   promoteToolSearchTextToolCalls,
   remapToolSearchChatToolCalls,
   remapToolSearchResponseOutput,
+  suppressToolSearchAssistantText,
   suppressToolSearchChatToolCalls,
   toolSearchCompatibility,
   toolSearchOutputItems,

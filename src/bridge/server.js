@@ -104,6 +104,7 @@ const {
   promoteToolSearchTextToolCalls,
   remapToolSearchChatToolCalls,
   remapToolSearchResponseOutput,
+  suppressToolSearchAssistantText,
   suppressToolSearchChatToolCalls,
   toolSearchCompatibility,
   toolSearchOutputItems,
@@ -870,6 +871,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     return;
   }
   let upstreamJson = promoteToolSearchTextToolCalls(providerResult.json, localToolSearch);
+  upstreamJson = suppressToolSearchAssistantText(upstreamJson, localToolSearch);
   upstreamJson = remapToolSearchChatToolCalls(upstreamJson, localToolSearch);
   const computerExecution = executeComputerChatToolCalls(localComputer, upstreamJson, config, { toolBudget });
   if (computerExecution.executed) {
@@ -1380,6 +1382,7 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
   }
 
   let upstreamJson = promoteToolSearchTextToolCalls(providerResult.json, contexts?.tool_search);
+  upstreamJson = suppressToolSearchAssistantText(upstreamJson, contexts?.tool_search);
   upstreamJson = remapToolSearchChatToolCalls(upstreamJson, contexts?.tool_search);
   if (contexts?.computer) {
     const computerExecution = executeComputerChatToolCalls(contexts.computer, upstreamJson, config, { toolBudget });
@@ -3469,6 +3472,13 @@ async function streamProviderWithLocalToolLoop(res, state, config, chat, incomin
         applyCombinedStreamUsage(state, usageParts);
         return { ok: true };
       }
+      const assistantTextSuppressedCount = localToolSearch?.assistant_text_suppressed_count || 0;
+      const suppressedCompletion = suppressToolSearchAssistantText(current.completion, localToolSearch);
+      if ((localToolSearch?.assistant_text_suppressed_count || 0) > assistantTextSuppressedCount) {
+        emitChatCompletionToolCallsAsStreamEvents(res, state, suppressedCompletion);
+        applyCombinedStreamUsage(state, usageParts);
+        return { ok: true };
+      }
       replayBufferedChatStreamEvents(res, state, current.payloads);
       applyCombinedStreamUsage(state, usageParts);
       return { ok: true };
@@ -5433,7 +5443,7 @@ function mergeChatStreamToolCalls(state, deltas) {
 
 function mergeChatStreamFunctionCall(current, delta) {
   const merged = current ? { ...current } : {};
-  if (delta.name !== undefined) merged.name = delta.name;
+  if (delta.name !== undefined) merged.name = `${merged.name || ""}${stringifyContent(delta.name)}`;
   if (delta.arguments !== undefined) {
     merged.arguments = `${merged.arguments || ""}${stringifyContent(delta.arguments)}`;
   }

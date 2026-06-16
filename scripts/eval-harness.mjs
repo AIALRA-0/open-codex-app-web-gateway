@@ -4558,6 +4558,8 @@ async function runToolSearchLargeCatalogCase(testCase, context, started) {
     loaded_chat_tool_count: localToolSearch.loaded_chat_tool_count || 0,
     text_tool_call_count: localToolSearch.text_tool_call_count || 0,
     text_suppressed_count: localToolSearch.text_suppressed_count || 0,
+    assistant_text_suppressed_count: localToolSearch.assistant_text_suppressed_count || 0,
+    assistant_text_suppressed_char_count: localToolSearch.assistant_text_suppressed_char_count || 0,
     loaded_namespace: outputNamespace?.name,
     loaded_tool_names: loadedToolNames,
     function_name: functionCall?.name,
@@ -4615,6 +4617,7 @@ async function runToolSearchCatalogSweepCase(testCase, context, started) {
     loaded_fraction_max: loadedFractions.length ? Number(Math.max(...loadedFractions).toFixed(4)) : 0,
     dsml_text_leak_count: scenarioResults.filter((result) => result.dsml_text_leak).length,
     assistant_text_leak_count: scenarioResults.filter((result) => result.assistant_text_leak).length,
+    assistant_text_suppressed_count: scenarioResults.reduce((sum, result) => sum + (result.assistant_text_suppressed_count || 0), 0),
     text_tool_call_count: scenarioResults.reduce((sum, result) => sum + (result.text_tool_call_count || 0), 0),
     function_calls: scenarioResults.map((result) => `${result.function_namespace || "none"}.${result.function_name || "none"}`),
     scenarios: scenarioResults,
@@ -4653,7 +4656,7 @@ function evaluateToolSearchSweepScenario(scenario, json, transport) {
     && localToolSearch.loaded_tool_count < localToolSearch.deferred_tool_count
     && localToolSearch.boundary === "deferred_tool_search_and_load";
   const minimalLoadOk = outputNamespaces.length === 1 && loadedNamespaceNames[0] === scenario.expected_namespace;
-  const ok = protocolOk && targetLoaded && functionOk && argumentsOk && minimalLoadOk && !dsmlTextLeak;
+  const ok = protocolOk && targetLoaded && functionOk && argumentsOk && minimalLoadOk && !dsmlTextLeak && !assistantTextLeak;
   const loadedFraction = localToolSearch.deferred_tool_count
     ? localToolSearch.loaded_tool_count / localToolSearch.deferred_tool_count
     : 0;
@@ -4683,6 +4686,8 @@ function evaluateToolSearchSweepScenario(scenario, json, transport) {
     assistant_text_leak: assistantTextLeak,
     text_tool_call_count: localToolSearch.text_tool_call_count || 0,
     text_suppressed_count: localToolSearch.text_suppressed_count || 0,
+    assistant_text_suppressed_count: localToolSearch.assistant_text_suppressed_count || 0,
+    assistant_text_suppressed_char_count: localToolSearch.assistant_text_suppressed_char_count || 0,
     output_text: truncate(outputText, 300),
     error: ok ? undefined : truncate(JSON.stringify(json)),
   };

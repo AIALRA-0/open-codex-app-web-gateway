@@ -167,11 +167,14 @@ expected `RMA-42`/`pdf` arguments. The
 deterministically shuffled large-catalog tasks for `inventory`, `security`,
 and `support`, recording scenario pass rate, average/P95 latency, token usage,
 loaded-catalog fraction, DSML text leaks, assistant prose leaks, and final
-function-call namespaces/arguments. Mock-provider coverage hardens
+function-call namespaces/arguments. The sweep now fails if assistant prose is
+visible on these tool-only turns. Mock-provider coverage hardens
 DeepSeek-style DSML text pseudo-tool outputs for loaded functions by promoting
 direct function invocations, `local_tool_call` `path`/`input` wrappers, and
 namespace `method`/`params` wrappers into standard tool calls before public
-Responses translation. MCP tool-search coverage verifies the official "group by MCP
+Responses translation, and suppresses ordinary assistant prose that appears in
+the same Chat choice as an already-loaded `tool_search` function call while
+recording suppression counts. MCP tool-search coverage verifies the official "group by MCP
 servers" guidance: a deferred remote MCP server starts as a searchable group,
 the model calls the generated
 `local_tool_search` function, the bridge imports remote `tools/list`, emits

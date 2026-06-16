@@ -5358,7 +5358,7 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
           index: 0,
           message: {
             role: "assistant",
-            content: null,
+            content: "I found the CRM orders tool and will call it now.",
             tool_calls: [{
               id: "call_orders",
               type: "function",
@@ -5462,10 +5462,13 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
     assert.equal(json.output[2].name, "list_open_orders");
     assert.equal(json.output[2].namespace, "crm");
     assert.equal(json.output[2].arguments, "{\"customer_id\":\"CUST-123\"}");
+    assert.equal(json.output.some((item) => item.type === "message"), false);
     assert.equal(json.metadata.compatibility.local_tool_search.provider, "local");
     assert.equal(json.metadata.compatibility.local_tool_search.deferred_tool_count, 1);
     assert.equal(json.metadata.compatibility.local_tool_search.search_call_count, 1);
     assert.equal(json.metadata.compatibility.local_tool_search.loaded_tool_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.assistant_text_suppressed_count, 1);
+    assert.ok(json.metadata.compatibility.local_tool_search.assistant_text_suppressed_char_count > 0);
     assert.equal(json.usage.input_tokens, 18);
     assert.equal(json.usage.output_tokens, 5);
     assert.equal(json.usage.total_tokens, 23);
@@ -5704,6 +5707,20 @@ test("POST /v1/responses remaps streaming tool_search namespace function names a
         index: 0,
         delta: {
           role: "assistant",
+          content: "Loaded CRM lookup. Calling it now.",
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_tool_search_collision_call",
+      object: "chat.completion.chunk",
+      created: 101,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
           tool_calls: [{
             index: 0,
             id: "call_stream_crm_lookup",
@@ -5786,6 +5803,8 @@ test("POST /v1/responses remaps streaming tool_search namespace function names a
     const events = parseSseEvents(await response.text());
     assert.equal(requests.length, 2);
     assert.ok(generatedToolName);
+    assert.equal(events.some((event) => event.event === "response.output_text.delta"), false);
+    assert.equal(events.some((event) => event.event === "response.output_text.done"), false);
     assert.ok(events.some((event) => event.event === "response.function_call_arguments.delta"
       && event.data.delta === "{\"customer_id\":\"CUST-9\"}"));
 
@@ -5816,6 +5835,8 @@ test("POST /v1/responses remaps streaming tool_search namespace function names a
     assert.equal(completed.output[2].arguments, "{\"customer_id\":\"CUST-9\"}");
     assert.equal(completed.metadata.compatibility.local_tool_search.stream_remapped_tool_call_count, 1);
     assert.equal(completed.metadata.compatibility.local_tool_search.loaded_chat_tool_count, 1);
+    assert.equal(completed.metadata.compatibility.local_tool_search.assistant_text_suppressed_count, 1);
+    assert.ok(completed.metadata.compatibility.local_tool_search.assistant_text_suppressed_char_count > 0);
     assert.equal(completed.usage.input_tokens, 18);
     assert.equal(completed.usage.output_tokens, 5);
     assert.equal(completed.usage.total_tokens, 23);

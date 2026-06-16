@@ -1,5 +1,55 @@
 # Audit Log
 
+## 2026-06-16 Tool-Only Tool Search Prose Suppression
+
+- Rechecked the official OpenAI tools guidance through the OpenAI developer
+  docs MCP. This hardening keeps the documented `tool_search` flow intact:
+  deferred tools are loaded first, then the public Responses output should
+  expose `tool_search_call` / `tool_search_output` followed by the selected
+  function call.
+- Added a narrow local `tool_search` post-processor for Chat-only providers:
+  when an already-loaded `tool_search` function call and ordinary
+  `message.content` arrive in the same Chat choice, the bridge suppresses the
+  ordinary assistant text before Responses translation. This prevents
+  tool-only turns from gaining an extra public `message` item while preserving
+  the function call.
+- Added compatibility metadata counters:
+  `local_tool_search.assistant_text_suppressed_count` and
+  `local_tool_search.assistant_text_suppressed_char_count`.
+- Applied the same behavior to non-streaming, streaming, and background
+  Responses paths. The streaming path now detects this condition after
+  buffering the provider stream and emits function-call SSE events instead of
+  replaying buffered text deltas.
+- Fixed the Chat streaming accumulator so split `tool_calls[].function.name`
+  fragments are concatenated instead of overwritten. The public stream already
+  accumulated names correctly; the buffered-completion path now matches it.
+- Tightened `responses-tool-search-catalog-sweep`: assistant prose visible in
+  the public output is now a failing condition, and the eval report includes
+  suppression counts.
+- Validation:
+  - `node --check src/bridge/local_tool_search.js src/bridge/server.js
+    scripts/eval-harness.mjs test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "tool_search"`:
+    passed 201/201.
+  - `npm test`: passed 245/245.
+  - Restarted `aialra-opencodexapp-bridge.service`; `/healthz` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 2796 ms, P95 latency 4282 ms, and 99 total tokens.
+  - Live `responses-tool-search-catalog-sweep` passed 1/1 against
+    `deepseek-v4-pro`; all 3/3 scenarios passed, pass rate 1.0, total latency
+    11564 ms, per-scenario average latency 3854 ms, P95 latency 4832 ms, usage
+    6722 input / 357 output / 7079 total tokens, loaded fraction average/max
+    0.125, DSML text leak count 0, assistant text leak count 0, assistant text
+    suppressed count 1, text pseudo-tool call count 0, and final function
+    calls `inventory.reserve_sku`, `security.rotate_key`, and
+    `support.escalate_ticket`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Tool Search Catalog Sweep
 
 - Rechecked the official OpenAI `tool_search` guidance through the OpenAI
