@@ -223,6 +223,7 @@ const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
   "reasoning.encrypted_content",
   "message.output_text.logprobs",
 ]);
+const OPENAI_RESPONSES_TRUNCATION_VALUES = Object.freeze(["auto", "disabled"]);
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -876,6 +877,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
   if (stateReferenceError) {
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
+  const truncationValueError = validateOpenAIResponsesTruncation(request);
+  if (truncationValueError) {
+    sendError(res, 400, truncationValueError.message, truncationValueError);
     return;
   }
   const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
@@ -2588,6 +2594,17 @@ function validateOpenAIResponseStateReferences(body = {}) {
   return null;
 }
 
+function validateOpenAIResponsesTruncation(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "truncation") || body.truncation == null) return null;
+  if (typeof body.truncation !== "string" || !OPENAI_RESPONSES_TRUNCATION_VALUES.includes(body.truncation)) {
+    return requestValidationError(
+      `truncation must be one of: ${OPENAI_RESPONSES_TRUNCATION_VALUES.join(", ")}`,
+      "truncation",
+    );
+  }
+  return null;
+}
+
 function validateOpenAILegacyEcho(body = {}) {
   return validateOpenAIBooleanParameter(body, "echo");
 }
@@ -3930,6 +3947,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
     return;
   }
+  const truncationValueError = validateOpenAIResponsesTruncation(request);
+  if (truncationValueError) {
+    sendError(res, 400, truncationValueError.message, truncationValueError);
+    return;
+  }
   const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
   if (responsesMaxOutputTokensError) {
     sendError(res, 400, responsesMaxOutputTokensError.message, responsesMaxOutputTokensError);
@@ -4020,6 +4042,11 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
   if (stateReferenceError) {
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
+    return;
+  }
+  const truncationValueError = validateOpenAIResponsesTruncation(request);
+  if (truncationValueError) {
+    sendError(res, 400, truncationValueError.message, truncationValueError);
     return;
   }
   const conversation = prepareConversationContext(request, conversationStore, config);

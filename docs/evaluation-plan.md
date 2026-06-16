@@ -733,7 +733,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Responses `truncation:"auto"` drops oldest local `conversation` /
   `previous_response_id` replay messages before upstream Chat calls when the
   local context budget is exceeded, while disabled truncation returns a bounded
-  `context_length_exceeded` error before provider calls.
+  `context_length_exceeded` error before provider calls. Responses
+  `truncation` values must also validate as `auto`, `disabled`, or null on
+  create, `/input_tokens`, and the local `/compact` compatibility path before
+  replay, local context truncation, or provider calls.
 - Responses state references validate at the public boundary:
   `previous_response_id` must be string/null, `conversation` must be an id
   string or `{id}` object, the local `conversation_id` alias must be string/null,

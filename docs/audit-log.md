@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Official Responses Truncation Validation
+
+- Rechecked the current official OpenAI Responses create documentation through
+  the OpenAI developer docs MCP and the official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://api.openai.com/v1/responses/input_tokens`, and
+  `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateResponse.truncation` is `auto`, `disabled`, or null, and
+  `TokenCountsBody.truncation` references the same `TruncationEnum`. The
+  official compact request body does not currently expose `truncation`, but the
+  bridge's local compact compatibility path already participates in local
+  replay truncation, so any caller-supplied `truncation` value is now validated
+  against the same enum before local work starts.
+- Added local request validation before replay, local context truncation, or
+  provider calls:
+  - `POST /v1/responses` rejects invalid `truncation` values with
+    `400 invalid_request_error`, `code:"invalid_request_parameter"`, and
+    `param:"truncation"`.
+  - `POST /v1/responses/input_tokens` applies the same enum validation before
+    prompt-token probes.
+  - `POST /v1/responses/compact` applies the same enum validation for the
+    bridge's local compact compatibility extension.
+  - Valid `auto`, `disabled`, omitted, and null values keep the existing local
+    truncation behavior.
+- Updated the compatibility matrix and evaluation plan so `truncation` enum
+  validation is tracked alongside the existing local context-budget behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "Responses truncation" test/server.test.js`:
+    passed 3/3.
+  - `npm test`: passed 323/323.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact` returned HTTP
+    400 with `param:"truncation"` for invalid string, boolean, and empty-string
+    values.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 6.0G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Responses State Reference Validation
 
 - Rechecked the current official OpenAI Responses create, input-token-count,

@@ -16105,6 +16105,38 @@ test("Responses truncation disabled returns context_length_exceeded before provi
   }, { truncationMaxInputChars: 120 });
 });
 
+test("Responses truncation values validate before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid truncation values");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidValues = ["middle", "", true, 1, {}, []];
+    for (const endpoint of ["/v1/responses", "/v1/responses/input_tokens", "/v1/responses/compact"]) {
+      for (const invalidValue of invalidValues) {
+        const response = await fetch(`${baseUrl}${endpoint}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            model: "mock-model",
+            input: "Validate truncation values before provider calls.",
+            truncation: invalidValue,
+          }),
+        });
+        assert.equal(response.status, 400, `${endpoint} ${JSON.stringify(invalidValue)}`);
+        assert.deepEqual(await response.json(), {
+          error: {
+            message: "truncation must be one of: auto, disabled",
+            type: "invalid_request_error",
+            param: "truncation",
+            code: "invalid_request_parameter",
+          },
+        });
+      }
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses conversation references return 404 when the local conversation is missing", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
