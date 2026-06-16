@@ -102,6 +102,7 @@ const {
   localToolSearchToolTypes,
   prepareToolSearchContext,
   remapToolSearchChatToolCalls,
+  remapToolSearchResponseOutput,
   suppressToolSearchChatToolCalls,
   toolSearchCompatibility,
   toolSearchOutputItems,
@@ -3293,6 +3294,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
     sanitizeMcpAssistantOutput(response, localMcp);
     mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
+    remapToolSearchResponseOutput(response, localToolSearch);
     mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
     Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
     syncStreamTextFromResponse(state);

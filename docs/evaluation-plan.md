@@ -178,9 +178,13 @@ approval-required case emits `response.output_item.added` for
 surfacing bridge-internal Chat `function_call` events, then the streaming
 continuation approves the request, reuses the prior `mcp_list_tools`, emits MCP
 argument delta/done/progress events for the approved `mcp_call`, combines usage,
-and still skips a second remote `tools/list`. Follow-up eval work should add live bridge cases for `tool_search`,
-collision-heavy streaming function names, hosted connectors, and large catalogs
-to measure latency, token savings, and tool-selection quality.
+and still skips a second remote `tools/list`. Mock-provider coverage also
+exercises collision-heavy streaming function names by splitting a generated
+namespace Chat function name across SSE chunks and verifying that public
+Responses output keeps the original `namespace` / `name`. Follow-up eval work
+should add live bridge cases for client-executed `tool_search`, hosted
+connectors, and large catalogs to measure latency, token savings, and
+tool-selection quality.
 Computer Use coverage verifies both the screenshot-first local `computer_call`
 shape and the follow-up loop where a returned `computer_call_output` lets a
 Chat-only model request the next action through a generated function tool. The

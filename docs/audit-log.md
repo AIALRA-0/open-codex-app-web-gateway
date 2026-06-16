@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-16 Streaming Tool Search Name Remapping
+
+- Closed the local `tool_search` streaming name-leak boundary for deferred
+  namespace functions whose public name collides with another Chat function.
+  The bridge now remaps final streaming `function_call` output items from the
+  generated Chat tool name back to the original Responses `name` and
+  `namespace` before `response.output_item.done` and `response.completed` are
+  emitted.
+- Added `metadata.compatibility.local_tool_search.stream_remapped_tool_call_count`
+  so live streams can be audited when generated Chat names are rewritten at
+  the public Responses boundary.
+- Added mock-provider coverage for a collision-heavy streaming path:
+  - first stream calls generated `local_tool_search`;
+  - the bridge emits public `tool_search_call` and `tool_search_output`;
+  - the follow-up Chat request contains both the immediate `lookup` function
+    and the loaded deferred `crm.lookup` function under a generated
+    collision-safe Chat name;
+  - the provider splits that generated name across two SSE chunks;
+  - the public stream and completed response expose only
+    `namespace:"crm", name:"lookup"`.
+- Updated the compatibility matrix and evaluation plan to remove the old
+  streaming generated-name boundary and keep hosted connector search, live
+  client-executed `tool_search`, and large-catalog evals on the roadmap.
+- Validation:
+  - `node --check src/bridge/local_tool_search.js src/bridge/server.js
+    test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "remaps streaming tool_search namespace function names"`:
+    passed 199/199 because the Node test runner executed the full server test
+    file, including the new regression.
+  - `npm test`: passed 243/243.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1257 ms, P95 latency 1433 ms, and 99 total tokens.
+  - Live
+    `responses-mcp-remote-tool-search-stream-approval` passed 1/1 against
+    `deepseek-v4-pro`; latency 4807 ms, 33 stream events, public output
+    `mcp-tool-search-stream-approval-ok`, remote methods `initialize`,
+    `notifications/initialized`, `tools/list`, and `tools/call`, and no public
+    bridge-internal function-call events.
+
 ## 2026-06-16 Live Tool Search MCP Approval Hardening
 
 - Extended the live bridge-regression harness with deferred remote MCP approval

@@ -5465,6 +5465,201 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
   });
 });
 
+test("POST /v1/responses remaps streaming tool_search namespace function names after Chat name collisions", async () => {
+  let providerCallCount = 0;
+  let generatedToolName = "";
+
+  await withMockProvider(async (_req, res, call) => {
+    providerCallCount += 1;
+    assert.equal(call.body.stream, true);
+    const toolNames = (call.body.tools || []).map((tool) => tool.function?.name).filter(Boolean);
+
+    if (providerCallCount === 1) {
+      assert.ok(toolNames.includes("lookup"));
+      const searchTool = call.body.tools.find((tool) => /^local_tool_search/.test(tool.function?.name || ""));
+      assert.ok(searchTool);
+      assert.equal(toolNames.some((name) => /^crm_lookup/.test(name)), false);
+
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_tool_search_collision_search",
+        object: "chat.completion.chunk",
+        created: 100,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          delta: {
+            role: "assistant",
+            tool_calls: [{
+              index: 0,
+              id: "call_stream_search_collision",
+              type: "function",
+              function: { name: searchTool.function.name, arguments: "" },
+            }],
+          },
+          finish_reason: null,
+        }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_tool_search_collision_search",
+        object: "chat.completion.chunk",
+        choices: [{
+          index: 0,
+          delta: {
+            tool_calls: [{
+              index: 0,
+              function: { arguments: "{\"paths\":[\"crm.lookup\"],\"query\":\"customer lookup\"}" },
+            }],
+          },
+          finish_reason: null,
+        }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_tool_search_collision_search",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+        usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+      })}\n\n`);
+      res.end("data: [DONE]\n\n");
+      return;
+    }
+
+    assert.equal(providerCallCount, 2);
+    assert.ok(toolNames.includes("lookup"));
+    const loadedTool = call.body.tools.find((tool) => /^crm_lookup/.test(tool.function?.name || ""));
+    assert.ok(loadedTool, JSON.stringify(toolNames));
+    assert.equal(loadedTool.function.parameters.properties.customer_id.type, "string");
+    generatedToolName = loadedTool.function.name;
+    const splitAt = Math.max(1, Math.floor(generatedToolName.length / 2));
+
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_tool_search_collision_call",
+      object: "chat.completion.chunk",
+      created: 101,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [{
+            index: 0,
+            id: "call_stream_crm_lookup",
+            type: "function",
+            function: { name: generatedToolName.slice(0, splitAt), arguments: "" },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_tool_search_collision_call",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            function: {
+              name: generatedToolName.slice(splitAt),
+              arguments: "{\"customer_id\":\"CUST-9\"}",
+            },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_tool_search_collision_call",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+    })}\n\n`);
+    res.end("data: [DONE]\n\n");
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Find CRM customer CUST-9.",
+        stream: true,
+        tools: [
+          { type: "tool_search" },
+          {
+            type: "function",
+            name: "lookup",
+            description: "Immediate public lookup tool.",
+            parameters: {
+              type: "object",
+              properties: { record_id: { type: "string" } },
+              required: ["record_id"],
+              additionalProperties: false,
+            },
+          },
+          {
+            type: "namespace",
+            name: "crm",
+            description: "CRM tools for customer records.",
+            tools: [{
+              type: "function",
+              name: "lookup",
+              description: "Look up a CRM customer by customer ID.",
+              defer_loading: true,
+              parameters: {
+                type: "object",
+                properties: { customer_id: { type: "string" } },
+                required: ["customer_id"],
+                additionalProperties: false,
+              },
+            }],
+          },
+        ],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+    const events = parseSseEvents(await response.text());
+    assert.equal(requests.length, 2);
+    assert.ok(generatedToolName);
+    assert.ok(events.some((event) => event.event === "response.function_call_arguments.delta"
+      && event.data.delta === "{\"customer_id\":\"CUST-9\"}"));
+
+    const doneItem = events.find((event) => event.event === "response.output_item.done"
+      && event.data.item?.type === "function_call")?.data.item;
+    assert.ok(doneItem);
+    assert.equal(doneItem.name, "lookup");
+    assert.equal(doneItem.namespace, "crm");
+    assert.equal(doneItem.arguments, "{\"customer_id\":\"CUST-9\"}");
+
+    const terminalEvents = events.filter((event) => (
+      event.event === "response.output_item.done" || event.event === "response.completed"
+    ));
+    const escapedGeneratedName = generatedToolName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    assert.doesNotMatch(JSON.stringify(terminalEvents), new RegExp(`"name":"${escapedGeneratedName}"`));
+
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.deepEqual(completed.output.map((item) => item.type), [
+      "tool_search_call",
+      "tool_search_output",
+      "function_call",
+    ]);
+    assert.deepEqual(completed.output[0].arguments.paths, ["crm.lookup"]);
+    assert.equal(completed.output[1].tools[0].type, "namespace");
+    assert.equal(completed.output[1].tools[0].name, "crm");
+    assert.equal(completed.output[2].name, "lookup");
+    assert.equal(completed.output[2].namespace, "crm");
+    assert.equal(completed.output[2].arguments, "{\"customer_id\":\"CUST-9\"}");
+    assert.equal(completed.metadata.compatibility.local_tool_search.stream_remapped_tool_call_count, 1);
+    assert.equal(completed.metadata.compatibility.local_tool_search.loaded_chat_tool_count, 1);
+    assert.equal(completed.usage.input_tokens, 18);
+    assert.equal(completed.usage.output_tokens, 5);
+    assert.equal(completed.usage.total_tokens, 23);
+  });
+});
+
 test("POST /v1/responses loads client-executed tool_search_output tools from input", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools.length, 1);

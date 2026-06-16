@@ -662,6 +662,29 @@ function remapToolSearchChatToolCalls(chatCompletion, context) {
   return cloned;
 }
 
+function remapToolSearchResponseOutput(response, context) {
+  if (!response || !context?.chat_tool_map) return response;
+  let remapped = 0;
+  for (const item of response.output || []) {
+    if (item?.type !== "function_call") continue;
+    const mapping = context.chat_tool_map[item.name];
+    if (!mapping) continue;
+    const nextName = mapping.name || item.name;
+    const hadNamespace = Object.prototype.hasOwnProperty.call(item, "namespace");
+    const changed = item.name !== nextName
+      || (mapping.namespace ? item.namespace !== mapping.namespace : hadNamespace);
+    item.name = nextName;
+    if (mapping.namespace) {
+      item.namespace = mapping.namespace;
+    } else {
+      delete item.namespace;
+    }
+    if (changed) remapped += 1;
+  }
+  if (remapped) context.stream_remapped_tool_call_count = (context.stream_remapped_tool_call_count || 0) + remapped;
+  return response;
+}
+
 function attachToolSearchOutput(response, context) {
   if (!context) return response;
   response.output = [
@@ -697,6 +720,7 @@ function toolSearchCompatibility(context) {
       mcp_loaded_tool_count: context.mcp_loaded_tool_count || 0,
       mcp_list_tools_failed_count: context.mcp_list_tools_failed_count || 0,
       loaded_chat_tool_count: Object.keys(context.chat_tool_map || {}).length,
+      stream_remapped_tool_call_count: context.stream_remapped_tool_call_count || 0,
       skipped_count: context.skipped_count || 0,
       failed_count: context.failed_count || 0,
       ...(context.chat_search_tool_name ? { chat_search_tool_name: context.chat_search_tool_name } : {}),
@@ -809,6 +833,7 @@ module.exports = {
   localToolSearchToolTypes,
   prepareToolSearchContext,
   remapToolSearchChatToolCalls,
+  remapToolSearchResponseOutput,
   suppressToolSearchChatToolCalls,
   toolSearchCompatibility,
   toolSearchOutputItems,
