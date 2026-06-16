@@ -226,6 +226,8 @@ const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
 const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
 const OPENAI_RESPONSE_FORMAT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const OPENAI_RESPONSE_MODALITY_VALUES = Object.freeze(["text", "audio"]);
+const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "flac", "opus", "pcm16"]);
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
@@ -889,6 +891,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const chatOutputFieldsError = validateOpenAIChatOutputFields(request);
+  if (chatOutputFieldsError) {
+    sendError(res, 400, chatOutputFieldsError.message, chatOutputFieldsError);
     return;
   }
   const textError = validateOpenAIResponsesText(request);
@@ -2593,6 +2600,118 @@ function validateOpenAILogitBias(body = {}) {
         `logit_bias values must be numbers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
         `logit_bias.${tokenId}`,
       );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIChatOutputFields(body = {}) {
+  const modalitiesError = validateOpenAIResponseModalities(body);
+  if (modalitiesError) return modalitiesError;
+
+  const audioError = validateOpenAIChatAudioOutput(body);
+  if (audioError) return audioError;
+
+  if (
+    Array.isArray(body.modalities)
+    && body.modalities.includes("audio")
+    && body.audio == null
+  ) {
+    return requestValidationError("audio is required when modalities includes audio", "audio");
+  }
+
+  const predictionError = validateOpenAIChatPrediction(body);
+  if (predictionError) return predictionError;
+
+  return null;
+}
+
+function validateOpenAIResponseModalities(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "modalities") || body.modalities == null) return null;
+  if (!Array.isArray(body.modalities)) {
+    return requestValidationError("modalities must be an array", "modalities");
+  }
+  if (
+    !body.modalities.every((modality) => (
+      typeof modality === "string"
+      && OPENAI_RESPONSE_MODALITY_VALUES.includes(modality)
+    ))
+  ) {
+    return requestValidationError(
+      `modalities items must be one of: ${OPENAI_RESPONSE_MODALITY_VALUES.join(", ")}`,
+      "modalities",
+    );
+  }
+  return null;
+}
+
+function validateOpenAIChatAudioOutput(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "audio") || body.audio == null) return null;
+  if (!isPlainObject(body.audio)) {
+    return requestValidationError("audio must be an object", "audio");
+  }
+  if (!Object.prototype.hasOwnProperty.call(body.audio, "voice") || body.audio.voice == null) {
+    return requestValidationError("audio.voice is required", "audio.voice");
+  }
+  const voiceError = validateOpenAIChatAudioVoice(body.audio.voice);
+  if (voiceError) return voiceError;
+  if (!Object.prototype.hasOwnProperty.call(body.audio, "format") || body.audio.format == null) {
+    return requestValidationError("audio.format is required", "audio.format");
+  }
+  if (
+    typeof body.audio.format !== "string"
+    || !OPENAI_AUDIO_OUTPUT_FORMAT_VALUES.includes(body.audio.format)
+  ) {
+    return requestValidationError(
+      `audio.format must be one of: ${OPENAI_AUDIO_OUTPUT_FORMAT_VALUES.join(", ")}`,
+      "audio.format",
+    );
+  }
+  return null;
+}
+
+function validateOpenAIChatAudioVoice(voice) {
+  if (typeof voice === "string") return null;
+  if (!isPlainObject(voice) || typeof voice.id !== "string") {
+    return requestValidationError(
+      "audio.voice must be a string or a custom voice object with string id",
+      "audio.voice",
+    );
+  }
+  if (Object.keys(voice).some((key) => key !== "id")) {
+    return requestValidationError("audio.voice custom voice must only include id", "audio.voice");
+  }
+  return null;
+}
+
+function validateOpenAIChatPrediction(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "prediction") || body.prediction == null) return null;
+  if (!isPlainObject(body.prediction)) {
+    return requestValidationError("prediction must be an object", "prediction");
+  }
+  if (body.prediction.type !== "content") {
+    return requestValidationError("prediction.type must be content", "prediction.type");
+  }
+  if (!Object.prototype.hasOwnProperty.call(body.prediction, "content")) {
+    return requestValidationError("prediction.content is required", "prediction.content");
+  }
+  const content = body.prediction.content;
+  if (typeof content === "string") return null;
+  if (!Array.isArray(content) || content.length < 1) {
+    return requestValidationError(
+      "prediction.content must be a string or a non-empty array of text content parts",
+      "prediction.content",
+    );
+  }
+  for (const part of content) {
+    if (!isPlainObject(part)) {
+      return requestValidationError("prediction.content items must be text content parts", "prediction.content");
+    }
+    if (part.type !== "text") {
+      return requestValidationError("prediction.content items must have type text", "prediction.content");
+    }
+    if (typeof part.text !== "string") {
+      return requestValidationError("prediction.content[].text must be a string", "prediction.content");
     }
   }
   return null;
@@ -4974,6 +5093,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const logitBiasError = validateOpenAILogitBias(body);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const chatOutputFieldsError = validateOpenAIChatOutputFields(body);
+  if (chatOutputFieldsError) {
+    sendError(res, 400, chatOutputFieldsError.message, chatOutputFieldsError);
     return;
   }
   const responseFormatError = validateOpenAIChatResponseFormat(body);

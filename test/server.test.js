@@ -1079,6 +1079,143 @@ test("POST /v1/responses maps Chat-native aliases and request fields", async () 
   });
 });
 
+test("POST /v1/responses validates Chat output fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.modalities, ["text", "audio"]);
+    assert.deepEqual(call.body.audio, { voice: { id: "voice_custom" }, format: "pcm16" });
+    assert.deepEqual(call.body.prediction, {
+      type: "content",
+      content: [{ type: "text", text: "cached draft" }],
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_output_fields",
+      object: "chat.completion",
+      created: 101,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses output fields ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 3, total_tokens: 5 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { modalities: "text" },
+        param: "modalities",
+        message: "modalities must be an array",
+      },
+      {
+        body: { modalities: ["text", "video"] },
+        param: "modalities",
+        message: "modalities items must be one of: text, audio",
+      },
+      {
+        body: { modalities: ["audio"] },
+        param: "audio",
+        message: "audio is required when modalities includes audio",
+      },
+      {
+        body: { audio: "wav" },
+        param: "audio",
+        message: "audio must be an object",
+      },
+      {
+        body: { audio: { format: "mp3" } },
+        param: "audio.voice",
+        message: "audio.voice is required",
+      },
+      {
+        body: { audio: { voice: { id: 123 }, format: "mp3" } },
+        param: "audio.voice",
+        message: "audio.voice must be a string or a custom voice object with string id",
+      },
+      {
+        body: { audio: { voice: { id: "voice_custom", extra: true }, format: "mp3" } },
+        param: "audio.voice",
+        message: "audio.voice custom voice must only include id",
+      },
+      {
+        body: { audio: { voice: "alloy", format: "ogg" } },
+        param: "audio.format",
+        message: "audio.format must be one of: wav, aac, mp3, flac, opus, pcm16",
+      },
+      {
+        body: { prediction: "cached" },
+        param: "prediction",
+        message: "prediction must be an object",
+      },
+      {
+        body: { prediction: { type: "static", content: "cached" } },
+        param: "prediction.type",
+        message: "prediction.type must be content",
+      },
+      {
+        body: { prediction: { type: "content" } },
+        param: "prediction.content",
+        message: "prediction.content is required",
+      },
+      {
+        body: { prediction: { type: "content", content: [] } },
+        param: "prediction.content",
+        message: "prediction.content must be a string or a non-empty array of text content parts",
+      },
+      {
+        body: { prediction: { type: "content", content: [{ type: "image_url", image_url: { url: "https://example.com/image.png" } }] } },
+        param: "prediction.content",
+        message: "prediction.content items must have type text",
+      },
+      {
+        body: { prediction: { type: "content", content: [{ type: "text", text: 1 }] } },
+        param: "prediction.content",
+        message: "prediction.content[].text must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check Chat output field validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid Chat output fields.",
+        modalities: ["text", "audio"],
+        audio: { voice: { id: "voice_custom" }, format: "pcm16" },
+        prediction: {
+          type: "content",
+          content: [{ type: "text", text: "cached draft" }],
+        },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses output fields ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses filters Chat-native request fields when configured", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.metadata, undefined);
@@ -21175,6 +21312,91 @@ test("POST /v1/chat/completions validates logit_bias before provider calls", asy
     assert.equal((await valid.json()).choices[0].message.content, "chat logit bias ok");
     assert.equal(requests.length, 1);
   });
+});
+
+test("POST /v1/chat/completions validates Chat output fields before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.modalities, undefined);
+    assert.equal(call.body.audio, undefined);
+    assert.equal(call.body.prediction, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_output_fields",
+      object: "chat.completion",
+      created: 1700000304,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat output fields ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { modalities: "audio" },
+        param: "modalities",
+        message: "modalities must be an array",
+      },
+      {
+        body: { modalities: ["audio"] },
+        param: "audio",
+        message: "audio is required when modalities includes audio",
+      },
+      {
+        body: { audio: { voice: "alloy", format: "ogg" } },
+        param: "audio.format",
+        message: "audio.format must be one of: wav, aac, mp3, flac, opus, pcm16",
+      },
+      {
+        body: { prediction: { type: "content", content: [{ type: "text" }] } },
+        param: "prediction.content",
+        message: "prediction.content[].text must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        modalities: ["text", "audio"],
+        audio: { voice: "alloy", format: "mp3" },
+        prediction: { type: "content", content: [{ type: "text", text: "cached draft" }] },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.choices[0].message.content, "chat output fields ok");
+    assert.deepEqual(
+      json.metadata.compatibility.chat_passthrough.chat_native_fields.filtered.sort(),
+      ["audio", "modalities", "prediction"].sort(),
+    );
+    assert.equal(requests.length, 1);
+  }, { forwardChatNativeFields: false });
 });
 
 test("POST /v1/chat/completions validates verbosity values before provider calls", async () => {

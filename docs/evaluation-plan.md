@@ -651,6 +651,14 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   forward valid values to upstream Chat providers, and verify the stop marker
   is omitted from visible output.
 - Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-number bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
+- Responses and direct Chat requests that include Chat-native output
+  `modalities`, `audio`, or `prediction` validate the official Chat create
+  request contract locally before provider calls: modalities must be text/audio
+  arrays, audio output requests require `audio.voice` plus one of the official
+  output formats, custom voice objects must carry only a string `id`, and
+  predicted output content must use `type:"content"` with string or non-empty
+  text-part content. Valid values still follow provider-aware passthrough or
+  filtering, with DeepSeek filtering recorded in compatibility metadata.
 - Responses and direct Chat requests that include `reasoning.effort`,
   direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
   the current OpenAI reasoning-effort enum locally before provider calls; valid

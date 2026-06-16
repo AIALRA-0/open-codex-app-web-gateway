@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-16 Official Chat Output Field Validation
+
+- Rechecked the official OpenAI Chat Completions request contract through the
+  OpenAI developer docs MCP search result and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CreateChatCompletionRequest` documents `modalities` through the shared
+  `ResponseModalities` schema as array/null of `text` / `audio`, `audio` as
+  object/null with required `voice` and `format` when audio output is
+  requested, output formats `wav`, `aac`, `mp3`, `flac`, `opus`, and `pcm16`,
+  and `prediction` as nullable `PredictionContent` with `type:"content"` plus
+  string or non-empty text-part content.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects invalid Chat-native output `modalities`,
+    `audio`, and `prediction` values before Responses-to-Chat translation,
+    provider-aware passthrough/filtering, or upstream Chat requests.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough, DeepSeek-compatible field filtering, local stored-completion
+    handling, or upstream Chat requests.
+  - Requests with `modalities:["audio"]` must include a valid `audio` object,
+    custom voice objects must contain only a string `id`, and predicted output
+    arrays must contain text content parts with string `text`.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values: valid fields
+  still pass through when the configured provider supports Chat-native fields,
+  and DeepSeek-compatible deployments still filter unsupported
+  `modalities` / `audio` / `prediction` fields with compatibility metadata
+  instead of forwarding them upstream.
+- Added regression coverage proving invalid Chat output field shapes fail
+  locally on Responses and direct Chat with zero upstream calls, while valid
+  output audio and predicted-output request shapes continue through the
+  existing passthrough or provider-filtered paths.
+- Updated the compatibility matrix and evaluation plan so Chat output
+  modalities, audio-output parameters, and predicted-output content are tracked
+  as OpenAI-boundary validated fields.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "Chat output fields|maps Chat-native aliases and request fields|normalizes OpenAI Chat fields"`:
+    passed 263/263; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 312/312.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"audio"` for `modalities:["audio"]` without `audio`; public
+    `/v1/chat/completions` returned HTTP 400 with `param:"audio.format"` for
+    unsupported `audio.format:"ogg"` and HTTP 400 with
+    `param:"prediction.content"` for a text prediction part missing string
+    `text`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 9.7G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Legacy Best-Of And Suffix Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer
