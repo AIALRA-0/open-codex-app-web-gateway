@@ -1283,6 +1283,8 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     store: true,
   };
   chat.stream = false;
+  const backgroundDroppedStreamOptions = chat.stream_options !== undefined || compatibility.stream_options !== undefined;
+  delete chat.stream_options;
   if (config.forwardStoredChatFields === false) {
     delete chat.store;
   } else {
@@ -1300,6 +1302,15 @@ function handleBackgroundResponse(req, res, config, store, backgroundJobs, reque
     ...toolBudgetCompatibility(toolBudget),
     background: request.store === false ? "local_store_forced" : "local_async",
     ...(request.stream ? { stream: "disabled_for_background" } : {}),
+    ...(backgroundDroppedStreamOptions
+      ? {
+        stream_options: {
+          source: "stream_options",
+          forwarded: false,
+          reason: "background_stream_disabled",
+        },
+      }
+      : {}),
   };
   response.metadata = {
     ...(response.metadata || {}),

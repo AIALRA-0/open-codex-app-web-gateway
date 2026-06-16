@@ -15496,6 +15496,7 @@ test("POST /v1/responses with background true returns in_progress and later comp
     assert.equal(createdJson.output.length, 0);
     assert.equal(createdJson.metadata.compatibility.background, "local_store_forced");
     assert.equal(createdJson.metadata.compatibility.stream, "disabled_for_background");
+    assert.equal(createdJson.metadata.compatibility.stream_options.reason, "background_stream_disabled");
 
     const pending = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);
     assert.equal(pending.status, 200);
@@ -15563,8 +15564,10 @@ test("POST /v1/responses with background true returns in_progress and later comp
     assert.equal(finalJson.metadata.state, "in_progress");
     assert.equal(finalJson.metadata.compatibility.background, "local_store_forced");
     assert.equal(finalJson.metadata.compatibility.stream, "disabled_for_background");
+    assert.equal(finalJson.metadata.compatibility.stream_options.reason, "background_stream_disabled");
     assert.equal(requests[0].body.stream, false);
     assert.equal(requests[0].body.store, true);
+    assert.equal(requests[0].body.stream_options, undefined);
   });
 });
 

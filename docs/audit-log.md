@@ -1,5 +1,41 @@
 # Audit Log
 
+## 2026-06-17 Background Stream Options Drop
+
+- Reproduced a real DeepSeek-compatible provider failure for
+  `background:true` requests that also set `stream:true`:
+  - Responses background execution correctly disables upstream Chat streaming;
+  - the prior Chat mapping still carried `stream_options.include_usage`, causing
+    DeepSeek to reject the non-streaming Chat request with
+    `stream_options should be set along with stream = true`.
+- Fixed the background path:
+  - `chat.stream` is still forced to `false`;
+  - Chat `stream_options` are now removed before storing or executing the local
+    background job;
+  - compatibility metadata records
+    `stream_options.reason=background_stream_disabled`.
+- Updated tests and the compatibility matrix for `background:true` plus
+  caller-supplied or bridge-added streaming options.
+- Validation:
+  - targeted background response tests pass;
+  - `npm test` passes: 341 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional `sk-...` pattern scan has no repository matches;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after bridge restart;
+  - local smoke against `http://127.0.0.1:12912` with
+    `background:true`, `stream:true`, `store:false`, and
+    `reasoning.effort:none` completed successfully, emitted
+    `response.completed`, and recorded
+    `stream_options.reason=background_stream_disabled`;
+  - public smoke against `https://opencodexapp.aialra.online` with the same
+    request completed successfully, emitted `response.completed`, and recorded
+    `stream_options.reason=background_stream_disabled`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Active Background Retrieve Stream Alignment
 
 - Rechecked the official OpenAI `GET /v1/responses/{response_id}` query
