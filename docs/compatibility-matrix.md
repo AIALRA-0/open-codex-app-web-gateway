@@ -1484,6 +1484,10 @@ functions, namespaces, and deferred remote MCP server groups:
   and `additional_tools` input items so tool schemas are not duplicated as
   ordinary user text;
 - supports non-streaming, streaming, and active background Responses paths;
+- in streaming Responses, emits public `tool_search_call` / `mcp_list_tools`
+  output items before later MCP call events, preserves combined usage, and
+  suppresses bridge-internal Chat `function_call` stream items from the public
+  SSE;
 - maps `tool_choice:{type:"tool_search"}` to the generated search function and
   can preload a forced deferred `tool_choice:{type:"function"}` when it matches
   a known deferred function;

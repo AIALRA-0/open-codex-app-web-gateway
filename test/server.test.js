@@ -6173,6 +6173,300 @@ test("POST /v1/responses loads deferred remote MCP tools through hosted tool_sea
   ]);
 });
 
+test("POST /v1/responses streams deferred remote MCP tools loaded through hosted tool_search", async () => {
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_stream_tool_search_mcp_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "stream-tool-search-mcp-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      assert.equal(req.headers["mcp-session-id"], "sess_stream_tool_search_mcp_test");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after streaming tool_search loads this MCP schema.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "tools/call") {
+      assert.equal(req.headers["mcp-session-id"], "sess_stream_tool_search_mcp_test");
+      assert.equal(body.params.name, "roll");
+      assert.deepEqual(body.params.arguments, { diceRollExpression: "2d4+1" });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          content: [{ type: "text", text: "7" }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unexpected streaming tool_search MCP method: ${body.method}` }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    let providerCallCount = 0;
+    let mcpChatToolName = "";
+    await withMockProvider(async (_req, res, call) => {
+      providerCallCount += 1;
+      assert.equal(call.body.stream, true);
+
+      if (providerCallCount === 1) {
+        assert.equal(call.body.tools.length, 1);
+        const searchTool = call.body.tools[0];
+        assert.match(searchTool.function.name, /^local_tool_search/);
+        const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+        assert.match(prompt, /Searchable MCP servers:/);
+        assert.match(prompt, /stream_dice_server/);
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_search",
+          object: "chat.completion.chunk",
+          created: 100,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            delta: {
+              role: "assistant",
+              tool_calls: [{
+                index: 0,
+                id: "call_stream_search_mcp",
+                type: "function",
+                function: { name: searchTool.function.name, arguments: "" },
+              }],
+            },
+            finish_reason: null,
+          }],
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_search",
+          object: "chat.completion.chunk",
+          choices: [{
+            index: 0,
+            delta: {
+              tool_calls: [{
+                index: 0,
+                function: { arguments: "{\"server_labels\":[\"stream_dice_server\"],\"query\":\"dice roller\"}" },
+              }],
+            },
+            finish_reason: null,
+          }],
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_search",
+          object: "chat.completion.chunk",
+          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+        })}\n\n`);
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+
+      if (providerCallCount === 2) {
+        const toolMessage = call.body.messages.find((message) => (
+          message.role === "tool" && /mcp_loaded_tool_count/.test(message.content || "")
+        ));
+        assert.ok(toolMessage);
+        assert.equal(JSON.parse(toolMessage.content).mcp_loaded_tool_count, 1);
+        const mcpTool = call.body.tools.find((tool) => /^mcp_stream_dice_server_roll_/.test(tool.function?.name || ""));
+        assert.ok(mcpTool, JSON.stringify(call.body.tools.map((tool) => tool.function?.name || "")));
+        mcpChatToolName = mcpTool.function.name;
+        assert.equal(mcpTool.function.parameters.properties.diceRollExpression.type, "string");
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_call",
+          object: "chat.completion.chunk",
+          created: 101,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            delta: {
+              role: "assistant",
+              tool_calls: [{
+                index: 0,
+                id: "call_stream_tool_search_roll",
+                type: "function",
+                function: { name: mcpChatToolName, arguments: "" },
+              }],
+            },
+            finish_reason: null,
+          }],
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_call",
+          object: "chat.completion.chunk",
+          choices: [{
+            index: 0,
+            delta: {
+              tool_calls: [{
+                index: 0,
+                function: { arguments: "{\"diceRollExpression\":\"2d4+1\"}" },
+              }],
+            },
+            finish_reason: null,
+          }],
+        })}\n\n`);
+        res.write(`data: ${JSON.stringify({
+          id: "chatcmpl_stream_tool_search_mcp_call",
+          object: "chat.completion.chunk",
+          choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+          usage: { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 },
+        })}\n\n`);
+        res.end("data: [DONE]\n\n");
+        return;
+      }
+
+      assert.equal(providerCallCount, 3);
+      assert.equal(call.body.tool_choice, "none");
+      assert.ok(call.body.messages.some((message) => message.role === "tool" && message.content === "7"));
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_tool_search_mcp_final",
+        object: "chat.completion.chunk",
+        created: 102,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", content: "stream-tool-search-mcp-ok" },
+          finish_reason: null,
+        }],
+      })}\n\n`);
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_tool_search_mcp_final",
+        object: "chat.completion.chunk",
+        choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+        usage: { prompt_tokens: 11, completion_tokens: 3, total_tokens: 14 },
+      })}\n\n`);
+      res.end("data: [DONE]\n\n");
+    }, async ({ bridgeAddress, requests }) => {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Stream-search the dice MCP tool, roll 2d4+1, and return stream-tool-search-mcp-ok.",
+          stream: true,
+          tools: [
+            { type: "tool_search" },
+            {
+              type: "mcp",
+              server_label: "stream_dice_server",
+              server_description: "Streaming dice roller server.",
+              server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+              require_approval: "never",
+              allowed_tools: ["roll"],
+              defer_loading: true,
+            },
+          ],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
+      const events = parseSseEvents(await response.text());
+      assert.equal(requests.length, 3);
+      assert.ok(!events.some((event) => event.data?.item?.type === "function_call"));
+      assert.ok(!events.some((event) => event.event === "response.function_call_arguments.delta"));
+      assert.ok(events.some((event) => event.event === "response.output_item.added"
+        && event.data.item?.type === "tool_search_call"));
+      assert.ok(events.some((event) => event.event === "response.output_item.added"
+        && event.data.item?.type === "mcp_list_tools"));
+      assert.ok(events.some((event) => event.event === "response.mcp_call_arguments.delta"
+        && event.data.delta === "{\"diceRollExpression\":\"2d4+1\"}"));
+      assert.ok(events.some((event) => event.event === "response.mcp_call_arguments.done"
+        && event.data.arguments === "{\"diceRollExpression\":\"2d4+1\"}"));
+      assert.ok(events.some((event) => event.event === "response.mcp_call.in_progress"));
+      const completed = events.find((event) => event.event === "response.completed").data.response;
+      assert.deepEqual(completed.output.map((item) => item.type), [
+        "tool_search_call",
+        "mcp_list_tools",
+        "mcp_call",
+        "message",
+      ]);
+      assert.deepEqual(completed.output[0].arguments.server_labels, ["stream_dice_server"]);
+      assert.equal(completed.output[1].server_label, "stream_dice_server");
+      assert.equal(completed.output[1].tools[0].name, "roll");
+      assert.equal(completed.output[2].server_label, "stream_dice_server");
+      assert.equal(completed.output[2].name, "roll");
+      assert.equal(completed.output[2].arguments, "{\"diceRollExpression\":\"2d4+1\"}");
+      assert.equal(completed.output[2].output, "7");
+      assert.equal(completed.output[2].error, null);
+      assert.equal(completed.output[3].content[0].text, "stream-tool-search-mcp-ok");
+      assert.equal(completed.usage.input_tokens, 29);
+      assert.equal(completed.usage.output_tokens, 7);
+      assert.equal(completed.usage.total_tokens, 36);
+      assert.equal(completed.metadata.compatibility.local_tool_search.mcp_list_tools_loaded_count, 1);
+      assert.equal(completed.metadata.compatibility.local_tool_search.mcp_loaded_tool_count, 1);
+      assert.equal(completed.metadata.compatibility.local_tool_search.boundary, "deferred_mcp_tool_search_and_load");
+      assert.equal(completed.metadata.compatibility.local_mcp.tool_search_list_tools_loaded_count, 1);
+      assert.equal(completed.metadata.compatibility.local_mcp.tool_search_loaded_tool_count, 1);
+      assert.equal(completed.metadata.compatibility.local_mcp.remote_call_success_count, 1);
+      assert.equal(completed.metadata.compatibility.local_mcp.boundary, "tool_search_mcp_list_tools_and_call_execution");
+      assert.deepEqual(completed.metadata.compatibility.local_tool_budget, {
+        max_tool_calls: 2,
+        used: 2,
+        skipped: 0,
+        exhausted: true,
+      });
+      assert.match(events.map((event) => event.data?.delta || "").join(""), /stream-tool-search-mcp-ok/);
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000, mcpMaxCallRounds: 2 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+    "tools/call",
+  ]);
+});
+
 test("POST /v1/responses executes auto-approved remote MCP tools/call through Chat tool calls", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-call";
   const mcpRequests = [];

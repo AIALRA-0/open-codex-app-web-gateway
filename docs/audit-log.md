@@ -1,5 +1,42 @@
 # Audit Log
 
+## 2026-06-16 Streaming Tool Search MCP Coverage
+
+- Re-confirmed the official OpenAI `tool_search` deployment guidance through
+  the OpenAI developer docs MCP: deferred tool definitions are hidden at request
+  start, loaded only after the model runs tool search, and should be grouped by
+  namespaces or MCP servers when possible.
+- Added a streaming mock-provider regression for the full deferred MCP
+  tool-search chain:
+  - first streaming Chat turn calls the generated `local_tool_search` function;
+  - the bridge imports remote MCP `tools/list`, emits public
+    `tool_search_call` and `mcp_list_tools` output items, and injects the
+    loaded MCP schema into the next streaming Chat request;
+  - the second streaming Chat turn calls the generated MCP proxy function;
+  - the bridge executes remote MCP `tools/call`, emits public MCP argument
+    delta/done/progress events, suppresses bridge-internal Chat
+    `function_call` stream items, and streams the final text from the third
+    Chat turn;
+  - the completed Responses object records combined usage and
+    `boundary=tool_search_mcp_list_tools_and_call_execution`.
+- Updated `docs/evaluation-plan.md` and `docs/compatibility-matrix.md` so this
+  streaming coverage is listed beside the non-streaming hosted tool-search MCP
+  coverage.
+- Validation:
+  - `node --check test/server.test.js src/bridge/server.js src/bridge/local_mcp.js src/bridge/local_tool_search.js`:
+    passed.
+  - `node --test --test-name-pattern "streams deferred remote MCP tools loaded through hosted tool_search" test/server.test.js`:
+    passed.
+  - `node --test --test-name-pattern "loads deferred remote MCP tools through hosted tool_search|streams deferred remote MCP tools loaded through hosted tool_search|streams auto-approved remote MCP tools/call|streams remote MCP approval requests|streams approved remote MCP approval response execution" test/server.test.js`:
+    passed 5/5 tests.
+  - `git diff --check`: passed.
+  - `npm test`: passed 238/238 tests.
+  - `npm run secret-scan`: passed.
+  - exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: still blocked by upstream DeepSeek `402
+    Insufficient Balance` on both live protocol-smoke cases.
+
 ## 2026-06-16 Hosted Tool Search Loads Deferred MCP
 
 - Re-checked the official OpenAI deployment checklist through the OpenAI
