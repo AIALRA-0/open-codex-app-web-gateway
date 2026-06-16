@@ -165,7 +165,13 @@ response emits `tool_search_call`, `mcp_list_tools`, and `mcp_approval_request`
 without running `tools/call`; the continuation uses `previous_response_id` plus
 `mcp_approval_response` to reuse that `mcp_list_tools` context, skip a second
 remote `tools/list`, execute the approved `tools/call`, and redact
-authorization from provider prompts and public Responses output. Streaming
+authorization from provider prompts and public Responses output. Live
+bridge-regression cases cover both non-streaming and streaming deferred remote
+MCP approval against DeepSeek. They also validate provider-specific hardening
+for DSML-like pseudo-tool text: text approval invocations are parsed into MCP
+approval items before public output, and pseudo-tool text emitted after a
+successful approved `mcp_call` is suppressed while preserving the public
+`mcp_call` item. Streaming
 coverage verifies both auto-approved and approval-required variants: the
 approval-required case emits `response.output_item.added` for
 `tool_search_call`, `mcp_list_tools`, and `mcp_approval_request` without
@@ -196,6 +202,9 @@ node --test test/server.test.js --test-name-pattern 'tool_search'
 node --test test/server.test.js --test-name-pattern 'additional_tools'
 node --test test/server.test.js --test-name-pattern 'mcp_list_tools'
 node --test test/server.test.js --test-name-pattern 'loads deferred remote MCP tools through hosted tool_search|streams deferred remote MCP tools loaded through hosted tool_search'
+node --test --test-name-pattern 'deferred remote MCP loaded through hosted tool_search|text MCP approval emitted after hosted tool_search|suppresses pseudo tool markup' test/server.test.js
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-approval --timeout-ms 120000 --verbose
+node scripts/eval-harness.mjs --suite bridge-regression --case responses-mcp-remote-tool-search-stream-approval --timeout-ms 120000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-function-tool --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-background --timeout-ms 90000 --verbose
 node scripts/eval-harness.mjs --suite bridge-regression --case responses-conversation-lifecycle --timeout-ms 90000 --verbose

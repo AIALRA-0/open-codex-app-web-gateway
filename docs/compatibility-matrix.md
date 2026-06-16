@@ -1506,11 +1506,14 @@ request-global Chat function definitions because Chat Completions does not
 support mid-input tool availability. Hosted connector tool search is still
 handled by the connector roadmap. Same-request `tool_search` plus remote MCP
 execution needs `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` high enough for the search
-turn and the MCP call turn; the default remains conservative at `1`, while the
-mock regression for search-plus-call runs with `2`. Streaming output can still
-expose a generated fallback function name if a namespace function name collides
-with another Chat function and the provider splits the function name across
-stream chunks; non-streaming responses remap names exactly.
+turn and the MCP call turn; the bridge automatically uses an effective minimum
+of two rounds when local `tool_search` and MCP are both active so deferred MCP
+discovery can be followed by an approval request or call in the same Responses
+request.
+Streaming output can still expose a generated fallback function name if a
+namespace function name collides with another Chat function and the provider
+splits the function name across stream chunks; non-streaming responses remap
+names exactly.
 
 ## Local MCP Tool Adapter
 
@@ -1592,6 +1595,12 @@ function-tool proxy calls:
   Denied or missing approval responses are counted in compatibility metadata
   and are not re-exposed as fresh generated function tools on that
   continuation turn;
+- for DeepSeek-style text pseudo-tool outputs, parses DSML-like approval/call
+  invocations into generated MCP Chat tool calls before public output when
+  they identify a known MCP server/tool, including `requests:[[server, tool,
+  args]]` payloads. After a successful remote `mcp_call`, assistant DSML /
+  pseudo-tool text is suppressed so clients see the public MCP output item
+  instead of bridge-internal markup;
 - forwards caller-provided MCP headers except hop-by-hop headers, maps
   `authorization` to an HTTP `Authorization: Bearer ...` header for that
   request only, carries returned `mcp-session-id` values on later remote list
@@ -1610,8 +1619,8 @@ function-tool proxy calls:
 - records `metadata.compatibility.local_mcp` counts for remote servers,
   connectors, imported tools, remote import attempts/successes/failures,
   remote call attempts/successes/failures, deferred servers, redacted
-  authorization, input MCP context items, skipped calls, and the current
-  boundary;
+  authorization, input MCP context items, text pseudo-tool calls parsed,
+  pseudo-tool text suppressions, skipped calls, and the current boundary;
 - deletes MCP `authorization` and `headers.Authorization` from response
   objects and background job snapshots. The adapter only records that
   authorization was present.
@@ -1623,7 +1632,7 @@ Configuration:
 | `CODEXCOMPAT_MCP_PROVIDER` | `local` | Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS` | `true` | Enables bounded remote MCP `initialize` / `tools/list` imports for `server_url` tools without explicit local definitions |
 | `CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS` | `true` | Enables non-streaming, streaming, and active background remote MCP `tools/call` execution through Chat function-tool proxy calls, including auto-approved calls and approved `mcp_approval_response` continuations |
-| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per Responses request that runs a remote MCP call loop. Use `2` or higher for same-request hosted `tool_search` followed by bridge-executed remote MCP `tools/call` and final text |
+| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per Responses request that runs a remote MCP call loop. Same-request hosted `tool_search` plus MCP uses an effective minimum of `2` so the search round can be followed by bridge-executed remote MCP approval/call handling |
 | `CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS` | `20000` | Maximum remote MCP tool output characters injected into follow-up Chat tool messages and returned `mcp_call.output` |
 | `CODEXCOMPAT_MCP_TIMEOUT_MS` | `5000` | Timeout for each remote MCP HTTP request |
 | `CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES` | `1048576` | Maximum bytes read from one remote MCP HTTP/SSE response |

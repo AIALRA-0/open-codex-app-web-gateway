@@ -192,7 +192,7 @@ Useful bridge flags:
 | `CODEXCOMPAT_MCP_PROVIDER` | `local` | Local Responses `mcp` protocol-context adapter provider. Use `disabled` to leave MCP tools as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_MCP_REMOTE_LIST_TOOLS` | `true` | Enables bounded remote MCP `initialize` / `tools/list` imports for `server_url` tools without explicit local definitions |
 | `CODEXCOMPAT_MCP_REMOTE_TOOL_CALLS` | `true` | Enables non-streaming, streaming, and active background remote MCP `tools/call` execution through Chat function-tool proxy calls, including auto-approved calls and approved `mcp_approval_response` continuations |
-| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per Responses request that runs a remote MCP call loop |
+| `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` | `1` | Maximum remote MCP call/follow-up rounds per Responses request that runs a remote MCP call loop; same-request deferred `tool_search` plus MCP uses an effective minimum of `2` for the search and approval/call turns |
 | `CODEXCOMPAT_MCP_MAX_TOOL_OUTPUT_CHARS` | `20000` | Maximum remote MCP tool output characters injected into the follow-up Chat tool message and returned `mcp_call.output` |
 | `CODEXCOMPAT_MCP_TIMEOUT_MS` | `5000` | Timeout for each remote MCP HTTP request |
 | `CODEXCOMPAT_MCP_MAX_RESPONSE_BYTES` | `1048576` | Maximum bytes read from one remote MCP HTTP/SSE response |

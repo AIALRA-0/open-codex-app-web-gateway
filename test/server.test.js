@@ -11,6 +11,7 @@ const crypto = require("node:crypto");
 const { createServer, loadConfig } = require("../src/bridge/server");
 const { FileResponseStore } = require("../src/bridge/store");
 const { unzipFiles } = require("../src/bridge/local_skills");
+const { sanitizeMcpAssistantOutput } = require("../src/bridge/local_mcp");
 const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
 function listen(server) {
@@ -6458,6 +6459,213 @@ test("POST /v1/responses requests approval for deferred remote MCP loaded throug
   assert.equal(methods.filter((method) => method === "tools/list").length, 1);
   assert.equal(methods.filter((method) => method === "tools/call").length, 1);
   assert.equal(methods.at(-1), "tools/call");
+});
+
+test("POST /v1/responses parses text MCP approval emitted after hosted tool_search", async () => {
+  const authValue = "redaction-fixture-value-for-text-tool-search-mcp-approval";
+  const mcpRequests = [];
+  const mcpServer = http.createServer(async (req, res) => {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(Buffer.from(chunk));
+    const body = JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
+    mcpRequests.push({ req, body });
+
+    if (body.method === "initialize") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      res.writeHead(200, {
+        "content-type": "application/json",
+        "mcp-session-id": "sess_text_tool_search_mcp_approval_test",
+      });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          protocolVersion: "2025-03-26",
+          capabilities: { tools: {} },
+          serverInfo: { name: "text-tool-search-mcp-approval-test", version: "1.0.0" },
+        },
+      }));
+      return;
+    }
+
+    if (body.method === "notifications/initialized") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      res.writeHead(202).end();
+      return;
+    }
+
+    if (body.method === "tools/list") {
+      assert.equal(req.headers.authorization, `Bearer ${authValue}`);
+      assert.equal(req.headers["mcp-session-id"], "sess_text_tool_search_mcp_approval_test");
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        jsonrpc: "2.0",
+        id: body.id,
+        result: {
+          tools: [{
+            name: "roll",
+            description: "Roll dice after text approval.",
+            inputSchema: {
+              type: "object",
+              properties: {
+                diceRollExpression: { type: "string" },
+              },
+              required: ["diceRollExpression"],
+              additionalProperties: false,
+            },
+          }],
+        },
+      }));
+      return;
+    }
+
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: `unexpected text approval MCP method: ${body.method}` }));
+  });
+  const mcpAddress = await listen(mcpServer);
+
+  try {
+    let providerCallCount = 0;
+    await withMockProvider(async (_req, res, call) => {
+      providerCallCount += 1;
+      assert.doesNotMatch(JSON.stringify(call.body), new RegExp(authValue));
+
+      if (providerCallCount === 1) {
+        const searchTool = call.body.tools.find((tool) => /^local_tool_search/.test(tool.function?.name || ""));
+        assert.ok(searchTool);
+        res.writeHead(200, { "content-type": "application/json" });
+        res.end(JSON.stringify({
+          id: "chatcmpl_text_tool_search_mcp_approval_search",
+          object: "chat.completion",
+          created: 100,
+          model: "mock-model",
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: null,
+              tool_calls: [{
+                id: "call_search_text_approval_mcp",
+                type: "function",
+                function: {
+                  name: searchTool.function.name,
+                  arguments: "{\"server_labels\":[\"approval_text_dice\"],\"query\":\"approval dice roller\"}",
+                },
+              }],
+            },
+            finish_reason: "tool_calls",
+          }],
+          usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+        }));
+        return;
+      }
+
+      assert.equal(providerCallCount, 2);
+      assert.ok(call.body.tools.some((tool) => /^mcp_approval_text_dice_roll_/.test(tool.function?.name || "")));
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: "chatcmpl_text_tool_search_mcp_approval_request",
+        object: "chat.completion",
+        created: 101,
+        model: "mock-model",
+        choices: [{
+          index: 0,
+          message: {
+            role: "assistant",
+            content: [
+              "<｜｜DSML｜｜tool_calls>",
+              "<｜｜DSML｜｜invoke name=\"mcp_tool_approval_request\">",
+              "<｜｜DSML｜｜parameter name=\"requests\" string=\"false\">[[\"approval_text_dice\",\"roll\",{\"diceRollExpression\":\"2d4+1\"}]]</｜｜DSML｜｜parameter>",
+              "</｜｜DSML｜｜invoke>",
+              "</｜｜DSML｜｜tool_calls>",
+            ].join("\n"),
+          },
+          finish_reason: "stop",
+        }],
+        usage: { prompt_tokens: 10, completion_tokens: 4, total_tokens: 14 },
+      }));
+    }, async ({ bridgeAddress, requests }) => {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Find the approval dice MCP tool and request a roll of 2d4+1.",
+          tools: [
+            { type: "tool_search" },
+            {
+              type: "mcp",
+              server_label: "approval_text_dice",
+              server_description: "Dice roller server requiring text approval.",
+              server_url: `http://127.0.0.1:${mcpAddress.port}/mcp`,
+              authorization: authValue,
+              require_approval: "always",
+              allowed_tools: ["roll"],
+              defer_loading: true,
+            },
+          ],
+          max_tool_calls: 2,
+          store: false,
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      assert.equal(requests.length, 2);
+      const json = await response.json();
+      assert.deepEqual(json.output.map((item) => item.type), [
+        "tool_search_call",
+        "mcp_list_tools",
+        "mcp_approval_request",
+      ]);
+      assert.equal(json.output[2].server_label, "approval_text_dice");
+      assert.equal(json.output[2].name, "roll");
+      assert.equal(json.output[2].arguments, "{\"diceRollExpression\":\"2d4+1\"}");
+      assert.equal(json.metadata.compatibility.local_mcp.remote_text_tool_call_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_approval_request_count, 1);
+      assert.equal(json.metadata.compatibility.local_mcp.remote_call_attempt_count, 0);
+      assert.equal(json.metadata.compatibility.local_mcp.boundary, "tool_search_mcp_list_tools_with_approval_request");
+      const serialized = JSON.stringify(json);
+      assert.doesNotMatch(serialized, /DSML/);
+      assert.doesNotMatch(serialized, new RegExp(authValue));
+    }, { mcpRemoteListTools: true, mcpRemoteToolCalls: true, mcpTimeoutMs: 1000, mcpMaxCallRounds: 2 });
+  } finally {
+    await close(mcpServer);
+  }
+
+  assert.deepEqual(mcpRequests.map((request) => request.body.method), [
+    "initialize",
+    "notifications/initialized",
+    "tools/list",
+  ]);
+});
+
+test("local MCP suppresses pseudo tool markup after a successful remote call", () => {
+  const context = {
+    remote_call_success_count: 1,
+  };
+  const response = {
+    output: [{
+      id: "msg_pseudo_mcp",
+      type: "message",
+      status: "completed",
+      role: "assistant",
+      content: [{
+        type: "output_text",
+        text: [
+          "<｜｜DSML｜｜tool_calls>",
+          "<｜｜DSML｜｜invoke name=\"mcp_approval_request\">",
+          "<｜｜DSML｜｜parameter name=\"server_label\">remote_eval</｜｜DSML｜｜parameter>",
+          "</｜｜DSML｜｜invoke>",
+          "</｜｜DSML｜｜tool_calls>",
+        ].join("\n"),
+      }],
+    }],
+  };
+
+  sanitizeMcpAssistantOutput(response, context);
+
+  assert.equal(response.output[0].content[0].text, "");
+  assert.equal(context.remote_text_suppressed_count, 1);
 });
 
 test("POST /v1/responses streams approval flow for deferred remote MCP loaded through hosted tool_search", async () => {

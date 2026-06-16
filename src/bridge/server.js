@@ -91,6 +91,7 @@ const {
   mcpOutputItems,
   mcpToolSearchCatalog,
   prepareMcpContext,
+  sanitizeMcpAssistantOutput,
   suppressMcpChatToolCalls,
 } = require("./local_mcp");
 const {
@@ -656,7 +657,7 @@ async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeade
   if (!current.ok) return current;
   if (current.json?.usage) usageParts.push(current.json.usage);
 
-  const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
+  const maxRounds = localToolLoopMaxRounds(config, { localMcp, localToolSearch });
   for (let round = 0; round < maxRounds; round += 1) {
     const toolSearchExecution = await executeToolSearchChatToolCalls(localToolSearch, current.json, config, {
       toolBudget,
@@ -738,6 +739,12 @@ function combineChatUsage(usages = []) {
   if (reasoningTokens) totals.completion_tokens_details = { reasoning_tokens: reasoningTokens };
   if (cachedTokens) totals.prompt_tokens_details = { cached_tokens: cachedTokens };
   return totals;
+}
+
+function localToolLoopMaxRounds(config = {}, contexts = {}) {
+  const configured = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
+  const neededForDeferredMcpSearch = contexts.localMcp && contexts.localToolSearch ? 2 : 1;
+  return Math.max(configured, neededForDeferredMcpSearch);
 }
 
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
@@ -856,6 +863,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
   attachMcpOutput(response, localMcp);
+  mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
   attachToolSearchOutput(response, localToolSearch);
   attachImageGenerationOutput(response, localImageGeneration);
   attachWebSearchOutput(response, localWebSearch, { includeSources: true });
@@ -3283,6 +3291,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
     annotateWebSearchResponse(response, localWebSearch);
     annotateFileSearchResponse(response, localFileSearch);
     mergeLocalComputerCompatibility(compatibility, computerCompatibility(localComputer));
+    sanitizeMcpAssistantOutput(response, localMcp);
     mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
     mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
     Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
@@ -3386,7 +3395,7 @@ function canRunStreamingLocalToolLoop(localMcp, localComputer, localToolSearch, 
 async function streamProviderWithLocalToolLoop(res, state, config, chat, incomingHeaders, contexts = {}) {
   const { localMcp = null, localComputer = null, localToolSearch = null, toolBudget = null } = contexts;
   const usageParts = [];
-  const maxRounds = Math.max(1, Math.min(5, Number(config.mcpMaxCallRounds || 1)));
+  const maxRounds = localToolLoopMaxRounds(config, { localMcp, localToolSearch });
 
   for (let round = 0; round <= maxRounds; round += 1) {
     const current = await collectProviderStreamCompletion(config, chat, incomingHeaders);

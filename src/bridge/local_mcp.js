@@ -916,6 +916,7 @@ async function executeMcpChatToolCalls(context, chatCompletion, config = {}, opt
   if (!context?.chat_tool_map || config.mcpRemoteToolCalls === false) {
     return { executed: false, output_items: [], messages: [] };
   }
+  injectMcpTextProxyToolCalls(chatCompletion, context);
   const choice = (chatCompletion?.choices || []).find((item) => {
     const calls = item?.message?.tool_calls;
     return Array.isArray(calls) && calls.some((call) => context.chat_tool_map.has(call?.function?.name));
@@ -1134,6 +1135,141 @@ async function executeApprovedMcpApprovalResponses(context, config = {}, options
   };
 }
 
+function injectMcpTextProxyToolCalls(chatCompletion, context) {
+  if (!chatCompletion || !(context?.chat_tool_map instanceof Map)) return;
+  for (const choice of chatCompletion.choices || []) {
+    const message = choice?.message;
+    if (!message || (Array.isArray(message.tool_calls) && message.tool_calls.length)) continue;
+    const calls = mcpTextProxyToolCallsFromContent(message.content, context);
+    if (!calls.length) continue;
+    message.tool_calls = calls;
+    message.content = null;
+    if (choice.finish_reason === "stop" || choice.finish_reason == null) choice.finish_reason = "tool_calls";
+    context.remote_text_tool_call_count = (context.remote_text_tool_call_count || 0) + calls.length;
+  }
+}
+
+function mcpTextProxyToolCallsFromContent(content, context) {
+  const text = stringifyOptional(content || "");
+  if (!text || !/DSML|mcp_tool_proxy|create_approval_request/i.test(text)) return [];
+  const calls = [];
+  const invokePattern = /<[^>]*invoke\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*invoke>/g;
+  for (const match of text.matchAll(invokePattern)) {
+    const invokeName = decodeTextToolCallValue(match[1]).trim();
+    const body = match[2] || "";
+    const params = textToolCallParameters(body);
+    const scoped = splitMcpTextToolCallName(invokeName);
+    const request = textToolCallRequest(params);
+    const serverLabel = safeLabel(params.server_label || params.serverLabel || request.server_label || scoped.server_label || "");
+    const toolName = stringifyOptional(params.tool_name || params.name || request.tool_name || scoped.tool_name || "");
+    const rawArguments = stringifyOptional(params.arguments || request.arguments || textToolCallArguments(params)) || "{}";
+    let functionName = "";
+
+    if (context.chat_tool_map.has(invokeName)) {
+      functionName = invokeName;
+    } else if (
+      ["create_approval", "create_approval_request", "local_mcp_approval_create", "mcp_approval_request", "mcp_call"].includes(invokeName)
+      || invokeName.startsWith("mcp_tool_")
+      || scoped.tool_name
+    ) {
+      functionName = findMcpChatToolFunctionName(context, serverLabel, toolName);
+    }
+
+    if (!functionName) continue;
+    calls.push({
+      id: prefixedId("call"),
+      type: "function",
+      function: {
+        name: functionName,
+        arguments: rawArguments,
+      },
+    });
+  }
+  return calls;
+}
+
+function textToolCallParameters(text) {
+  const params = {};
+  const parameterPattern = /<[^>]*parameter\s+name="([^"]+)"[^>]*>([\s\S]*?)<\/[^>]*parameter>/g;
+  for (const match of text.matchAll(parameterPattern)) {
+    const key = decodeTextToolCallValue(match[1]).trim();
+    if (!key) continue;
+    params[key] = decodeTextToolCallValue(match[2]).trim();
+  }
+  return params;
+}
+
+function splitMcpTextToolCallName(value) {
+  const text = stringifyOptional(value || "").trim();
+  const dot = text.indexOf(".");
+  if (dot <= 0 || dot >= text.length - 1) return { server_label: "", tool_name: "" };
+  return {
+    server_label: text.slice(0, dot),
+    tool_name: text.slice(dot + 1),
+  };
+}
+
+function textToolCallArguments(params = {}) {
+  const ignored = new Set([
+    "approval_id",
+    "arguments",
+    "mcp_approval_request",
+    "name",
+    "serverLabel",
+    "server_label",
+    "tool_call_id",
+    "tool_name",
+  ]);
+  const args = {};
+  for (const [key, value] of Object.entries(params)) {
+    if (ignored.has(key)) continue;
+    args[key] = value;
+  }
+  return Object.keys(args).length ? JSON.stringify(args) : "{}";
+}
+
+function textToolCallRequest(params = {}) {
+  const rawRequests = stringifyOptional(params.requests || "").trim();
+  if (!rawRequests) return {};
+  const parsed = parseJsonLenient(rawRequests);
+  const request = Array.isArray(parsed?.[0]) ? parsed[0] : Array.isArray(parsed) ? parsed : [];
+  if (!Array.isArray(request) || request.length < 2) return {};
+  return {
+    server_label: stringifyOptional(request[0]),
+    tool_name: stringifyOptional(request[1]),
+    arguments: JSON.stringify(isPlainObject(request[2]) ? request[2] : {}),
+  };
+}
+
+function parseJsonLenient(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+
+function decodeTextToolCallValue(value) {
+  return stringifyOptional(value || "")
+    .replace(/&quot;/g, "\"")
+    .replace(/&#34;/g, "\"")
+    .replace(/&apos;/g, "'")
+    .replace(/&#39;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&amp;/g, "&");
+}
+
+function findMcpChatToolFunctionName(context, serverLabel, toolName) {
+  if (!(context?.chat_tool_map instanceof Map) || !toolName) return "";
+  for (const [functionName, mapping] of context.chat_tool_map.entries()) {
+    if (mapping.tool_name !== toolName) continue;
+    if (serverLabel && safeLabel(mapping.server_label) !== serverLabel) continue;
+    return functionName;
+  }
+  return "";
+}
+
 function findMcpServer(context, serverLabel) {
   return (context.servers || []).find((server) => server.server_label === serverLabel);
 }
@@ -1350,10 +1486,31 @@ function injectMcpMessages(chat, context) {
 
 function attachMcpOutput(response, context) {
   if (!context) return response;
+  sanitizeMcpAssistantOutput(response, context);
   response.output = [
     ...mcpOutputItems(context),
     ...(response.output || []),
   ];
+  return response;
+}
+
+function sanitizeMcpAssistantOutput(response, context) {
+  if (!response || !shouldSuppressMcpPseudoToolText(context) || !Array.isArray(response.output)) return response;
+  let suppressed = 0;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "message" || !Array.isArray(item.content)) return item;
+    let changed = false;
+    const content = item.content.map((part) => {
+      if (part?.type !== "output_text" || !isMcpPseudoToolText(part.text)) return part;
+      changed = true;
+      suppressed += 1;
+      return { ...part, text: "" };
+    });
+    return changed ? { ...item, content } : item;
+  });
+  if (suppressed) {
+    context.remote_text_suppressed_count = (context.remote_text_suppressed_count || 0) + suppressed;
+  }
   return response;
 }
 
@@ -1399,6 +1556,8 @@ function mcpCompatibility(context) {
       remote_approval_approved_count: context.remote_approval_approved_count || 0,
       remote_approval_denied_count: context.remote_approval_denied_count || 0,
       remote_approval_missing_count: context.remote_approval_missing_count || 0,
+      remote_text_tool_call_count: context.remote_text_tool_call_count || 0,
+      remote_text_suppressed_count: context.remote_text_suppressed_count || 0,
       remote_call_attempt_count: context.remote_call_attempt_count || 0,
       remote_call_success_count: context.remote_call_success_count || 0,
       remote_call_failed_count: context.remote_call_failed_count || 0,
@@ -1441,6 +1600,9 @@ function mcpPrompt(context) {
     "Local Responses MCP compatibility is active.",
     "The bridge preserves MCP tool definitions and MCP context item shapes for Chat-only providers. It can import remote MCP tool lists when configured, execute auto-approved remote MCP tool calls in non-streaming, streaming, and active background requests, and create or consume local MCP approval items for approval-required remote calls. It does not yet execute hosted connector calls.",
     "Never infer private connector data. Use only visible MCP context items, user input, and other provided evidence.",
+    "Do not write DSML, XML, or pseudo tool-call markup in a normal assistant answer. If an actual Chat function tool is available, use that tool call; otherwise answer in plain text from the visible MCP context.",
+    "When MCP call output items are already present, use their output directly for the final answer unless the user explicitly asks for another tool action.",
+    "A present MCP call output item means any referenced approval response has already been accepted and executed. Do not ask for approval again or say the tool still requires approval.",
   ];
 
   if (context.servers?.length) {
@@ -1519,6 +1681,18 @@ function mcpPrompt(context) {
   }
 
   return sections.join("\n\n");
+}
+
+function shouldSuppressMcpPseudoToolText(context) {
+  return !!context && (
+    context.remote_call_success_count > 0
+    || (context.call_items || []).some((item) => item?.type === "mcp_call" && !item.error && item.output)
+  );
+}
+
+function isMcpPseudoToolText(text) {
+  const value = stringifyOptional(text);
+  return /DSML/i.test(value) && /<\/?[^>]*(tool_calls|invoke|parameter)/i.test(value);
 }
 
 function extractMcpContextItems(input) {
@@ -1622,5 +1796,6 @@ module.exports = {
   mcpOutputItems,
   mcpToolSearchCatalog,
   prepareMcpContext,
+  sanitizeMcpAssistantOutput,
   suppressMcpChatToolCalls,
 };

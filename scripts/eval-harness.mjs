@@ -1646,6 +1646,41 @@ function buildSuites(defaultModel) {
         },
       },
       {
+        id: "responses-mcp-remote-tool-search-approval",
+        mode: "responses-mcp-remote",
+        remoteToolSearch: true,
+        remoteApproval: true,
+        approvalOkText: "mcp-tool-search-approval-ok",
+        request: {
+          model: defaultModel,
+          instructions: "You can discover a deferred MCP dice server with tool_search. First use tool_search to load server remote_eval, then request approval to call its roll tool with expression 2d4+1. After approval and tool output are available, answer exactly this text and nothing else: mcp-tool-search-approval-ok.",
+          input: "Use tool_search to load remote_eval, request approval for roll expression 2d4+1, then after approval return mcp-tool-search-approval-ok.",
+          reasoning: { effort: "none" },
+          tool_choice: { type: "mcp", server_label: "remote_eval", name: "roll" },
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          store: true,
+        },
+      },
+      {
+        id: "responses-mcp-remote-tool-search-stream-approval",
+        mode: "responses-mcp-remote",
+        remoteToolSearch: true,
+        remoteApproval: true,
+        approvalOkText: "mcp-tool-search-stream-approval-ok",
+        request: {
+          model: defaultModel,
+          instructions: "You can discover a deferred MCP dice server with tool_search. First use tool_search to load server remote_eval, then request approval to call its roll tool with expression 2d4+1. After approval and tool output are available, stream exactly this text and nothing else: mcp-tool-search-stream-approval-ok.",
+          input: "Stream the tool_search approval flow for remote_eval roll expression 2d4+1, then after approval return mcp-tool-search-stream-approval-ok.",
+          reasoning: { effort: "none" },
+          tool_choice: { type: "mcp", server_label: "remote_eval", name: "roll" },
+          stream: true,
+          max_tool_calls: 2,
+          max_output_tokens: 128,
+          store: true,
+        },
+      },
+      {
         id: "responses-mcp-remote-denial",
         mode: "responses-mcp-remote",
         remoteApproval: true,
@@ -3489,7 +3524,7 @@ function buildSuites(defaultModel) {
           filename: "bridge-file-search.pdf",
           purpose: "assistants",
           mime_type: "application/pdf",
-          content_base64: tinyPdfBase64("Bridge PDF file search fixture. The exact PDF search answer is file-search-pdf-ok."),
+          content_base64: tinyPdfBase64("file-search-pdf-ok"),
         },
         vectorStore: { name: "bridge-file-search-pdf-eval" },
         vectorFile: { attributes: { suite: "bridge-regression-pdf" } },
@@ -7401,6 +7436,7 @@ async function runMcpRemoteCase(testCase, context, started) {
   const authValue = "eval-remote-mcp-token";
   const wantsCall = !!testCase.remoteCall;
   const wantsApproval = !!testCase.remoteApproval;
+  const wantsToolSearch = !!testCase.remoteToolSearch;
   const approvalApprove = testCase.remoteApprovalApprove !== false;
   const wantsBackground = !!testCase.background || !!testCase.request?.background;
   const wantsStream = !!testCase.request?.stream;
@@ -7495,17 +7531,41 @@ async function runMcpRemoteCase(testCase, context, started) {
 
   try {
     const address = await listenServer(mcpServer);
+    const expectedHeader = wantsToolSearch
+      ? wantsApproval
+        ? wantsStream
+          ? "tool-search-stream-approval"
+          : "tool-search-approval"
+        : wantsStream && wantsCall
+        ? "tool-search-stream-call"
+        : wantsCall
+        ? "tool-search-call"
+        : "tool-search-list"
+      : wantsApproval
+      ? "remote-approval"
+      : wantsBackground
+      ? "remote-background-call"
+      : wantsStream && wantsCall
+      ? "remote-stream-call"
+      : wantsCall
+      ? "remote-call"
+      : "remote-list";
+    const mcpTool = {
+      type: "mcp",
+      server_label: "remote_eval",
+      server_description: wantsToolSearch ? "Deferred remote dice evaluator MCP server." : undefined,
+      server_url: `http://127.0.0.1:${address.port}/mcp`,
+      authorization: authValue,
+      headers: { "x-eval-mcp": expectedHeader },
+      require_approval: wantsApproval ? "always" : "never",
+      allowed_tools: ["roll"],
+      ...(wantsToolSearch ? { defer_loading: true } : {}),
+    };
     const request = {
       ...resolveRequest(testCase.request, {}),
-      tools: [{
-        type: "mcp",
-        server_label: "remote_eval",
-        server_url: `http://127.0.0.1:${address.port}/mcp`,
-        authorization: authValue,
-        headers: { "x-eval-mcp": wantsApproval ? "remote-approval" : wantsBackground ? "remote-background-call" : wantsStream && wantsCall ? "remote-stream-call" : wantsCall ? "remote-call" : "remote-list" },
-        require_approval: wantsApproval ? "always" : "never",
-        allowed_tools: ["roll"],
-      }],
+      tools: wantsToolSearch
+        ? [{ type: "tool_search" }, mcpTool]
+        : [mcpTool],
     };
     const response = await postJson(`${baseUrl}/v1/responses`, request);
     const body = await response.text();
@@ -7561,17 +7621,13 @@ async function runMcpRemoteCase(testCase, context, started) {
     const toolsListRecord = records.find((record) => record.method === "tools/list") || {};
     const toolsCallRecord = records.find((record) => record.method === "tools/call") || {};
     const mcpCallArguments = parseJsonish(mcpCall?.arguments);
-    const expectedHeader = wantsApproval
-      ? "remote-approval"
-      : wantsBackground
-      ? "remote-background-call"
-      : wantsStream && wantsCall
-      ? "remote-stream-call"
-      : wantsCall
-      ? "remote-call"
-      : "remote-list";
     if (wantsApproval) {
       const approvalRequest = (json.output || []).find((item) => item.type === "mcp_approval_request");
+      const toolSearchCall = (json.output || []).find((item) => item.type === "tool_search_call");
+      const localToolSearch = json.metadata?.compatibility?.local_tool_search || {};
+      const firstBoundary = wantsToolSearch
+        ? "tool_search_mcp_list_tools_with_approval_request"
+        : "remote_list_tools_with_approval_request";
       const firstOk = mcpList?.server_label === "remote_eval"
         && mcpList.tools?.length === 1
         && mcpList.tools?.[0]?.name === "roll"
@@ -7582,12 +7638,25 @@ async function runMcpRemoteCase(testCase, context, started) {
         && localMcp.remote_import_success_count === 1
         && localMcp.remote_approval_request_count === 1
         && localMcp.remote_call_attempt_count === 0
-        && localMcp.boundary === "remote_list_tools_with_approval_request"
+        && localMcp.boundary === firstBoundary
         && initializeRecord.headers?.authorization === `Bearer ${authValue}`
-        && initializeRecord.headers?.["x-eval-mcp"] === "remote-approval"
+        && initializeRecord.headers?.["x-eval-mcp"] === expectedHeader
         && toolsListRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
         && !serialized.includes(authValue)
-        && !serialized.includes("hidden_tool");
+        && !serialized.includes("hidden_tool")
+        && (!wantsToolSearch || (
+          toolSearchCall?.type === "tool_search_call"
+          && localToolSearch.search_call_count === 1
+          && localToolSearch.mcp_list_tools_loaded_count === 1
+          && localToolSearch.mcp_loaded_tool_count === 1
+          && localMcp.tool_search_list_tools_loaded_count === 1
+          && localMcp.input_list_tools_loaded_count === 0
+          && (!wantsStream || (
+            streamEvents.some((event) => event.event === "response.output_item.added" && event.data?.item?.type === "tool_search_call")
+            && streamEvents.some((event) => event.event === "response.output_item.added" && event.data?.item?.type === "mcp_approval_request")
+            && !streamEvents.some((event) => event.event === "response.function_call_arguments.delta" || event.data?.item?.type === "function_call")
+          ))
+        ));
       if (!firstOk) {
         return finishResult(testCase, context, started, {
           ok: false,
@@ -7596,23 +7665,29 @@ async function runMcpRemoteCase(testCase, context, started) {
           output_text: text,
           remote_import_success_count: localMcp.remote_import_success_count || 0,
           remote_approval_request_count: localMcp.remote_approval_request_count || 0,
+          tool_search_call_count: localToolSearch.search_call_count || 0,
+          tool_search_mcp_list_tools_loaded_count: localToolSearch.mcp_list_tools_loaded_count || 0,
           mcp_methods: methods,
           error: truncate(serialized),
         });
       }
 
+      const approvalOkText = testCase.approvalOkText
+        || (wantsStream ? "mcp-remote-stream-approval-ok" : "mcp-remote-approval-ok");
       const secondRequest = {
         ...request,
         instructions: approvalApprove
           ? wantsStream
-            ? "The approved MCP roll output is now available in context. Stream exactly this text and nothing else: mcp-remote-stream-approval-ok."
-            : "The approved MCP roll output is now available in context. Return exactly this text and nothing else: mcp-remote-approval-ok."
+            ? `The approved MCP roll output is now available in context. Do not call tools, request tool descriptions, or emit DSML/XML markup. Stream exactly this text and nothing else: ${approvalOkText}.`
+            : `The approved MCP roll output is now available in context. Do not call tools, request tool descriptions, or emit DSML/XML markup. Return exactly this text and nothing else: ${approvalOkText}.`
           : "The MCP roll tool approval was denied. Return exactly this text and nothing else: mcp-remote-denial-ok.",
         input: [{
           type: "mcp_approval_response",
           approve: approvalApprove,
           approval_request_id: approvalRequest.id,
         }],
+        tools: [mcpTool],
+        tool_choice: "none",
         previous_response_id: json.id,
         store: false,
       };
@@ -7656,8 +7731,11 @@ async function runMcpRemoteCase(testCase, context, started) {
       const allMethods = records.map((record) => record.method);
       const callRecord = records.find((record) => record.method === "tools/call") || {};
       const approvalTextMatched = wantsStream
-        ? /mcp-remote-stream-approval-ok/i.test(secondText)
-        : /mcp-remote-approval-ok/i.test(secondText);
+        ? secondText.toLowerCase().includes(approvalOkText.toLowerCase())
+        : secondText.toLowerCase().includes(approvalOkText.toLowerCase());
+      const secondBoundary = wantsToolSearch
+        ? "input_mcp_list_tools_and_call_execution"
+        : "remote_list_tools_and_call_execution";
       const secondOk = approvalApprove
         ? (approvalTextMatched || !secondText.trim())
         && secondMcpCall?.approval_request_id === approvalRequest.id
@@ -7669,9 +7747,12 @@ async function runMcpRemoteCase(testCase, context, started) {
         && secondLocalMcp.remote_approval_response_count === 1
         && secondLocalMcp.remote_approval_approved_count === 1
         && secondLocalMcp.remote_call_success_count === 1
-        && secondLocalMcp.boundary === "remote_list_tools_and_call_execution"
+        && secondLocalMcp.boundary === secondBoundary
         && callRecord.headers?.authorization === `Bearer ${authValue}`
-        && callRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp"
+        && (wantsToolSearch || callRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp")
+        && (!wantsToolSearch || secondLocalMcp.input_list_tools_loaded_count === 1)
+        && (!wantsToolSearch || secondLocalMcp.remote_import_success_count === 0)
+        && (!wantsToolSearch || allMethods.filter((method) => method === "tools/list").length === 1)
         && callRecord.params?.name === "roll"
         && callRecord.params?.arguments?.expression === "2d4+1"
         && !secondSerialized.includes(authValue)
@@ -7701,9 +7782,12 @@ async function runMcpRemoteCase(testCase, context, started) {
         remote_approval_approved_count: secondLocalMcp.remote_approval_approved_count || 0,
         remote_approval_denied_count: secondLocalMcp.remote_approval_denied_count || 0,
         remote_call_success_count: secondLocalMcp.remote_call_success_count || 0,
+        remote_text_suppressed_count: secondLocalMcp.remote_text_suppressed_count || 0,
         mcp_methods: allMethods,
         mcp_auth_forwarded: callRecord.headers?.authorization === `Bearer ${authValue}`,
         session_forwarded: callRecord.headers?.["mcp-session-id"] === "sess_eval_remote_mcp",
+        tool_search_call_count: localToolSearch.search_call_count || undefined,
+        input_list_tools_loaded_count: secondLocalMcp.input_list_tools_loaded_count || undefined,
         event_count: streamEvents.length + secondEvents.length || undefined,
         error: secondOk ? undefined : truncate(secondSerialized),
       });
@@ -8252,6 +8336,10 @@ async function runFileSearchCase(testCase, context, started) {
       } : {}),
       usage: responseUsage(json),
       output_text: truncate(text),
+      error: ok ? undefined : truncate(JSON.stringify({
+        output: json.output,
+        local_file_search: json.metadata?.compatibility?.local_file_search,
+      })),
     });
   } finally {
     if (responseId) await deleteJson(`${baseUrl}/v1/responses/${responseId}`);

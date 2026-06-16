@@ -1,5 +1,71 @@
 # Audit Log
 
+## 2026-06-16 Live Tool Search MCP Approval Hardening
+
+- Extended the live bridge-regression harness with deferred remote MCP approval
+  cases that exercise the official Responses sequence end to end against the
+  deployed DeepSeek bridge:
+  - `tool_search` selects a deferred `mcp` server and imports remote
+    `tools/list`;
+  - the first response emits `tool_search_call`, `mcp_list_tools`, and
+    `mcp_approval_request`;
+  - the continuation sends `mcp_approval_response` with `previous_response_id`,
+    reuses the prior `mcp_list_tools`, skips a second `tools/list`, executes
+    remote `tools/call`, and emits the public `mcp_call`.
+- Hardened DeepSeek compatibility for MCP pseudo-tool text observed in live
+  runs:
+  - parses DSML-like text invocations such as `mcp_tool_approval_request`,
+    `create_approval`, `local_mcp_approval_create`, scoped
+    `server.tool` names, and `requests:[[server, tool, args]]` into generated
+    Chat function calls before the bridge maps them to Responses MCP items;
+  - suppresses assistant DSML / pseudo tool-call text after a successful
+    remote MCP call, while preserving the `mcp_call` output item for clients;
+  - records `local_mcp.remote_text_tool_call_count` and
+    `local_mcp.remote_text_suppressed_count` compatibility metadata.
+- Kept `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` at `1` for ordinary direct MCP
+  requests, but added an effective minimum of two tool-loop rounds when local
+  `tool_search` and MCP are both active. A complete same-request
+  `tool_search -> MCP approval/call` chain needs one provider round to load the
+  server and another to request or execute the MCP action. Updated
+  `.env.example`, deployment docs, and the compatibility matrix.
+- Tightened MCP prompt guidance so Chat-only providers are told not to emit
+  DSML/XML pseudo-tool markup in normal assistant answers and not to request
+  approval again when a successful `mcp_call.output` is already visible.
+- Stabilized the live PDF file-search fixture by shortening the embedded PDF
+  text to the marker itself, avoiding `pdftotext` line clipping that made the
+  result-content assertion flaky while preserving the same PDF extraction
+  coverage.
+- Validation:
+  - `node --check src/bridge/local_mcp.js src/bridge/server.js
+    scripts/eval-harness.mjs`: passed.
+  - Focused MCP/tool-search tests:
+    `node --test --test-name-pattern "auto-approved remote MCP tools/call|background executes auto-approved remote MCP|deferred remote MCP loaded through hosted tool_search|text MCP approval emitted after hosted tool_search|suppresses pseudo tool markup" test/server.test.js`
+    passed 7/7.
+  - `npm test`: passed 242/242.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; `/healthz` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass rate
+    1.0, average latency 1342 ms, P95 latency 1357 ms, and 99 total tokens.
+  - Live `responses-mcp-remote-approval` passed 1/1 against
+    `deepseek-v4-pro`, latency 3228 ms, direct remote MCP approval/call still
+    forwarding MCP auth and preserving session forwarding.
+  - Live `responses-mcp-remote-tool-search-approval` passed 1/1 against
+    `deepseek-v4-pro`; latency 5011 ms, `remote_text_suppressed_count:1`,
+    remote methods `initialize`, `notifications/initialized`, `tools/list`,
+    `tools/call`, authorization forwarded to MCP and absent from public output.
+  - Live `responses-mcp-remote-tool-search-stream-approval` passed 1/1 against
+    `deepseek-v4-pro`; latency 5438 ms, 33 stream events, same remote MCP
+    method chain, `remote_text_suppressed_count:0`, and no public
+    bridge-internal function-call events.
+  - Full live `npm run eval:bridge -- --timeout-ms 180000`: passed 115/115,
+    pass rate 1.0, average latency 1448 ms, P95 latency 4116 ms, and 34658
+    total tokens.
+
 ## 2026-06-16 Streaming Tool Search MCP Approval Coverage
 
 - Re-confirmed the official OpenAI MCP/connectors guidance through the OpenAI
@@ -158,13 +224,13 @@
     output, and injects the imported MCP schemas as generated Chat function
     tools for the follow-up request;
   - returned generated Chat tool calls can execute remote MCP `tools/call` in
-    the same Responses request when `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS` permits a
-    search round and an MCP call round;
+    the same Responses request when the effective MCP tool loop permits a
+    search round and an MCP approval/call round;
   - preparation-time deferred MCP servers no longer consume an empty
     `mcp_list_tools` budget slot before tool search has selected them.
-- Kept the conservative default `CODEXCOMPAT_MCP_MAX_CALL_ROUNDS=1`; the new
-  same-request search-plus-call regression sets `mcpMaxCallRounds:2`
-  explicitly.
+- Later live hardening kept the configured default at `1` for ordinary direct
+  MCP requests and applies an effective minimum of `2` only when local
+  `tool_search` and MCP are both active.
 - Added compatibility metadata for
   `local_tool_search.searchable_mcp_server_count`,
   `local_tool_search.mcp_list_tools_loaded_count`,
