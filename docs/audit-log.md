@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 Official Service Tier Validation
+
+- Rechecked the official OpenAI Responses and Chat Completions create
+  body-parameter docs through the OpenAI developer docs MCP before changing
+  validation behavior:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`
+  and
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`.
+  Both contracts document `service_tier` as an optional request field whose
+  accepted request values are `auto`, `default`, `flex`, and `priority`; unset
+  behavior defaults to `auto`.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects invalid Chat-native `service_tier`
+    aliases before translating the request to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough.
+  - `null` is treated as unset, matching the bridge's optional-field handling
+    for other OpenAI request parameters.
+- Preserved the existing provider-aware forwarding policy: valid values still
+  flow through for providers configured to accept Chat-native `service_tier`,
+  while DeepSeek-compatible default filtering records the compatibility
+  decision instead of silently forwarding an unsupported field.
+- Added regression coverage proving invalid strings, uppercase enum values,
+  legacy tier names, and non-string values fail locally for both Responses and
+  direct Chat with zero upstream calls. Valid `default` and `priority` values
+  still reach the existing provider-aware passthrough/filtering path.
+- Updated the compatibility matrix and evaluation plan so Chat-native
+  `service_tier` parity tracks request-contract validation as well as
+  passthrough/filtering behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "service_tier|Chat-native request fields|normalizes OpenAI Chat fields|passes Chat service tier|filter service tier"`:
+    passed 270/270; the current Node test runner executed both full selected
+    test files.
+  - `npm test`: passed 274/274.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `service_tier` smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"`, `param:"service_tier"`, and
+    `code:"invalid_request_parameter"`; the Responses request used
+    `service_tier:"fast"`, and the Chat request used
+    `service_tier:"PRIORITY"`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Verbosity Validation
 
 - Rechecked the official OpenAI Chat Completions create body-parameter docs

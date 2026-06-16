@@ -210,6 +210,7 @@ const OPENAI_PENALTY_MAX = 2;
 const OPENAI_STOP_MAX_SEQUENCES = 4;
 const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
+const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
@@ -814,6 +815,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const serviceTierError = validateOpenAIServiceTier(request);
+  if (serviceTierError) {
+    sendError(res, 400, serviceTierError.message, serviceTierError);
     return;
   }
   const verbosityError = validateOpenAIVerbosity(request);
@@ -2371,6 +2377,17 @@ function validateOpenAIVerbosity(body = {}) {
     return requestValidationError(
       `verbosity must be one of: ${OPENAI_VERBOSITY_VALUES.join(", ")}`,
       "verbosity",
+    );
+  }
+  return null;
+}
+
+function validateOpenAIServiceTier(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "service_tier") || body.service_tier == null) return null;
+  if (typeof body.service_tier !== "string" || !OPENAI_SERVICE_TIER_VALUES.includes(body.service_tier)) {
+    return requestValidationError(
+      `service_tier must be one of: ${OPENAI_SERVICE_TIER_VALUES.join(", ")}`,
+      "service_tier",
     );
   }
   return null;
@@ -4510,6 +4527,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const logitBiasError = validateOpenAILogitBias(body);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const serviceTierError = validateOpenAIServiceTier(body);
+  if (serviceTierError) {
+    sendError(res, 400, serviceTierError.message, serviceTierError);
     return;
   }
   const verbosityError = validateOpenAIVerbosity(body);
