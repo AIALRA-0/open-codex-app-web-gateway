@@ -4386,6 +4386,9 @@ function chatPassthroughUpstreamBody(body, config) {
   const responseFormat = normalizeChatPassthroughResponseFormat(upstreamBody, config);
   if (responseFormat) compatibility.response_format = responseFormat;
 
+  const verbosity = normalizeChatPassthroughVerbosity(upstreamBody, config);
+  if (verbosity) compatibility.verbosity = verbosity;
+
   const nativeFields = filterChatPassthroughNativeFields(upstreamBody, config);
   if (nativeFields) compatibility.chat_native_fields = nativeFields;
 
@@ -4412,7 +4415,7 @@ function normalizeChatPassthroughResponseFormat(upstreamBody, config = {}) {
     }
     if (jsonSchemaMode === "json_object") {
       upstreamBody.response_format = { type: "json_object" };
-      injectChatPassthroughJsonInstruction(upstreamBody, makeChatPassthroughJsonSchemaInstruction(format));
+      injectChatPassthroughSystemInstruction(upstreamBody, makeChatPassthroughJsonSchemaInstruction(format));
       return {
         source: "response_format",
         type,
@@ -4426,7 +4429,7 @@ function normalizeChatPassthroughResponseFormat(upstreamBody, config = {}) {
     return null;
   }
   if (type === "json_object" && !chatPassthroughMessagesContainJson(upstreamBody.messages)) {
-    injectChatPassthroughJsonInstruction(upstreamBody, makeChatPassthroughJsonModeInstruction());
+    injectChatPassthroughSystemInstruction(upstreamBody, makeChatPassthroughJsonModeInstruction());
     return {
       source: "response_format",
       type,
@@ -4455,7 +4458,7 @@ function makeChatPassthroughJsonModeInstruction() {
   return "JSON mode compatibility: return only valid json. Do not include markdown or prose outside the JSON value.";
 }
 
-function injectChatPassthroughJsonInstruction(upstreamBody, content) {
+function injectChatPassthroughSystemInstruction(upstreamBody, content) {
   const message = { role: "system", content };
   if (!Array.isArray(upstreamBody.messages)) {
     upstreamBody.messages = [message];
@@ -4467,6 +4470,36 @@ function injectChatPassthroughJsonInstruction(upstreamBody, content) {
 function chatPassthroughMessagesContainJson(messages = []) {
   return (Array.isArray(messages) ? messages : [])
     .some((message) => /\bjson\b/i.test(stringifyContent(message?.content)));
+}
+
+function normalizeChatPassthroughVerbosity(upstreamBody, config = {}) {
+  if (upstreamBody.verbosity === undefined || config.forwardChatNativeFields !== false) return null;
+  const instruction = chatPassthroughVerbosityInstruction(upstreamBody.verbosity);
+  if (!instruction) return null;
+  const value = stringifyContent(upstreamBody.verbosity);
+  delete upstreamBody.verbosity;
+  injectChatPassthroughSystemInstruction(upstreamBody, instruction);
+  return {
+    source: "verbosity",
+    value,
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  };
+}
+
+function chatPassthroughVerbosityInstruction(value) {
+  const normalized = stringifyContent(value).trim().toLowerCase();
+  if (normalized === "low") {
+    return "Verbosity compatibility: answer concisely. Prefer the shortest complete response that satisfies the user.";
+  }
+  if (normalized === "medium") {
+    return "Verbosity compatibility: use balanced detail. Give enough context to be useful without unnecessary expansion.";
+  }
+  if (normalized === "high") {
+    return "Verbosity compatibility: answer with thorough detail. Include relevant context, caveats, and examples when useful.";
+  }
+  return null;
 }
 
 function normalizeChatPassthroughContentInputs(upstreamBody, config = {}) {

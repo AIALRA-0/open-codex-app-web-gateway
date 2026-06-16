@@ -601,6 +601,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   if (logprobsRequested !== undefined) chat.logprobs = logprobsRequested;
 
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
+  const verbosityCompatibility = mapVerbosity(request, chat, options);
   const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, options);
 
   const toolChoice = mapToolChoice(request.tool_choice);
@@ -646,6 +647,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(chatAudioInputCompatibility ? { chat_audio_inputs: chatAudioInputCompatibility } : {}),
       ...(promptCompatibility ? { prompt_template: promptCompatibility } : {}),
       ...(maxTokensCompatibility || {}),
+      ...(verbosityCompatibility ? { verbosity: verbosityCompatibility } : {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
   };
@@ -924,6 +926,7 @@ function mapChatNativeFields(request, chat, options = {}) {
   const filtered = [];
   const forward = options.forwardChatNativeFields !== false;
   for (const field of present) {
+    if (!forward && field === "verbosity" && verbosityInstruction(request[field])) continue;
     if (forward) {
       chat[field] = clone(request[field]);
       forwarded.push(field);
@@ -937,6 +940,37 @@ function mapChatNativeFields(request, chat, options = {}) {
     ...(filtered.length ? { filtered } : {}),
     reason: forward ? "chat_native_passthrough" : "provider_unsupported",
   };
+}
+
+function mapVerbosity(request, chat, options = {}) {
+  if (request.verbosity === undefined || options.forwardChatNativeFields !== false) return null;
+  const instruction = verbosityInstruction(request.verbosity);
+  if (!instruction) return null;
+  chat.messages = [
+    { role: "system", content: instruction },
+    ...(Array.isArray(chat.messages) ? chat.messages : []),
+  ];
+  return {
+    source: "verbosity",
+    value: stringifyContent(request.verbosity),
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  };
+}
+
+function verbosityInstruction(value) {
+  const normalized = stringifyContent(value).trim().toLowerCase();
+  if (normalized === "low") {
+    return "Verbosity compatibility: answer concisely. Prefer the shortest complete response that satisfies the user.";
+  }
+  if (normalized === "medium") {
+    return "Verbosity compatibility: use balanced detail. Give enough context to be useful without unnecessary expansion.";
+  }
+  if (normalized === "high") {
+    return "Verbosity compatibility: answer with thorough detail. Include relevant context, caveats, and examples when useful.";
+  }
+  return null;
 }
 
 function mapStreamOptions(request, chat, options = {}) {

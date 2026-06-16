@@ -180,7 +180,8 @@ implementations for those tools.
 | `temperature`, `top_p`, penalties, `seed`, `user` | same-name fields | Provider-dependent |
 | `metadata`, `store` | local Responses/Chat storage semantics plus optional upstream Chat stored-completion fields | Provider-aware stored-chat passthrough. The bridge always preserves local `metadata` on Responses and stored Chat records and uses `store` for local replay/list/retrieve behavior; DeepSeek defaults to filtering these unsupported upstream fields and records `metadata.compatibility.stored_chat_fields` / `metadata.compatibility.chat_passthrough.stored_chat_fields` |
 | `service_tier` | `service_tier` | Provider-dependent Chat-native passthrough; DeepSeek defaults to filtering this unsupported field and records `metadata.compatibility.service_tier` |
-| `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `verbosity`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
+| `logit_bias`, `modalities`, `audio`, `prediction`, `n`, `parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`, `safety_identifier`, `web_search_options`, legacy `functions` / `function_call` | same-name Chat fields | Provider-aware Chat-native passthrough; DeepSeek defaults to filtering these unsupported fields and records forwarded/filtered names in `metadata.compatibility.chat_native_fields` |
+| `verbosity` | same-name Chat field, or system instruction for unsupported providers | Provider-aware Chat-native passthrough. For DeepSeek-compatible providers where Chat-native fields are filtered, official OpenAI `low` / `medium` / `high` verbosity values are translated into a leading system instruction and recorded in `metadata.compatibility.verbosity` or `metadata.compatibility.chat_passthrough.verbosity` instead of being silently dropped |
 | `moderation` | same-name Chat field plus local inline moderation fallback | Provider-aware Chat-native passthrough when supported; when the field is filtered or the upstream Chat provider returns no moderation payload, the bridge attaches local `input`/`output` moderation results to `response.moderation` and records `metadata.compatibility.local_moderation` |
 | `stream_options` with `stream:true` | `stream_options` | Provider-aware subfield passthrough; when omitted the bridge defaults `include_usage:true` so streaming Responses terminal events can carry usage. DeepSeek defaults to forwarding only `include_usage` and records filtered subfields with `metadata.compatibility.stream_options.reason=provider_stream_option_filter` |
 | `stream_options` without `stream:true` | omitted | Filtered with `metadata.compatibility.stream_options.reason=stream_required` |
@@ -453,13 +454,15 @@ filtered by default for DeepSeek because DeepSeek currently documents only
 while function tools remain forwardable, `store` and `metadata` are kept as
 local stored-completion
 semantics and filtered for DeepSeek upstream calls, `service_tier` is filtered
-when unsupported, `stream_options` are removed on non-streaming requests,
+when unsupported, OpenAI Chat `verbosity:"low"|"medium"|"high"` is converted
+to a leading system instruction when the provider does not support the native
+field, `stream_options` are removed on non-streaming requests,
 provider-unsupported streaming subfields are filtered by
 `CODEXCOMPAT_STREAM_OPTION_FIELDS`, and configured OpenAI-only Chat fields such
 as `logit_bias`, `modalities`, `audio`, `moderation`, `n`, `prediction`,
 `parallel_tool_calls`, `prompt_cache_key`, `prompt_cache_retention`,
-`safety_identifier`, `verbosity`, `web_search_options`, and legacy
-`functions` / `function_call` are filtered instead of being sent to the
+`safety_identifier`, `web_search_options`, and legacy `functions` /
+`function_call` are filtered instead of being sent to the
 provider. DeepSeek-supported Chat log-probability controls such as `logprobs`
 and `top_logprobs` remain pass-through. Non-streaming JSON
 responses and stored reconstructed streaming responses record these actions under

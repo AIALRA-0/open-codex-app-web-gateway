@@ -605,6 +605,11 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
     assert.equal(call.body.logit_bias, undefined);
     assert.equal(call.body.n, undefined);
     assert.equal(call.body.parallel_tool_calls, undefined);
+    assert.equal(call.body.verbosity, undefined);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(call.body.messages[0].content, /Verbosity compatibility/);
+    assert.match(call.body.messages[0].content, /thorough detail/);
+    assert.equal(call.body.messages[1].content, "Filter Chat-native fields.");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_chat_native_filtered",
@@ -630,6 +635,7 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
         logit_bias: { "8": -4 },
         n: 3,
         parallel_tool_calls: false,
+        verbosity: "high",
       }),
     });
 
@@ -644,6 +650,13 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
       "store",
     ].sort());
     assert.equal(json.metadata.compatibility.chat_native_fields.reason, "provider_unsupported");
+    assert.deepEqual(json.metadata.compatibility.verbosity, {
+      source: "verbosity",
+      value: "high",
+      forwarded: false,
+      reason: "provider_unsupported_prompt_instruction",
+      prompt_instruction: "injected",
+    });
     assert.deepEqual(json.metadata.compatibility.chat_native_fields.filtered.sort(), [
       "logit_bias",
       "n",
@@ -17884,10 +17897,11 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
 
 test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compatible providers", async () => {
   await withMockProvider(async (_req, res, call) => {
-    assert.deepEqual(call.body.messages, [
-      { role: "system", content: "Use terse answers." },
-      { role: "user", content: "Return chat-developer-ok." },
-    ]);
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "system", "user"]);
+    assert.match(call.body.messages[0].content, /Verbosity compatibility/);
+    assert.match(call.body.messages[0].content, /answer concisely/);
+    assert.equal(call.body.messages[1].content, "Use terse answers.");
+    assert.equal(call.body.messages[2].content, "Return chat-developer-ok.");
     assert.equal(call.body.user, undefined);
     assert.match(call.body.user_id, /^sha256_[a-f0-9]{64}$/);
     assert.equal(call.body.service_tier, undefined);
@@ -17982,6 +17996,13 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
     assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.forwarded, false);
     assert.equal(json.metadata.compatibility.chat_passthrough.reasoning_effort.reason, "deepseek_thinking_disabled");
     assert.equal(json.metadata.compatibility.chat_passthrough.service_tier.forwarded, false);
+    assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.value, "low");
+    assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.forwarded, false);
+    assert.equal(
+      json.metadata.compatibility.chat_passthrough.verbosity.reason,
+      "provider_unsupported_prompt_instruction",
+    );
+    assert.equal(json.metadata.compatibility.chat_passthrough.verbosity.prompt_instruction, "injected");
     assert.equal(json.metadata.compatibility.chat_passthrough.stream_options.reason, "stream_required");
     assert.equal(json.metadata.compatibility.chat_passthrough.stored_chat_fields.reason, "provider_unsupported_local_semantics");
     assert.deepEqual(
@@ -18003,7 +18024,6 @@ test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compa
         "prompt_cache_key",
         "prompt_cache_retention",
         "safety_identifier",
-        "verbosity",
         "web_search_options",
       ].sort(),
     );

@@ -628,14 +628,26 @@ test("filters Chat-native request fields for unsupported providers", () => {
     modalities: ["audio"],
     n: 2,
     parallel_tool_calls: false,
+    verbosity: "high",
   }, [], { forwardChatNativeFields: false, forwardStoredChatFields: false });
 
+  assert.deepEqual(chat.messages.map((message) => message.role), ["system", "user"]);
+  assert.match(chat.messages[0].content, /Verbosity compatibility/);
+  assert.match(chat.messages[0].content, /thorough detail/);
   assert.equal(chat.metadata, undefined);
   assert.equal(chat.store, undefined);
   assert.equal(chat.logit_bias, undefined);
   assert.equal(chat.modalities, undefined);
   assert.equal(chat.n, undefined);
   assert.equal(chat.parallel_tool_calls, undefined);
+  assert.equal(chat.verbosity, undefined);
+  assert.deepEqual(compatibility.verbosity, {
+    source: "verbosity",
+    value: "high",
+    forwarded: false,
+    reason: "provider_unsupported_prompt_instruction",
+    prompt_instruction: "injected",
+  });
   assert.deepEqual(compatibility.chat_native_fields.filtered.sort(), [
     "logit_bias",
     "modalities",

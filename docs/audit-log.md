@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-16 Verbosity Prompt Instruction Compatibility
+
+- Rechecked the official OpenAI Chat Completions OpenAPI schema through the
+  OpenAI developer docs MCP. OpenAI documents `verbosity` as a Chat completion
+  request field with `low`, `medium`, and `high` values that constrain response
+  detail.
+- Extended DeepSeek-compatible request normalization so unsupported
+  `verbosity` no longer disappears into the generic Chat-native field filter:
+  - `/v1/responses` translation removes the native `verbosity` field when
+    Chat-native passthrough is disabled, injects a leading system instruction
+    for `low`, `medium`, or `high`, and records
+    `metadata.compatibility.verbosity`;
+  - direct `/v1/chat/completions` passthrough applies the same downgrade before
+    proxying to the provider and records
+    `metadata.compatibility.chat_passthrough.verbosity`;
+  - providers with Chat-native passthrough enabled still receive the native
+    field unchanged, while unsupported or unknown values continue through the
+    existing filter/audit path.
+- Updated the compatibility matrix to separate mappable `verbosity` semantics
+  from OpenAI-only Chat fields that are simply filtered for DeepSeek.
+- Added regressions for:
+  - translator-level Responses mapping of `verbosity:"high"` into a leading
+    system message and compatibility metadata;
+  - `/v1/responses` end-to-end filtering proving the upstream request receives
+    the prompt instruction instead of the native field;
+  - direct `/v1/chat/completions` normalization proving
+    `verbosity:"low"` is removed from the upstream request, injected as a
+    system instruction, and excluded from the generic filtered field list.
+- Validation:
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/translator.test.js --test-name-pattern "Chat-native request fields"`:
+    passed 41/41.
+  - `node --test test/server.test.js --test-name-pattern "verbosity|Chat-native request fields|normalizes OpenAI Chat fields"`:
+    passed 204/204.
+  - `npm test`: passed 248/248.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1770 ms, P95 latency 1938 ms, and 116 total
+    tokens.
+  - Live localhost `/v1/chat/completions` smoke with `verbosity:"low"` and
+    `reasoning_effort:"none"` against `deepseek-v4-pro` returned HTTP 200,
+    visible content `ok-verbosity-live`, and compatibility metadata showing
+    `forwarded:false`, `reason:"provider_unsupported_prompt_instruction"`,
+    and `prompt_instruction:"injected"`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 DeepSeek Structured Output Passthrough Downgrade
 
 - Rechecked the official OpenAI Structured Outputs guidance through the
