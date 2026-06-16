@@ -48,6 +48,13 @@
   - Restarted `aialra-opencodexapp-bridge.service`; `/healthz` returned
     `ok:true`, provider base `https://api.deepseek.com`, default model
     `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Post-push service check: `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were all `active`;
+    `https://opencodexapp.aialra.online/` returned HTTP 200.
+  - Storage check: repo worktree 125 MB, `state/` 46 MB, `output/` 4.5 MB,
+    `/srv/aialra/data/opencodexapp` 136 KB, and
+    `/srv/aialra/logs/opencodexapp` 30 MB.
   - Live `responses-tool-search-large-catalog` passed 1/1 against
     `deepseek-v4-pro`; latency 3111 ms, usage 2305 input / 105 output / 2410
     total tokens, namespace count 8, deferred tool count 48, loaded tool count
