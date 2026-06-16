@@ -2376,6 +2376,7 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     return;
   }
   chat.stream = false;
+  delete chat.stream_options;
   delete chat.store;
   chat[config.maxTokensField || "max_tokens"] = 1;
 

@@ -14529,6 +14529,128 @@ test("POST /v1/responses/input_tokens returns upstream prompt token usage", asyn
   });
 });
 
+test("POST /v1/responses/input_tokens counts conversation, files, images, and tools", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, false);
+    assert.equal(call.body.max_tokens, 1);
+    assert.equal(call.body.store, undefined);
+    assert.equal(call.body.stream_options, undefined);
+    assert.equal(call.body.model, "mock-model");
+
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Token count conversation marker token-conv-42/);
+    assert.match(prompt, /Count the current multimodal request/);
+    assert.match(prompt, /Local Responses input_file compatibility extracted file inputs/);
+    assert.match(prompt, /File token fixture says token-file-ok/);
+    assert.match(prompt, /\[image:https:\/\/example.test\/token-chart.png\]/);
+    assert.match(prompt, /detail: high/);
+    assert.doesNotMatch(prompt, /provider should not append/);
+
+    assert.deepEqual(call.body.tools, [{
+      type: "function",
+      function: {
+        name: "lookup_budget",
+        description: "Look up a budget by id.",
+        parameters: {
+          type: "object",
+          properties: { budget_id: { type: "string" } },
+          required: ["budget_id"],
+          additionalProperties: false,
+        },
+        strict: true,
+      },
+    }]);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_token_probe_multimodal",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 123, completion_tokens: 1, total_tokens: 124 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const conversationResponse = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{ type: "message", role: "user", content: "Token count conversation marker token-conv-42." }],
+      }),
+    });
+    assert.equal(conversationResponse.status, 200);
+    const conversation = await conversationResponse.json();
+
+    const createdFile = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "token-count-fixture.txt",
+        purpose: "user_data",
+        content: "File token fixture says token-file-ok.",
+      }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+
+    const inputTokens = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: conversation.id,
+        instructions: "Count all model-visible input.",
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_file", file_id: file.id },
+            {
+              type: "input_image",
+              image_url: "https://example.test/token-chart.png",
+              detail: "high",
+            },
+            { type: "input_text", text: "Count the current multimodal request." },
+          ],
+        }],
+        tools: [{
+          type: "function",
+          name: "lookup_budget",
+          description: "Look up a budget by id.",
+          parameters: {
+            type: "object",
+            properties: { budget_id: { type: "string" } },
+            required: ["budget_id"],
+            additionalProperties: false,
+          },
+          strict: true,
+        }],
+        stream: true,
+        store: true,
+        stream_options: { include_usage: true },
+        max_output_tokens: 200,
+      }),
+    });
+    assert.equal(inputTokens.status, 200);
+    assert.deepEqual(await inputTokens.json(), {
+      object: "response.input_tokens",
+      input_tokens: 123,
+    });
+    assert.equal(requests.length, 1);
+
+    const items = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`);
+    assert.equal(items.status, 200);
+    assert.equal((await items.json()).data.length, 1);
+  }, {
+    chatImageInputMode: "text",
+    chatFileInputMode: "text",
+  });
+});
+
 test("POST /v1/embeddings returns deterministic local OpenAI-compatible vectors", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

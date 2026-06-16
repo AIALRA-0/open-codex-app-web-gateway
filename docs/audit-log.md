@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-16 Input Token Probe Multimodal Coverage
+
+- Rechecked the official OpenAI token-counting guidance through the OpenAI
+  developer docs MCP. The documented `/v1/responses/input_tokens` endpoint
+  accepts the same input shape as the Responses API, including messages,
+  images, files, tools, conversations, and returns a
+  `response.input_tokens` object with an integer `input_tokens` count.
+- Tightened the local Responses input-token compatibility path for
+  Chat-Completions-only providers:
+  - request input, `previous_response_id`, and local conversation replay are
+    translated to Chat-visible prompt context;
+  - local `input_file` and `input_image` content extraction is included in
+    the upstream usage probe when configured for text-mode compatibility;
+  - Responses function tools are preserved as Chat function tools for the
+    provider-side prompt-token calculation;
+  - stream-only request options are stripped after the probe is forced to
+    non-streaming `max_tokens:1`, so `stream_options` is not leaked into a
+    non-streaming upstream Chat request;
+  - the probe remains read-only and does not append Conversation items.
+- Added a regression covering conversation replay, local input files, image
+  text markers, tool schemas, `store:true`, `stream:true`,
+  `stream_options.include_usage`, and the read-only conversation invariant.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "responses/input_tokens"`:
+    passed 202/202.
+  - `npm test`: passed 246/246.
+  - `npm run eval:protocol`: passed 2/2 against `deepseek-v4-pro`, pass
+    rate 1.0, average latency 1258 ms, P95 latency 1412 ms, and 99 total
+    tokens.
+  - Pre-restart localhost `/v1/responses/input_tokens` smoke reproduced the
+    old DeepSeek rejection for `stream_options` on a forced non-streaming
+    probe; after restarting the bridge with this fix, the same payload returned
+    `{"object":"response.input_tokens","input_tokens":12}`.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+
 ## 2026-06-16 Direct Chat DeepSeek Field Matrix Regression
 
 - Rechecked current OpenAI Chat Completions create-field coverage with the
