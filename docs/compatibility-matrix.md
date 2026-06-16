@@ -768,7 +768,7 @@ Chat-only providers.
 | `GET /v1/conversations/{conversation_id}/items` | Implemented locally | Lists local conversation items with `limit`, `after`, `before`, and `order` pagination; defaults to the official `order=desc` while preserving explicit `order=asc`; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
 | `POST /v1/conversations/{conversation_id}/items` | Implemented locally | Appends official `{items:[...]}` payloads to the local conversation, validates `items` as an array with the official 20-item limit, and keeps legacy local extensions for one raw item object or `{item}` |
 | `GET /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Retrieves a local conversation item; message input image URLs and computer output image URLs are hidden unless their matching include values are requested |
-| `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Deletes a local conversation item |
+| `DELETE /v1/conversations/{conversation_id}/items/{item_id}` | Implemented locally | Deletes a local conversation item and returns the updated official `ConversationResource` |
 
 When a Responses request includes `conversation:"conv_..."`, the bridge injects
 existing conversation items into the upstream Chat prompt, returns

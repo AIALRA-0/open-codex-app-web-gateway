@@ -235,11 +235,7 @@ class FileConversationStore {
     if (index === -1) return null;
     record.items = [...items.slice(0, index), ...items.slice(index + 1)];
     this.put(id, record);
-    return {
-      id: itemId,
-      object: "conversation.item.deleted",
-      deleted: true,
-    };
+    return conversationResource(record);
   }
 
   put(id, record) {

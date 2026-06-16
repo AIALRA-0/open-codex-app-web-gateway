@@ -16412,11 +16412,10 @@ test("local Conversations API persists items and feeds Responses conversation co
       method: "DELETE",
     });
     assert.equal(itemDelete.status, 200);
-    assert.deepEqual(await itemDelete.json(), {
-      id: itemCreateJson.id,
-      object: "conversation.item.deleted",
-      deleted: true,
-    });
+    const itemDeleteJson = await itemDelete.json();
+    assert.equal(itemDeleteJson.id, createdJson.id);
+    assert.equal(itemDeleteJson.object, "conversation");
+    assert.deepEqual(itemDeleteJson.metadata, { topic: "updated" });
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",

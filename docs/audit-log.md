@@ -1,5 +1,35 @@
 # Audit Log
 
+## 2026-06-17 Conversation Item Delete Response Alignment
+
+- Rechecked the official OpenAI
+  `DELETE /v1/conversations/{conversation_id}/items/{item_id}` schema through
+  the official `openai/openai-openapi` schema. Current delete-item returns the
+  updated `ConversationResource`, not a deleted marker object.
+- Aligned local Conversation item deletion:
+  - deleting an item still removes it from local durable Conversation state;
+  - successful delete now returns `object:"conversation"` with the
+    conversation id, `created_at`, and metadata.
+- Updated tests and the compatibility matrix to document the official delete
+  response shape.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'local Conversations API'`:
+    passed 289/289 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 340/340.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed delete-item returns
+    `object:"conversation"` for the updated conversation and removes the item
+    from subsequent item lists.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Items List Ordering Tightening
 
 - Rechecked the official OpenAI
