@@ -931,6 +931,8 @@ test("POST /v1/responses validates sampling parameter ranges before provider cal
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.temperature, 0);
     assert.equal(call.body.top_p, 1);
+    assert.equal(call.body.frequency_penalty, -2);
+    assert.equal(call.body.presence_penalty, 2);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_sampling_boundary",
@@ -953,6 +955,12 @@ test("POST /v1/responses validates sampling parameter ranges before provider cal
       { body: { top_p: -0.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
       { body: { top_p: 1.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
       { body: { top_p: "0.5" }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { frequency_penalty: -2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: 2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: "0" }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: -2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: 2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: "0" }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -984,6 +992,8 @@ test("POST /v1/responses validates sampling parameter ranges before provider cal
         input: "Check sampling lower and upper boundaries.",
         temperature: 0,
         top_p: 1,
+        frequency_penalty: -2,
+        presence_penalty: 2,
       }),
     });
     assert.equal(valid.status, 200);
@@ -18265,6 +18275,8 @@ test("POST /v1/chat/completions validates sampling parameter ranges before provi
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.temperature, 2);
     assert.equal(call.body.top_p, 0);
+    assert.equal(call.body.frequency_penalty, 2);
+    assert.equal(call.body.presence_penalty, -2);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_chat_sampling_boundary",
@@ -18286,6 +18298,12 @@ test("POST /v1/chat/completions validates sampling parameter ranges before provi
       { body: { top_p: -0.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
       { body: { top_p: 1.01 }, param: "top_p", message: "top_p must be a number between 0 and 1" },
       { body: { top_p: "0.5" }, param: "top_p", message: "top_p must be a number between 0 and 1" },
+      { body: { frequency_penalty: -2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: 2.1 }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { frequency_penalty: "0" }, param: "frequency_penalty", message: "frequency_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: -2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: 2.1 }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
+      { body: { presence_penalty: "0" }, param: "presence_penalty", message: "presence_penalty must be a number between -2 and 2" },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/chat/completions`, {
@@ -18317,6 +18335,8 @@ test("POST /v1/chat/completions validates sampling parameter ranges before provi
         messages: [{ role: "user", content: "hello" }],
         temperature: 2,
         top_p: 0,
+        frequency_penalty: 2,
+        presence_penalty: -2,
       }),
     });
     assert.equal(valid.status, 200);

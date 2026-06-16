@@ -205,6 +205,8 @@ const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
 const OPENAI_TOP_P_MAX = 1;
+const OPENAI_PENALTY_MIN = -2;
+const OPENAI_PENALTY_MAX = 2;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -2292,14 +2294,16 @@ function validateOpenAITopLogprobs(body = {}, options = {}) {
 }
 
 function validateOpenAISamplingParameters(body = {}) {
-  const temperatureError = validateNumberRange(
-    body,
-    "temperature",
-    OPENAI_TEMPERATURE_MIN,
-    OPENAI_TEMPERATURE_MAX,
-  );
-  if (temperatureError) return temperatureError;
-  return validateNumberRange(body, "top_p", OPENAI_TOP_P_MIN, OPENAI_TOP_P_MAX);
+  for (const [field, min, max] of [
+    ["temperature", OPENAI_TEMPERATURE_MIN, OPENAI_TEMPERATURE_MAX],
+    ["top_p", OPENAI_TOP_P_MIN, OPENAI_TOP_P_MAX],
+    ["frequency_penalty", OPENAI_PENALTY_MIN, OPENAI_PENALTY_MAX],
+    ["presence_penalty", OPENAI_PENALTY_MIN, OPENAI_PENALTY_MAX],
+  ]) {
+    const error = validateNumberRange(body, field, min, max);
+    if (error) return error;
+  }
+  return null;
 }
 
 function validateNumberRange(body = {}, field, min, max) {

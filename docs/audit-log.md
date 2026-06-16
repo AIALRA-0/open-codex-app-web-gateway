@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-16 Official Penalty Parameter Validation
+
+- Rechecked the official OpenAI Chat Completions and legacy Completions
+  creation surfaces through the OpenAI developer docs MCP before changing
+  validation behavior. The Chat/Completions penalty contract uses numeric
+  `frequency_penalty` and `presence_penalty` values from -2.0 through 2.0.
+  The Responses create docs do not stably expose these fields as first-class
+  Responses parameters, but this bridge already accepts them on
+  `POST /v1/responses` as Chat-native aliases and forwards them to upstream
+  Chat providers, so the accepted alias fields now follow the Chat contract.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects non-number, below-minimum, and
+    above-maximum `frequency_penalty` / `presence_penalty` values before
+    translating the request to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct
+    Chat passthrough, matching the OpenAI Chat request contract instead of
+    relying on provider-specific errors.
+  - Valid boundary values still pass through unchanged:
+    `frequency_penalty:-2` / `presence_penalty:2` on Responses, and
+    `frequency_penalty:2` / `presence_penalty:-2` on direct Chat.
+- Added regression coverage proving invalid values
+  `frequency_penalty:-2.1`, `frequency_penalty:2.1`,
+  `frequency_penalty:"0"`, `presence_penalty:-2.1`,
+  `presence_penalty:2.1`, and `presence_penalty:"0"` fail locally for both
+  Responses and direct Chat with zero upstream calls, while valid boundaries
+  still reach the mock Chat provider.
+- Updated the compatibility matrix and evaluation plan so sampling parity now
+  tracks request-contract validation for penalties as well as `temperature`
+  and `top_p`.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "sampling|penalty|frequency_penalty|presence_penalty"`:
+    passed 216/216; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 265/265.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public penalty smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses error used `param:"frequency_penalty"` for
+    `frequency_penalty:2.1`, and the Chat error used
+    `param:"presence_penalty"` for `presence_penalty:-2.1`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Sampling Parameter Validation
 
 - Rechecked the official OpenAI Responses create and Chat Completions create
