@@ -16337,6 +16337,122 @@ test("Responses auxiliary endpoints replay local conversation state", async () =
   });
 });
 
+test("POST /v1/responses/compact validates official request fields before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid compact request fields");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: {},
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: null },
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: "" },
+        param: "model",
+        message: "model is required",
+      },
+      {
+        body: { model: 42 },
+        param: "model",
+        message: "model must be a string",
+      },
+      {
+        body: { model: "mock-model", prompt_cache_key: [] },
+        param: "prompt_cache_key",
+        message: "prompt_cache_key must be a string",
+      },
+      {
+        body: { model: "mock-model", prompt_cache_key: "c".repeat(65) },
+        param: "prompt_cache_key",
+        message: "prompt_cache_key must be at most 64 characters",
+      },
+      {
+        body: { model: "mock-model", prompt_cache_retention: "7d" },
+        param: "prompt_cache_retention",
+        message: "prompt_cache_retention must be one of: in_memory, 24h",
+      },
+      {
+        body: { model: "mock-model", service_tier: "fast" },
+        param: "service_tier",
+        message: "service_tier must be one of: auto, default, flex, priority",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/compact`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: "Validate compact official fields.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/responses/compact forwards validated cache and service fields to compaction Chat", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.model, "mock-model");
+    assert.equal(call.body.prompt_cache_key, "compact-cache");
+    assert.equal(call.body.prompt_cache_retention, "24h");
+    assert.equal(call.body.service_tier, "priority");
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_compact_cache",
+      object: "chat.completion",
+      created: 102,
+      model: "mock-model",
+      service_tier: "flex",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "Compacted cache-aware state." },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 12, completion_tokens: 5, total_tokens: 17 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/compact`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Compact cache-aware state.",
+        prompt_cache_key: "compact-cache",
+        prompt_cache_retention: "24h",
+        service_tier: "priority",
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.object, "response.compaction");
+    assert.equal(json.usage.input_tokens, 12);
+    assert.equal(json.metadata.upstream_object, "chat.completion");
+    assert.equal(requests.length, 1);
+  }, {
+    forwardServiceTier: true,
+    forwardChatNativeFields: true,
+  });
+});
+
 test("POST /v1/responses/compact returns local compaction and replays it", async () => {
   await withMockProvider(async (_req, res, call) => {
     res.writeHead(200, { "content-type": "application/json" });

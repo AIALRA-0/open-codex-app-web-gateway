@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-16 Official Responses Compact Request Validation
+
+- Rechecked the current official OpenAI Responses compact documentation through
+  the OpenAI developer docs MCP and the official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/compact`,
+  `https://api.openai.com/v1/responses/compact`, and
+  `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  `CompactResponseMethodPublicBody` requires `model` and exposes
+  `input`, `previous_response_id`, `instructions`, `prompt_cache_key`,
+  `prompt_cache_retention`, and `service_tier`. The official schema gives
+  `prompt_cache_key` a 64-character string limit, uses
+  `PromptCacheRetentionEnum` for `prompt_cache_retention`, and uses
+  `ServiceTierEnum` for `service_tier`.
+- Added compact request validation before replay, local input preparation,
+  local context truncation, compaction, or provider calls:
+  - `POST /v1/responses/compact` now requires a non-empty string `model`.
+  - `prompt_cache_key` must be string/null and at most 64 characters.
+  - `prompt_cache_retention` must be `in_memory`, `24h`, or null.
+  - `service_tier` must be `auto`, `default`, `flex`, `priority`, or null.
+- Preserved valid cache and service fields through the compaction Chat rebuild:
+  - `prompt_cache_key` and `prompt_cache_retention` are forwarded when the
+    provider configuration keeps Chat-native fields.
+  - `service_tier` is forwarded only when the existing provider-aware
+    `service_tier` mapper keeps it.
+  - DeepSeek-compatible `prompt_cache_key` to `user_id` mapping is preserved by
+    copying the translated `user_id` from the intermediate Chat request.
+- Updated the compatibility matrix and evaluation plan so compact has explicit
+  request-boundary coverage alongside Responses create and input-token probes.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "responses/compact|Responses auxiliary endpoints replay local conversation state" test/server.test.js`:
+    passed 4/4.
+  - `npm test`: passed 325/325.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses/compact` returned HTTP
+    400 with params `model`, `prompt_cache_key`, and `service_tier` for missing
+    model, overlong prompt cache key, and invalid service tier values.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository. `npm run secret-scan`,
+  `git diff --check`, and the exact tracked-file DeepSeek key search passed.
+- Storage: `/srv/aialra/apps` had roughly 5.5G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Responses Truncation Validation
 
 - Rechecked the current official OpenAI Responses create documentation through

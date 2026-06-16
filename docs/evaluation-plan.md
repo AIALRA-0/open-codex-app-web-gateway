@@ -623,8 +623,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   non-integer or out-of-official-range `seed` values locally with zero upstream
   calls, while valid seeds continue through provider-aware passthrough.
 - Identity/cache compatibility must verify that Responses create, local
-  `/v1/responses/input_tokens`, and direct Chat reject non-string `user`,
-  `safety_identifier`, and `prompt_cache_key` values, reject
+  `/v1/responses/input_tokens`, local `/v1/responses/compact`, and direct Chat
+  reject non-string `user`, `safety_identifier`, and `prompt_cache_key` values, reject
   `safety_identifier` values over 64 characters, reject unsupported
   `prompt_cache_retention` values, enforce the Responses 64-character
   `prompt_cache_key` limit, and keep valid fields eligible for upstream
@@ -743,6 +743,13 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   and `previous_response_id` plus conversation state is rejected on
   `/v1/responses`, `/v1/responses/input_tokens`, and `/v1/responses/compact`
   before provider calls.
+- Responses compact validates its official request contract before provider
+  calls: `model` is required, `prompt_cache_key` follows the Responses
+  64-character string limit, `prompt_cache_retention` follows the
+  `in_memory` / `24h` enum, and `service_tier` follows the
+  `auto` / `default` / `flex` / `priority` enum. Valid prompt-cache and
+  provider-supported service-tier fields must survive the local compaction Chat
+  request rebuild.
 - Responses `context` request compatibility records the official
   context-management field as a local boundary only: mock-provider tests must
   prove it is not forwarded to Chat Completions providers, compatibility

@@ -4039,6 +4039,11 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
 
 async function handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore) {
   const request = await readJson(req);
+  const modelError = validateOpenAIRequiredStringParameter(request, "model");
+  if (modelError) {
+    sendError(res, 400, modelError.message, modelError);
+    return;
+  }
   const stateReferenceError = validateOpenAIResponseStateReferences(request);
   if (stateReferenceError) {
     sendError(res, 400, stateReferenceError.message, stateReferenceError);
@@ -4047,6 +4052,18 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   const truncationValueError = validateOpenAIResponsesTruncation(request);
   if (truncationValueError) {
     sendError(res, 400, truncationValueError.message, truncationValueError);
+    return;
+  }
+  const identityCacheError = validateOpenAIIdentityCacheFields(request, {
+    promptCacheKeyMaxLength: OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS,
+  });
+  if (identityCacheError) {
+    sendError(res, 400, identityCacheError.message, identityCacheError);
+    return;
+  }
+  const serviceTierError = validateOpenAIServiceTier(request);
+  if (serviceTierError) {
+    sendError(res, 400, serviceTierError.message, serviceTierError);
     return;
   }
   const conversation = prepareConversationContext(request, conversationStore, config);
@@ -4754,6 +4771,9 @@ function makeCompactionChatRequest(request, chat, config) {
   compactChat[maxTokensField] = request.max_output_tokens || config.compactionMaxOutputTokens;
   if (config.deepseekDisableThinkingForCompaction && !config.deepseekThinkingMode) {
     compactChat.thinking = { type: "disabled" };
+  }
+  for (const field of ["prompt_cache_key", "prompt_cache_retention", "service_tier", "user_id"]) {
+    if (chat[field] !== undefined) compactChat[field] = chat[field];
   }
   return compactChat;
 }
