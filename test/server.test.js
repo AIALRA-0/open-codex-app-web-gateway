@@ -791,6 +791,88 @@ test("POST /v1/responses maps Chat max_completion_tokens alias", async () => {
   });
 });
 
+test("POST /v1/responses validates token limits before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 16);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_token_limit_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses token limit ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { max_output_tokens: 15 },
+        param: "max_output_tokens",
+        message: "max_output_tokens must be an integer greater than or equal to 16",
+      },
+      {
+        body: { max_output_tokens: "16" },
+        param: "max_output_tokens",
+        message: "max_output_tokens must be an integer",
+      },
+      {
+        body: { max_output_tokens: 16.5 },
+        param: "max_output_tokens",
+        message: "max_output_tokens must be an integer",
+      },
+      {
+        body: { max_completion_tokens: "7" },
+        param: "max_completion_tokens",
+        message: "max_completion_tokens must be an integer",
+      },
+      {
+        body: { max_tokens: 3.5 },
+        param: "max_tokens",
+        message: "max_tokens must be an integer",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check token limit validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check Responses token limit boundary.",
+        max_output_tokens: 16,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses token limit ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps Chat-native aliases and request fields", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.max_tokens, 6);
@@ -15639,6 +15721,86 @@ test("POST /v1/responses/input_tokens returns upstream prompt token usage", asyn
   });
 });
 
+test("POST /v1/responses/input_tokens validates token limits before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 1);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_input_token_limit_probe",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 55, completion_tokens: 1, total_tokens: 56 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { max_output_tokens: 15 },
+        param: "max_output_tokens",
+        message: "max_output_tokens must be an integer greater than or equal to 16",
+      },
+      {
+        body: { max_output_tokens: "16" },
+        param: "max_output_tokens",
+        message: "max_output_tokens must be an integer",
+      },
+      {
+        body: { max_completion_tokens: "2" },
+        param: "max_completion_tokens",
+        message: "max_completion_tokens must be an integer",
+      },
+      {
+        body: { max_tokens: 2.5 },
+        param: "max_tokens",
+        message: "max_tokens must be an integer",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Count invalid token limit request.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Count valid token limit request.",
+        max_output_tokens: 16,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.deepEqual(await valid.json(), {
+      object: "response.input_tokens",
+      input_tokens: 55,
+    });
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses/input_tokens validates and counts style preset", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
@@ -18917,6 +19079,83 @@ test("POST /v1/completions validates logit_bias before provider calls", async ()
   });
 });
 
+test("POST /v1/completions validates max_tokens before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 0);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_max_tokens_boundary",
+      object: "chat.completion",
+      created: 1700000125,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy max tokens ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { max_tokens: -1 },
+        message: "max_tokens must be an integer greater than or equal to 0",
+      },
+      {
+        body: { max_tokens: 1.5 },
+        message: "max_tokens must be an integer",
+      },
+      {
+        body: { max_tokens: "0" },
+        message: "max_tokens must be an integer",
+      },
+      {
+        body: { max_tokens: [] },
+        message: "max_tokens must be an integer",
+      },
+      {
+        body: { max_tokens: {} },
+        message: "max_tokens must be an integer",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy max_tokens validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: "max_tokens",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "Check legacy max_tokens boundary.",
+        max_tokens: 0,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.choices[0].text, "legacy max tokens ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates echo and logprobs before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.logprobs, true);
@@ -19346,6 +19585,69 @@ test("POST /v1/chat/completions validates logprobs flag before provider calls", 
     });
     assert.equal(valid.status, 200);
     assert.equal((await valid.json()).choices[0].message.content, "chat logprobs flag ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates token limits before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.max_tokens, 32);
+    assert.equal(call.body.max_completion_tokens, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_token_limit",
+      object: "chat.completion",
+      created: 1700000302,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat token limit ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { body: { max_completion_tokens: "32" }, param: "max_completion_tokens" },
+      { body: { max_completion_tokens: 32.5 }, param: "max_completion_tokens" },
+      { body: { max_completion_tokens: [] }, param: "max_completion_tokens" },
+      { body: { max_tokens: "32" }, param: "max_tokens" },
+      { body: { max_tokens: 32.5 }, param: "max_tokens" },
+      { body: { max_tokens: {} }, param: "max_tokens" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: `${invalidCase.param} must be an integer`,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        max_completion_tokens: 32,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat token limit ok");
     assert.equal(requests.length, 1);
   });
 });

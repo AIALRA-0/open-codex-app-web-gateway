@@ -1,5 +1,77 @@
 # Audit Log
 
+## 2026-06-16 Official Token Limit Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Responses `max_output_tokens` is an integer/null field with an official
+  minimum of 16; Chat Completions `max_completion_tokens` and deprecated
+  `max_tokens` are integer/null fields; legacy Completions `max_tokens` is an
+  integer/null field with minimum 0.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects non-integer `max_output_tokens`, values
+    below 16, and non-integer Chat-native `max_completion_tokens` / `max_tokens`
+    aliases before Responses-to-Chat translation or upstream provider calls.
+  - local `POST /v1/responses/input_tokens` applies the same Responses and
+    Chat-token-alias validation before building the prompt-token probe.
+  - `POST /v1/chat/completions` now rejects non-integer
+    `max_completion_tokens` and `max_tokens` before direct Chat passthrough or
+    provider-specific token-field normalization.
+  - `POST /v1/completions` now rejects non-integer and negative legacy
+    `max_tokens` before prompt-to-Chat mapping, non-streaming provider calls,
+    or streaming provider calls.
+  - Invalid strings, floats, arrays, objects, and out-of-range lower-bound
+    numbers now return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values:
+  - Responses `max_output_tokens:16` still maps to the configured upstream Chat
+    max-token field;
+  - Responses Chat-native `max_completion_tokens` / `max_tokens` aliases remain
+    accepted as integer/null fields and retain existing precedence metadata;
+  - direct Chat `max_completion_tokens` still maps to DeepSeek `max_tokens` or
+    any configured provider token field;
+  - legacy Completions `max_tokens:0` remains valid and is forwarded through the
+    prompt-to-Chat adapter.
+- Added regression coverage proving invalid token-limit values fail locally with
+  zero upstream calls on Responses create, Responses input-token probes, direct
+  Chat, and legacy Completions; valid boundary or normal values continue through
+  the bridge.
+- Updated the compatibility matrix and evaluation plan so token-limit parity
+  tracks official request validation in addition to provider-specific field
+  mapping.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "validates token limits|validates max_tokens|aliases token limits|maps Chat max_completion_tokens alias|input_tokens validates token limits"`:
+    passed 246/246; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 295/295.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` returned HTTP 400 with
+    `param:"max_output_tokens"` for `max_output_tokens:15`; public
+    `/v1/responses/input_tokens` returned HTTP 400 with
+    `param:"max_output_tokens"` for `max_output_tokens:"16"`; public
+    `/v1/chat/completions` returned HTTP 400 with
+    `param:"max_completion_tokens"` for `max_completion_tokens:"32"`; public
+    `/v1/completions` returned HTTP 400 with `param:"max_tokens"` for
+    `max_tokens:-1`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 8.0G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Logprobs And Echo Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

@@ -203,6 +203,8 @@ const OPENAI_TOP_LOGPROBS_MIN = 0;
 const OPENAI_TOP_LOGPROBS_MAX = 20;
 const OPENAI_LEGACY_LOGPROBS_MIN = 0;
 const OPENAI_LEGACY_LOGPROBS_MAX = 5;
+const OPENAI_RESPONSES_MAX_OUTPUT_TOKENS_MIN = 16;
+const OPENAI_LEGACY_MAX_TOKENS_MIN = 0;
 const OPENAI_TEMPERATURE_MIN = 0;
 const OPENAI_TEMPERATURE_MAX = 2;
 const OPENAI_TOP_P_MIN = 0;
@@ -812,6 +814,16 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const topLogprobsError = validateOpenAITopLogprobs(request);
   if (topLogprobsError) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
+    return;
+  }
+  const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
+  if (responsesMaxOutputTokensError) {
+    sendError(res, 400, responsesMaxOutputTokensError.message, responsesMaxOutputTokensError);
+    return;
+  }
+  const chatMaxTokensError = validateOpenAIChatMaxTokenAliases(request);
+  if (chatMaxTokensError) {
+    sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
     return;
   }
   const samplingError = validateOpenAISamplingParameters(request);
@@ -2433,6 +2445,26 @@ function validateOpenAILegacyLogprobs(body = {}) {
   return null;
 }
 
+function validateOpenAIResponsesMaxOutputTokens(body = {}) {
+  return validateIntegerParameter(body, "max_output_tokens", {
+    min: OPENAI_RESPONSES_MAX_OUTPUT_TOKENS_MIN,
+  });
+}
+
+function validateOpenAIChatMaxTokenAliases(body = {}) {
+  for (const field of ["max_completion_tokens", "max_tokens"]) {
+    const error = validateIntegerParameter(body, field);
+    if (error) return error;
+  }
+  return null;
+}
+
+function validateOpenAILegacyMaxTokens(body = {}) {
+  return validateIntegerParameter(body, "max_tokens", {
+    min: OPENAI_LEGACY_MAX_TOKENS_MIN,
+  });
+}
+
 function validateOpenAIChoiceCount(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "n") || body.n == null) return null;
   if (!Number.isInteger(body.n) || body.n < OPENAI_N_MIN || body.n > OPENAI_N_MAX) {
@@ -2596,6 +2628,17 @@ function validateOpenAIBooleanParameter(body = {}, field) {
   if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
   if (typeof body[field] !== "boolean") {
     return requestValidationError(`${field} must be a boolean`, field);
+  }
+  return null;
+}
+
+function validateIntegerParameter(body = {}, field, options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  if (!Number.isInteger(body[field])) {
+    return requestValidationError(`${field} must be an integer`, field);
+  }
+  if (options.min != null && body[field] < options.min) {
+    return requestValidationError(`${field} must be an integer greater than or equal to ${options.min}`, field);
   }
   return null;
 }
@@ -2788,6 +2831,16 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   const styleError = validateResponsesInputTokensStyle(request);
   if (styleError) {
     sendError(res, 400, styleError.message, styleError);
+    return;
+  }
+  const responsesMaxOutputTokensError = validateOpenAIResponsesMaxOutputTokens(request);
+  if (responsesMaxOutputTokensError) {
+    sendError(res, 400, responsesMaxOutputTokensError.message, responsesMaxOutputTokensError);
+    return;
+  }
+  const chatMaxTokensError = validateOpenAIChatMaxTokenAliases(request);
+  if (chatMaxTokensError) {
+    sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
     return;
   }
   const conversation = prepareConversationContext(request, conversationStore, config);
@@ -4726,6 +4779,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     sendError(res, 400, topLogprobsError.message, topLogprobsError);
     return;
   }
+  const chatMaxTokensError = validateOpenAIChatMaxTokenAliases(body);
+  if (chatMaxTokensError) {
+    sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
+    return;
+  }
   const samplingError = validateOpenAISamplingParameters(body);
   if (samplingError) {
     sendError(res, 400, samplingError.message, samplingError);
@@ -6173,6 +6231,11 @@ async function handleLegacyCompletions(req, res, config) {
   const legacyLogprobsError = validateOpenAILegacyLogprobs(request);
   if (legacyLogprobsError) {
     sendError(res, 400, legacyLogprobsError.message, legacyLogprobsError);
+    return;
+  }
+  const legacyMaxTokensError = validateOpenAILegacyMaxTokens(request);
+  if (legacyMaxTokensError) {
+    sendError(res, 400, legacyMaxTokensError.message, legacyMaxTokensError);
     return;
   }
   const choiceCountError = validateOpenAIChoiceCount(request);

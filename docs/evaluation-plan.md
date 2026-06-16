@@ -470,6 +470,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,
+  validating OpenAI Chat `max_completion_tokens` and `max_tokens` integer/null
+  request values before token-limit alias routing,
   mapping OpenAI Chat `reasoning_effort` values to DeepSeek
   `reasoning_effort` / `thinking` after validating the OpenAI
   `none` / `minimal` / `low` / `medium` / `high` / `xhigh` enum before
@@ -595,6 +597,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   direct Chat rejects non-boolean `store` values locally, valid
   `background:false` stays synchronous, and valid `store:false` does not create
   local stored Responses or Chat completion records.
+- Token-limit compatibility must verify that Responses create and local
+  `/v1/responses/input_tokens` reject non-integer `max_output_tokens` and
+  values below 16 before provider calls, that Responses/direct Chat reject
+  non-integer Chat token aliases before provider calls, and that legacy
+  Completions rejects non-integer or negative `max_tokens` before
+  prompt-to-Chat mapping.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `logprobs` boolean/null handling on Responses and direct Chat requests, official `top_logprobs` integer bounds, the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set, and legacy Completions `echo` boolean/null plus `logprobs` integer 0..5 validation before prompt-to-Chat mapping.
 - Stored Responses metadata update and completed-response cancel/no-op paths apply the same include projection as response retrieval, so include-gated fields are not exposed by lifecycle endpoints unless explicitly requested.
 - Responses and Conversations input-item retrieval hides message input image URLs and computer output image URLs by default, returning them only when `include:["message.input_image.image_url"]` or `include:["computer_call_output.output.image_url"]` is requested.
