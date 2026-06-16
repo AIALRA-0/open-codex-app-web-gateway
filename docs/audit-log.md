@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-16 Official Legacy Best-Of And Suffix Validation
+
+- Rechecked the official OpenAI request contract through the OpenAI developer
+  docs MCP and official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/completions/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  Legacy `CreateCompletionRequest` documents `best_of` as integer/null from 0
+  through 20, with `best_of` incompatible with streaming and required to be
+  greater than explicit `n` when both fields are set. Legacy `suffix` is
+  documented as string/null insertion suffix context.
+- Added local request validation before provider calls:
+  - `POST /v1/completions` now rejects invalid `best_of` values before legacy
+    prompt-to-Chat mapping, non-streaming provider calls, or streaming provider
+    calls.
+  - `best_of` must be an integer/null from 0 through 20, cannot be used with
+    `stream:true`, and must be greater than explicit `n` when both fields are
+    set.
+  - `POST /v1/completions` now rejects non-string `suffix` values before any
+    upstream Chat request.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved existing compatibility behavior for valid values: valid `suffix`
+  text is still converted into Chat-visible insertion context, valid `best_of`
+  is accepted for OpenAI boundary compatibility, and unsupported legacy-only
+  fields are not forwarded to Chat Completions providers.
+- Added regression coverage proving invalid `best_of` and `suffix` values fail
+  locally with zero upstream calls, and valid `best_of` plus `suffix` requests
+  still complete through the existing Chat-backed legacy completion mapper.
+- Updated the compatibility matrix and evaluation plan so legacy completion
+  insertion and server-side selection parity is tracked as validated local
+  compatibility, with `best_of` still marked as not losslessly representable on
+  Chat-only providers.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "best_of and suffix|POST /v1/completions maps legacy prompts|validates n before provider calls|validates stream flag before provider calls"`:
+    passed 261/261; the current Node test runner executed the selected server
+    test file rather than pruning unrelated cases by the name pattern.
+  - `npm test`: passed 310/310.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/completions` returned HTTP 400 with
+    `param:"best_of"` for `best_of:21`, `best_of` with `stream:true`, and
+    `best_of` not greater than explicit `n`; public `suffix:[]` returned HTTP
+    400 with `param:"suffix"`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 11G free after tests and smoke
+  checks.
+
 ## 2026-06-16 Official Legacy Sampling And Stop Validation
 
 - Rechecked the official OpenAI request contract through the OpenAI developer

@@ -658,6 +658,12 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `thinking` compatibility mapper, while provider-only aliases such as
   DeepSeek `max` fail at the OpenAI-compatible boundary.
 - Legacy `/v1/completions` requests that include `logit_bias` use the same local object/value contract validation before non-streaming or streaming Chat-backed execution, with regression coverage for zero upstream calls on invalid values and boundary passthrough for valid values.
+- Legacy `/v1/completions` requests that include `best_of` and `suffix`
+  validate the official request contract before provider calls: `best_of` must
+  be an integer from 0 through 20, cannot be used with streaming, and must be
+  greater than explicit `n`; `suffix` must be a string/null and valid suffixes
+  must still be converted into Chat-visible insertion context without
+  forwarding unsupported legacy fields upstream.
 - Responses and direct Chat requests that include Chat-native `verbosity` validate the official `low` / `medium` / `high` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, empty strings, and non-string values producing zero upstream calls while valid values still feed the provider-aware passthrough or prompt-instruction compatibility path.
 - Responses and direct Chat requests that include Chat-native `service_tier` validate the official `auto` / `default` / `flex` / `priority` enum locally before provider calls, with regression coverage for invalid strings, case mismatches, legacy tier names, and non-string values producing zero upstream calls while valid values still follow provider-aware passthrough/filtering.
 - Responses `text.format` and direct Chat `response_format` requests validate the official `text` / `json_object` / `json_schema` union locally before provider calls, including response-format object shape, schema config `name`, required Responses `schema`, optional Chat `json_schema.schema`, `strict` boolean/null, and `description` string/null coverage with zero upstream calls on invalid structures.

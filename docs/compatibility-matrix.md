@@ -295,8 +295,8 @@ Chat responses back to `object:"text_completion"` completion objects.
 | `stream` | validates as boolean/null before prompt-to-Chat mapping; valid `true` upstream Chat streams are transformed into `data: {object:"text_completion"}` frames plus `data: [DONE]`, while valid `false` remains non-streaming | Implemented |
 | `stream_options` | forwarded when stream forwarding is enabled; the bridge defaults `include_usage:true` for usage-bearing final chunks and applies provider-aware subfield filtering | Provider-dependent after request validation; legacy Completions validates `stream_options` as an object/null and known subfields `include_usage` / `include_obfuscation` as booleans before prompt-to-Chat mapping. DeepSeek defaults to `include_usage` only |
 | `echo` | validates as boolean/null before prompt-to-Chat mapping; `true` prefixes the original prompt to returned completion text, including the first stream chunk for each choice, while `false` returns only generated completion text | Emulated locally |
-| `suffix` | added as suffix context in the Chat prompt because Chat Completions has no insertion-suffix primitive | Best-effort local compatibility |
-| `best_of` | accepted but not forwarded; Chat Completions has no equivalent server-side generation/ranking primitive | Not losslessly representable |
+| `suffix` | added as suffix context in the Chat prompt because Chat Completions has no insertion-suffix primitive | Best-effort local compatibility after request validation; legacy Completions `suffix` must be a string/null before prompt-to-Chat mapping |
+| `best_of` | accepted but not forwarded; Chat Completions has no equivalent server-side generation/ranking primitive | Not losslessly representable after request validation. Legacy Completions `best_of` must be an integer/null from 0 through 20, cannot be used with `stream:true`, and must be greater than explicit `n` when both fields are set before any upstream Chat request |
 
 Returned non-stream objects use local `cmpl-...` ids, `object:"text_completion"`,
 upstream `created` when available, upstream `model`, mapped legacy choices,

@@ -19713,6 +19713,114 @@ test("POST /v1/completions validates user before provider calls", async () => {
   });
 });
 
+test("POST /v1/completions validates best_of and suffix before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.best_of, undefined);
+    assert.equal(call.body.suffix, undefined);
+    assert.equal(call.body.n, 1);
+    assert.match(call.body.messages[0].content, /Complete the prefix/);
+    assert.match(call.body.messages[0].content, /Prefix:\nlegacy prefix/);
+    assert.match(call.body.messages[0].content, /Suffix:\nlegacy suffix/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_best_of_suffix",
+      object: "chat.completion",
+      created: 1700000128,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy best_of suffix ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { best_of: -1 },
+        param: "best_of",
+        message: "best_of must be an integer between 0 and 20",
+      },
+      {
+        body: { best_of: 21 },
+        param: "best_of",
+        message: "best_of must be an integer between 0 and 20",
+      },
+      {
+        body: { best_of: 1.5 },
+        param: "best_of",
+        message: "best_of must be an integer",
+      },
+      {
+        body: { best_of: "2" },
+        param: "best_of",
+        message: "best_of must be an integer",
+      },
+      {
+        body: { best_of: [] },
+        param: "best_of",
+        message: "best_of must be an integer",
+      },
+      {
+        body: { best_of: 2, stream: true },
+        param: "best_of",
+        message: "best_of cannot be used with stream",
+      },
+      {
+        body: { best_of: 2, n: 2 },
+        param: "best_of",
+        message: "best_of must be greater than n when both are set",
+      },
+      {
+        body: { suffix: [] },
+        param: "suffix",
+        message: "suffix must be a string",
+      },
+      {
+        body: { suffix: 123 },
+        param: "suffix",
+        message: "suffix must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          prompt: "Check legacy best_of and suffix validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        prompt: "legacy prefix",
+        suffix: "legacy suffix",
+        best_of: 2,
+        n: 1,
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].text, "legacy best_of suffix ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/completions validates sampling parameter ranges before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.temperature, 2);

@@ -205,6 +205,8 @@ const OPENAI_LEGACY_LOGPROBS_MIN = 0;
 const OPENAI_LEGACY_LOGPROBS_MAX = 5;
 const OPENAI_RESPONSES_MAX_OUTPUT_TOKENS_MIN = 16;
 const OPENAI_LEGACY_MAX_TOKENS_MIN = 0;
+const OPENAI_LEGACY_BEST_OF_MIN = 0;
+const OPENAI_LEGACY_BEST_OF_MAX = 20;
 const OPENAI_SEED_MIN = -9223372036854776000;
 const OPENAI_SEED_MAX = 9223372036854776000;
 const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
@@ -2503,6 +2505,26 @@ function validateOpenAILegacyMaxTokens(body = {}) {
   return validateIntegerParameter(body, "max_tokens", {
     min: OPENAI_LEGACY_MAX_TOKENS_MIN,
   });
+}
+
+function validateOpenAILegacyBestOf(body = {}) {
+  const bestOfError = validateIntegerParameter(body, "best_of", {
+    min: OPENAI_LEGACY_BEST_OF_MIN,
+    max: OPENAI_LEGACY_BEST_OF_MAX,
+  });
+  if (bestOfError) return bestOfError;
+  if (!Object.prototype.hasOwnProperty.call(body, "best_of") || body.best_of == null) return null;
+  if (body.stream === true) {
+    return requestValidationError("best_of cannot be used with stream", "best_of");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(body, "n")
+    && body.n != null
+    && body.best_of <= body.n
+  ) {
+    return requestValidationError("best_of must be greater than n when both are set", "best_of");
+  }
+  return null;
 }
 
 function validateOpenAISeed(body = {}) {
@@ -6398,9 +6420,19 @@ async function handleLegacyCompletions(req, res, config) {
     sendError(res, 400, userError.message, userError);
     return;
   }
+  const suffixError = validateOpenAIStringParameter(request, "suffix");
+  if (suffixError) {
+    sendError(res, 400, suffixError.message, suffixError);
+    return;
+  }
   const choiceCountError = validateOpenAIChoiceCount(request);
   if (choiceCountError) {
     sendError(res, 400, choiceCountError.message, choiceCountError);
+    return;
+  }
+  const bestOfError = validateOpenAILegacyBestOf(request);
+  if (bestOfError) {
+    sendError(res, 400, bestOfError.message, bestOfError);
     return;
   }
   const logitBiasError = validateOpenAILogitBias(request);
