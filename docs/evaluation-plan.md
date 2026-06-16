@@ -80,9 +80,11 @@ larger agent evaluations.
 | `runtime-prune` | Dry-run and apply checks for ignored runtime artifacts under `output/`, `.playwright-cli/`, and bounded bridge state records |
 
 The bridge regression track also explicitly covers Responses `instructions`
-request validation across create, `/input_tokens`, and `/compact`, ensuring
-malformed values fail locally before any Chat provider call while valid strings
-continue to map into model-visible system guidance.
+request validation across create, `/input_tokens`, and `/compact`, plus
+Responses create `prompt` reference validation for official
+`id`/`version`/`variables` shapes. Malformed values must fail locally before
+any Chat provider call while valid strings and prompt references continue to
+map into model-visible system guidance.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local

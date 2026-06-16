@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-16 Responses `prompt` Reference Validation
+
+- Rechecked the official OpenAI generated Responses create reference:
+  - `https://developers.openai.com/api/reference/resources/responses/methods/create/index.md`
+  The current request body documents `prompt` as an optional
+  `ResponsePrompt`, with string `id`, optional `version`, and optional
+  `variables` map whose values may be strings or `ResponseInputText`,
+  `ResponseInputImage`, or `ResponseInputFile` objects.
+- Added local `/v1/responses` request validation before local prompt-template
+  expansion, Chat translation, or provider calls:
+  - non-object/non-string `prompt` values now return OpenAI-style
+    `400 invalid_request_error` with `param:"prompt"`;
+  - official prompt objects require a non-empty string `id`, unless using the
+    bridge's explicit local inline-template compatibility extension;
+  - `prompt.id` and local `prompt.prompt_id` / `prompt.name` aliases must be
+    non-empty strings when present;
+  - `prompt.version` must be a string/null when present;
+  - `prompt.variables` must be an object/map when present;
+  - each variable value must be a string or an `input_text`, `input_image`, or
+    `input_file` object validated with the same content-part checks used by the
+    bridge's Chat compatibility layer.
+- Preserved existing migration compatibility:
+  - string `prompt` remains accepted as a local prompt-template id;
+  - `prompt.prompt_id` / `prompt.name` remain accepted as id aliases;
+  - `prompt.template` / `prompt.local_template` and inline
+    `messages`/`instructions`/`input`/`content`/`text` remain accepted for
+    local deterministic fixtures.
+- Updated the compatibility matrix and evaluation plan so future
+  bridge-regression passes track official prompt-object request validation
+  alongside local prompt-template expansion.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "prompt references|prompt templates"
+    test/server.test.js`: passed 3/3.
+  - `npm test`: passed 335/335.
+  - Restarted `aialra-opencodexapp-bridge.service`; local and public healthz
+    returned `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS invalid-request smoke tests returned HTTP 400 with
+    `param:"prompt.id"` for `prompt.id:null` and `param:"prompt.variables"`
+    for malformed `prompt.variables`.
+  - Local and public HTTPS valid hosted-prompt-reference smoke tests returned
+    HTTP 200 `status:"completed"`, exact output `prompt-valid-ok`, and
+    `metadata.compatibility.prompt_template.status:"reference_preserved"`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses `instructions` Request Validation
 
 - Rechecked the official OpenAI Responses create reference through the

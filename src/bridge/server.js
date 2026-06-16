@@ -903,6 +903,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, instructionsError.message, instructionsError);
     return;
   }
+  const promptError = validateOpenAIResponsesPrompt(request);
+  if (promptError) {
+    sendError(res, 400, promptError.message, promptError);
+    return;
+  }
   const logprobsFlagError = validateOpenAIChatLogprobsFlag(request);
   if (logprobsFlagError) {
     sendError(res, 400, logprobsFlagError.message, logprobsFlagError);
@@ -4010,6 +4015,58 @@ function validateOpenAIStringParameter(body = {}, field, options = {}) {
 
 function validateOpenAIResponsesInstructions(body = {}) {
   return validateOpenAIStringParameter(body, "instructions");
+}
+
+function validateOpenAIResponsesPrompt(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "prompt") || body.prompt == null) return null;
+  const prompt = body.prompt;
+  if (typeof prompt === "string") return null;
+  if (!isPlainObject(prompt)) {
+    return requestValidationError("prompt must be an object", "prompt");
+  }
+
+  const localTemplate = Object.prototype.hasOwnProperty.call(prompt, "template")
+    || Object.prototype.hasOwnProperty.call(prompt, "local_template")
+    || ["messages", "instructions", "input", "content", "text"].some((field) => (
+      Object.prototype.hasOwnProperty.call(prompt, field)
+    ));
+  const idFields = ["id", "prompt_id", "name"];
+  for (const field of idFields) {
+    if (
+      Object.prototype.hasOwnProperty.call(prompt, field)
+      && (typeof prompt[field] !== "string" || prompt[field] === "")
+    ) {
+      return requestValidationError(`prompt.${field} must be a non-empty string`, `prompt.${field}`);
+    }
+  }
+  const hasUsableId = idFields.some((field) => (
+    typeof prompt[field] === "string" && prompt[field] !== ""
+  ));
+  if (!hasUsableId && !localTemplate) {
+    return requestValidationError("prompt.id is required", "prompt.id");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(prompt, "version")
+    && prompt.version != null
+    && typeof prompt.version !== "string"
+  ) {
+    return requestValidationError("prompt.version must be a string", "prompt.version");
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(prompt, "variables") || prompt.variables == null) return null;
+  if (!isPlainObject(prompt.variables)) {
+    return requestValidationError("prompt.variables must be an object", "prompt.variables");
+  }
+  for (const [key, value] of Object.entries(prompt.variables)) {
+    const param = `prompt.variables.${key}`;
+    if (typeof value === "string") continue;
+    if (!isPlainObject(value)) {
+      return requestValidationError(`${param} must be a string or response input object`, param);
+    }
+    const error = validateOpenAIChatContentPart(value, param, ["input_text", "input_image", "input_file"]);
+    if (error) return error;
+  }
+  return null;
 }
 
 function validateOpenAIRequiredParameter(body = {}, field) {

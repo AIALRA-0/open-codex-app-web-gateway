@@ -426,6 +426,103 @@ test("POST /v1/responses expands configured local prompt templates", async () =>
   });
 });
 
+test("POST /v1/responses validates prompt references before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid prompt references");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        prompt: 42,
+        param: "prompt",
+        message: "prompt must be an object",
+      },
+      {
+        prompt: [],
+        param: "prompt",
+        message: "prompt must be an object",
+      },
+      {
+        prompt: {},
+        param: "prompt.id",
+        message: "prompt.id is required",
+      },
+      {
+        prompt: { id: 123 },
+        param: "prompt.id",
+        message: "prompt.id must be a non-empty string",
+      },
+      {
+        prompt: { id: null },
+        param: "prompt.id",
+        message: "prompt.id must be a non-empty string",
+      },
+      {
+        prompt: { id: "" },
+        param: "prompt.id",
+        message: "prompt.id must be a non-empty string",
+      },
+      {
+        prompt: { prompt_id: "" },
+        param: "prompt.prompt_id",
+        message: "prompt.prompt_id must be a non-empty string",
+      },
+      {
+        prompt: { id: "pmpt_test", version: 2 },
+        param: "prompt.version",
+        message: "prompt.version must be a string",
+      },
+      {
+        prompt: { id: "pmpt_test", variables: [] },
+        param: "prompt.variables",
+        message: "prompt.variables must be an object",
+      },
+      {
+        prompt: { id: "pmpt_test", variables: { answer: 7 } },
+        param: "prompt.variables.answer",
+        message: "prompt.variables.answer must be a string or response input object",
+      },
+      {
+        prompt: { id: "pmpt_test", variables: { answer: { type: "input_text" } } },
+        param: "prompt.variables.answer.text",
+        message: "prompt.variables.answer.text must be a string",
+      },
+      {
+        prompt: { id: "pmpt_test", variables: { image: { type: "image_url", image_url: "https://example.test/a.png" } } },
+        param: "prompt.variables.image.type",
+        message: "prompt.variables.image.type must be one of: input_text, input_image, input_file",
+      },
+      {
+        prompt: { id: "pmpt_test", variables: { file: { type: "input_file", file_id: 123 } } },
+        param: "prompt.variables.file.file_id",
+        message: "prompt.variables.file.file_id must be a string",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Validate prompt reference.",
+          prompt: invalidCase.prompt,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses forwards service_tier and preserves provider tier", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.service_tier, "priority");
