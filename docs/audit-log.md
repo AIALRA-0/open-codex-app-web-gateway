@@ -42,6 +42,11 @@
     `mcp-tool-search-stream-approval-ok`, remote methods `initialize`,
     `notifications/initialized`, `tools/list`, and `tools/call`, and no public
     bridge-internal function-call events.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`, local `/healthz` returned `ok:true` with
+    provider base `https://api.deepseek.com` and default model
+    `deepseek-v4-pro`, and `https://opencodexapp.aialra.online/` returned
+    HTTP 200.
 
 ## 2026-06-16 Live Tool Search MCP Approval Hardening
 
