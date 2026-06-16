@@ -1,5 +1,35 @@
 # Audit Log
 
+## 2026-06-17 Conversation Items List Ordering Tightening
+
+- Rechecked the official OpenAI
+  `GET /v1/conversations/{conversation_id}/items` schema through the official
+  `openai/openai-openapi` schema. Current list-items supports `limit`,
+  `after`, `before`, `include`, and `order`, with default `order=desc`.
+- Tightened local Conversation item listing:
+  - default listing now uses official descending order;
+  - explicit `order=asc` still returns write-order history for local debugging
+    and replay inspection;
+  - create-items responses remain in the order of the items created by that
+    request.
+- Updated tests and the compatibility matrix to document the default ordering.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern 'local Conversations API'`:
+    passed 289/289 because the command executed the full server test file in
+    this shell.
+  - `npm test`: passed 340/340.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - generic `sk-...` repository path scan excluding runtime output/state and
+    `node_modules`: no matches.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    services were all `active`.
+  - Local and public smoke confirmed default Conversation item listing returns
+    newest-first order, while `order=asc` returns oldest-first order.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Items Create Contract Tightening
 
 - Rechecked the official OpenAI

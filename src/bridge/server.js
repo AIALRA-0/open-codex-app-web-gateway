@@ -13840,7 +13840,7 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
     return;
   }
-  sendJson(res, 200, paginateList(projectInputItemsForIncludes(items, url), url));
+  sendJson(res, 200, paginateListWithDefaultOrder(projectInputItemsForIncludes(items, url), url, "desc", 20, 100));
 }
 
 function handleConversationItemGet(res, conversationStore, conversationId, itemId, url) {

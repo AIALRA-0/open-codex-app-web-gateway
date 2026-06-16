@@ -16443,7 +16443,7 @@ test("local Conversations API persists items and feeds Responses conversation co
     assert.equal(itemsJson.data.length, 2);
     assert.equal(itemsJson.has_more, true);
 
-    const allItems = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items`);
+    const allItems = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items?order=asc`);
     assert.equal(allItems.status, 200);
     const allItemsJson = await allItems.json();
     assert.equal(allItemsJson.data.length, 3);
@@ -16451,6 +16451,13 @@ test("local Conversations API persists items and feeds Responses conversation co
     assert.equal(allItemsJson.data[1].content[0].text, "What codeword is stored?");
     assert.equal(allItemsJson.data[2].role, "assistant");
     assert.equal(allItemsJson.data[2].content[0].text, "delta-42");
+
+    const defaultItems = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items`);
+    assert.equal(defaultItems.status, 200);
+    const defaultItemsJson = await defaultItems.json();
+    assert.equal(defaultItemsJson.data.length, 3);
+    assert.equal(defaultItemsJson.data[0].id, allItemsJson.data[2].id);
+    assert.equal(defaultItemsJson.data[2].id, allItemsJson.data[0].id);
 
     const retrievedItem = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items/${allItemsJson.data[2].id}`);
     assert.equal(retrievedItem.status, 200);
