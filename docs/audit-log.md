@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-16 Tool Search Input-Loaded Tools
+
+- Continued the local `tool_search` parity work against the official OpenAI
+  tool-search guide's client-executed second-turn and `additional_tools`
+  sections.
+- Closed two input-driven loaded-tool gaps for Chat-only providers:
+  - a later Responses request can now pass `tool_search_output.tools` in
+    `input` without repeating `tools:[{type:"tool_search"}]`; the bridge loads
+    those function/namespace definitions as Chat function tools and records
+    `metadata.compatibility.local_tool_search.boundary=loaded_from_tool_search_output_input`;
+  - `additional_tools` input items now load function/namespace definitions into
+    Chat function tools and record
+    `metadata.compatibility.local_tool_search.boundary=loaded_from_additional_tools_input`.
+- Prevented raw protocol item leakage by skipping `tool_search_call`,
+  `tool_search_output`, and `additional_tools` in the generic
+  Responses-input-to-Chat text fallback; the local tool-search adapter is
+  responsible for exposing loaded tool state.
+- Sanitized stored Chat replay tool calls so Responses-only `namespace`
+  metadata is not sent back to strict Chat providers inside
+  `tool_calls[].function`.
+- Added mock-provider regressions for client-executed second turns and
+  `additional_tools`, plus a translator regression for skipped local tool
+  protocol input items.
+- Validation:
+  - `node --check` on `src/bridge/local_tool_search.js`,
+    `src/bridge/server.js`, `src/bridge/translator.js`,
+    `test/server.test.js`, and `test/translator.test.js`: passed.
+  - `git diff --check`: passed.
+  - `node --test test/translator.test.js --test-name-pattern 'tool_search|additional_tools|tool-definition input'`:
+    passed 40/40 tests.
+  - `node --test test/server.test.js --test-name-pattern 'tool_search|additional_tools'`:
+    passed 191/191 tests.
+  - `npm test`: passed 234/234 tests.
+  - `npm run secret-scan`: passed.
+  - exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm run eval:protocol`: blocked by upstream DeepSeek `402 Insufficient
+    Balance` on both live cases; mock-provider protocol and bridge regressions
+    remain green.
+
 ## 2026-06-16 Local Tool Search Deferred Function Loading
 
 - Checked the official OpenAI tool-search guide through the OpenAI developer

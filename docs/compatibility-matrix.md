@@ -150,6 +150,8 @@ implementations for those tools.
 | `function_call` item | assistant `tool_calls[]` | Direct |
 | `function_call_output` item | `role:"tool"` message with `tool_call_id` | Direct |
 | `reasoning` item | assistant `reasoning_content` replay | DeepSeek-specific compatibility; local `encrypted_content` values with prefix `ocrsn1.` are decoded in memory when replayed |
+| `tool_search_call` / `tool_search_output` input items | local loaded-tool context plus Chat function tools | Emulated locally. The bridge skips raw Chat text fallback for tool-search protocol items, loads `tool_search_output.tools` into Chat function definitions even when the next request does not repeat `tools:[{type:"tool_search"}]`, and records `metadata.compatibility.local_tool_search` |
+| `additional_tools` input item | local loaded-tool context plus Chat function tools | Emulated locally for function and namespace tool definitions. Chat providers receive the loaded tools as global function tools plus a compatibility prompt; exact Responses mid-input tool availability ordering is approximated because Chat Completions tool definitions are request-global |
 | `prompt` template reference | local prompt-template expansion or compatibility system context | Emulated locally. Official `prompt:{id,version,variables}` references are expanded from `CODEXCOMPAT_PROMPT_TEMPLATES` / `CODEXCOMPAT_PROMPT_TEMPLATE_FILE` when available, using `{{variable}}` substitution; otherwise the bridge injects a bounded compatibility system message preserving the prompt id/version/variable keys and records `metadata.compatibility.prompt_template` |
 | `previous_response_id` | local replay store | Emulated locally |
 | `conversation` / `conversation_id` | local Conversations item replay plus persisted turn append | Emulated locally; supports durable conversation state even when a response sets `store:false` |
@@ -157,7 +159,7 @@ implementations for those tools.
 | `truncation:"disabled"` / omitted | local preflight error when over local budget | If the estimated Chat input exceeds `CODEXCOMPAT_TRUNCATION_MAX_INPUT_CHARS`, the bridge returns `400 context_length_exceeded` before calling the provider; otherwise the Chat provider's native context handling applies |
 | `background:true` | local async Chat completion plus local response store | Emulated locally; forces `store:true` and non-streaming upstream execution. The bridge persists background job snapshots, resumes safe `preparing` checkpoints and `provider_pending` jobs after restart, and marks unsafe or missing snapshots failed instead of leaving them stuck |
 | `tools[type=function]` | chat function tools | Direct |
-| `tools[type=tool_search]` + `defer_loading:true` functions / namespaces | local tool-search adapter plus generated Chat search function | Emulated locally for Chat-only providers. The bridge hides deferred function schemas from the initial Chat request, exposes a generated `local_tool_search` function, maps model search calls to Responses `tool_search_call` and `tool_search_output` items, injects the loaded function schemas into a follow-up Chat request, maps final function calls back to the original Responses name and `namespace`, supports non-streaming, streaming, and active background requests, and records `metadata.compatibility.local_tool_search`. `execution:"client"` returns a client `tool_search_call` without auto-loading tools; remote MCP `defer_loading` remains covered by the MCP adapter's own roadmap |
+| `tools[type=tool_search]` + `defer_loading:true` functions / namespaces | local tool-search adapter plus generated Chat search function | Emulated locally for Chat-only providers. The bridge hides deferred function schemas from the initial Chat request, exposes a generated `local_tool_search` function, maps model search calls to Responses `tool_search_call` and `tool_search_output` items, injects the loaded function schemas into a follow-up Chat request, maps final function calls back to the original Responses name and `namespace`, supports non-streaming, streaming, and active background requests, and records `metadata.compatibility.local_tool_search`. `execution:"client"` returns a client `tool_search_call` without auto-loading tools; a later request can pass matching `tool_search_output.tools` in `input` without repeating the `tools` array. Remote MCP `defer_loading` remains covered by the MCP adapter's own roadmap |
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page/find_in_page items and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
@@ -1467,8 +1469,15 @@ functions and namespaces:
   Chat function calls back to the original Responses function name and
   `namespace`;
 - loads previously returned `tool_search_output.tools` from request input or a
-  `previous_response_id` response so multi-turn tool-search state remains
-  callable;
+  `previous_response_id` response so client-executed second turns and
+  multi-turn tool-search state remain callable even when the request does not
+  repeat `tools:[{type:"tool_search"}]`;
+- loads function and namespace definitions from `additional_tools` input items
+  into Chat function tools, with a compatibility prompt marking the loaded
+  tool surface;
+- skips raw Chat text fallback for `tool_search_call`, `tool_search_output`,
+  and `additional_tools` input items so tool schemas are not duplicated as
+  ordinary user text;
 - supports non-streaming, streaming, and active background Responses paths;
 - maps `tool_choice:{type:"tool_search"}` to the generated search function and
   can preload a forced deferred `tool_choice:{type:"function"}` when it matches
@@ -1481,12 +1490,14 @@ functions and namespaces:
 | `CODEXCOMPAT_TOOL_SEARCH_PROVIDER` | `local` | Use `disabled` to leave `tool_search` as unsupported hosted-tool compatibility text |
 | `CODEXCOMPAT_TOOL_SEARCH_MAX_LOADED_TOOLS` | `10` | Maximum deferred functions loaded by one hosted local search call |
 
-Known boundary: remote MCP `defer_loading` and hosted connector tool search are
-still handled by the MCP/connector roadmap, not by this function/namespace
-adapter. Streaming output can still expose a generated fallback function name
-if a namespace function name collides with another Chat function and the
-provider splits the function name across stream chunks; non-streaming responses
-remap names exactly.
+Known boundary: `additional_tools` availability ordering is approximated as
+request-global Chat function definitions because Chat Completions does not
+support mid-input tool availability. Remote MCP `defer_loading` and hosted
+connector tool search are still handled by the MCP/connector roadmap, not by
+this function/namespace adapter. Streaming output can still expose a generated
+fallback function name if a namespace function name collides with another Chat
+function and the provider splits the function name across stream chunks;
+non-streaming responses remap names exactly.
 
 ## Local MCP Tool Adapter
 
@@ -1806,7 +1817,7 @@ Configuration:
 | OpenAI hosted `shell` / `code_interpreter` full parity | The local adapter covers explicit command execution, container lifecycle shape, output items, and artifacts, but it is not a hardened hosted container runtime | Add Docker/Firecracker isolation, network allowlists, domain secrets, service support, richer command negotiation, and lifecycle garbage collection |
 | OpenAI Skills full parity | The local adapter covers upload/list/read/delete/version/content endpoints and local shell `skill_reference` mounting, but it is not OpenAI's hosted skill service and does not yet expose org/project governance, hosted validation policy, or SDK-perfect metadata for every future field | Expand schema fidelity as official SDKs stabilize, add richer bundle validation, and connect skills to future hosted tool adapters |
 | OpenAI hosted `computer` / `computer_use_preview` full parity | The local adapter covers the screenshot-first `computer_call` item shape, `computer_call_output` replay context including bounded acknowledged safety-check summaries, non-streaming/streaming/background model-requested follow-up action mapping and common action-field alias normalization for `click`, `double_click`, `scroll`, `type`, `wait`, `keypress`, `drag`, `move`, and `screenshot`, local metadata, and shared `max_tool_calls`, but it is not a hosted browser/desktop executor and does not yet physically perform UI actions or run server-side multi-step UI loops | Add Playwright/VNC execution, screenshot capture, product safety-check acknowledgement policy, per-session isolation, cleanup policies, and richer multi-round action-loop control |
-| OpenAI hosted `tool_search` full parity | The local adapter covers function/namespace deferred loading for known request tools, public `tool_search_call` / `tool_search_output` items, client-mode first-call emission, previous-response/input `tool_search_output` replay, non-streaming/streaming/background paths, and shared `max_tool_calls`, but it is not OpenAI's hosted tool-index service and does not yet search remote MCP/connector inventories or guarantee exact hosted ranking/cache behavior | Add remote MCP and connector search, richer client-executed search round-trip tests, collision-safe streaming name remapping, per-tenant search indexes, and large-catalog latency/token evals |
+| OpenAI hosted `tool_search` full parity | The local adapter covers function/namespace deferred loading for known request tools, public `tool_search_call` / `tool_search_output` items, client-mode first-call emission, previous-response/input `tool_search_output` replay without repeating the `tools` array, `additional_tools` input loading, non-streaming/streaming/background paths, and shared `max_tool_calls`, but it is not OpenAI's hosted tool-index service and does not yet search remote MCP/connector inventories or guarantee exact hosted ranking/cache behavior | Add remote MCP and connector search, live client-executed bridge cases, collision-safe streaming name remapping, per-tenant search indexes, and large-catalog latency/token evals |
 | OpenAI hosted MCP / Connectors full parity | The local MCP adapter covers MCP tool reservation, remote `initialize` / `tools/list` import over Streamable HTTP-style JSON-RPC with JSON/SSE responses, exact MCP `tool_choice` mapping to generated Chat function names when uniquely resolvable, non-streaming, streaming, and active background auto-approved remote `tools/call` execution through Chat function-tool proxies, streaming `mcp_call` argument/progress events, streaming `mcp_approval_request` emission, non-streaming/streaming/background `mcp_approval_request` / `mcp_approval_response` execution for approval-required remote calls, `mcp_list_tools` and `mcp_call` output items, caller-supplied MCP input context, authorization redaction, background snapshots, streaming list output items, and shared `max_tool_calls`, but it does not provide restart-resumable per-request MCP authorization or hosted connector flows | Add hosted connector OAuth/token sidecars, allowlists, tool-output review, restart-resumable connector credentials, broader approval-state persistence, and multi-turn call replay tests |
 | OpenAI hosted `image_generation` / Videos full parity | The local adapter covers Responses output shape, direct `/v1/images/generations` JSON and SSE compatibility, direct `/v1/images/edits` multipart/JSON and SSE compatibility, direct `/v1/images/variations` multipart/JSON compatibility, provider-backed Images API generations, multipart edits, and multipart variations, upstream provider SSE relay for direct Images generation/edit requests, input image and mask upload mapping, placeholder fallback, provider failure mapping, background/stored response preservation, id-only multi-turn image-call persistence, Batch `/v1/responses`, `/v1/images/generations`, JSON-form `/v1/images/edits`, JSON-form `/v1/images/variations`, direct `/v1/videos`, local Videos create/list/retrieve/delete/content protocol compatibility, local Videos character create/retrieve/delete compatibility, and video `characters` reference preservation. It does not yet perform hosted Sora-quality video rendering, OpenAI hosted model-side prompt rewriting, or image/video-quality evals beyond protocol shape checks | Add moderation/error-detail parity, provider-backed video rendering, hosted-style prompt rewrite metadata, and image/video-quality evals |
 | OpenAI Conversations full parity | The local adapter covers object/item lifecycle and Responses state replay, but not every future OpenAI item subtype or server-side retention policy | Expand item subtype coverage as Codex emits them and add explicit retention/compaction policy controls |

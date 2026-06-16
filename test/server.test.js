@@ -5464,6 +5464,163 @@ test("POST /v1/responses emulates hosted tool_search for deferred namespace func
   });
 });
 
+test("POST /v1/responses loads client-executed tool_search_output tools from input", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools.length, 1);
+    assert.equal(call.body.tools[0].function.name, "get_shipping_eta");
+    assert.deepEqual(call.body.tools[0].function.parameters.properties.order_id, { type: "string" });
+    assert.equal(call.body.tools.some((tool) => /^local_tool_search/.test(tool.function?.name || "")), false);
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.doesNotMatch(prompt, /\[tool_search_output:/);
+    assert.doesNotMatch(prompt, /\[tool_search_call:/);
+    assert.match(prompt, /Loaded callable tools:\n- get_shipping_eta/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_tool_search_client_loaded",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_eta",
+            type: "function",
+            function: {
+              name: "get_shipping_eta",
+              arguments: "{\"order_id\":\"order_42\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          {
+            type: "tool_search_call",
+            execution: "client",
+            call_id: "call_search_eta",
+            status: "completed",
+            arguments: { goal: "Find the shipping ETA tool for order_42." },
+          },
+          {
+            type: "tool_search_output",
+            execution: "client",
+            call_id: "call_search_eta",
+            status: "completed",
+            tools: [{
+              type: "function",
+              name: "get_shipping_eta",
+              description: "Look up shipping ETA details for an order.",
+              defer_loading: true,
+              parameters: {
+                type: "object",
+                properties: { order_id: { type: "string" } },
+                required: ["order_id"],
+                additionalProperties: false,
+              },
+            }],
+          },
+          { role: "user", content: "Use the loaded shipping ETA tool for order_42." },
+        ],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    assert.equal(requests.length, 1);
+    const json = await response.json();
+    assert.deepEqual(json.output.map((item) => item.type), ["function_call"]);
+    assert.equal(json.output[0].name, "get_shipping_eta");
+    assert.equal(json.output[0].arguments, "{\"order_id\":\"order_42\"}");
+    assert.equal(json.metadata.compatibility.local_tool_search.tool_types[0], "tool_search_output");
+    assert.equal(json.metadata.compatibility.local_tool_search.input_tool_search_output_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.loaded_input_tool_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.loaded_chat_tool_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.boundary, "loaded_from_tool_search_output_input");
+  });
+});
+
+test("POST /v1/responses injects additional_tools input items as Chat functions", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools.length, 1);
+    assert.equal(call.body.tools[0].function.name, "get_customer");
+    assert.equal(call.body.messages.at(-2).content, "Look up CUST-9.");
+    assert.match(call.body.messages.at(-1).content, /Loaded callable tools:\n- get_customer/);
+    assert.equal(call.body.messages.some((message) => /\[additional_tools:/.test(message.content || "")), false);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_additional_tools",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_customer",
+            type: "function",
+            function: {
+              name: "get_customer",
+              arguments: "{\"customer_id\":\"CUST-9\"}",
+            },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 2, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          {
+            type: "additional_tools",
+            role: "developer",
+            tools: [{
+              type: "function",
+              name: "get_customer",
+              description: "Look up a customer by ID.",
+              parameters: {
+                type: "object",
+                properties: { customer_id: { type: "string" } },
+                required: ["customer_id"],
+                additionalProperties: false,
+              },
+            }],
+          },
+          { role: "user", content: "Look up CUST-9." },
+        ],
+        store: false,
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "function_call");
+    assert.equal(json.output[0].name, "get_customer");
+    assert.equal(json.metadata.compatibility.local_tool_search.tool_types[0], "additional_tools");
+    assert.equal(json.metadata.compatibility.local_tool_search.input_additional_tools_count, 1);
+    assert.equal(json.metadata.compatibility.local_tool_search.boundary, "loaded_from_additional_tools_input");
+  });
+});
+
 test("POST /v1/responses imports remote MCP tools/list over Streamable HTTP", async () => {
   const authValue = "redaction-fixture-value-for-remote-mcp-list";
   const mcpRequests = [];

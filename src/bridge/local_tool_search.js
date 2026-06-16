@@ -33,19 +33,33 @@ function localToolSearchToolTypes(tools = [], config = {}) {
 
 function prepareToolSearchContext(request = {}, config = {}, options = {}) {
   const searchTools = (request.tools || []).filter(isToolSearchTool);
-  if (!searchTools.length || !canUseLocalToolSearch(config)) return null;
+  const inputItems = [
+    ...(Array.isArray(options.previousResponse?.output) ? options.previousResponse.output : []),
+    ...flattenInputItems(request.input),
+  ];
+  const inputTools = loadedToolsFromItems(inputItems);
+  if ((!searchTools.length && !inputTools.tools.length) || !canUseLocalToolSearch(config)) return null;
 
   const context = {
     provider: "local",
     status: "completed",
-    tool_types: ["tool_search"],
-    execution: normalizeExecution(searchTools[0].execution),
+    tool_types: [
+      ...(searchTools.length ? ["tool_search"] : []),
+      ...(inputTools.tool_search_output_count ? ["tool_search_output"] : []),
+      ...(inputTools.additional_tools_count ? ["additional_tools"] : []),
+    ],
+    execution: searchTools.length
+      ? normalizeExecution(searchTools[0].execution)
+      : inputTools.execution || "client",
     requested_tool_choice: normalizeToolSearchToolChoice(request.tool_choice),
-    search_tool_definition: clone(searchTools[0]),
+    search_tool_definition: clone(searchTools[0] || {}),
     namespaces: [],
     deferred_tools: [],
     immediate_namespace_tools: [],
     loaded_tools: [],
+    input_tool_search_output_count: inputTools.tool_search_output_count,
+    input_additional_tools_count: inputTools.additional_tools_count,
+    input_loaded_tool_count: inputTools.tools.length,
     chat_tool_map: {},
     output_items: [],
     execution_items: [],
@@ -72,10 +86,7 @@ function prepareToolSearchContext(request = {}, config = {}, options = {}) {
     }
   }
 
-  context.loaded_tools.push(...loadedToolsFromItems([
-    ...(Array.isArray(options.previousResponse?.output) ? options.previousResponse.output : []),
-    ...flattenInputItems(request.input),
-  ]));
+  context.loaded_tools.push(...inputTools.tools);
 
   preloadForcedToolChoice(context);
   if (!context.deferred_tools.length && !context.immediate_namespace_tools.length && !context.loaded_tools.length) {
@@ -160,18 +171,37 @@ function responseFunctionTool(definition) {
 }
 
 function loadedToolsFromItems(items = []) {
-  const loaded = [];
+  const result = {
+    tools: [],
+    tool_search_output_count: 0,
+    additional_tools_count: 0,
+    execution: null,
+  };
   for (const item of items || []) {
-    if (!isPlainObject(item) || item.type !== "tool_search_output" || !Array.isArray(item.tools)) continue;
-    for (const tool of item.tools) {
-      if (!isPlainObject(tool)) continue;
-      if (tool.type === "function") {
-        const normalized = normalizeFunctionTool(tool);
-        if (normalized) loaded.push(normalized);
-      } else if (tool.type === "namespace") {
-        const namespace = normalizeNamespace(tool);
-        if (namespace) loaded.push(...namespace.tools);
-      }
+    if (!isPlainObject(item)) continue;
+    if (item.type === "tool_search_output" && Array.isArray(item.tools)) {
+      result.tool_search_output_count += 1;
+      if (!result.execution && item.execution) result.execution = normalizeExecution(item.execution);
+      result.tools.push(...normalizeLoadedTools(item.tools));
+    } else if (item.type === "additional_tools" && Array.isArray(item.tools)) {
+      result.additional_tools_count += 1;
+      result.tools.push(...normalizeLoadedTools(item.tools));
+    }
+  }
+  result.tools = uniqueToolsByPath(result.tools);
+  return result;
+}
+
+function normalizeLoadedTools(tools = []) {
+  const loaded = [];
+  for (const tool of tools || []) {
+    if (!isPlainObject(tool)) continue;
+    if (tool.type === "function") {
+      const normalized = normalizeFunctionTool(tool);
+      if (normalized) loaded.push(normalized);
+    } else if (tool.type === "namespace") {
+      const namespace = normalizeNamespace(tool);
+      if (namespace) loaded.push(...namespace.tools);
     }
   }
   return loaded;
@@ -603,7 +633,9 @@ function toolSearchCompatibility(context) {
       namespace_count: context.namespaces?.length || 0,
       deferred_tool_count: context.deferred_tools?.length || 0,
       immediate_namespace_tool_count: context.immediate_namespace_tools?.length || 0,
-      loaded_input_tool_count: context.loaded_tools?.length || 0,
+      loaded_input_tool_count: context.input_loaded_tool_count || context.loaded_tools?.length || 0,
+      input_tool_search_output_count: context.input_tool_search_output_count || 0,
+      input_additional_tools_count: context.input_additional_tools_count || 0,
       forced_preload_count: context.forced_preload_count || 0,
       search_call_count: context.search_call_count || 0,
       loaded_tool_count: context.loaded_tool_count || 0,
@@ -614,8 +646,12 @@ function toolSearchCompatibility(context) {
       ...(context.tool_choice_mapping ? { tool_choice: clone(context.tool_choice_mapping) } : {}),
       boundary: context.search_call_count
         ? "deferred_tool_search_and_load"
-        : context.loaded_tools?.length
+        : context.input_tool_search_output_count
           ? "loaded_from_tool_search_output_input"
+          : context.input_additional_tools_count
+            ? "loaded_from_additional_tools_input"
+            : context.loaded_tools?.length
+              ? "loaded_from_input_tools"
           : context.deferred_tools?.length
             ? "deferred_tools_hidden_until_search"
             : "no_deferred_tools",

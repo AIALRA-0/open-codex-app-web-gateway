@@ -200,6 +200,8 @@ Useful bridge flags:
 | `CODEXCOMPAT_MCP_PROTOCOL_VERSION` | `2025-03-26` | Protocol version sent in the remote MCP `initialize` request |
 | `CODEXCOMPAT_MCP_CLIENT_NAME` | `open-codex-responses-bridge` | Client name sent in the remote MCP `initialize` request |
 | `CODEXCOMPAT_DEEPSEEK_DISABLE_THINKING_FOR_LOCAL_MCP` | `true` | Disables DeepSeek thinking mode for local MCP-context requests so final text is visible under small output budgets |
+| `CODEXCOMPAT_TOOL_SEARCH_PROVIDER` | `local` | Local Responses `tool_search`, `tool_search_output`, and `additional_tools` adapter provider. Use `disabled` to leave tool search as unsupported hosted-tool compatibility text |
+| `CODEXCOMPAT_TOOL_SEARCH_MAX_LOADED_TOOLS` | `10` | Maximum deferred functions loaded by one hosted local tool-search call |
 | `CODEXCOMPAT_SKILL_STATE_DIR` | `$CODEXCOMPAT_STATE_DIR/local-skills` | Local Skills API state path; keep outside Git and monitor disk growth |
 | `CODEXCOMPAT_SKILL_MAX_UPLOAD_BYTES` | `52428800` | Maximum local skill upload size |
 | `CODEXCOMPAT_SKILL_MAX_FILE_COUNT` | `500` | Maximum files accepted in a local skill bundle |

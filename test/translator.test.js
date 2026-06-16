@@ -358,6 +358,33 @@ test("can reserve namespace tools for local tool_search execution", () => {
   assert.ok(!chat.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
 });
 
+test("skips local tool-definition input items that are handled by the bridge", () => {
+  const messages = responseInputToChatMessages([
+    {
+      type: "tool_search_call",
+      execution: "client",
+      call_id: "call_search",
+      status: "completed",
+      arguments: { goal: "find shipping" },
+    },
+    {
+      type: "tool_search_output",
+      execution: "client",
+      call_id: "call_search",
+      status: "completed",
+      tools: [{ type: "function", name: "get_shipping_eta" }],
+    },
+    {
+      type: "additional_tools",
+      role: "developer",
+      tools: [{ type: "function", name: "get_customer" }],
+    },
+    { role: "user", content: "Use the loaded tool." },
+  ]);
+
+  assert.deepEqual(messages, [{ role: "user", content: "Use the loaded tool." }]);
+});
+
 test("maps computer_call_output input to readable chat context", () => {
   const messages = responseInputToChatMessages([{
     type: "computer_call_output",

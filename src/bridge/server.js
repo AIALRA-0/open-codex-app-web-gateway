@@ -2026,8 +2026,8 @@ function applyLocalMcpToChat(chat, compatibility, localMcp, config) {
 }
 
 function applyLocalToolSearchToChat(chat, compatibility, localToolSearch, config) {
-  injectToolSearchMessages(chat, localToolSearch);
   injectToolSearchChatTools(chat, localToolSearch, config);
+  injectToolSearchMessages(chat, localToolSearch);
   mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
   return compatibility;
 }

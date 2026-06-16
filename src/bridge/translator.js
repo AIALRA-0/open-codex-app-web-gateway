@@ -250,6 +250,10 @@ function inputItemToChatMessages(item, options = {}) {
   if (typeof item === "string") return [{ role: "user", content: item }];
   if (!isPlainObject(item)) return [{ role: "user", content: stringifyContent(item) }];
 
+  if (item.type === "tool_search_call" || item.type === "tool_search_output" || item.type === "additional_tools") {
+    return [];
+  }
+
   if (item.type === "message" || item.role) {
     const role = normalizeChatRole(item.role, options);
     const message = {
@@ -1466,7 +1470,7 @@ function chatCompletionToReplayMessages(chat) {
       content: message.content ?? null,
     };
     if (message.tool_calls) {
-      replay.tool_calls = message.tool_calls;
+      replay.tool_calls = sanitizeReplayToolCalls(message.tool_calls);
     } else if (isPlainObject(message.function_call) && message.function_call.name) {
       replay.tool_calls = [{
         id: legacyFunctionCallId(chat, choice),
@@ -1482,6 +1486,22 @@ function chatCompletionToReplayMessages(chat) {
     if (isPlainObject(message.audio)) replay.audio = clone(message.audio);
     return [replay];
   });
+}
+
+function sanitizeReplayToolCalls(toolCalls = []) {
+  return asArray(toolCalls)
+    .filter((toolCall) => isPlainObject(toolCall))
+    .map((toolCall) => {
+      if (toolCall.type !== "function") return clone(toolCall);
+      return {
+        id: toolCall.id || prefixedId("call"),
+        type: "function",
+        function: {
+          name: stringifyContent(toolCall.function?.name || ""),
+          arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+        },
+      };
+    });
 }
 
 function responseOutputToReplayMessages(response) {
