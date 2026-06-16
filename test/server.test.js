@@ -523,6 +523,110 @@ test("POST /v1/responses validates service_tier values before provider calls", a
   });
 });
 
+test("POST /v1/responses validates text.format response formats before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.response_format, { type: "json_object" });
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
+    assert.match(call.body.messages[0].content, /JSON Schema/);
+    assert.match(call.body.messages[0].content, /answer_schema/);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_text_format_boundary",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "{\"answer\":\"text format ok\"}" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        text: "json",
+        error: { message: "text must be an object", param: "text" },
+      },
+      {
+        text: { format: "json" },
+        error: { message: "text.format must be an object", param: "text.format" },
+      },
+      {
+        text: { format: { type: "xml" } },
+        error: { message: "text.format.type must be one of: text, json_object, json_schema", param: "text.format.type" },
+      },
+      {
+        text: { format: { type: "json_schema", name: "bad name", schema: { type: "object" } } },
+        error: {
+          message: "text.format.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+          param: "text.format.name",
+        },
+      },
+      {
+        text: { format: { type: "json_schema", name: "missing_schema" } },
+        error: { message: "text.format.schema must be an object", param: "text.format.schema" },
+      },
+      {
+        text: { format: { type: "json_schema", name: "array_schema", schema: [] } },
+        error: { message: "text.format.schema must be an object", param: "text.format.schema" },
+      },
+      {
+        text: { format: { type: "json_schema", name: "strict_schema", schema: { type: "object" }, strict: "true" } },
+        error: { message: "text.format.strict must be a boolean or null", param: "text.format.strict" },
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check text format validation.",
+          text: invalidCase.text,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.error.message,
+          type: "invalid_request_error",
+          param: invalidCase.error.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Return the structured answer.",
+        text: {
+          format: {
+            type: "json_schema",
+            name: "answer_schema",
+            description: "Answer object.",
+            strict: true,
+            schema: {
+              type: "object",
+              properties: { answer: { type: "string" } },
+              required: ["answer"],
+              additionalProperties: false,
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.equal(json.output[0].content[0].text, "{\"answer\":\"text format ok\"}");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses maps reasoning effort none to DeepSeek non-thinking mode", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.reasoning_effort, undefined);
@@ -18959,6 +19063,93 @@ test("POST /v1/chat/completions validates service_tier values before provider ca
     const json = await valid.json();
     assert.equal(json.choices[0].message.content, "chat service tier ok");
     assert.equal(json.service_tier, "flex");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/chat/completions validates response_format before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.response_format, { type: "text" });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_response_format_boundary",
+      object: "chat.completion",
+      created: 1700000306,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat response format ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        response_format: "json_object",
+        error: { message: "response_format must be an object", param: "response_format" },
+      },
+      {
+        response_format: { type: "xml" },
+        error: { message: "response_format.type must be one of: text, json_object, json_schema", param: "response_format.type" },
+      },
+      {
+        response_format: { type: "json_schema" },
+        error: { message: "response_format.json_schema must be an object", param: "response_format.json_schema" },
+      },
+      {
+        response_format: { type: "json_schema", json_schema: { name: "bad name" } },
+        error: {
+          message: "response_format.json_schema.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+          param: "response_format.json_schema.name",
+        },
+      },
+      {
+        response_format: { type: "json_schema", json_schema: { name: "array_schema", schema: [] } },
+        error: { message: "response_format.json_schema.schema must be an object", param: "response_format.json_schema.schema" },
+      },
+      {
+        response_format: { type: "json_schema", json_schema: { name: "strict_schema", strict: "true" } },
+        error: { message: "response_format.json_schema.strict must be a boolean or null", param: "response_format.json_schema.strict" },
+      },
+      {
+        response_format: { type: "json_schema", json_schema: { name: "description_schema", description: 1 } },
+        error: { message: "response_format.json_schema.description must be a string or null", param: "response_format.json_schema.description" },
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          response_format: invalidCase.response_format,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.error.message,
+          type: "invalid_request_error",
+          param: invalidCase.error.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        response_format: { type: "text" },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).choices[0].message.content, "chat response format ok");
     assert.equal(requests.length, 1);
   });
 });

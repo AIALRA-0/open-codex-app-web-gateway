@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-16 Official Response Format Validation
+
+- Rechecked the official OpenAI Chat Completions and Responses create request
+  docs through the OpenAI developer docs MCP, then confirmed the current
+  OpenAPI schema from the official `openai/openai-openapi` source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`,
+  `https://developers.openai.com/api/reference/resources/responses/methods/create`,
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  The relevant response-format union accepts `text`, `json_object`, and
+  `json_schema`; Chat uses nested `response_format.json_schema`, while
+  Responses uses flat `text.format`.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` validates `text` as an object and `text.format` as a
+    response-format object when supplied.
+  - `POST /v1/chat/completions` validates `response_format` as a
+    response-format object when supplied.
+  - Both paths reject unknown `type` values, invalid schema config names,
+    non-object schemas, invalid `strict` values, and invalid `description`
+    values before any provider call.
+  - Responses `text.format.type:"json_schema"` requires the flat `schema`
+    object, matching `TextResponseFormatJsonSchema`; direct Chat
+    `response_format.type:"json_schema"` requires the nested `json_schema`
+    object and validates an optional nested `schema` object, matching
+    `ResponseFormatJsonSchema`.
+- Preserved the existing provider-aware forwarding policy: valid
+  `json_schema` values still follow the bridge's DeepSeek-compatible downgrade
+  to `json_object` plus a model-visible JSON Schema instruction when configured,
+  while valid `text` and `json_object` values continue through the existing
+  passthrough/instruction path.
+- Added regression coverage proving invalid Responses `text` /
+  `text.format` shapes and invalid direct Chat `response_format` shapes fail
+  locally with zero upstream calls. Valid Responses `json_schema` still reaches
+  the DeepSeek-compatible `json_object` downgrade path, and valid direct Chat
+  `{type:"text"}` reaches the provider.
+- Updated the compatibility matrix and evaluation plan so structured-output
+  parity tracks request-contract validation as well as downgrade/passthrough
+  behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js test/translator.test.js --test-name-pattern "response_format|text.format|structured output|json_schema"`:
+    passed 272/272; the current Node test runner executed both selected test
+    files except unrelated cases filtered by the name pattern.
+  - `npm test`: passed 276/276.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public response-format smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"` and `code:"invalid_request_parameter"`;
+    the Responses request used `text.format.type:"xml"` and returned
+    `param:"text.format.type"`, while the Chat request used an invalid
+    `response_format.json_schema.name` with a space and returned
+    `param:"response_format.json_schema.name"`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Service Tier Validation
 
 - Rechecked the official OpenAI Responses and Chat Completions create

@@ -210,6 +210,8 @@ const OPENAI_PENALTY_MAX = 2;
 const OPENAI_STOP_MAX_SEQUENCES = 4;
 const OPENAI_LOGIT_BIAS_MIN = -100;
 const OPENAI_LOGIT_BIAS_MAX = 100;
+const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
+const OPENAI_RESPONSE_FORMAT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
@@ -815,6 +817,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const logitBiasError = validateOpenAILogitBias(request);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const textError = validateOpenAIResponsesText(request);
+  if (textError) {
+    sendError(res, 400, textError.message, textError);
     return;
   }
   const serviceTierError = validateOpenAIServiceTier(request);
@@ -2367,6 +2374,81 @@ function validateOpenAILogitBias(body = {}) {
         `logit_bias.${tokenId}`,
       );
     }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesText(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "text") || body.text == null) return null;
+  if (!isPlainObject(body.text)) {
+    return requestValidationError("text must be an object", "text");
+  }
+  const format = Object.prototype.hasOwnProperty.call(body.text, "format")
+    ? body.text.format
+    : Object.prototype.hasOwnProperty.call(body.text, "type")
+      ? body.text
+      : undefined;
+  if (format == null) return null;
+  return validateOpenAIResponseFormatObject(format, "text.format", { responsesTextFormat: true });
+}
+
+function validateOpenAIChatResponseFormat(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "response_format") || body.response_format == null) return null;
+  return validateOpenAIResponseFormatObject(body.response_format, "response_format", { chatResponseFormat: true });
+}
+
+function validateOpenAIResponseFormatObject(format, param, options = {}) {
+  if (!isPlainObject(format)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof format.type !== "string" || !OPENAI_RESPONSE_FORMAT_TYPES.includes(format.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${OPENAI_RESPONSE_FORMAT_TYPES.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (format.type !== "json_schema") return null;
+
+  if (options.chatResponseFormat) {
+    if (!isPlainObject(format.json_schema)) {
+      return requestValidationError("response_format.json_schema must be an object", "response_format.json_schema");
+    }
+    return validateOpenAIJsonSchemaFormatConfig(format.json_schema, "response_format.json_schema", {
+      schemaRequired: false,
+    });
+  }
+
+  return validateOpenAIJsonSchemaFormatConfig(format, param, {
+    schemaRequired: !!options.responsesTextFormat,
+  });
+}
+
+function validateOpenAIJsonSchemaFormatConfig(config, param, options = {}) {
+  if (typeof config.name !== "string" || !OPENAI_RESPONSE_FORMAT_NAME_RE.test(config.name)) {
+    return requestValidationError(
+      `${param}.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes`,
+      `${param}.name`,
+    );
+  }
+  if (
+    (options.schemaRequired || Object.prototype.hasOwnProperty.call(config, "schema"))
+    && !isPlainObject(config.schema)
+  ) {
+    return requestValidationError(`${param}.schema must be an object`, `${param}.schema`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(config, "strict")
+    && config.strict !== null
+    && typeof config.strict !== "boolean"
+  ) {
+    return requestValidationError(`${param}.strict must be a boolean or null`, `${param}.strict`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(config, "description")
+    && config.description !== null
+    && typeof config.description !== "string"
+  ) {
+    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
   }
   return null;
 }
@@ -4527,6 +4609,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const logitBiasError = validateOpenAILogitBias(body);
   if (logitBiasError) {
     sendError(res, 400, logitBiasError.message, logitBiasError);
+    return;
+  }
+  const responseFormatError = validateOpenAIChatResponseFormat(body);
+  if (responseFormatError) {
+    sendError(res, 400, responseFormatError.message, responseFormatError);
     return;
   }
   const serviceTierError = validateOpenAIServiceTier(body);
