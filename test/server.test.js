@@ -14672,6 +14672,72 @@ test("POST /v1/responses/input_tokens returns upstream prompt token usage", asyn
   });
 });
 
+test("POST /v1/responses/input_tokens validates and counts style preset", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    assert.match(prompt, /Responses model-owned style preset "concise"/);
+    assert.match(prompt, /Style target request/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_token_probe_style",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "." },
+        finish_reason: "length",
+      }],
+      usage: { prompt_tokens: 55, completion_tokens: 1, total_tokens: 56 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const oversizedStyle = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "This should fail before the upstream probe.",
+        style: "x".repeat(65),
+      }),
+    });
+    assert.equal(oversizedStyle.status, 400);
+    assert.deepEqual(await oversizedStyle.json(), {
+      error: {
+        message: "style must be at most 64 characters",
+        type: "invalid_request_error",
+        param: "style",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
+    const inputTokens = await fetch(`${baseUrl}/v1/responses/input_tokens`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Style target request.",
+        style: "concise",
+      }),
+    });
+    assert.equal(inputTokens.status, 200);
+    assert.deepEqual(await inputTokens.json(), {
+      object: "response.input_tokens",
+      input_tokens: 55,
+    });
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].body.messages, [
+      {
+        role: "system",
+        content: 'Compatibility notice: apply the Responses model-owned style preset "concise" to this request.',
+      },
+      { role: "user", content: "Style target request." },
+    ]);
+  });
+});
+
 test("POST /v1/responses/input_tokens counts conversation, files, images, and tools", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);

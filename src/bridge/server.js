@@ -196,6 +196,7 @@ const LOCAL_VIDEO_CONTENT_VARIANTS = new Set(["video", "thumbnail", "spritesheet
 const LOCAL_PLACEHOLDER_MP4 = Buffer.from("AAAAHGZ0eXBpc29tAAACAGlzb21pc28ybXA0MQAAAAhmcmVlAAAAGG1kYXQ=", "base64");
 const LOCAL_PLACEHOLDER_WEBP = Buffer.from("UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA", "base64");
 const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
   "harassment",
@@ -2228,6 +2229,39 @@ function sendLocalTruncationError(res, error) {
   sendJson(res, 400, localTruncationErrorBody(error));
 }
 
+function validateResponsesInputTokensStyle(request = {}) {
+  if (!Object.prototype.hasOwnProperty.call(request, "style") || request.style == null) return null;
+  if (typeof request.style !== "string") {
+    return {
+      message: "style must be a string",
+      type: "invalid_request_error",
+      code: "invalid_request_parameter",
+      param: "style",
+    };
+  }
+  if (Array.from(request.style).length > RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS) {
+    return {
+      message: `style must be at most ${RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS} characters`,
+      type: "invalid_request_error",
+      code: "invalid_request_parameter",
+      param: "style",
+    };
+  }
+  return null;
+}
+
+function applyResponsesInputTokensStyle(chat, request = {}) {
+  const style = typeof request.style === "string" ? request.style : "";
+  if (!style) return;
+  chat.messages = [
+    {
+      role: "system",
+      content: `Compatibility notice: apply the Responses model-owned style preset ${JSON.stringify(style)} to this request.`,
+    },
+    ...(Array.isArray(chat.messages) ? chat.messages : []),
+  ];
+}
+
 function hasCompactionInput(value) {
   if (Array.isArray(value)) return value.some(hasCompactionInput);
   if (!value || typeof value !== "object") return false;
@@ -2359,6 +2393,11 @@ function conversationOutputItems(output) {
 
 async function handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore) {
   const request = await readJson(req);
+  const styleError = validateResponsesInputTokensStyle(request);
+  if (styleError) {
+    sendError(res, 400, styleError.message, styleError);
+    return;
+  }
   const conversation = prepareConversationContext(request, conversationStore, config);
   if (conversation?.missing) {
     sendError(res, 404, `conversation not found: ${conversation.id}`, { code: "conversation_not_found", param: "conversation" });
@@ -2371,6 +2410,7 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
   const localInputImages = prepareInputImageContext(request, config, fileSearchStore);
   const translatorRequest = localInputImages?.request || request;
   const { chat } = responsesToChatRequest(translatorRequest, previousMessages, translatorOptions(config));
+  applyResponsesInputTokensStyle(chat, request);
   chat.model = chat.model || config.defaultModel;
   const localInputFiles = await prepareInputFileContext(request, config, fileSearchStore);
   if (localInputFiles) injectInputFileMessages(chat, localInputFiles);

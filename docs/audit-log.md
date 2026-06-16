@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Responses Input Token Style Preset Mapping
+
+- Rechecked the official OpenAI `/v1/responses/input_tokens` body parameters
+  through the OpenAI developer docs MCP before changing bridge behavior. The
+  endpoint documents `style` as a model-owned style preset for the request and
+  limits values to at most 64 characters.
+- Tightened local Chat-provider compatibility for the input-token counting
+  endpoint:
+  - invalid non-string `style` values and `style` strings longer than 64
+    characters now return an OpenAI-style `400 invalid_request_error` with
+    `param:"style"` before any upstream provider call;
+  - valid `style` values are injected into the upstream Chat Completions usage
+    probe as a model-visible compatibility instruction, so Chat-only providers
+    count the preset request instead of silently dropping it;
+  - the public response shape remains the official
+    `{"object":"response.input_tokens","input_tokens":...}` object, avoiding
+    extra fields that could break strict SDK parsing.
+- Added regression coverage proving oversized `style` values are rejected
+  locally with zero upstream calls, and valid `style:"concise"` values are
+  present in the mock provider prompt while the endpoint returns upstream
+  `usage.prompt_tokens`.
+- Updated the compatibility matrix and evaluation plan so future bridge
+  regression runs treat `/input_tokens` `style` as a mapped compatibility
+  surface.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "responses/input_tokens"`:
+    passed 210/210; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 259/259.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public `/v1/responses/input_tokens` smoke through
+    `https://opencodexapp.aialra.online` with `style:"concise"` returned HTTP
+    200, `object:"response.input_tokens"`, and `input_tokens:32`.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Parallel Tool-Call Constraint Mapping
 
 - Rechecked the current official OpenAI Responses and Chat Completions create
