@@ -15540,6 +15540,7 @@ test("POST /v1/responses with background true returns in_progress and later comp
     const streamEvents = parseSseEvents(await streamTextPromise);
     assert.deepEqual(streamEvents.map((event) => event.event), [
       "response.created",
+      "response.queued",
       "response.in_progress",
       "response.output_item.added",
       "response.content_part.added",
@@ -15549,9 +15550,11 @@ test("POST /v1/responses with background true returns in_progress and later comp
       "response.output_item.done",
       "response.completed",
     ]);
-    assert.deepEqual(streamEvents.map((event) => event.data.sequence_number), [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-    assert.equal(streamEvents[4].data.delta, "background done");
-    assert.equal(streamEvents[8].data.response.metadata.suite, "background-update");
+    assert.deepEqual(streamEvents.map((event) => event.data.sequence_number), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    assert.equal(streamEvents[1].data.response.status, "queued");
+    assert.equal(streamEvents[2].data.response.status, "in_progress");
+    assert.equal(streamEvents[5].data.delta, "background done");
+    assert.equal(streamEvents[9].data.response.metadata.suite, "background-update");
 
     let finalJson = null;
     for (let attempt = 0; attempt < 20; attempt += 1) {
@@ -15678,8 +15681,11 @@ test("POST /v1/responses/{id}/cancel cancels an in-progress background response"
     const streamEvents = parseSseEvents(await streamTextPromise);
     assert.deepEqual(streamEvents.map((event) => event.event), [
       "response.created",
+      "response.queued",
       "response.in_progress",
     ]);
+    assert.equal(streamEvents[1].data.response.status, "queued");
+    assert.equal(streamEvents[2].data.response.status, "in_progress");
 
     await sleep(240);
     const fetched = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`);

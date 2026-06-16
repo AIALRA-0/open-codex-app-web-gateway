@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-17 Active Background Queued Stream Event
+
+- Rechecked the official OpenAI Responses stream event union through the
+  official `openai/openai-openapi` schema:
+  - `Response.status` includes `queued`;
+  - `ResponseStreamEvent` includes `ResponseQueuedEvent`;
+  - `response.cancelled` is still not a defined terminal stream event.
+- Tightened active background retrieve streams:
+  - `GET /v1/responses/{id}?stream=true` for an in-process local background job
+    now emits `response.created`, `response.queued`, and
+    `response.in_progress` before waiting for the stored terminal response;
+  - the queued event uses a cloned response snapshot with `status:"queued"`;
+  - terminal stored response replay is unchanged, so completed records do not
+    gain an extra queued event after the fact;
+  - `starting_after` sequence filtering continues to apply to the synthetic
+    lifecycle event.
+- Also checked the current official `text.format` reference while looking for
+  the next gap: `grammar` and `python` schemas exist in components, but the
+  active `TextResponseFormatConfiguration` for Responses still references only
+  `text`, `json_schema`, and `json_object`, so the bridge's public validation
+  remains aligned there.
+- Validation:
+  - `node --test test/server.test.js --test-name-pattern "background true returns in_progress|cancels an in-progress background response|stored response lifecycle"` passes; the Node runner executed the full `server.test.js` set in this invocation, 290 tests passing;
+  - `npm test` passes: 341 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional credential-pattern scan only matched a local test fixture bearer
+    token string;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local smoke against `http://127.0.0.1:12912` with
+    `background:true`, `stream:true`, and retrieve `stream=true` emitted
+    `response.created -> response.queued -> response.in_progress -> ...
+    -> response.completed`;
+  - public smoke against `https://opencodexapp.aialra.online` confirmed the
+    same active background retrieve-stream lifecycle.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Response Stream Obfuscation
 
 - Rechecked the official OpenAI Responses stream option schema through the

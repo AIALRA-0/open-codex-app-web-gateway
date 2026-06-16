@@ -13557,6 +13557,12 @@ async function writeStoredResponseEventStream(res, response, url, options = {}) 
     output: [],
   };
   emit("response.created", { type: "response.created", response: clone(progressResponse) });
+  if (shouldEmitStoredResponseQueuedEvent(response, options)) {
+    emit("response.queued", {
+      type: "response.queued",
+      response: storedResponseQueuedSnapshot(progressResponse),
+    });
+  }
   emit("response.in_progress", { type: "response.in_progress", response: clone(progressResponse) });
 
   try {
@@ -13578,6 +13584,20 @@ async function writeStoredResponseEventStream(res, response, url, options = {}) 
   } finally {
     if (!res.destroyed && !res.writableEnded) res.end();
   }
+}
+
+function shouldEmitStoredResponseQueuedEvent(response, options = {}) {
+  return response?.status === "in_progress"
+    && response.background === true
+    && typeof options.responseId === "string"
+    && !!options.backgroundJobs?.has?.(options.responseId);
+}
+
+function storedResponseQueuedSnapshot(response) {
+  return {
+    ...clone(response),
+    status: "queued",
+  };
 }
 
 async function storedResponseForStreamOutput(response, options = {}) {
