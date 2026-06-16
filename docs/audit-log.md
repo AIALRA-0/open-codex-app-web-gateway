@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-16 Responses and Chat `moderation` Config Validation
+
+- Rechecked the official OpenAI generated references:
+  - Responses create:
+    `https://developers.openai.com/api/reference/resources/responses/methods/create/index.md`
+  - Chat Completions create:
+    `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create/index.md`
+  Both current request bodies document `moderation` as an optional object with a
+  string `model` field for running moderation on request input and generated
+  output. The `input`/`output` object is response data, not the official request
+  shape.
+- Added shared local request validation for `/v1/responses` and
+  `/v1/chat/completions` before Chat translation, local moderation execution, or
+  provider calls:
+  - non-object `moderation` values such as strings and arrays now return
+    OpenAI-style `400 invalid_request_error` with `param:"moderation"`;
+  - `moderation.model`, when present, must be a string;
+  - the bridge's older local `moderation.input` / `moderation.output`
+    compatibility flags remain accepted only as booleans/null.
+- Mapped official `moderation:{model:"..."}` requests onto the local inline
+  moderation fallback when the Chat provider does not return native moderation
+  data. The requested moderation model is preserved in synthesized
+  `moderation.input.model` and `moderation.output.model`; the older
+  `{input,output}` flags still select local moderation scope for existing
+  bridge clients.
+- Updated the compatibility matrix and evaluation plan so future regression
+  passes cover official `{model}` config validation alongside the retained
+  local scope-flag extension.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "moderation config|inline moderation"
+    test/server.test.js`: passed 4/4.
+  - `npm test`: passed 333/333.
+  - Restarted `aialra-opencodexapp-bridge.service`; local healthz returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Local and public HTTPS invalid-request smoke tests returned HTTP 400 for
+    `/v1/responses` with `param:"moderation"` and direct
+    `/v1/chat/completions` with `param:"moderation.input"`.
+  - Local and public HTTPS valid-request smoke tests using
+    `moderation:{model:"omni-moderation-latest"}` returned HTTP 200 for both
+    `/v1/responses` and direct `/v1/chat/completions`, with
+    `moderation.input.model:"omni-moderation-latest"` and output moderation
+    present.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Responses Input Tokens `personality` Preset
 
 - Rechecked the official OpenAI Responses input-token-count contract through the

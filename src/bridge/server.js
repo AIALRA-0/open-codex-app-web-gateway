@@ -1030,6 +1030,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
     return;
   }
+  const moderationError = validateOpenAIInlineModeration(request);
+  if (moderationError) {
+    sendError(res, 400, moderationError.message, moderationError);
+    return;
+  }
   const legacyFunctionFieldsError = validateOpenAILegacyFunctionFields(request);
   if (legacyFunctionFieldsError) {
     sendError(res, 400, legacyFunctionFieldsError.message, legacyFunctionFieldsError);
@@ -3511,6 +3516,31 @@ function validateOpenAIChatWebSearchOptions(body = {}) {
         `web_search_options.user_location.approximate.${field} must be a string`,
         `web_search_options.user_location.approximate.${field}`,
       );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIInlineModeration(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "moderation") || body.moderation == null) return null;
+  const moderation = body.moderation;
+  if (moderation === true || moderation === false) return null;
+  if (!isPlainObject(moderation)) {
+    return requestValidationError("moderation must be an object", "moderation");
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(moderation, "model")
+    && (moderation.model == null || typeof moderation.model !== "string")
+  ) {
+    return requestValidationError("moderation.model must be a string", "moderation.model");
+  }
+  for (const field of ["input", "output"]) {
+    if (
+      Object.prototype.hasOwnProperty.call(moderation, field)
+      && moderation[field] != null
+      && typeof moderation[field] !== "boolean"
+    ) {
+      return requestValidationError(`moderation.${field} must be a boolean`, `moderation.${field}`);
     }
   }
   return null;
@@ -6358,6 +6388,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const webSearchOptionsError = validateOpenAIChatWebSearchOptions(body);
   if (webSearchOptionsError) {
     sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
+    return;
+  }
+  const moderationError = validateOpenAIInlineModeration(body);
+  if (moderationError) {
+    sendError(res, 400, moderationError.message, moderationError);
     return;
   }
   const toolFieldsError = validateOpenAIChatToolFields(body);
@@ -10390,15 +10425,16 @@ function score(value) {
 
 function inlineModerationConfig(value) {
   if (value === undefined || value === null || value === false) {
-    return { enabled: false, input: false, output: false };
+    return { enabled: false, input: false, output: false, model: null };
   }
-  if (value === true) return { enabled: true, input: true, output: true };
-  if (!isPlainObject(value)) return { enabled: false, input: false, output: false };
+  if (value === true) return { enabled: true, input: true, output: true, model: null };
+  if (!isPlainObject(value)) return { enabled: false, input: false, output: false, model: null };
 
-  const input = value.input !== undefined ? value.input !== false && value.input !== null : false;
-  const output = value.output !== undefined ? value.output !== false && value.output !== null : false;
+  const model = typeof value.model === "string" ? value.model : null;
+  const input = value.input !== undefined ? value.input === true : !!model;
+  const output = value.output !== undefined ? value.output === true : !!model;
   const enabled = input || output;
-  return { enabled, input, output };
+  return { enabled, input, output, model };
 }
 
 function attachLocalResponseInlineModeration(response, request, config) {
@@ -10411,14 +10447,14 @@ function attachLocalResponseInlineModeration(response, request, config) {
     provider: "local",
     classifier: "deterministic-keyword-safety",
     reason: "requested_inline_moderation",
-    requested: { input: options.input, output: options.output },
+    requested: { input: options.input, output: options.output, ...(options.model ? { model: options.model } : {}) },
   };
   if (options.input) {
-    moderation.input = localModerationPayload(moderationInputFromResponsesRequest(request), config, "input");
+    moderation.input = localModerationPayload(moderationInputFromResponsesRequest(request), config, "input", options.model);
     summary.input = moderationSummary(moderation.input);
   }
   if (options.output) {
-    moderation.output = localModerationPayload(moderationInputFromResponseOutput(response), config, "output");
+    moderation.output = localModerationPayload(moderationInputFromResponseOutput(response), config, "output", options.model);
     summary.output = moderationSummary(moderation.output);
   }
   response.moderation = moderation;
@@ -10435,24 +10471,24 @@ function attachLocalChatInlineModeration(completion, request, config) {
     provider: "local",
     classifier: "deterministic-keyword-safety",
     reason: "requested_inline_moderation",
-    requested: { input: options.input, output: options.output },
+    requested: { input: options.input, output: options.output, ...(options.model ? { model: options.model } : {}) },
   };
   if (options.input) {
-    moderation.input = localModerationPayload(moderationInputFromChatMessages(request.messages), config, "input");
+    moderation.input = localModerationPayload(moderationInputFromChatMessages(request.messages), config, "input", options.model);
     summary.input = moderationSummary(moderation.input);
   }
   if (options.output) {
-    moderation.output = localModerationPayload(moderationInputFromChatCompletionOutput(completion), config, "output");
+    moderation.output = localModerationPayload(moderationInputFromChatCompletionOutput(completion), config, "output", options.model);
     summary.output = moderationSummary(moderation.output);
   }
   completion.moderation = moderation;
   return summary;
 }
 
-function localModerationPayload(input, config, scope) {
+function localModerationPayload(input, config, scope, model = null) {
   return {
     id: prefixedId("modr"),
-    model: config.moderationsModel || "omni-moderation-latest",
+    model: model || config.moderationsModel || "omni-moderation-latest",
     results: [classifyModerationInput(input)],
     compatibility: {
       provider: "local",

@@ -1974,6 +1974,77 @@ test("POST /v1/responses attaches local inline moderation when provider field is
   }, { forwardChatNativeFields: false });
 });
 
+test("POST /v1/responses validates and maps moderation config", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.moderation, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_response_moderation_model",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "calm output" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 2, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { moderation: "auto", param: "moderation", message: "moderation must be an object" },
+      { moderation: [], param: "moderation", message: "moderation must be an object" },
+      { moderation: { model: 42 }, param: "moderation.model", message: "moderation.model must be a string" },
+      { moderation: { input: "true" }, param: "moderation.input", message: "moderation.input must be a boolean" },
+      { moderation: { output: 1 }, param: "moderation.output", message: "moderation.output must be a boolean" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "This invalid moderation config should not hit upstream.",
+          moderation: invalidCase.moderation,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "I want to kill them.",
+        moderation: { model: "omni-moderation-test" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.moderation.input.model, "omni-moderation-test");
+    assert.equal(json.moderation.output.model, "omni-moderation-test");
+    assert.equal(json.moderation.input.results[0].flagged, true);
+    assert.equal(json.moderation.output.results[0].flagged, false);
+    assert.deepEqual(json.metadata.compatibility.local_moderation.requested, {
+      input: true,
+      output: true,
+      model: "omni-moderation-test",
+    });
+    assert.equal(requests.length, 1);
+  }, { forwardChatNativeFields: false });
+});
+
 test("POST /v1/responses filters stream_options for non-streaming requests", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.stream, false);
@@ -24820,6 +24891,71 @@ test("POST /v1/chat/completions attaches local inline moderation when provider f
     const fetchedJson = await fetched.json();
     assert.equal(fetchedJson.moderation.output.results[0].flagged, true);
     assert.equal(fetchedJson.moderation.output.compatibility.provider, "local");
+  }, { forwardChatNativeFields: false });
+});
+
+test("POST /v1/chat/completions validates and maps moderation config", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.moderation, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_moderation_model",
+      object: "chat.completion",
+      created: 1700000401,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "I will kill you." },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 5, total_tokens: 10 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      { moderation: "auto", param: "moderation", message: "moderation must be an object" },
+      { moderation: { model: null }, param: "moderation.model", message: "moderation.model must be a string" },
+      { moderation: { input: "yes" }, param: "moderation.input", message: "moderation.input must be a boolean" },
+      { moderation: { output: [] }, param: "moderation.output", message: "moderation.output must be a boolean" },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "This invalid moderation config should not hit upstream." }],
+          moderation: invalidCase.moderation,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "A calm user prompt." }],
+        moderation: { model: "omni-moderation-chat-test" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.moderation.input.model, "omni-moderation-chat-test");
+    assert.equal(json.moderation.output.model, "omni-moderation-chat-test");
+    assert.equal(json.moderation.input.results[0].flagged, false);
+    assert.equal(json.moderation.output.results[0].flagged, true);
+    assert.equal(requests.length, 1);
   }, { forwardChatNativeFields: false });
 });
 
