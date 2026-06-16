@@ -665,6 +665,51 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
   }, { forwardChatNativeFields: false, forwardStoredChatFields: false });
 });
 
+test("POST /v1/responses records context management compatibility without provider forwarding", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.context, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_context_management",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "context ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 2, completion_tokens: 2, total_tokens: 4 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use local context management.",
+        context: {
+          type: "retention_ratio",
+          retention_ratio: 0.75,
+          sensitive_hint: "do-not-echo",
+        },
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "context ok");
+    assert.deepEqual(json.metadata.compatibility.context_management, {
+      source: "context",
+      forwarded: false,
+      reason: "chat_completions_no_equivalent",
+      value_type: "object",
+      keys: ["retention_ratio", "sensitive_hint", "type"],
+    });
+    assert.equal(JSON.stringify(json.metadata.compatibility.context_management).includes("do-not-echo"), false);
+  });
+});
+
 test("POST /v1/responses attaches local inline moderation when provider field is filtered", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.moderation, undefined);

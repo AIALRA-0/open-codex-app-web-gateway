@@ -659,6 +659,28 @@ test("filters Chat-native request fields for unsupported providers", () => {
   assert.equal(compatibility.stored_chat_fields.reason, "provider_unsupported_local_semantics");
 });
 
+test("records Responses context management without forwarding it to Chat providers", () => {
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "mock-model",
+    input: "Use context management.",
+    context: {
+      type: "retention_ratio",
+      retention_ratio: 0.75,
+      sensitive_hint: "do-not-echo",
+    },
+  });
+
+  assert.equal(chat.context, undefined);
+  assert.deepEqual(compatibility.context_management, {
+    source: "context",
+    forwarded: false,
+    reason: "chat_completions_no_equivalent",
+    value_type: "object",
+    keys: ["retention_ratio", "sensitive_hint", "type"],
+  });
+  assert.equal(JSON.stringify(compatibility.context_management).includes("do-not-echo"), false);
+});
+
 test("requests streaming usage from Chat stream options by default", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "mock-model",

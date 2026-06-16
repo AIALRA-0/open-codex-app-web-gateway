@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Responses Context Management Boundary
+
+- Rechecked the current official OpenAI Responses create schema through the
+  OpenAI developer docs MCP/OpenAPI spec before changing compatibility behavior.
+  The Responses request includes a top-level `context` field for context
+  management configuration, while Chat Completions has no matching upstream
+  request field.
+- Added an explicit Responses-to-Chat compatibility boundary for `context`:
+  - `responsesToChatRequest` now detects caller-supplied `context`;
+  - the field is not forwarded to upstream Chat Completions providers;
+  - `metadata.compatibility.context_management` records
+    `source:"context"`, `forwarded:false`,
+    `reason:"chat_completions_no_equivalent"`, the value type, and sorted
+    object keys when the value is an object;
+  - caller-provided context values are not copied into compatibility metadata.
+- Added regression coverage for:
+  - translator-level mapping that proves `chat.context` is omitted and only
+    scrubbed compatibility metadata remains;
+  - server-level mock-provider behavior that proves `/v1/responses` does not
+    forward `context` upstream and does not echo sensitive context values in the
+    compatibility block.
+- Updated the compatibility matrix and evaluation plan so future parity work
+  treats `context` as a tracked protocol field instead of an accidental
+  passthrough gap. A hosted context manager that actively changes retention or
+  summarization behavior remains future work beyond this metadata boundary.
+- Validation:
+  - `node --check src/bridge/translator.js`, `test/translator.test.js`, and
+    `test/server.test.js`: passed.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - `npm test`: passed 256/256.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public Responses smoke through
+    `https://opencodexapp.aialra.online/v1/responses`: HTTP 200, content
+    `ok-context-boundary`, `metadata.compatibility.context_management.reason`
+    was `chat_completions_no_equivalent`, and the caller-provided context value
+    used for the leak check was absent from the serialized response.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Chat Identity Alias Mapping Audit
 
 - Rechecked the current official OpenAI Chat Completions schema through the

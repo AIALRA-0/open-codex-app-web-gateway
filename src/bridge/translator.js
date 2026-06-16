@@ -602,6 +602,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
   const verbosityCompatibility = mapVerbosity(request, chat, options);
+  const contextManagementCompatibility = mapContextManagement(request);
   const chatNativeFieldsCompatibility = mapChatNativeFields(request, chat, {
     ...options,
     mappedNativeFields: deepseekUserIdCompatibility?.source ? [deepseekUserIdCompatibility.source] : [],
@@ -651,8 +652,22 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
       ...(promptCompatibility ? { prompt_template: promptCompatibility } : {}),
       ...(maxTokensCompatibility || {}),
       ...(verbosityCompatibility ? { verbosity: verbosityCompatibility } : {}),
+      ...(contextManagementCompatibility ? { context_management: contextManagementCompatibility } : {}),
       ...(chatNativeFieldsCompatibility ? { chat_native_fields: chatNativeFieldsCompatibility } : {}),
     },
+  };
+}
+
+function mapContextManagement(request = {}) {
+  if (!Object.prototype.hasOwnProperty.call(request, "context")) return null;
+  const value = request.context;
+  const valueType = value === null ? "null" : Array.isArray(value) ? "array" : typeof value;
+  return {
+    source: "context",
+    forwarded: false,
+    reason: "chat_completions_no_equivalent",
+    value_type: valueType,
+    ...(isPlainObject(value) ? { keys: Object.keys(value).sort() } : {}),
   };
 }
 
