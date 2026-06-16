@@ -42,6 +42,16 @@
   - `npm run eval:protocol`: blocked by upstream DeepSeek `402 Insufficient
     Balance` on both live cases; mock-provider protocol and bridge regressions
     remain green.
+  - Pushed commit `12c7b56` to `origin/main`.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and
+    app-server services were all `active`.
+  - Local bridge `/healthz` returned `ok:true` with DeepSeek provider base and
+    public HTTPS returned HTTP 200 from `https://opencodexapp.aialra.online/`.
+  - `npm run smoke:bridge` reached the live bridge but was blocked by upstream
+    DeepSeek `402 Insufficient Balance`.
+  - Storage check: repo path 117 MB, `/srv/aialra/data/opencodexapp` 136 KB,
+    `/srv/aialra/logs/opencodexapp` 30 MB, `output/` 4.5 MB, `state/` 42 MB,
+    and root filesystem had 12 GB available.
 
 ## 2026-06-16 Tool Search Input-Loaded Tools
 
