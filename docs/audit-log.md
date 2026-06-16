@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-16 Official Stop Sequence Validation
+
+- Rechecked the official OpenAI Chat Completions create body-parameter docs
+  through the OpenAI developer docs MCP before changing validation behavior.
+  The Chat contract accepts `stop` as stop sequences and documents up to 4
+  sequences; the bridge already accepts this Chat-native alias on
+  `POST /v1/responses` and forwards it to upstream Chat providers, so the
+  accepted alias now follows the Chat request contract.
+- Added local request validation before upstream provider calls:
+  - `POST /v1/responses` now rejects invalid Chat-native `stop` aliases before
+    translating the request to Chat Completions.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough.
+  - Valid values still pass through unchanged: a 4-string array on Responses
+    and a single string on direct Chat.
+- Added regression coverage proving `stop` arrays with more than 4 strings,
+  arrays containing non-string items, object values, and number values fail
+  locally for both Responses and direct Chat with zero upstream calls, while
+  valid boundary shapes still reach the mock Chat provider.
+- Updated the compatibility matrix and evaluation plan so stop-sequence parity
+  tracks local request-contract validation as well as passthrough behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test test/server.test.js --test-name-pattern "stop|sampling|chat passthrough|responses maps to"`:
+    passed 218/218; the current Node test runner executed the full server test
+    file.
+  - `npm test`: passed 267/267.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - Exact search for the user-provided DeepSeek test key across tracked files:
+    clean.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public stop smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` both returned HTTP 400 with
+    `type:"invalid_request_error"`, `param:"stop"`, and
+    `code:"invalid_request_parameter"`; the Responses request used a 5-item
+    `stop` array, and the Chat request used a non-string array item.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-16 Official Penalty Parameter Validation
 
 - Rechecked the official OpenAI Chat Completions and legacy Completions

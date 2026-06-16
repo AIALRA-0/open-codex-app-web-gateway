@@ -207,6 +207,7 @@ const OPENAI_TOP_P_MIN = 0;
 const OPENAI_TOP_P_MAX = 1;
 const OPENAI_PENALTY_MIN = -2;
 const OPENAI_PENALTY_MAX = 2;
+const OPENAI_STOP_MAX_SEQUENCES = 4;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -800,6 +801,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const samplingError = validateOpenAISamplingParameters(request);
   if (samplingError) {
     sendError(res, 400, samplingError.message, samplingError);
+    return;
+  }
+  const stopError = validateOpenAIStopSequences(request);
+  if (stopError) {
+    sendError(res, 400, stopError.message, stopError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2304,6 +2310,22 @@ function validateOpenAISamplingParameters(body = {}) {
     if (error) return error;
   }
   return null;
+}
+
+function validateOpenAIStopSequences(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "stop") || body.stop == null) return null;
+  if (typeof body.stop === "string") return null;
+  if (
+    Array.isArray(body.stop)
+    && body.stop.length <= OPENAI_STOP_MAX_SEQUENCES
+    && body.stop.every((sequence) => typeof sequence === "string")
+  ) {
+    return null;
+  }
+  return requestValidationError(
+    `stop must be a string or an array of strings with at most ${OPENAI_STOP_MAX_SEQUENCES} items`,
+    "stop",
+  );
 }
 
 function validateNumberRange(body = {}, field, min, max) {
@@ -4430,6 +4452,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const samplingError = validateOpenAISamplingParameters(body);
   if (samplingError) {
     sendError(res, 400, samplingError.message, samplingError);
+    return;
+  }
+  const stopError = validateOpenAIStopSequences(body);
+  if (stopError) {
+    sendError(res, 400, stopError.message, stopError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);
