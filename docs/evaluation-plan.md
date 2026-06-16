@@ -659,6 +659,15 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   predicted output content must use `type:"content"` with string or non-empty
   text-part content. Valid values still follow provider-aware passthrough or
   filtering, with DeepSeek filtering recorded in compatibility metadata.
+- Responses and direct Chat requests that include Chat-native
+  `web_search_options` validate the official Chat create request contract
+  locally before provider calls: the option must be an object,
+  `search_context_size` must be `low`, `medium`, or `high`, and
+  `user_location` must be null or the approximate-location object shape with
+  string `country`, `region`, `city`, and `timezone` fields. Regression
+  coverage proves invalid values produce zero upstream calls while valid
+  DeepSeek-compatible direct Chat requests continue through local web-search
+  emulation with source annotations and compatibility metadata.
 - Responses and direct Chat requests that include `reasoning.effort`,
   direct Chat `reasoning_effort`, or a direct Chat `reasoning` object validate
   the current OpenAI reasoning-effort enum locally before provider calls; valid

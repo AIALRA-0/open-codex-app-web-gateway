@@ -1346,6 +1346,129 @@ test("POST /v1/responses validates verbosity values before provider calls", asyn
   }, { forwardChatNativeFields: false });
 });
 
+test("POST /v1/responses validates web_search_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.web_search_options, {
+      search_context_size: "high",
+      user_location: {
+        type: "approximate",
+        approximate: {
+          country: "US",
+          region: "California",
+          city: "San Francisco",
+          timezone: "America/Los_Angeles",
+        },
+      },
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_web_search_options",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "responses web search options ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { web_search_options: "enabled" },
+        param: "web_search_options",
+        message: "web_search_options must be an object",
+      },
+      {
+        body: { web_search_options: null },
+        param: "web_search_options",
+        message: "web_search_options must be an object",
+      },
+      {
+        body: { web_search_options: { search_context_size: "tiny" } },
+        param: "web_search_options.search_context_size",
+        message: "web_search_options.search_context_size must be one of: low, medium, high",
+      },
+      {
+        body: { web_search_options: { search_context_size: 1 } },
+        param: "web_search_options.search_context_size",
+        message: "web_search_options.search_context_size must be one of: low, medium, high",
+      },
+      {
+        body: { web_search_options: { user_location: "US" } },
+        param: "web_search_options.user_location",
+        message: "web_search_options.user_location must be an object or null",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "exact", approximate: {} } } },
+        param: "web_search_options.user_location.type",
+        message: "web_search_options.user_location.type must be approximate",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "approximate" } } },
+        param: "web_search_options.user_location.approximate",
+        message: "web_search_options.user_location.approximate is required",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "approximate", approximate: [] } } },
+        param: "web_search_options.user_location.approximate",
+        message: "web_search_options.user_location.approximate must be an object",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "approximate", approximate: { country: 840 } } } },
+        param: "web_search_options.user_location.approximate.country",
+        message: "web_search_options.user_location.approximate.country must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: "Check web_search_options validation.",
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check valid web_search_options.",
+        web_search_options: {
+          search_context_size: "high",
+          user_location: {
+            type: "approximate",
+            approximate: {
+              country: "US",
+              region: "California",
+              city: "San Francisco",
+              timezone: "America/Los_Angeles",
+            },
+          },
+        },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    assert.equal((await valid.json()).output[0].content[0].text, "responses web search options ok");
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("POST /v1/responses validates official string metadata limits", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });
@@ -22072,6 +22195,102 @@ test("POST /v1/chat/completions maps prompt_cache_key to DeepSeek user_id when i
   });
 });
 
+test("POST /v1/chat/completions validates web_search_options before provider calls", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.web_search_options, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_chat_web_search_options",
+      object: "chat.completion",
+      created: 1700000411,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "chat web search options ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [
+      {
+        body: { web_search_options: [] },
+        param: "web_search_options",
+        message: "web_search_options must be an object",
+      },
+      {
+        body: { web_search_options: { search_context_size: "full" } },
+        param: "web_search_options.search_context_size",
+        message: "web_search_options.search_context_size must be one of: low, medium, high",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "approximate" } } },
+        param: "web_search_options.user_location.approximate",
+        message: "web_search_options.user_location.approximate is required",
+      },
+      {
+        body: { web_search_options: { user_location: { type: "approximate", approximate: { timezone: 7 } } } },
+        param: "web_search_options.user_location.approximate.timezone",
+        message: "web_search_options.user_location.approximate.timezone must be a string",
+      },
+    ];
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/chat/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          messages: [{ role: "user", content: "hello" }],
+          ...invalidCase.body,
+        }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const valid = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        messages: [{ role: "user", content: "hello" }],
+        web_search_options: {
+          search_context_size: "medium",
+          user_location: null,
+        },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const json = await valid.json();
+    assert.match(json.choices[0].message.content, /^chat web search options ok/);
+    assert.match(json.choices[0].message.content, /Sources:\n\[1\] Direct Chat Validation Search Result: https:\/\/example\.test\/direct-chat-validation-search/);
+    assert.deepEqual(json.metadata.compatibility.chat_passthrough.web_search_options, {
+      source: "web_search_options",
+      forwarded: false,
+      reason: "provider_unsupported_local_web_search",
+      search_context_size: "medium",
+      user_location: "received",
+    });
+    assert.equal(requests.length, 1);
+  }, {
+    forwardChatNativeFields: false,
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Direct Chat Validation Search Result",
+      url: "https://example.test/direct-chat-validation-search",
+      snippet: "The validation fixture found this result.",
+    }],
+  });
+});
+
 test("POST /v1/chat/completions emulates web_search_options locally for DeepSeek-compatible providers", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.web_search_options, undefined);
@@ -22108,7 +22327,7 @@ test("POST /v1/chat/completions emulates web_search_options locally for DeepSeek
         messages: [{ role: "user", content: "Search for direct Chat bridge result and answer direct-chat-web-ok [1]." }],
         web_search_options: {
           search_context_size: "low",
-          user_location: { type: "approximate", country: "US" },
+          user_location: { type: "approximate", approximate: { country: "US" } },
         },
       }),
     });

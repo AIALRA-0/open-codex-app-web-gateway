@@ -231,6 +231,7 @@ const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "f
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
+const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
 const MODERATION_CATEGORIES = Object.freeze([
@@ -916,6 +917,11 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   const verbosityError = validateOpenAIVerbosity(request);
   if (verbosityError) {
     sendError(res, 400, verbosityError.message, verbosityError);
+    return;
+  }
+  const webSearchOptionsError = validateOpenAIChatWebSearchOptions(request);
+  if (webSearchOptionsError) {
+    sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
     return;
   }
   const responseId = prefixedId("resp");
@@ -2840,6 +2846,66 @@ function validateOpenAIServiceTier(body = {}) {
       `service_tier must be one of: ${OPENAI_SERVICE_TIER_VALUES.join(", ")}`,
       "service_tier",
     );
+  }
+  return null;
+}
+
+function validateOpenAIChatWebSearchOptions(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "web_search_options")) return null;
+  const options = body.web_search_options;
+  if (!isPlainObject(options)) {
+    return requestValidationError("web_search_options must be an object", "web_search_options");
+  }
+
+  if (
+    Object.prototype.hasOwnProperty.call(options, "search_context_size")
+    && (
+      typeof options.search_context_size !== "string"
+      || !OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES.includes(options.search_context_size)
+    )
+  ) {
+    return requestValidationError(
+      `web_search_options.search_context_size must be one of: ${OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES.join(", ")}`,
+      "web_search_options.search_context_size",
+    );
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(options, "user_location")) return null;
+  if (options.user_location == null) return null;
+  if (!isPlainObject(options.user_location)) {
+    return requestValidationError(
+      "web_search_options.user_location must be an object or null",
+      "web_search_options.user_location",
+    );
+  }
+  if (options.user_location.type !== "approximate") {
+    return requestValidationError(
+      "web_search_options.user_location.type must be approximate",
+      "web_search_options.user_location.type",
+    );
+  }
+  if (!Object.prototype.hasOwnProperty.call(options.user_location, "approximate")) {
+    return requestValidationError(
+      "web_search_options.user_location.approximate is required",
+      "web_search_options.user_location.approximate",
+    );
+  }
+  if (!isPlainObject(options.user_location.approximate)) {
+    return requestValidationError(
+      "web_search_options.user_location.approximate must be an object",
+      "web_search_options.user_location.approximate",
+    );
+  }
+  for (const field of ["country", "region", "city", "timezone"]) {
+    if (
+      Object.prototype.hasOwnProperty.call(options.user_location.approximate, field)
+      && typeof options.user_location.approximate[field] !== "string"
+    ) {
+      return requestValidationError(
+        `web_search_options.user_location.approximate.${field} must be a string`,
+        `web_search_options.user_location.approximate.${field}`,
+      );
+    }
   }
   return null;
 }
@@ -5118,6 +5184,11 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
   const verbosityError = validateOpenAIVerbosity(body);
   if (verbosityError) {
     sendError(res, 400, verbosityError.message, verbosityError);
+    return;
+  }
+  const webSearchOptionsError = validateOpenAIChatWebSearchOptions(body);
+  if (webSearchOptionsError) {
+    sendError(res, 400, webSearchOptionsError.message, webSearchOptionsError);
     return;
   }
   const { upstreamBody, compatibility: passthroughCompatibility } = chatPassthroughUpstreamBody(body, config);

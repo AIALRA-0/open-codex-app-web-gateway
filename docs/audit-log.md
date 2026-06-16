@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-16 Official Chat Web Search Options Validation
+
+- Rechecked the official OpenAI Chat Completions request contract through the
+  OpenAI developer docs MCP and the official OpenAPI source:
+  `https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create`
+  and `https://github.com/openai/openai-openapi/blob/master/openapi.yaml`.
+  The Chat create schema documents `web_search_options` with optional
+  `search_context_size` values `low`, `medium`, or `high`, and optional
+  `user_location` as null or an approximate-location object requiring
+  `type:"approximate"` plus an `approximate` object whose `country`, `region`,
+  `city`, and `timezone` fields are strings when present.
+- Added local request validation before provider calls:
+  - `POST /v1/responses` now rejects invalid Chat-native
+    `web_search_options` before Responses-to-Chat translation,
+    provider-aware passthrough/filtering, local web-search setup, or upstream
+    Chat requests.
+  - `POST /v1/chat/completions` applies the same validation before direct Chat
+    passthrough, DeepSeek-compatible local web-search emulation, stored-chat
+    handling, or upstream Chat requests.
+  - Invalid values return `type:"invalid_request_error"`,
+    `code:"invalid_request_parameter"`, and the relevant `param` locally with
+    zero upstream provider calls.
+- Preserved valid compatibility behavior: valid `web_search_options` still
+  pass through to capable providers, while DeepSeek-compatible direct Chat
+  requests continue using the local web-search adapter, source-context
+  injection, source annotations, usage accounting, and
+  `metadata.compatibility.chat_passthrough.web_search_options`.
+- Added regression coverage proving invalid option shape, invalid
+  `search_context_size`, missing `user_location.approximate`, invalid
+  `type`, invalid approximate object shape, and non-string approximate fields
+  fail locally on Responses and direct Chat with zero upstream calls, while
+  valid requests preserve the existing local web-search behavior.
+- Updated the compatibility matrix and evaluation plan so Chat web-search
+  options are tracked as OpenAI-boundary validated fields rather than only
+  provider-aware passthrough or fallback behavior.
+- Validation:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "web_search_options before provider calls|emulates web_search_options locally|maps Chat-native aliases" test/server.test.js`:
+    passed 4/4.
+  - `npm test`: passed 314/314.
+  - Restarted `aialra-opencodexapp-bridge.service`; local
+    `http://127.0.0.1:12912/healthz` returned HTTP 200 JSON with provider base
+    `https://api.deepseek.com`, default model `deepseek-v4-pro`, and
+    `has_provider_key:true`.
+  - Public invalid-request smoke tests through
+    `https://opencodexapp.aialra.online/v1/responses` and
+    `/v1/chat/completions` returned HTTP 400 with params
+    `web_search_options.search_context_size`,
+    `web_search_options.user_location.approximate`, and
+    `web_search_options.user_location.approximate.timezone`.
+  - `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service` were active after restart and
+    smoke testing.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+- Storage: `/srv/aialra/apps` had roughly 9.1G free after tests, restart, and
+  smoke checks.
+
 ## 2026-06-16 Official Chat Output Field Validation
 
 - Rechecked the official OpenAI Chat Completions request contract through the
