@@ -17081,11 +17081,12 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, file.id);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/files?purpose=assistants&before=${file.id}&limit=1`);
-    assert.equal(beforeIgnored.status, 200);
-    assert.equal((await beforeIgnored.json()).data[0].id, file.id);
-
     const invalidFileListCases = [
+      {
+        path: `/v1/files?purpose=assistants&before=${file.id}&limit=1`,
+        message: "Unsupported query parameter: before",
+        param: "before",
+      },
       {
         path: `/v1/files?purpose=assistants&purpose=batch`,
         message: "purpose must be a single string query value",

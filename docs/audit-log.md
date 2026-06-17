@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-17 Files List Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Files:
+  - `GET /v1/files` declares only `purpose`, `limit`, `order`, and `after`
+    query parameters;
+  - `POST /v1/files` declares a multipart request body and no query
+    parameters.
+- Tightened local bridge behavior:
+  - `GET /v1/files` now rejects unsupported query parameters before listing
+    local file metadata, so `before` no longer succeeds as an ignored generic
+    paginator field;
+  - existing `purpose`, `limit`, `order`, and `after` scalar/range validation
+    remains unchanged.
+- Regression coverage updated:
+  - changed the local file-search/file lifecycle test from ignored
+    `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the official Files list query allowlist.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search compatibility" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Files smoke verified health, invalid `before` query rejection,
+    small temporary file creation, purpose-filtered listing, retrieve,
+    content download, and cleanup deletion.
+  - Disk guard after deployment: `/` 193G size, 185G used, 8.6G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated file ids, temporary file contents, or smoke
+    request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Audio Voice Consents Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Audio voice consents:

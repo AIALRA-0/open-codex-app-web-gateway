@@ -7222,6 +7222,9 @@ function handleFilesList(res, fileSearchStore, url) {
 }
 
 function validateOpenAIFilesListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["purpose", "limit", "order", "after"]);
+  if (allowedError) return allowedError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
