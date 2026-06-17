@@ -24648,6 +24648,12 @@ test("Organization audit logs list local admin lifecycle events and filters", as
     const pagedJson = await paged.json();
     assert.equal(pagedJson.data.length, 2);
     assert.equal(pagedJson.has_more, true);
+    const orderIgnored = await fetch(`${baseUrl}/v1/organization/audit_logs?order=asc&limit=2`);
+    assert.equal(orderIgnored.status, 200);
+    assert.deepEqual(
+      (await orderIgnored.json()).data.map((entry) => entry.id),
+      pagedJson.data.map((entry) => entry.id),
+    );
     const nextPage = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=2&after=${encodeURIComponent(pagedJson.last_id)}`);
     assert.equal(nextPage.status, 200);
     const nextPageJson = await nextPage.json();
@@ -24658,9 +24664,74 @@ test("Organization audit logs list local admin lifecycle events and filters", as
     assert.equal(emptyFiltered.status, 200);
     assert.deepEqual((await emptyFiltered.json()).data, []);
 
-    const invalidFilter = await fetch(`${baseUrl}/v1/organization/audit_logs?effective_at%5Bgte%5D=not-a-number`);
-    assert.equal(invalidFilter.status, 400);
-    assert.equal((await invalidFilter.json()).error.code, "invalid_audit_log_filter");
+    const tenantOnlyLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?tenant_only=true&limit=50`);
+    assert.equal(tenantOnlyLogs.status, 200);
+    assert.deepEqual((await tenantOnlyLogs.json()).data, []);
+
+    const invalidAuditLogListCases = [
+      {
+        path: "/v1/organization/audit_logs?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/audit_logs?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/audit_logs?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/audit_logs?after=${encodeURIComponent(pagedJson.last_id)}&after=${encodeURIComponent(nextPageJson.last_id)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: `/v1/organization/audit_logs?before=${encodeURIComponent(pagedJson.first_id)}&before=${encodeURIComponent(pagedJson.last_id)}`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+      {
+        path: "/v1/organization/audit_logs?tenant_only=yes",
+        message: "tenant_only must be a boolean",
+        param: "tenant_only",
+      },
+      {
+        path: "/v1/organization/audit_logs?tenant_only=true&tenant_only=false",
+        message: "tenant_only must be a single string query value",
+        param: "tenant_only",
+      },
+      {
+        path: "/v1/organization/audit_logs?effective_at=123",
+        message: "effective_at must use range query fields",
+        param: "effective_at",
+      },
+      {
+        path: "/v1/organization/audit_logs?effective_at%5Bgte%5D=1.5",
+        message: "effective_at filters must be Unix second integers",
+        param: "effective_at.gte",
+      },
+      {
+        path: `/v1/organization/audit_logs?effective_at%5Bgte%5D=${startedAt}&effective_at_gte=${startedAt}`,
+        message: "effective_at.gte must be a single integer query value",
+        param: "effective_at.gte",
+      },
+    ];
+    for (const testCase of invalidAuditLogListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${role.id}`, { method: "DELETE" });
     await fetch(`${baseUrl}/v1/organization/roles/${role.id}`, { method: "DELETE" });

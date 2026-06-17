@@ -483,7 +483,9 @@ class LocalOrganizationAdminStore {
     const actorIds = uniqueStrings(filter.actorIds);
     const actorEmails = uniqueStrings(filter.actorEmails).map((email) => email.toLowerCase());
     const resourceIds = uniqueStrings(filter.resourceIds);
+    const tenantOnly = filter.tenantOnly === true;
     return this.listJsonFiles(this.auditLogsDir())
+      .filter((log) => !tenantOnly || log._filter_tenant_scoped === true || log.tenant_scoped === true)
       .filter((log) => this.auditLogMatchesEffectiveAt(log, effectiveAt))
       .filter((log) => !eventTypes.length || eventTypes.includes(log.type))
       .filter((log) => intersects(this.auditLogProjectIds(log), projectIds))

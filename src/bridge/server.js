@@ -15754,9 +15754,14 @@ function imageRequestCount(request = {}) {
 }
 
 function handleOrganizationAuditLogsList(res, organizationAdminStore, url) {
+  const queryError = validateOpenAIAuditLogsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, paginateListWithDefaultOrder(
     organizationAdminStore.listAuditLogs(organizationAuditLogFilters(url)),
-    url,
+    officialAuditLogsListPaginationUrl(url),
     "desc",
     20,
     100,
@@ -16816,6 +16821,33 @@ function validateOpenAIProjectRateLimitsListQuery(url) {
 }
 
 function officialProjectRateLimitsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "before", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIAuditLogsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const beforeError = validateOpenAISingleQueryValue(url, "before");
+  if (beforeError) return beforeError;
+
+  const tenantOnlySingleError = validateOpenAISingleQueryValue(url, "tenant_only");
+  if (tenantOnlySingleError) return tenantOnlySingleError;
+
+  const tenantOnlyError = validateOpenAIQueryBoolean(url, "tenant_only");
+  if (tenantOnlyError) return tenantOnlyError;
+
+  return validateOpenAIAuditLogsEffectiveAtQuery(url);
+}
+
+function officialAuditLogsListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "before", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
@@ -18885,17 +18917,14 @@ function organizationAuditLogFilters(url) {
     actorIds: queryArrayValues(url, "actor_ids"),
     actorEmails: queryArrayValues(url, "actor_emails"),
     resourceIds: queryArrayValues(url, "resource_ids"),
+    tenantOnly: queryBooleanFromUrl(url, "tenant_only", false),
   };
 }
 
 function organizationAuditLogEffectiveAtFilter(url) {
   const filter = {};
   for (const op of ["gt", "gte", "lt", "lte"]) {
-    const value = firstQueryValue(url, [
-      `effective_at[${op}]`,
-      `effective_at.${op}`,
-      `effective_at_${op}`,
-    ]);
+    const value = firstQueryValue(url, auditLogEffectiveAtQueryNames(op));
     if (value === undefined) continue;
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) {
@@ -18907,6 +18936,33 @@ function organizationAuditLogEffectiveAtFilter(url) {
     filter[op] = Math.trunc(parsed);
   }
   return filter;
+}
+
+function validateOpenAIAuditLogsEffectiveAtQuery(url) {
+  if (url.searchParams.has("effective_at")) {
+    return requestValidationError("effective_at must use range query fields", "effective_at");
+  }
+  for (const op of ["gt", "gte", "lt", "lte"]) {
+    const names = auditLogEffectiveAtQueryNames(op);
+    const values = names.flatMap((name) => url.searchParams.getAll(name));
+    if (values.length > 1) {
+      return requestValidationError(`effective_at.${op} must be a single integer query value`, `effective_at.${op}`);
+    }
+    if (!values.length) continue;
+    const value = String(values[0] || "").trim();
+    if (!/^-?\d+$/.test(value) || !Number.isSafeInteger(Number(value))) {
+      return requestValidationError("effective_at filters must be Unix second integers", `effective_at.${op}`);
+    }
+  }
+  return null;
+}
+
+function auditLogEffectiveAtQueryNames(op) {
+  return [
+    `effective_at[${op}]`,
+    `effective_at.${op}`,
+    `effective_at_${op}`,
+  ];
 }
 
 function queryArrayValues(url, name) {

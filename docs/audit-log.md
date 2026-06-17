@@ -1,5 +1,73 @@
 # Audit Log
 
+## 2026-06-17 Audit Logs List Query Validation
+
+- Rechecked official OpenAPI through the OpenAI developer-docs MCP for
+  `GET /v1/organization/audit_logs`:
+  - operation `list-audit-logs` documents `effective_at` range fields
+    `gt`/`gte`/`lt`/`lte`, array filters `project_ids[]`,
+    `event_types[]`, `actor_ids[]`, `actor_emails[]`, `resource_ids[]`,
+    boolean `tenant_only`, and pagination with `limit`, `after`, and
+    `before`;
+  - the documented response page uses `object:"list"`, `data`, `first_id`,
+    `last_id`, and `has_more`;
+  - the official parameter list does not include `order`.
+- Tightened local audit log list behavior:
+  - `GET /v1/organization/audit_logs` now validates official list query
+    parameters before reading local audit records;
+  - `limit` is validated from 1 through 100 with default 20;
+  - `after`, `before`, and `tenant_only` must be single scalar query values;
+  - `tenant_only` must be boolean-like `true`/`false`/`1`/`0`;
+  - `effective_at[gt]`, `effective_at[gte]`, `effective_at[lt]`, and
+    `effective_at[lte]` must be single safe integer Unix-second values;
+  - local migration aliases `effective_at.gt` and `effective_at_gt` remain
+    accepted, but supplying multiple spellings for the same operator returns
+    an OpenAI-style HTTP 400 error instead of silently picking one;
+  - unsupported `order` query values are stripped before pagination, so they
+    no longer shape official audit-log list results;
+  - `tenant_only=true` is now recognized by the local store and returns only
+    locally marked tenant-scoped logs; the current compatibility store does not
+    synthesize tenant-scoped events by default.
+- Regression coverage updated:
+  - the Organization audit logs lifecycle test now verifies ignored `order`,
+    `tenant_only=true`, invalid limits, repeated `limit`/`after`/`before`,
+    invalid and repeated `tenant_only`, raw `effective_at`, non-integer
+    effective-time values, repeated effective-time operator aliases, existing
+    event/project/resource/actor filters, cursor paging, and zero upstream
+    provider calls.
+- Documentation updated:
+  - compatibility matrix now records the official audit-log query/filter set,
+    scalar validation rules, integer effective-time validation, unsupported
+    `order` handling, and local non-hosted audit-export boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/local_organization_admin.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization audit logs list local admin lifecycle events and filters" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public audit logs smoke marker `audit-logs-query-smoke-mqib2xul` created
+    one temporary project and one temporary role, generated local audit-log
+    records, verified page shape, ignored `order`, `after`, project/event/
+    resource/effective-time filters, `tenant_only=true`, and invalid query
+    errors, then deleted the role and archived the project.
+  - Disk guard after deployment: `/` 193G size, 181G used, 12G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5356 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or audit-log smoke-test secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Certificates List Query Validation
 
 - Rechecked current official/generated OpenAI SDK sources for the project
