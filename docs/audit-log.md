@@ -1,5 +1,61 @@
 # Audit Log
 
+## 2026-06-17 Skills List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:
+  - `GET /skills`;
+  - `GET /skills/{skill_id}/versions`.
+- Confirmed both endpoints support:
+  - `limit` as an integer scalar with documented range 0 through 100;
+  - `order` as an `asc` / `desc` string scalar;
+  - `after` as a string cursor scalar.
+- Tightened local Skills list behavior:
+  - `GET /v1/skills` and
+    `GET /v1/skills/{skill_id}/versions` now validate repeated scalar
+    `limit`, `order`, and `after` query parameters before listing;
+  - `limit` is validated with the official 0 through 100 range;
+  - `limit=0` now returns an empty page and preserves `has_more:true` when
+    matching records exist;
+  - unsupported `before` is removed before calling the local paginator so it
+    no longer changes official Skills list results.
+- Regression coverage updated:
+  - local Skills lifecycle tests now cover `limit=0`, unsupported `before`
+    sanitization, invalid/out-of-range `limit`, repeated `limit`, invalid or
+    repeated `order`, and repeated `after` for both skills and skill versions.
+- Documentation updated:
+  - compatibility matrix now records official Skills and Skill Versions list
+    pagination, `limit=0` behavior, and unsupported `before` sanitization.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/local_skills.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Skills API manages versions and mounts skill references for shell" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`.
+  - Public Skills smoke created one temporary skill and one temporary version;
+    `GET /v1/skills?limit=0` and
+    `GET /v1/skills/{skill_id}/versions?limit=0` returned empty pages with
+    `has_more:true`.
+  - Public unsupported-`before` smokes for both skills and skill versions
+    returned the expected temporary resources, confirming `before` no longer
+    controls those official list results.
+  - Public invalid `limit` smokes for both skills and skill versions returned
+    HTTP 400 with `code:"invalid_request_parameter"` and `param:"limit"`.
+  - Public smoke cleanup deleted the temporary skill successfully.
+  - Disk guard after deployment: `/` 193G size, 183G used, 11G available,
+    95% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Containers List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:

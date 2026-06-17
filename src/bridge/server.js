@@ -6647,6 +6647,19 @@ function validateOpenAIListLimitQuery(url, options = {}) {
   return null;
 }
 
+function validateOpenAIListZeroLimitQuery(url) {
+  const limits = url.searchParams.getAll("limit");
+  if (!limits.length) return null;
+  if (limits.length > 1) {
+    return requestValidationError("limit must be a single string query value", "limit");
+  }
+  const value = limits[0];
+  if (!/^(0|[1-9]\d*)$/.test(value) || Number(value) > 100) {
+    return requestValidationError("limit must be an integer between 0 and 100", "limit");
+  }
+  return null;
+}
+
 function validateResponsesInputTokensStyle(request = {}) {
   if (!Object.prototype.hasOwnProperty.call(request, "style") || request.style == null) return null;
   if (typeof request.style !== "string") {
@@ -7479,7 +7492,22 @@ async function handleSkillCreate(req, res, config, skillStore) {
 }
 
 function handleSkillsList(res, skillStore, url) {
-  sendJson(res, 200, skillStore.listSkills({ url }));
+  const queryError = validateOpenAISkillsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, skillStore.listSkills({ url: officialAfterListPaginationUrl(url) }));
+}
+
+function validateOpenAISkillsListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListZeroLimitQuery(url);
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
 }
 
 function handleSkillGet(res, skillStore, skillId) {
@@ -7521,7 +7549,12 @@ async function handleSkillVersionCreate(req, res, config, skillStore, skillId) {
 }
 
 function handleSkillVersionsList(res, skillStore, skillId, url) {
-  const page = skillStore.listSkillVersions(skillId, { url });
+  const queryError = validateOpenAISkillsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const page = skillStore.listSkillVersions(skillId, { url: officialAfterListPaginationUrl(url) });
   if (!page) {
     sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
     return;

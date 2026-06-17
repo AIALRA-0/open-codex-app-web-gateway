@@ -618,8 +618,9 @@ function paginateList(items, url) {
 }
 
 function parseLimit(value, fallback, max) {
+  if (value == null || value === "") return fallback;
   const parsed = Number(value);
-  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
   return Math.min(Math.trunc(parsed), max);
 }
 

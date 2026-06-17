@@ -18185,6 +18185,51 @@ test("local Skills API manages versions and mounts skill references for shell", 
     const listed = await listResponse.json();
     assert.equal(listed.data[0].id, skill.id);
 
+    const zeroLimitSkills = await fetch(`${baseUrl}/v1/skills?limit=0`);
+    assert.equal(zeroLimitSkills.status, 200);
+    const zeroLimitSkillsJson = await zeroLimitSkills.json();
+    assert.deepEqual(zeroLimitSkillsJson.data, []);
+    assert.equal(zeroLimitSkillsJson.has_more, true);
+
+    const skillsBeforeIgnored = await fetch(`${baseUrl}/v1/skills?before=${skill.id}&limit=1`);
+    assert.equal(skillsBeforeIgnored.status, 200);
+    assert.equal((await skillsBeforeIgnored.json()).data[0].id, skill.id);
+
+    const invalidSkillListCases = [
+      {
+        path: "/v1/skills?limit=101",
+        message: "limit must be an integer between 0 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/skills?limit=0&limit=1",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: "/v1/skills?order=ascending",
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: `/v1/skills?after=${skill.id}&after=skill_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidSkillListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const versionResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -18224,6 +18269,46 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.equal(versionsResponse.status, 200);
     const versions = await versionsResponse.json();
     assert.deepEqual(versions.data.map((item) => item.version), [1, 2]);
+
+    const zeroLimitVersions = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?limit=0`);
+    assert.equal(zeroLimitVersions.status, 200);
+    const zeroLimitVersionsJson = await zeroLimitVersions.json();
+    assert.deepEqual(zeroLimitVersionsJson.data, []);
+    assert.equal(zeroLimitVersionsJson.has_more, true);
+
+    const versionsBeforeIgnored = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?before=${version.id}&limit=1&order=desc`);
+    assert.equal(versionsBeforeIgnored.status, 200);
+    assert.equal((await versionsBeforeIgnored.json()).data[0].id, version.id);
+
+    const invalidSkillVersionListCases = [
+      {
+        path: `/v1/skills/${skill.id}/versions?limit=-1`,
+        message: "limit must be an integer between 0 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/skills/${skill.id}/versions?order=asc&order=desc`,
+        message: "order must be a single string query value",
+        param: "order",
+      },
+      {
+        path: `/v1/skills/${skill.id}/versions?after=${version.id}&after=skillver_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidSkillVersionListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const latestResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/latest`);
     assert.equal(latestResponse.status, 200);
