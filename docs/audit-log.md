@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Request Metadata Shape
+
+- Rechecked the official OpenAI OpenAPI schema and examples for stored Chat
+  completions:
+  - `GET /v1/chat/completions` returns a `ChatCompletionList`;
+  - list records use the Chat completion object shape;
+  - the official stored Chat list example exposes top-level `request_id` and
+    `input_user` fields alongside `tool_choice`, sampling fields, `tools`,
+    `metadata`, and `response_format`.
+- Tightened local stored Chat completion records:
+  - non-streaming `store:true` Chat completions now copy upstream
+    `x-request-id` to top-level `request_id` before returning and storing the
+    local record;
+  - streaming `store:true` Chat completion reconstruction now applies the same
+    `x-request-id` to the reconstructed terminal stored object;
+  - request `user` is projected to top-level `input_user` when the provider did
+    not already return that field;
+  - provider-supplied `request_id` / `input_user` values remain authoritative
+    and are not overwritten.
+- Regression coverage added:
+  - non-streaming stored Chat create, retrieve, and list responses preserve
+    `request_id` and `input_user`;
+  - streaming stored Chat retrieve and list responses preserve the reconstructed
+    `request_id` and `input_user`.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe stored Chat
+    `request_id` / `input_user` normalization.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle and streaming stored Chat tests pass.
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes;
+  - local and public smoke created temporary `store:true` Chat completions with
+    request `user`, confirmed create, retrieve, list, and messages endpoints,
+    verified top-level `input_user`, and deleted the temporary records. The
+    DeepSeek upstream used by smoke did not return `x-request-id`, so
+    `request_id` is covered by mock-provider regression where the upstream
+    header is present.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Message List Shape
 
 - Rechecked the official OpenAI OpenAPI schema for

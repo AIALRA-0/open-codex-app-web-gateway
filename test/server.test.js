@@ -24341,7 +24341,10 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
   await withMockProvider(async (_req, res, call) => {
     const userText = call.body?.messages?.find((message) => message.role === "user")?.content;
     const secondCompletion = userText === "hello again";
-    res.writeHead(200, { "content-type": "application/json" });
+    res.writeHead(200, {
+      "content-type": "application/json",
+      "x-request-id": secondCompletion ? "req_stored_chat_second" : "req_stored_chat_first",
+    });
     res.end(JSON.stringify({
       id: secondCompletion ? "chatcmpl_passthrough_second" : "chatcmpl_passthrough",
       object: "chat.completion",
@@ -24359,6 +24362,7 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
         model: "mock-model",
         store: true,
         metadata: { suite: "chat-list" },
+        user: "stored-user",
         messages: [{ role: "user", content: "hello" }],
       }),
     });
@@ -24370,6 +24374,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(json.model, "mock-model");
     assert.equal(Number.isInteger(json.created), true);
     assert.equal(json.created > 0, true);
+    assert.equal(json.request_id, "req_stored_chat_first");
+    assert.equal(json.input_user, "stored-user");
     assert.deepEqual(json.metadata, { suite: "chat-list" });
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
@@ -24379,6 +24385,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(fetchedJson.object, "chat.completion");
     assert.equal(fetchedJson.model, "mock-model");
     assert.equal(fetchedJson.created, json.created);
+    assert.equal(fetchedJson.request_id, "req_stored_chat_first");
+    assert.equal(fetchedJson.input_user, "stored-user");
     assert.deepEqual(fetchedJson.metadata, { suite: "chat-list" });
 
     const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
@@ -24467,6 +24475,7 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
         model: "mock-model",
         store: true,
         metadata: { suite: "chat-updated", owner: "bridge-test" },
+        user: "stored-user-2",
         messages: [{ role: "user", content: "hello again" }],
       }),
     });
@@ -24488,6 +24497,10 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(listedJson.data[1].object, "chat.completion");
     assert.equal(listedJson.data[1].model, "mock-model");
     assert.equal(Number.isInteger(listedJson.data[1].created), true);
+    assert.equal(listedJson.data[0].request_id, "req_stored_chat_first");
+    assert.equal(listedJson.data[0].input_user, "stored-user");
+    assert.equal(listedJson.data[1].request_id, "req_stored_chat_second");
+    assert.equal(listedJson.data[1].input_user, "stored-user-2");
     assert.equal(listedJson.data[0].metadata.suite, "chat-updated");
     assert.equal(listedJson.data[0].metadata.owner, "bridge-test");
     assert.equal(listedJson.first_id, json.id);
@@ -26302,7 +26315,7 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(call.body.stream, true);
     assert.deepEqual(call.body.metadata, { suite: "chat-stream-list" });
     assert.deepEqual(call.body.stream_options, { include_usage: true });
-    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.writeHead(200, { "content-type": "text/event-stream", "x-request-id": "req_stream_store" });
     res.write(`data: ${JSON.stringify({
       id: "chatcmpl_stream_store",
       object: "chat.completion.chunk",
@@ -26366,6 +26379,7 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
         store: true,
         stream: true,
         metadata: { suite: "chat-stream-list" },
+        user: "stream-user",
         messages: [{ role: "user", content: "stream and store" }],
         tools: [{
           type: "function",
@@ -26395,6 +26409,8 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(fetchedJson.model, "mock-stream-model");
     assert.equal(fetchedJson.system_fingerprint, "fp_chat_stream_store");
     assert.equal(fetchedJson.service_tier, "flex");
+    assert.equal(fetchedJson.request_id, "req_stream_store");
+    assert.equal(fetchedJson.input_user, "stream-user");
     assert.equal(fetchedJson.metadata.suite, "chat-stream-list");
     assert.deepEqual(fetchedJson.metadata.compatibility.chat_passthrough.stream_options, {
       source: "stream_options",
@@ -26428,6 +26444,8 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     const listedJson = await listed.json();
     assert.equal(listedJson.data.length, 1);
     assert.equal(listedJson.data[0].id, "chatcmpl_stream_store");
+    assert.equal(listedJson.data[0].request_id, "req_stream_store");
+    assert.equal(listedJson.data[0].input_user, "stream-user");
   }, { streamOptionFields: ["include_usage"] });
 });
 

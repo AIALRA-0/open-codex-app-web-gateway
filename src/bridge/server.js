@@ -6792,7 +6792,9 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     attachLocalChatInlineModeration(json, body, config);
     attachChatPassthroughCompatibility(json, body, compatibility);
     if (body.store === true && isPlainObject(json)) {
-      attachStoredChatRequestFields(json, body);
+      attachStoredChatRequestFields(json, body, {
+        requestId: fanout.headers?.["x-request-id"],
+      });
     }
     if (json?.id && body.store === true) {
       store.put(json.id, {
@@ -6830,7 +6832,9 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     const attachedCompatibility = upstream.ok ? attachChatPassthroughCompatibility(json, body, compatibility) : false;
     const attachedStoredChatFields = upstream.ok && body.store === true && isPlainObject(json);
     if (attachedStoredChatFields) {
-      attachStoredChatRequestFields(json, body);
+      attachStoredChatRequestFields(json, body, {
+        requestId: upstream.headers.get("x-request-id"),
+      });
     }
     if (upstream.ok && json?.id && body.store === true) {
       store.put(json.id, {
@@ -8063,7 +8067,9 @@ async function handleChatStreamPassthrough(
   incomingHeaders = {},
   contexts = {},
 ) {
-  const accumulator = createChatStreamAccumulator(request);
+  const accumulator = createChatStreamAccumulator(request, {
+    requestId: upstream.headers.get("x-request-id") || headers?.["x-request-id"],
+  });
   res.writeHead(upstream.status, headers);
 
   try {
@@ -8562,7 +8568,7 @@ function writeLegacyCompletionSse(res, payload) {
   res.write(`data: ${JSON.stringify(payload)}\n\n`);
 }
 
-function createChatStreamAccumulator(request = {}) {
+function createChatStreamAccumulator(request = {}, options = {}) {
   return {
     id: null,
     created: null,
@@ -8572,6 +8578,7 @@ function createChatStreamAccumulator(request = {}) {
     usage: null,
     choices: new Map(),
     request,
+    requestId: options.requestId || null,
   };
 }
 
@@ -8694,7 +8701,9 @@ function finalizeChatStreamCompletion(accumulator) {
   if (accumulator.system_fingerprint !== null) completion.system_fingerprint = accumulator.system_fingerprint;
   if (accumulator.service_tier !== null) completion.service_tier = accumulator.service_tier;
   if (accumulator.usage) completion.usage = clone(accumulator.usage);
-  attachStoredChatRequestFields(completion, accumulator.request);
+  attachStoredChatRequestFields(completion, accumulator.request, {
+    requestId: accumulator.requestId,
+  });
   return completion;
 }
 
@@ -8728,12 +8737,15 @@ function normalizeStreamToolCall(toolCall) {
   };
 }
 
-function attachStoredChatRequestFields(completion, request = {}) {
+function attachStoredChatRequestFields(completion, request = {}, options = {}) {
   completion.object = "chat.completion";
   if (!Number.isInteger(completion.created)) completion.created = nowSeconds();
   if (typeof completion.model !== "string" || completion.model.length === 0) {
     completion.model = typeof request.model === "string" && request.model.length ? request.model : "unknown";
   }
+  const requestId = stringifyOptional(options.requestId);
+  if (requestId && completion.request_id === undefined) completion.request_id = requestId;
+  if (request.user !== undefined && completion.input_user === undefined) completion.input_user = clone(request.user);
   const fields = [
     "metadata",
     "tool_choice",
