@@ -1199,7 +1199,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   mergeLocalMcpCompatibility(compatibility, mcpCompatibility(localMcp));
   attachToolSearchOutput(response, localToolSearch);
   attachImageGenerationOutput(response, localImageGeneration);
-  attachWebSearchOutput(response, localWebSearch, { includeSources: true });
+  attachWebSearchOutput(response, localWebSearch, { includeResults: true, includeSources: true });
   attachFileSearchOutput(response, localFileSearch, { includeResults: true });
   const localReasoningEncryptedContent = attachLocalReasoningEncryptedContent(response, request, config, { force: true });
   const localModeration = attachLocalResponseInlineModeration(response, request, config);
@@ -1663,7 +1663,7 @@ function backgroundPreparationOutputItems(contexts = {}) {
     ...mcpOutputItems(contexts.mcp),
     ...toolSearchOutputItems(contexts.tool_search),
     ...imageGenerationOutputItems(contexts.image_generation),
-    ...webSearchOutputItems(contexts.web_search, { includeSources: true }),
+    ...webSearchOutputItems(contexts.web_search, { includeResults: true, includeSources: true }),
     ...fileSearchOutputItems(contexts.file_search, { includeResults: true }),
   ];
 }
@@ -1819,7 +1819,7 @@ function mergeFullFileSearchOutputs(response, localFileSearch) {
 
 function mergeFullWebSearchOutputs(response, localWebSearch) {
   if (!Array.isArray(response?.output)) return response;
-  const fullWebSearchItems = webSearchOutputItems(localWebSearch, { includeSources: true });
+  const fullWebSearchItems = webSearchOutputItems(localWebSearch, { includeResults: true, includeSources: true });
   const fullWebSearchCalls = new Map(fullWebSearchItems
     .filter((item) => item?.type === "web_search_call" && item.id)
     .map((item) => [item.id, item]));
@@ -14965,6 +14965,9 @@ function projectResponseForIncludeSet(response, includes = new Set()) {
   if (!includes.has("web_search_call.action.sources")) {
     projected = redactWebSearchActionSources(projected);
   }
+  if (!includes.has("web_search_call.results")) {
+    projected = redactWebSearchCallResults(projected);
+  }
   if (!includes.has("file_search_call.results")) {
     projected = redactFileSearchCallResults(projected);
   }
@@ -15025,6 +15028,17 @@ function redactWebSearchActionSources(response) {
     if (item?.type !== "web_search_call" || !isPlainObject(item.action)) return item;
     const cloned = { ...item, action: { ...item.action } };
     delete cloned.action.sources;
+    return cloned;
+  });
+  return response;
+}
+
+function redactWebSearchCallResults(response) {
+  if (!Array.isArray(response?.output)) return response;
+  response.output = response.output.map((item) => {
+    if (item?.type !== "web_search_call") return item;
+    const cloned = { ...item };
+    delete cloned.results;
     return cloned;
   });
   return response;

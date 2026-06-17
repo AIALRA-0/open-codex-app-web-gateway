@@ -8,6 +8,7 @@ const WEB_SEARCH_TOOL_TYPES = new Set([
   "web_search_preview",
   "web_search_preview_2025_03_11",
 ]);
+const WEB_SEARCH_RESULTS_INCLUDE = "web_search_call.results";
 const WEB_SEARCH_ACTION_SOURCES_INCLUDE = "web_search_call.action.sources";
 const DEFAULT_WIKIPEDIA_ENDPOINT = "https://en.wikipedia.org/w/api.php";
 const DEFAULT_WEB_SEARCH_USER_AGENT = "open-codex-responses-bridge/0.2 (https://opencodexapp.aialra.online)";
@@ -56,6 +57,7 @@ async function prepareWebSearchContext(request = {}, config = {}, options = {}) 
   const context = {
     provider,
     query,
+    include_results: webSearchResultsRequested(request),
     include_action_sources: webSearchActionSourcesRequested(request),
     tool_types: Array.from(new Set(tools.map((tool) => tool.type))),
     status: "completed",
@@ -147,9 +149,11 @@ function annotateChatWebSearchCompletion(completion, context) {
 }
 
 function webSearchOutputItems(context, options = {}) {
+  const includeResults = options.includeResults ?? context?.include_results ?? false;
   const includeSources = options.includeSources ?? context?.include_action_sources ?? false;
   return (context?.calls || []).map((call) => {
     const action = call.action || { type: "search", query: context.query || "" };
+    const results = includeResults ? webSearchResults(context, action) : [];
     const sources = includeSources ? webSearchActionSources(context, action) : [];
     return {
       id: call.id,
@@ -159,6 +163,7 @@ function webSearchOutputItems(context, options = {}) {
         ...action,
         ...(sources.length ? { sources } : {}),
       },
+      ...(results.length ? { results } : {}),
       ...(call.status === "failed" ? { error: call.error || context.error || "local web search failed" } : {}),
     };
   });
@@ -186,16 +191,34 @@ function webSearchCompatibility(context) {
           source_count: context.results?.length || 0,
         },
       } : {}),
+      ...(context.include_results ? {
+        results: {
+          status: "included",
+          result_count: context.results?.length || 0,
+        },
+      } : {}),
       ...(context.error ? { error: context.error } : {}),
     },
   };
+}
+
+function webSearchResultsRequested(request = {}) {
+  return Array.isArray(request.include) && request.include.includes(WEB_SEARCH_RESULTS_INCLUDE);
 }
 
 function webSearchActionSourcesRequested(request = {}) {
   return Array.isArray(request.include) && request.include.includes(WEB_SEARCH_ACTION_SOURCES_INCLUDE);
 }
 
+function webSearchResults(context, action = {}) {
+  return webSearchResultObjectsForAction(context, action);
+}
+
 function webSearchActionSources(context, action = {}) {
+  return webSearchResultObjectsForAction(context, action);
+}
+
+function webSearchResultObjectsForAction(context, action = {}) {
   const results = Array.isArray(context?.results) ? context.results : [];
   if (!results.length) return [];
 

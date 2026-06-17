@@ -823,7 +823,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   boundary values still pass through to upstream Chat providers unchanged.
 - Local `code_interpreter` compatibility emits `code_interpreter_call` items and only includes nested call logs when `include:["code_interpreter_call.outputs"]` is requested on create or stored-response retrieval.
 - Local reasoning compatibility emits `reasoning` items with encrypted local replay payloads hidden by default and returned only when `include:["reasoning.encrypted_content"]` is requested on create or stored-response retrieval.
-- Local `web_search` compatibility emits `web_search_call` items and only includes `action.sources` when `include:["web_search_call.action.sources"]` is requested on create or stored-response retrieval.
+- Local `web_search` compatibility emits `web_search_call` items and only includes top-level `results` or nested `action.sources` when `include:["web_search_call.results"]` or `include:["web_search_call.action.sources"]` is requested on create or stored-response retrieval.
 - Local `file_search` compatibility emits `file_search_call` items and only includes search result details when `include:["file_search_call.results"]` is requested on create or stored-response retrieval.
 - Background response polling and cancellation remain stable for in-process jobs.
 - Stale in-progress background responses left by a bridge restart either resume
@@ -874,7 +874,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/fine_tuning/alpha/graders/run` for deterministic graders, local
   subprocess `python`, and provider-backed `score_model`, including Python
   runtime error flags and judge token accounting.
-- Hosted-tool emulation returns auditable search/open-page/find-in-page call items, create/retrieve `web_search_call.action.sources` projection, and citations for web search.
+- Hosted-tool emulation returns auditable search/open-page/find-in-page call items, create/retrieve `web_search_call.results` and `web_search_call.action.sources` projections, and citations for web search.
 - Responses `max_tool_calls` is enforced across local hosted-tool emulation so
   skipped web/file/shell/computer/image-generation actions are not executed and
   are recorded in compatibility metadata; invalid non-number, non-integer, and

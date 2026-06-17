@@ -6852,6 +6852,92 @@ test("POST /v1/responses includes local web_search action sources when requested
   });
 });
 
+test("POST /v1/responses includes local web_search results when requested", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.ok(call.body.messages.some((message) => /Bridge Results Projection/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_web_search_results",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "bridge-results-ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const expectedResults = [{
+      type: "url",
+      url: "https://example.test/bridge-results",
+      title: "Bridge Results Projection",
+      index: 1,
+      snippet: "The bridge can expose web search result arrays.",
+    }];
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for bridge results projection and return bridge-results-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        include: ["web_search_call.results"],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "web_search_call");
+    assert.equal(json.output[0].action.type, "search");
+    assert.deepEqual(json.output[0].results, expectedResults);
+    assert.equal(json.output[0].action.sources, undefined);
+    assert.deepEqual(json.metadata.compatibility.local_web_search.results, {
+      status: "included",
+      result_count: 1,
+    });
+
+    const storedWithoutInclude = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search for bridge results projection and return bridge-results-ok [1].",
+        tools: [{ type: "web_search_preview" }],
+        store: true,
+      }),
+    });
+    assert.equal(storedWithoutInclude.status, 200);
+    const storedWithoutIncludeJson = await storedWithoutInclude.json();
+    assert.equal(storedWithoutIncludeJson.output[0].type, "web_search_call");
+    assert.equal(storedWithoutIncludeJson.output[0].results, undefined);
+    assert.equal(storedWithoutIncludeJson.output[0].action.sources, undefined);
+
+    const hiddenStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${storedWithoutIncludeJson.id}`);
+    assert.equal(hiddenStoredResponse.status, 200);
+    const hiddenStoredJson = await hiddenStoredResponse.json();
+    assert.equal(hiddenStoredJson.output[0].type, "web_search_call");
+    assert.equal(hiddenStoredJson.output[0].results, undefined);
+    assert.equal(hiddenStoredJson.output[0].action.sources, undefined);
+
+    const includedStoredResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses/${storedWithoutIncludeJson.id}?include[]=web_search_call.results`);
+    assert.equal(includedStoredResponse.status, 200);
+    const includedStoredJson = await includedStoredResponse.json();
+    assert.equal(includedStoredJson.output[0].type, "web_search_call");
+    assert.deepEqual(includedStoredJson.output[0].results, expectedResults);
+    assert.equal(includedStoredJson.output[0].action.sources, undefined);
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Bridge Results Projection",
+      url: "https://example.test/bridge-results",
+      snippet: "The bridge can expose web search result arrays.",
+    }],
+  });
+});
+
 test("local web_search falls back to Wikipedia REST when the MediaWiki API is rejected", async () => {
   const seen = [];
   const context = await prepareWebSearchContext({

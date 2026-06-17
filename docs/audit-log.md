@@ -1,5 +1,75 @@
 # Audit Log
 
+## 2026-06-17 Web Search Results Include Projection
+
+- Rechecked the official Responses include surface through the OpenAI developer
+  docs MCP:
+  - the public docs page currently documents `web_search_call.action.sources`
+    for web-search source projection;
+  - the bridge already validates `web_search_call.results` as an official
+    `IncludeEnum` value, so this pass closes the local behavior gap for that
+    accepted include value instead of merely allowing it through validation.
+- Implemented local Responses `include:["web_search_call.results"]`
+  projection for the web-search adapter:
+  - `prepareWebSearchContext` records whether the create request asked for
+    top-level web-search results;
+  - `webSearchOutputItems` can now emit top-level `results` arrays separately
+    from nested `action.sources`;
+  - result objects reuse the existing stable source shape with URL, title,
+    index, snippet, and bounded open/find status metadata, while omitting
+    fetched page text;
+  - non-streaming and background stored Responses persist full local
+    web-search outputs so later retrieval can project results on demand;
+  - `projectResponseForIncludeSet` redacts `web_search_call.results` unless
+    the caller explicitly requests `web_search_call.results`;
+  - requesting `web_search_call.results` does not imply
+    `web_search_call.action.sources`, and vice versa.
+- Regression coverage added:
+  - create with `include:["web_search_call.results"]` returns top-level
+    `results` and keeps `action.sources` hidden;
+  - local compatibility metadata records the create-time result projection;
+  - `store:true` create and default `GET /v1/responses/{id}` keep
+    `results` hidden;
+  - `GET /v1/responses/{id}?include[]=web_search_call.results` restores the
+    stored local result projection while keeping `action.sources` hidden.
+- Documentation updated:
+  - compatibility matrix now lists `web_search_call.results` as a local output
+    projection instead of an accepted-only enum;
+  - web-search hosted-tool notes describe the separate `results` and
+    `action.sources` gates;
+  - evaluation plan now requires both projections in hosted-tool regression.
+- Validation:
+  - `node --check src/bridge/web_search.js` passes;
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "web_search"
+    test/server.test.js` passes: 13 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 352 tests;
+  - `npm run secret-scan` passes;
+  - an explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` verifies create
+    with `include:["web_search_call.results"]` returns five local web-search
+    results and does not expose `action.sources`;
+  - public stored-response smoke verifies default create/default retrieve hide
+    `web_search_call.results`, retrieve with `include[]=web_search_call.results`
+    returns five results, `action.sources` remains hidden, and the temporary
+    response record is deleted.
+- Runtime/storage check:
+  - `/` has 14 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits;
+  - the user-provided DeepSeek key was not written into the repository.
+
 ## 2026-06-17 Container Memory and Network Policy Validation
 
 - Rechecked the official OpenAI OpenAPI schema for Containers:
