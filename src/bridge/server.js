@@ -313,12 +313,15 @@ const OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES = Object.freeze({
   apply_patch_call: Object.freeze(["in_progress", "completed"]),
   apply_patch_call_output: Object.freeze(["completed", "failed"]),
   mcp_call: Object.freeze(["in_progress", "completed", "incomplete", "calling", "failed"]),
+  tool_search_call: Object.freeze(["in_progress", "completed", "incomplete"]),
+  tool_search_output: Object.freeze(["in_progress", "completed", "incomplete"]),
 });
 const OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES = new Set([
   ...Object.keys(OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES),
   "mcp_list_tools",
   "mcp_approval_request",
   "mcp_approval_response",
+  "additional_tools",
 ]);
 const OPENAI_IMAGE_GENERATION_QUALITY_VALUES = Object.freeze(["low", "medium", "high", "auto"]);
 const OPENAI_IMAGE_GENERATION_OUTPUT_FORMAT_VALUES = Object.freeze(["png", "webp", "jpeg"]);
@@ -3758,61 +3761,65 @@ function validateOpenAIResponsesToolFields(body = {}) {
 
 function validateOpenAIResponsesTools(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "tools") || body.tools == null) return null;
-  if (!Array.isArray(body.tools)) {
-    return requestValidationError("tools must be an array", "tools");
+  return validateOpenAIResponsesToolDefinitions(body.tools, "tools", body);
+}
+
+function validateOpenAIResponsesToolDefinitions(tools, param, body = {}) {
+  if (!Array.isArray(tools)) {
+    return requestValidationError(`${param} must be an array`, param);
   }
 
-  for (const [index, tool] of body.tools.entries()) {
-    const param = `tools.${index}`;
+  for (const [index, tool] of tools.entries()) {
+    const toolParam = `${param}.${index}`;
     if (!isPlainObject(tool)) {
-      return requestValidationError(`${param} must be an object`, param);
+      return requestValidationError(`${toolParam} must be an object`, toolParam);
     }
     if (typeof tool.type !== "string" || !OPENAI_RESPONSES_TOOL_TYPES.includes(tool.type)) {
       return requestValidationError(
-        `${param}.type must be one of: ${OPENAI_RESPONSES_TOOL_TYPES.join(", ")}`,
-        `${param}.type`,
+        `${toolParam}.type must be one of: ${OPENAI_RESPONSES_TOOL_TYPES.join(", ")}`,
+        `${toolParam}.type`,
       );
     }
     if (tool.type === "function") {
-      const functionError = validateOpenAIResponsesFunctionTool(tool, param);
+      const functionError = validateOpenAIResponsesFunctionTool(tool, toolParam);
       if (functionError) return functionError;
     } else if (tool.type === "custom") {
-      const customError = validateOpenAIResponsesCustomTool(tool, param);
+      const customError = validateOpenAIResponsesCustomTool(tool, toolParam);
       if (customError) return customError;
     } else if (tool.type === "namespace") {
-      const namespaceError = validateOpenAIResponsesNamespaceTool(tool, param);
+      const namespaceError = validateOpenAIResponsesNamespaceTool(tool, toolParam);
       if (namespaceError) return namespaceError;
     } else if (tool.type === "file_search") {
-      const fileSearchError = validateOpenAIResponsesFileSearchTool(tool, param, body);
+      const fileSearchError = validateOpenAIResponsesFileSearchTool(tool, toolParam, body);
       if (fileSearchError) return fileSearchError;
     } else if (isOpenAIResponsesWebSearchToolType(tool.type)) {
-      const webSearchError = validateOpenAIResponsesWebSearchTool(tool, param);
+      const webSearchError = validateOpenAIResponsesWebSearchTool(tool, toolParam);
       if (webSearchError) return webSearchError;
     } else if (tool.type === "image_generation") {
-      const imageGenerationError = validateOpenAIResponsesImageGenerationTool(tool, param);
+      const imageGenerationError = validateOpenAIResponsesImageGenerationTool(tool, toolParam);
       if (imageGenerationError) return imageGenerationError;
     } else if (tool.type === "mcp") {
-      const mcpError = validateOpenAIResponsesMcpTool(tool, param);
+      const mcpError = validateOpenAIResponsesMcpTool(tool, toolParam);
       if (mcpError) return mcpError;
     } else if (tool.type === "computer_use_preview") {
-      const computerError = validateOpenAIResponsesComputerTool(tool, param, {
+      const computerError = validateOpenAIResponsesComputerTool(tool, toolParam, {
         requirePreviewFields: true,
       });
       if (computerError) return computerError;
     } else if (tool.type === "computer" || tool.type === "computer_use") {
-      const computerError = validateOpenAIResponsesComputerTool(tool, param);
+      const computerError = validateOpenAIResponsesComputerTool(tool, toolParam);
       if (computerError) return computerError;
     } else if (tool.type === "tool_search") {
-      const toolSearchError = validateOpenAIResponsesToolSearchTool(tool, param);
+      const toolSearchError = validateOpenAIResponsesToolSearchTool(tool, toolParam);
       if (toolSearchError) return toolSearchError;
     } else if (tool.type === "local_shell" || tool.type === "apply_patch") {
-      const typeOnlyError = validateOpenAIResponsesTypeOnlyObject(tool, param);
+      const typeOnlyError = validateOpenAIResponsesTypeOnlyObject(tool, toolParam);
       if (typeOnlyError) return typeOnlyError;
     } else if (tool.type === "shell") {
-      const shellError = validateOpenAIResponsesShellTool(tool, param);
+      const shellError = validateOpenAIResponsesShellTool(tool, toolParam);
       if (shellError) return shellError;
     } else if (tool.type === "code_interpreter") {
-      const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
+      const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, toolParam);
       if (codeInterpreterError) return codeInterpreterError;
     }
   }
@@ -5576,6 +5583,42 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     return validateOpenAIOptionalStringItemField(item, param, "output", { nullable: true });
   }
 
+  if (item.type === "tool_search_call") {
+    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+    if (idError) return idError;
+    const callIdError = validateOpenAIOptionalStringItemField(item, param, "call_id", {
+      nullable: true,
+      nonEmpty: true,
+    });
+    if (callIdError) return callIdError;
+    const executionError = validateOpenAIResponsesToolSearchItemExecution(item, param);
+    if (executionError) return executionError;
+    return validateOpenAIRequiredObjectItemField(item, param, "arguments");
+  }
+
+  if (item.type === "tool_search_output") {
+    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+    if (idError) return idError;
+    const callIdError = validateOpenAIOptionalStringItemField(item, param, "call_id", {
+      nullable: true,
+      nonEmpty: true,
+    });
+    if (callIdError) return callIdError;
+    const executionError = validateOpenAIResponsesToolSearchItemExecution(item, param);
+    if (executionError) return executionError;
+    const toolsError = validateOpenAIResponsesToolDefinitions(item.tools, `${param}.tools`, { tools: item.tools });
+    if (toolsError) return toolsError;
+    return null;
+  }
+
+  if (item.type === "additional_tools") {
+    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+    if (idError) return idError;
+    const roleError = validateOpenAIOptionalStringItemField(item, param, "role", { nullable: true });
+    if (roleError) return roleError;
+    return validateOpenAIResponsesToolDefinitions(item.tools, `${param}.tools`, { tools: item.tools });
+  }
+
   if (item.type === "mcp_list_tools") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id");
     if (idError) return idError;
@@ -5623,6 +5666,17 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     return validateOpenAIOptionalStringItemField(item, param, "reason", { nullable: true });
   }
 
+  return null;
+}
+
+function validateOpenAIResponsesToolSearchItemExecution(item, param) {
+  if (!Object.prototype.hasOwnProperty.call(item, "execution") || item.execution == null) return null;
+  if (typeof item.execution !== "string" || !OPENAI_TOOL_SEARCH_EXECUTION_VALUES.includes(item.execution)) {
+    return requestValidationError(
+      `${param}.execution must be one of: ${OPENAI_TOOL_SEARCH_EXECUTION_VALUES.join(", ")}`,
+      `${param}.execution`,
+    );
+  }
   return null;
 }
 

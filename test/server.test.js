@@ -889,6 +889,64 @@ test("Responses endpoints validate input image and file detail before provider c
         param: "input.0.status",
         message: "input.0.status must be one of: in_progress, completed",
       },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "tool_search_call",
+          status: "failed",
+          arguments: { paths: ["crm.lookup"] },
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, completed, incomplete",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "tool_search_call",
+          execution: "client",
+          arguments: "crm.lookup",
+        }],
+        param: "input.0.arguments",
+        message: "input.0.arguments must be an object",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "tool_search_output",
+          execution: "hosted",
+          tools: [],
+        }],
+        param: "input.0.execution",
+        message: "input.0.execution must be one of: server, client",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "tool_search_output",
+          tools: {},
+        }],
+        param: "input.0.tools",
+        message: "input.0.tools must be an array",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "tool_search_output",
+          tools: [{ type: "function", name: "lookup", parameters: [] }],
+        }],
+        param: "input.0.tools.0.parameters",
+        message: "input.0.tools.0.parameters must be an object or null",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "additional_tools",
+          role: "developer",
+          tools: [{ type: "namespace", name: "crm", description: "CRM tools", tools: [] }],
+        }],
+        param: "input.0.tools.0.tools",
+        message: "input.0.tools.0.tools must be a non-empty array",
+      },
     ];
 
     for (const invalidCase of invalidCases) {

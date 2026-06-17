@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Responses Tool Search Input Validation
+
+- Rechecked the current official OpenAI Responses schema through the developer
+  docs MCP workflow and the official `openai-openapi` YAML for
+  `ToolSearchCallItemParam`, `ToolSearchOutputItemParam`, `FunctionToolParam`,
+  and `NamespaceToolParam`:
+  - `tool_search_call` input items require object `arguments` and accept
+    optional `execution:"server"|"client"`;
+  - `tool_search_call` and `tool_search_output` status values are
+    `in_progress`, `completed`, or `incomplete`;
+  - `tool_search_output.tools` is an array of Responses tool definitions;
+  - `additional_tools` remains a local bridge/CodexApp compatibility input
+    item, so it now reuses the same loaded-tool schema guard.
+- Tightened Responses input validation before provider calls:
+  - `tool_search_call` now rejects invalid status/execution values and
+    non-object `arguments`;
+  - `tool_search_output` now rejects invalid status/execution values and
+    malformed loaded tool arrays;
+  - `additional_tools.tools` now rejects malformed loaded tool definitions;
+  - the top-level Responses `tools` validator was factored into a shared
+    helper so loaded-tool validation uses the same function/custom/namespace
+    schema checks as normal request tools.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `tool_search_call`, `tool_search_output`, and `additional_tools` cases
+    across `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`;
+  - existing client-executed `tool_search_output` and `additional_tools`
+    successful loading tests still pass.
+- Documentation updated:
+  - compatibility matrix now records pre-provider validation for tool-search
+    protocol input items and loaded `additional_tools` definitions.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate Responses tools before
+    provider calls|validate input image and file detail|loads client-executed
+    tool_search_output|injects additional_tools" test/server.test.js` passes:
+    4 tests;
+  - full `node --test test/*.test.js` passes: 365 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `tool_search_call.status:"failed"` input-token request
+    returns `400 invalid_request_parameter` with `param:"input.0.status"`;
+  - public valid `tool_search_output.tools` input-token request returns 200
+    with `input_tokens:7`.
+- Runtime/storage check:
+  - `/` has 12 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Computer Call Output Input Validation
 
 - Rechecked the current official OpenAI Responses `ComputerCallOutputItemParam`
