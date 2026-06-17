@@ -3614,6 +3614,8 @@ function validateOpenAIResponsesText(body = {}) {
   if (!isPlainObject(body.text)) {
     return requestValidationError("text must be an object", "text");
   }
+  const verbosityError = validateOpenAIEnumValue(body.text.verbosity, "text.verbosity", OPENAI_VERBOSITY_VALUES);
+  if (verbosityError) return verbosityError;
   const format = Object.prototype.hasOwnProperty.call(body.text, "format")
     ? body.text.format
     : Object.prototype.hasOwnProperty.call(body.text, "type")

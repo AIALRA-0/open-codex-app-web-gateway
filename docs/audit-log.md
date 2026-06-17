@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-18 Responses Text Verbosity Mapping
+
+- Rechecked the official OpenAI OpenAPI schema for Responses text output:
+  - `ResponseTextParam` exposes `format` and nullable `verbosity`;
+  - `Verbosity` accepts only `low`, `medium`, and `high` plus null;
+  - `POST /v1/responses/input_tokens` reuses the same Responses text
+    parameter shape.
+- Tightened local bridge behavior:
+  - Responses create and `/v1/responses/input_tokens` now validate
+    `text.verbosity` before provider calls;
+  - when top-level `verbosity` is absent, `text.verbosity` maps to Chat
+    `verbosity` for capable providers;
+  - DeepSeek-compatible deployments that filter native Chat fields reuse the
+    existing verbosity prompt-instruction fallback and record
+    `metadata.compatibility.verbosity.source:"text.verbosity"`;
+  - top-level `verbosity` keeps precedence when both fields are supplied.
+- Regression coverage updated:
+  - added invalid `text.verbosity` request cases for Responses create and
+    input-token probes;
+  - added valid native-forward and DeepSeek-style filtered-provider tests for
+    `text.verbosity`.
+- Documentation updated:
+  - compatibility matrix now records official Responses `text.verbosity`
+    validation, mapping, precedence, and input-token probe support.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/translator.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `git diff --check` passed.
+  - `node --test --test-name-pattern "verbosity" test/server.test.js`
+    passed 3/3 matched tests.
+  - `node --test --test-name-pattern "input_tokens validates text"
+    test/server.test.js` passed 1/1 matched test.
+  - Full `node --test test/*.test.js` passed 388/388 tests.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Disk guard before deployment: `/` 193G size, 182G used, 11G available,
+    95% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or live provider payloads were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Variation Model Bounds
 
 - Rechecked official OpenAI Images API references:

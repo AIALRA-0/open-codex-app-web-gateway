@@ -2776,11 +2776,14 @@ test("POST /v1/responses filters Chat-native request fields when configured", as
 });
 
 test("POST /v1/responses validates verbosity values before provider calls", async () => {
+  const expectedInstructionPatterns = [/answer concisely/, /thorough detail/];
+  let providerCallCount = 0;
   await withMockProvider(async (_req, res, call) => {
+    const expectedPattern = expectedInstructionPatterns[providerCallCount++];
     assert.equal(call.body.verbosity, undefined);
     assert.deepEqual(call.body.messages.map((message) => message.role), ["system", "user"]);
     assert.match(call.body.messages[0].content, /Verbosity compatibility/);
-    assert.match(call.body.messages[0].content, /answer concisely/);
+    assert.match(call.body.messages[0].content, expectedPattern);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_verbosity_boundary",
@@ -2796,10 +2799,36 @@ test("POST /v1/responses validates verbosity values before provider calls", asyn
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const invalidCases = [
-      { verbosity: "terse" },
-      { verbosity: "HIGH" },
-      { verbosity: "" },
-      { verbosity: 1 },
+      {
+        body: { verbosity: "terse" },
+        param: "verbosity",
+        message: "verbosity must be one of: low, medium, high",
+      },
+      {
+        body: { verbosity: "HIGH" },
+        param: "verbosity",
+        message: "verbosity must be one of: low, medium, high",
+      },
+      {
+        body: { verbosity: "" },
+        param: "verbosity",
+        message: "verbosity must be one of: low, medium, high",
+      },
+      {
+        body: { verbosity: 1 },
+        param: "verbosity",
+        message: "verbosity must be one of: low, medium, high",
+      },
+      {
+        body: { text: { verbosity: "terse" } },
+        param: "text.verbosity",
+        message: "text.verbosity must be one of: low, medium, high",
+      },
+      {
+        body: { text: { verbosity: 1 } },
+        param: "text.verbosity",
+        message: "text.verbosity must be one of: low, medium, high",
+      },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -2808,15 +2837,15 @@ test("POST /v1/responses validates verbosity values before provider calls", asyn
         body: JSON.stringify({
           model: "mock-model",
           input: "Check verbosity validation.",
-          ...invalidCase,
+          ...invalidCase.body,
         }),
       });
       assert.equal(response.status, 400);
       assert.deepEqual(await response.json(), {
         error: {
-          message: "verbosity must be one of: low, medium, high",
+          message: invalidCase.message,
           type: "invalid_request_error",
-          param: "verbosity",
+          param: invalidCase.param,
           code: "invalid_request_parameter",
         },
       });
@@ -2833,9 +2862,78 @@ test("POST /v1/responses validates verbosity values before provider calls", asyn
       }),
     });
     assert.equal(valid.status, 200);
-    assert.equal((await valid.json()).output[0].content[0].text, "verbosity ok");
+    const validJson = await valid.json();
+    assert.equal(validJson.output[0].content[0].text, "verbosity ok");
+    assert.deepEqual(validJson.metadata.compatibility.verbosity, {
+      source: "verbosity",
+      value: "low",
+      forwarded: false,
+      reason: "provider_unsupported_prompt_instruction",
+      prompt_instruction: "injected",
+    });
     assert.equal(requests.length, 1);
+
+    const textVerbosity = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check text verbosity boundary.",
+        text: { verbosity: "high" },
+      }),
+    });
+    assert.equal(textVerbosity.status, 200);
+    const textVerbosityJson = await textVerbosity.json();
+    assert.equal(textVerbosityJson.output[0].content[0].text, "verbosity ok");
+    assert.deepEqual(textVerbosityJson.metadata.compatibility.verbosity, {
+      source: "text.verbosity",
+      value: "high",
+      forwarded: false,
+      reason: "provider_unsupported_prompt_instruction",
+      prompt_instruction: "injected",
+    });
+    assert.equal(requests.length, 2);
   }, { forwardChatNativeFields: false });
+});
+
+test("POST /v1/responses maps text.verbosity to Chat verbosity when supported", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.verbosity, "medium");
+    assert.deepEqual(call.body.messages.map((message) => message.role), ["user"]);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_text_verbosity_alias",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "text verbosity ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Check text verbosity alias.",
+        text: { verbosity: "medium" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "text verbosity ok");
+    assert.deepEqual(json.metadata.compatibility.verbosity, {
+      source: "text.verbosity",
+      target: "verbosity",
+      value: "medium",
+      forwarded: true,
+      reason: "responses_text_verbosity_alias",
+    });
+    assert.equal(requests.length, 1);
+  });
 });
 
 test("POST /v1/responses validates web_search_options before provider calls", async () => {
@@ -22891,6 +22989,7 @@ test("POST /v1/responses/input_tokens validates text, reasoning, and parallel to
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.parallel_tool_calls, false);
     assert.deepEqual(call.body.response_format, { type: "json_object" });
+    assert.equal(call.body.verbosity, "low");
     assert.equal(call.body.reasoning_effort, "high");
     assert.equal(call.body.max_tokens, 1);
     res.writeHead(200, { "content-type": "application/json" });
@@ -22928,6 +23027,11 @@ test("POST /v1/responses/input_tokens validates text, reasoning, and parallel to
         body: { text: { format: { type: "yaml" } } },
         param: "text.format.type",
         message: "text.format.type must be one of: text, json_object, json_schema",
+      },
+      {
+        body: { text: { verbosity: "terse" } },
+        param: "text.verbosity",
+        message: "text.verbosity must be one of: low, medium, high",
       },
       {
         body: { reasoning: "low" },
@@ -22980,6 +23084,7 @@ test("POST /v1/responses/input_tokens validates text, reasoning, and parallel to
         input: "Count valid official input-token fields.",
         parallel_tool_calls: false,
         text: {
+          verbosity: "low",
           format: {
             type: "json_schema",
             name: "token_probe",

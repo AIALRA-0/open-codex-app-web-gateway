@@ -1570,20 +1570,42 @@ function mapChatNativeFields(request, chat, options = {}) {
 }
 
 function mapVerbosity(request, chat, options = {}) {
-  if (request.verbosity === undefined || options.forwardChatNativeFields !== false) return null;
-  const instruction = verbosityInstruction(request.verbosity);
+  const verbosity = responseVerbosityRequest(request);
+  if (!verbosity || verbosity.value == null) return null;
+  if (verbosity.source === "verbosity" && options.forwardChatNativeFields !== false) return null;
+  if (options.forwardChatNativeFields !== false) {
+    chat.verbosity = verbosity.value;
+    return {
+      source: verbosity.source,
+      target: "verbosity",
+      value: stringifyContent(verbosity.value),
+      forwarded: true,
+      reason: "responses_text_verbosity_alias",
+    };
+  }
+  const instruction = verbosityInstruction(verbosity.value);
   if (!instruction) return null;
   chat.messages = [
     { role: "system", content: instruction },
     ...(Array.isArray(chat.messages) ? chat.messages : []),
   ];
   return {
-    source: "verbosity",
-    value: stringifyContent(request.verbosity),
+    source: verbosity.source,
+    value: stringifyContent(verbosity.value),
     forwarded: false,
     reason: "provider_unsupported_prompt_instruction",
     prompt_instruction: "injected",
   };
+}
+
+function responseVerbosityRequest(request = {}) {
+  if (Object.prototype.hasOwnProperty.call(request, "verbosity")) {
+    return { source: "verbosity", value: request.verbosity };
+  }
+  if (isPlainObject(request.text) && Object.prototype.hasOwnProperty.call(request.text, "verbosity")) {
+    return { source: "text.verbosity", value: request.text.verbosity };
+  }
+  return null;
 }
 
 function verbosityInstruction(value) {
