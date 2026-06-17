@@ -7334,7 +7334,12 @@ function handleUploadCancel(res, uploadStore, uploadId, url) {
   sendJson(res, 200, uploadStore.cancelUpload(uploadId));
 }
 
-async function handleVectorStoreCreate(req, res, fileSearchStore) {
+async function handleVectorStoreCreate(req, res, fileSearchStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   sendJson(res, 200, fileSearchStore.createVectorStore(body));
 }
@@ -7406,7 +7411,12 @@ function officialAfterListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleVectorStoreGet(res, fileSearchStore, storeId) {
+function handleVectorStoreGet(res, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const store = fileSearchStore.getVectorStore(storeId);
   if (!store) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
@@ -7415,7 +7425,12 @@ function handleVectorStoreGet(res, fileSearchStore, storeId) {
   sendJson(res, 200, store);
 }
 
-async function handleVectorStoreUpdate(req, res, fileSearchStore, storeId) {
+async function handleVectorStoreUpdate(req, res, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const store = fileSearchStore.updateVectorStore(storeId, body);
   if (!store) {
@@ -7425,7 +7440,12 @@ async function handleVectorStoreUpdate(req, res, fileSearchStore, storeId) {
   sendJson(res, 200, store);
 }
 
-function handleVectorStoreDelete(res, fileSearchStore, storeId) {
+function handleVectorStoreDelete(res, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = fileSearchStore.deleteVectorStore(storeId);
   if (!deleted) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
@@ -7434,7 +7454,12 @@ function handleVectorStoreDelete(res, fileSearchStore, storeId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId) {
+async function handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const attached = fileSearchStore.attachFile(storeId, body);
   if (!attached) {
@@ -7445,7 +7470,12 @@ async function handleVectorStoreFileCreate(req, res, config, fileSearchStore, st
   sendJson(res, 200, attached);
 }
 
-async function handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId) {
+async function handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const batch = fileSearchStore.createVectorStoreFileBatch(storeId, body);
   if (!batch) {
@@ -7459,7 +7489,12 @@ async function handleVectorStoreFileBatchCreate(req, res, config, fileSearchStor
   sendJson(res, 200, batch);
 }
 
-function handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId) {
+function handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const batch = fileSearchStore.getVectorStoreFileBatch(storeId, batchId);
   if (!batch) {
     sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
@@ -7468,7 +7503,12 @@ function handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId) {
   sendJson(res, 200, batch);
 }
 
-function handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId) {
+function handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const batch = fileSearchStore.cancelVectorStoreFileBatch(storeId, batchId);
   if (!batch) {
     sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
@@ -7509,7 +7549,12 @@ function handleVectorStoreFilesList(res, fileSearchStore, storeId, url) {
   sendJson(res, 200, page);
 }
 
-function handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId) {
+function handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const attached = fileSearchStore.getVectorStoreFile(storeId, fileId);
   if (!attached) {
     sendError(res, 404, `vector store file not found: ${fileId}`, { code: "vector_store_file_not_found" });
@@ -7518,7 +7563,12 @@ function handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId) {
   sendJson(res, 200, attached);
 }
 
-async function handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId) {
+async function handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const attached = fileSearchStore.updateVectorStoreFile(storeId, fileId, body);
   if (!attached) {
@@ -7528,7 +7578,12 @@ async function handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, f
   sendJson(res, 200, attached);
 }
 
-function handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId) {
+function handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const content = fileSearchStore.getVectorStoreFileContent(storeId, fileId);
   if (!content) {
     sendError(res, 404, `vector store file not found: ${fileId}`, { code: "vector_store_file_not_found" });
@@ -7537,7 +7592,12 @@ function handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId) {
   sendJson(res, 200, content);
 }
 
-function handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId) {
+function handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = fileSearchStore.deleteVectorStoreFile(storeId, fileId);
   if (!deleted) {
     sendError(res, 404, `vector store file not found: ${fileId}`, { code: "vector_store_file_not_found" });
@@ -7546,7 +7606,12 @@ function handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleVectorStoreSearch(req, res, fileSearchStore, storeId) {
+async function handleVectorStoreSearch(req, res, fileSearchStore, storeId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const validationError = validateOpenAIVectorStoreSearchRequest(body);
   if (validationError) {
@@ -23481,14 +23546,14 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleVectorStoreCreate(req, res, fileSearchStore);
+          await handleVectorStoreCreate(req, res, fileSearchStore, url);
           return;
         }
       }
 
       const vectorStoreSearchRoute = url.pathname.match(/^\/v1\/vector_stores\/([^/]+)\/search$/);
       if (vectorStoreSearchRoute && req.method === "POST") {
-        await handleVectorStoreSearch(req, res, fileSearchStore, decodeURIComponent(vectorStoreSearchRoute[1]));
+        await handleVectorStoreSearch(req, res, fileSearchStore, decodeURIComponent(vectorStoreSearchRoute[1]), url);
         return;
       }
 
@@ -23498,11 +23563,11 @@ function createServer(config = loadConfig()) {
         const batchId = vectorStoreFileBatchesRoute[2] ? decodeURIComponent(vectorStoreFileBatchesRoute[2]) : "";
         const action = vectorStoreFileBatchesRoute[3] || "";
         if (!batchId && req.method === "POST") {
-          await handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId);
+          await handleVectorStoreFileBatchCreate(req, res, config, fileSearchStore, storeId, url);
           return;
         }
         if (batchId && !action && req.method === "GET") {
-          handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId);
+          handleVectorStoreFileBatchGet(res, fileSearchStore, storeId, batchId, url);
           return;
         }
         if (batchId && action === "files" && req.method === "GET") {
@@ -23510,7 +23575,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (batchId && action === "cancel" && req.method === "POST") {
-          handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId);
+          handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId, url);
           return;
         }
       }
@@ -23525,23 +23590,23 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!fileId && req.method === "POST") {
-          await handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId);
+          await handleVectorStoreFileCreate(req, res, config, fileSearchStore, storeId, url);
           return;
         }
         if (fileId && !action && req.method === "GET") {
-          handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId);
+          handleVectorStoreFileGet(res, fileSearchStore, storeId, fileId, url);
           return;
         }
         if (fileId && !action && req.method === "POST") {
-          await handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId);
+          await handleVectorStoreFileUpdate(req, res, fileSearchStore, storeId, fileId, url);
           return;
         }
         if (fileId && !action && req.method === "DELETE") {
-          handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId);
+          handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId, url);
           return;
         }
         if (fileId && action === "content" && req.method === "GET") {
-          handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId);
+          handleVectorStoreFileContent(res, fileSearchStore, storeId, fileId, url);
           return;
         }
       }
@@ -23550,15 +23615,15 @@ function createServer(config = loadConfig()) {
       if (vectorStoreRoute) {
         const storeId = decodeURIComponent(vectorStoreRoute[1]);
         if (req.method === "GET") {
-          handleVectorStoreGet(res, fileSearchStore, storeId);
+          handleVectorStoreGet(res, fileSearchStore, storeId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleVectorStoreUpdate(req, res, fileSearchStore, storeId);
+          await handleVectorStoreUpdate(req, res, fileSearchStore, storeId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleVectorStoreDelete(res, fileSearchStore, storeId);
+          handleVectorStoreDelete(res, fileSearchStore, storeId, url);
           return;
         }
       }

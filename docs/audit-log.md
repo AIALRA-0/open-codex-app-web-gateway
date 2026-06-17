@@ -1,5 +1,80 @@
 # Audit Log
 
+## 2026-06-17 Vector Stores Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `GET` / `POST /v1/vector_stores`;
+  - `GET` / `POST` / `DELETE /v1/vector_stores/{vector_store_id}`;
+  - `POST /v1/vector_stores/{vector_store_id}/search`;
+  - `GET` / `POST /v1/vector_stores/{vector_store_id}/files`;
+  - `GET` / `POST` / `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}`;
+  - `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content`;
+  - `POST /v1/vector_stores/{vector_store_id}/file_batches`;
+  - `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}`;
+  - `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files`;
+  - `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel`.
+- Official schema notes:
+  - Vector Store list supports official `limit`, `order`, `after`, and
+    `before` query parameters;
+  - Vector Store files list and file-batch files list additionally support the
+    official `filter` query parameter;
+  - create, retrieve, update, delete, attach, content, search, batch-create,
+    batch-retrieve, and batch-cancel operations are path/body-driven and do
+    not declare query parameters.
+- Tightened local bridge behavior:
+  - Vector Store create/retrieve/update/delete now reject unsupported query
+    parameters before JSON parsing, metadata reads, mutations, or deletion;
+  - Vector Store search rejects unsupported query parameters before JSON body
+    parsing or `last_active_at` refresh;
+  - Vector Store file attach/retrieve/update/content/delete reject unsupported
+    query parameters before parsing, reading indexed content, updating
+    attributes, or detaching the file;
+  - Vector Store file batch create/retrieve/cancel reject unsupported query
+    parameters before parsing, reading, attachment, or lifecycle mutation;
+  - the official list/query behavior for vector stores, vector-store files, and
+    batch files remains unchanged.
+- Regression coverage updated:
+  - added a Vector Stores query test that verifies OpenAI-style
+    `invalid_request_parameter` errors for unsupported query parameters across
+    create, retrieve, update, delete, search, file attach, file retrieve,
+    file update, file content, file delete, batch create, batch retrieve, and
+    batch cancel;
+  - the test confirms invalid update/delete/detach/cancel requests leave local
+    state intact and that allowed batch-files list queries still work.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for all
+    path/body-only Vector Stores endpoints while preserving documented list
+    pagination and `filter` query support.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Vector Stores endpoints reject unsupported query parameters before local mutations" test/server.test.js`
+    passed 1/1 test.
+  - `node --test --test-name-pattern "Vector Stores endpoints|local Files and Vector Stores|local Vector Store|file_search compatibility|local Uploads API|local Uploads and Files preserve binary bytes" test/server.test.js`
+    passed 9/9 tests.
+  - Full `node --test test/*.test.js` passed 378/378 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Vector Stores query smoke verified invalid `metadata` queries on
+    Vector Store create/retrieve/update/delete/search, file
+    attach/retrieve/update/content/delete, and batch create/retrieve/cancel
+    return OpenAI-style 400 errors; it also verified invalid update/delete and
+    detach/cancel requests leave state intact, and allowed batch-files list
+    queries still succeed.
+  - Cleaned up the small public smoke File and Vector Store after validation.
+  - Disk guard after deployment: `/` 193G size, 182G used, 11G available, 95%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5388 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, uploaded file content, generated File or Vector Store
+    ids, or smoke-test request secrets were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Files and Uploads Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

@@ -16127,6 +16127,132 @@ test("Files and Uploads endpoints reject unsupported query parameters before loc
   });
 });
 
+test("Vector Stores endpoints reject unsupported query parameters before local mutations", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local Vector Stores query validation");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectedQueryError = {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    };
+    const assertInvalidQuery = async (method, pathSuffix, options = {}) => {
+      const response = await fetch(`${baseUrl}${pathSuffix}?metadata=debug`, {
+        method,
+        ...options,
+      });
+      assert.equal(response.status, 400, `${method} ${pathSuffix}`);
+      assert.deepEqual(await response.json(), expectedQueryError, `${method} ${pathSuffix}`);
+    };
+
+    await assertInvalidQuery("POST", "/v1/vector_stores", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const createdFileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "vector-query-boundary.txt",
+        purpose: "assistants",
+        content: "Vector query boundary marker.",
+      }),
+    });
+    assert.equal(createdFileResponse.status, 200);
+    const file = await createdFileResponse.json();
+
+    const createdStoreResponse = await fetch(`${baseUrl}/v1/vector_stores`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "vector-query-boundary" }),
+    });
+    assert.equal(createdStoreResponse.status, 200);
+    const vectorStore = await createdStoreResponse.json();
+
+    await assertInvalidQuery("GET", `/v1/vector_stores/${vectorStore.id}`);
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let currentStore = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    assert.equal(currentStore.status, 200);
+    assert.equal((await currentStore.json()).name, "vector-query-boundary");
+
+    await assertInvalidQuery("DELETE", `/v1/vector_stores/${vectorStore.id}`);
+    currentStore = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}`);
+    assert.equal(currentStore.status, 200);
+
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}/search`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}/files`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let filesList = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files?filter=completed`);
+    assert.equal(filesList.status, 200);
+    assert.deepEqual((await filesList.json()).data, []);
+
+    const attachResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_id: file.id, attributes: { stage: "initial" } }),
+    });
+    assert.equal(attachResponse.status, 200);
+    const attached = await attachResponse.json();
+    assert.equal(attached.id, file.id);
+
+    await assertInvalidQuery("GET", `/v1/vector_stores/${vectorStore.id}/files/${file.id}`);
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}/files/${file.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let attachedGet = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${file.id}`);
+    assert.equal(attachedGet.status, 200);
+    assert.deepEqual((await attachedGet.json()).attributes, { stage: "initial" });
+
+    await assertInvalidQuery("GET", `/v1/vector_stores/${vectorStore.id}/files/${file.id}/content`);
+    await assertInvalidQuery("DELETE", `/v1/vector_stores/${vectorStore.id}/files/${file.id}`);
+    attachedGet = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files/${file.id}`);
+    assert.equal(attachedGet.status, 200);
+
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}/file_batches`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const batchResponse = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ file_ids: [file.id], attributes: { batch: "query-boundary" } }),
+    });
+    assert.equal(batchResponse.status, 200);
+    const batch = await batchResponse.json();
+
+    await assertInvalidQuery("GET", `/v1/vector_stores/${vectorStore.id}/file_batches/${batch.id}`);
+    const batchGet = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${batch.id}`);
+    assert.equal(batchGet.status, 200);
+    assert.equal((await batchGet.json()).id, batch.id);
+
+    await assertInvalidQuery("POST", `/v1/vector_stores/${vectorStore.id}/file_batches/${batch.id}/cancel`);
+    const batchAfterInvalidCancel = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${batch.id}`);
+    assert.equal(batchAfterInvalidCancel.status, 200);
+    assert.equal((await batchAfterInvalidCancel.json()).status, "completed");
+
+    const batchFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${batch.id}/files?filter=completed&limit=1&order=desc`);
+    assert.equal(batchFiles.status, 200);
+    assert.equal((await batchFiles.json()).data[0].id, file.id);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Files and Vector Stores back Responses file_search compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
