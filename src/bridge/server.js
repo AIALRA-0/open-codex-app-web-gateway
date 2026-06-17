@@ -4496,8 +4496,9 @@ function conversationIdFromRequest(request = {}) {
 function prepareConversationContext(request, conversationStore, config) {
   const id = conversationIdFromRequest(request);
   if (!id) return null;
-  const items = conversationStore?.listItems(id);
-  if (!items) return { id, missing: true, items: [], messages: [] };
+  const record = conversationStore?.get?.(id);
+  if (!record || record.deleted === true) return { id, missing: true, items: [], messages: [] };
+  const items = Array.isArray(record.items) ? record.items : [];
   const replayRequest = {
     model: request.model || config.defaultModel,
     input: items,
@@ -14399,7 +14400,7 @@ async function handleConversationCreate(req, res, conversationStore) {
 
 function handleConversationGet(res, conversationStore, conversationId) {
   const record = conversationStore.get(conversationId);
-  if (!record) {
+  if (!record || record.deleted === true) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
     return;
   }

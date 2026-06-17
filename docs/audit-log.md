@@ -1,5 +1,43 @@
 # Audit Log
 
+## 2026-06-17 Conversation Delete Item Retention
+
+- Rechecked the official OpenAI OpenAPI schema for
+  `DELETE /v1/conversations/{conversation_id}`:
+  - the response object is `conversation.deleted`;
+  - the endpoint summary explicitly states that items in the conversation are
+    not deleted.
+- Changed the local Conversation store delete behavior from physical JSON-file
+  removal to a tombstone record that preserves existing items:
+  - `GET /v1/conversations/{conversation_id}` treats tombstoned conversations
+    as missing;
+  - conversation updates, new item appends, item deletion, and Responses
+    `conversation` replay reject tombstoned conversations with
+    `conversation_not_found`;
+  - `GET /v1/conversations/{conversation_id}/items` and
+    `GET /v1/conversations/{conversation_id}/items/{item_id}` still return the
+    retained items with the existing include and pagination projections.
+- Regression coverage added:
+  - delete returns the official `conversation.deleted` object;
+  - parent conversation retrieval returns `404` after delete;
+  - retained items remain listable and individually retrievable after delete;
+  - appending to or replaying a deleted conversation returns `404` without an
+    upstream provider call.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe the soft-delete item
+    retention boundary.
+- Validation:
+  - targeted local Conversations lifecycle and request-contract tests pass;
+  - `node --check src/bridge/server.js`,
+    `node --check src/bridge/store.js`, and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Items Pagination Query Validation
 
 - Rechecked the official OpenAI OpenAPI schema for

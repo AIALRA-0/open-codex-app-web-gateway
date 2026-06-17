@@ -180,7 +180,7 @@ class FileConversationStore {
 
   update(id, body = {}) {
     const record = this.get(id);
-    if (!record) return null;
+    if (!record || record.deleted === true) return null;
     if (Object.prototype.hasOwnProperty.call(body, "metadata")) {
       record.metadata = isPlainObject(body.metadata) ? body.metadata : {};
     }
@@ -190,14 +190,10 @@ class FileConversationStore {
 
   delete(id) {
     const record = this.get(id);
-    if (!record) return null;
-    const filePath = this.filePath(id);
-    if (!filePath) return null;
-    try {
-      fs.unlinkSync(filePath);
-    } catch (error) {
-      if (error.code !== "ENOENT") throw error;
-    }
+    if (!record || record.deleted === true) return null;
+    record.deleted = true;
+    record.deleted_at = Math.floor(Date.now() / 1000);
+    this.put(id, record);
     return {
       id,
       object: "conversation.deleted",
@@ -213,7 +209,7 @@ class FileConversationStore {
 
   appendItems(id, items) {
     const record = this.get(id);
-    if (!record) return null;
+    if (!record || record.deleted === true) return null;
     const existing = Array.isArray(record.items) ? record.items : [];
     const normalized = normalizeConversationItems(items, existing.length);
     record.items = [...existing, ...normalized];
@@ -229,7 +225,7 @@ class FileConversationStore {
 
   deleteItem(id, itemId) {
     const record = this.get(id);
-    if (!record) return null;
+    if (!record || record.deleted === true) return null;
     const items = Array.isArray(record.items) ? record.items : [];
     const index = items.findIndex((item) => item.id === itemId);
     if (index === -1) return null;

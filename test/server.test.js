@@ -16929,6 +16929,40 @@ test("local Conversations API persists items and feeds Responses conversation co
 
     const missing = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}`);
     assert.equal(missing.status, 404);
+
+    const retainedItems = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items?order=asc`);
+    assert.equal(retainedItems.status, 200);
+    const retainedItemsJson = await retainedItems.json();
+    assert.equal(retainedItemsJson.data.length, 3);
+    assert.equal(retainedItemsJson.data[0].content, "Remember codeword delta-42.");
+    assert.equal(retainedItemsJson.data[1].content[0].text, "What codeword is stored?");
+    assert.equal(retainedItemsJson.data[2].content[0].text, "delta-42");
+
+    const retainedItem = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items/${allItemsJson.data[0].id}`);
+    assert.equal(retainedItem.status, 200);
+    assert.equal((await retainedItem.json()).content, "Remember codeword delta-42.");
+
+    const appendDeletedConversation = await fetch(`${baseUrl}/v1/conversations/${createdJson.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ items: [{ type: "message", role: "user", content: "after delete" }] }),
+    });
+    assert.equal(appendDeletedConversation.status, 404);
+
+    const replayDeletedConversation = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        conversation: createdJson.id,
+        input: "This should not replay.",
+      }),
+    });
+    assert.equal(replayDeletedConversation.status, 404);
+    const replayDeletedConversationJson = await replayDeletedConversation.json();
+    assert.equal(replayDeletedConversationJson.error.code, "conversation_not_found");
+    assert.equal(replayDeletedConversationJson.error.param, "conversation");
+    assert.equal(requests.length, 1);
   });
 });
 

@@ -95,7 +95,11 @@ honors explicit ascending order, rejects unsupported `order` values, and
 enforces the official `limit` range from 1 through 100 before returning stored
 input items. Local Conversations item-list coverage applies the same pagination
 query contract to `GET /v1/conversations/{conversation_id}/items` while keeping
-the Conversation-specific include projections intact.
+the Conversation-specific include projections intact. Conversation lifecycle
+coverage also verifies the official delete boundary: deleting a conversation
+returns `conversation.deleted` and makes the parent conversation unavailable
+for retrieval, updates, new items, and Responses replay, while existing
+conversation items remain listable and individually retrievable.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
