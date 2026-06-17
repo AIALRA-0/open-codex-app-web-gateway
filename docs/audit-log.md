@@ -39,6 +39,19 @@
   - `npm run secret-scan` passed.
   - Disk guard before deployment: `/` 193G size, 182G used, 11G available,
     95% used.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Responses create smoke verified invalid `text.verbosity:"terse"`
+    returns HTTP 400 with `param:"text.verbosity"` before provider calls.
+  - Public Responses input-token smoke verified invalid
+    `text.verbosity:"terse"` returns HTTP 400 with `param:"text.verbosity"`
+    before provider calls.
+  - Disk guard after deployment: `/` 193G size, 182G used, 11G available,
+    95% used.
 - Secret handling:
   - no API keys, account credentials, bearer tokens, provider headers, local
     deployment env files, or live provider payloads were added to source,
