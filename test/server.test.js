@@ -28321,9 +28321,16 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(listAfter.status, 200);
     assert.deepEqual((await listAfter.json()).data.map((item) => item.id), [secondVideo.id]);
 
-    const listBeforeIgnored = await fetch(`${baseUrl}/v1/videos?order=asc&before=${encodeURIComponent(secondVideo.id)}&limit=10`);
-    assert.equal(listBeforeIgnored.status, 200);
-    assert.deepEqual((await listBeforeIgnored.json()).data.map((item) => item.id), [video.id, secondVideo.id]);
+    const listWithUnsupportedBefore = await fetch(`${baseUrl}/v1/videos?order=asc&before=${encodeURIComponent(secondVideo.id)}&limit=10`);
+    assert.equal(listWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await listWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const content = await fetch(`${baseUrl}/v1/videos/${video.id}/content`);
     assert.equal(content.status, 200);

@@ -13505,6 +13505,9 @@ function handleVideosList(res, store, url) {
 }
 
 function validateOpenAIVideosListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["limit", "order", "after"]);
+  if (allowedError) return allowedError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
