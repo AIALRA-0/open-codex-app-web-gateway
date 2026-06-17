@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Direct Chat Tools Count Validation
+
+- Rechecked the current official OpenAI Chat Completions OpenAPI YAML through
+  the developer docs workflow and the official `openai/openai-openapi` source:
+  - current direct Chat `tools` accepts function and custom tool definitions;
+  - the Chat/legacy functions documentation records a maximum of 128 supported
+    functions.
+- Tightened direct Chat validation before provider calls:
+  - `/v1/chat/completions` now rejects `tools` arrays with more than 128
+    entries, matching the existing legacy `functions` boundary and avoiding
+    oversized tool tables being forwarded to DeepSeek-compatible providers.
+- Regression coverage updated:
+  - extended the direct Chat tools/tool_choice validation test with 129 valid
+    function tool definitions and confirmed it fails at `param:"tools"` before
+    any provider call.
+- Documentation updated:
+  - compatibility matrix now records the direct Chat `tools` count boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "validates tools and tool_choice" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 368/368 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public 129-tool smoke against `/v1/chat/completions` returned HTTP 400
+    with `code:"invalid_request_parameter"` and `param:"tools"`.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Stored Chat Messages Cursor Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 stored Chat message-list

@@ -450,6 +450,7 @@ const OPENAI_CONTAINER_DOMAIN_SECRET_VALUE_MAX_CHARS = 10485760;
 const OPENAI_INLINE_SKILL_SOURCE_DATA_MAX_CHARS = 70254592;
 const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
 const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
+const OPENAI_CHAT_TOOLS_MAX = 128;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
@@ -4995,6 +4996,9 @@ function validateOpenAIChatTools(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "tools")) return null;
   if (!Array.isArray(body.tools)) {
     return requestValidationError("tools must be an array", "tools");
+  }
+  if (body.tools.length > OPENAI_CHAT_TOOLS_MAX) {
+    return requestValidationError(`tools must contain at most ${OPENAI_CHAT_TOOLS_MAX} items`, "tools");
   }
 
   for (const [index, tool] of body.tools.entries()) {

@@ -26542,11 +26542,20 @@ test("POST /v1/chat/completions validates tools and tool_choice before provider 
     }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const tooManyTools = Array.from({ length: 129 }, (_, index) => ({
+      type: "function",
+      function: { name: `tool_${index}` },
+    }));
     const invalidCases = [
       {
         body: { tools: null },
         param: "tools",
         message: "tools must be an array",
+      },
+      {
+        body: { tools: tooManyTools },
+        param: "tools",
+        message: "tools must contain at most 128 items",
       },
       {
         body: { tools: [{ type: "file_search" }] },
