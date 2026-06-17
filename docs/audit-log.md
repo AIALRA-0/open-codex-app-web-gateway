@@ -1,5 +1,72 @@
 # Audit Log
 
+## 2026-06-17 Responses Function Tool Name Boundary and Alias Mapping
+
+- Rechecked the official OpenAI OpenAPI schema for Responses tools through the
+  OpenAI developer docs/OpenAPI source:
+  - `FunctionToolParam.name` is a required string with `minLength:1`,
+    `maxLength:128`, and pattern `^[a-zA-Z0-9_-]+$`;
+  - `CustomToolParam.name` is a required string without the function-name
+    length/pattern constraint;
+  - Chat Completions `FunctionObject.name` and deprecated `functions[].name`
+    remain documented with the 64-character function-name limit.
+- Tightened and corrected local request validation:
+  - Responses function tools and function `tool_choice` now use the 1-128
+    Responses function-name boundary;
+  - Responses custom tools and custom `tool_choice` validate `name` as a
+    string-only field instead of reusing the function-name regex;
+  - direct Chat function and deprecated legacy function validation remain at
+    the 1-64 Chat boundary.
+- Added Chat-provider aliasing for long Responses function names:
+  - valid Responses function names that exceed the Chat function-name boundary
+    are converted to deterministic Chat-safe aliases before upstream Chat
+    provider calls;
+  - non-streaming, streaming, and background Responses output remaps returned
+    Chat tool-call names back to the caller's original Responses function name;
+  - compatibility metadata records the internal alias map for debugging and
+    auditability.
+- Regression coverage updated:
+  - invalid Responses tool tests now reject 129-character function names before
+    provider calls;
+  - custom tool names are covered as string-only fields;
+  - non-streaming and streaming mock-provider tests verify 128-character
+    function tool names are accepted, aliased for Chat, and restored in public
+    Responses output.
+- Documentation updated:
+  - compatibility matrix now distinguishes Responses 128-character function
+    names, Chat 64-character function names, and string-only custom tool names;
+  - evaluation plan now requires long-name alias/remap coverage for
+    non-streaming and streaming Responses paths.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check src/bridge/translator.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|128-character function tool|streaming aliased function"
+    test/server.test.js` passes: 3 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 354 tests;
+  - `npm run secret-scan` passes;
+  - an explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions.
+- Runtime/storage check:
+  - `/` has 14 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200;
+  - public `POST /v1/responses` with a 129-character function tool name returns
+    `400 invalid_request_parameter` with `param:"tools.0.name"` before any
+    upstream provider work.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or deployment env files
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Responses `context_management` Non-Empty Validation
 
 - Rechecked the official OpenAI OpenAPI schema for `CreateResponse` through the

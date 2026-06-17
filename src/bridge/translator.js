@@ -21,6 +21,7 @@ const CHAT_NATIVE_PASSTHROUGH_FIELDS = Object.freeze([
   "functions",
   "function_call",
 ]);
+const CHAT_FUNCTION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
@@ -446,6 +447,11 @@ function responseInputToChatMessages(input, options = {}) {
 function mapResponsesTools(tools = [], options = {}) {
   const mapped = [];
   const unsupported = [];
+  const usedFunctionNames = new Set();
+  const functionToolNameMap = {
+    chat_to_responses: {},
+    responses_to_chat: {},
+  };
   const localHostedTools = new Set(options.localHostedTools || []);
   const deferFunctionTools = localHostedTools.has("tool_search")
     && (tools || []).some((tool) => isPlainObject(tool) && tool.type === "tool_search");
@@ -454,10 +460,17 @@ function mapResponsesTools(tools = [], options = {}) {
     if (!isPlainObject(tool)) continue;
     if (tool.type === "function") {
       if (deferFunctionTools && tool.defer_loading) continue;
+      const chatName = chatFunctionNameForResponsesTool(tool.name, usedFunctionNames);
+      if (chatName !== tool.name) {
+        functionToolNameMap.chat_to_responses[chatName] = tool.name;
+        if (!functionToolNameMap.responses_to_chat[tool.name]) {
+          functionToolNameMap.responses_to_chat[tool.name] = chatName;
+        }
+      }
       mapped.push({
         type: "function",
         function: {
-          name: tool.name,
+          name: chatName,
           description: tool.description || "",
           parameters: tool.parameters || { type: "object", properties: {} },
           ...(tool.strict != null ? { strict: tool.strict } : {}),
@@ -470,16 +483,38 @@ function mapResponsesTools(tools = [], options = {}) {
     }
   }
 
-  return { mapped, unsupported };
+  const hasNameMap = Object.keys(functionToolNameMap.chat_to_responses).length > 0;
+  return { mapped, unsupported, functionToolNameMap: hasNameMap ? functionToolNameMap : null };
 }
 
-function mapToolChoice(toolChoice) {
+function chatFunctionNameForResponsesTool(name, usedNames) {
+  const raw = stringifyContent(name);
+  if (CHAT_FUNCTION_NAME_RE.test(raw) && !usedNames.has(raw)) {
+    usedNames.add(raw);
+    return raw;
+  }
+  const hash = crypto.createHash("sha256").update(raw).digest("hex").slice(0, 12);
+  const prefix = raw.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 50) || "tool";
+  let candidate = `${prefix}_${hash}`.slice(0, 64);
+  let suffix = 2;
+  while (usedNames.has(candidate)) {
+    const marker = `_${suffix++}`;
+    candidate = `${prefix.slice(0, 64 - marker.length)}${marker}`;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function mapToolChoice(toolChoice, options = {}) {
   if (toolChoice == null) return undefined;
   if (typeof toolChoice === "string") return toolChoice;
   if (!isPlainObject(toolChoice)) return undefined;
   if (toolChoice.type === "function") {
     const name = toolChoice.name || toolChoice.function?.name;
-    if (name) return { type: "function", function: { name } };
+    if (name) {
+      const mappedName = options.functionToolNameMap?.responses_to_chat?.[name] || name;
+      return { type: "function", function: { name: mappedName } };
+    }
   }
   return toolChoice;
 }
@@ -614,7 +649,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
 
   messages.push(...responseInputToChatMessages(request.input, options));
 
-  let { mapped: tools, unsupported } = mapResponsesTools(request.tools || [], options);
+  let { mapped: tools, unsupported, functionToolNameMap } = mapResponsesTools(request.tools || [], options);
   const compatibilityMessage = makeCompatibilityMessage(unsupported);
   if (compatibilityMessage) messages.unshift(compatibilityMessage);
 
@@ -646,7 +681,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
   const verbosityCompatibility = mapVerbosity(request, chat, options);
   const contextManagementCompatibility = mapContextManagement(request);
-  let toolChoice = mapToolChoice(request.tool_choice);
+  let toolChoice = mapToolChoice(request.tool_choice, { functionToolNameMap });
   const legacyFunctionsCompatibility = mapLegacyChatFunctions(request, tools, toolChoice, options);
   if (legacyFunctionsCompatibility?.tools) tools = legacyFunctionsCompatibility.tools;
   if (Object.prototype.hasOwnProperty.call(legacyFunctionsCompatibility || {}, "toolChoice")) {
@@ -687,6 +722,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
     chat,
     compatibility: {
       unsupported_tools: unsupported,
+      ...(functionToolNameMap ? { response_function_tool_names: functionToolNameMap } : {}),
       ...(toolChoice !== undefined && !tools.length && hasLocalHostedToolRequest(request.tools, options)
         ? { local_tool_choice: "handled_by_bridge" }
         : {}),
@@ -1490,8 +1526,8 @@ function chatCompletionToResponse(chat, request = {}, options = {}) {
     const message = choice.message || {};
     appendReasoningOutput(response, message.reasoning_content);
     appendMessageOutput(response, message, choice.logprobs);
-    appendToolCallOutputs(response, message.tool_calls || []);
-    appendLegacyFunctionCallOutput(response, message.function_call, legacyFunctionCallId(chat, choice));
+    appendToolCallOutputs(response, message.tool_calls || [], options);
+    appendLegacyFunctionCallOutput(response, message.function_call, legacyFunctionCallId(chat, choice), options);
   }
 
   const compatibilityMetadata = chatCompatibilityMetadata(chat);
@@ -1725,14 +1761,14 @@ function normalizeAssistantText(content) {
   return stringifyContent(content);
 }
 
-function appendToolCallOutputs(response, toolCalls) {
+function appendToolCallOutputs(response, toolCalls, options = {}) {
   for (const toolCall of toolCalls || []) {
     if (!toolCall || toolCall.type !== "function") continue;
     response.output.push({
       id: prefixedId("fc"),
       type: "function_call",
       call_id: toolCall.id || prefixedId("call"),
-      name: toolCall.function?.name,
+      name: remapChatFunctionName(toolCall.function?.name, options),
       ...(toolCall.function?.namespace ? { namespace: toolCall.function.namespace } : {}),
       arguments: stringifyContent(toolCall.function?.arguments ?? ""),
       status: "completed",
@@ -1740,17 +1776,24 @@ function appendToolCallOutputs(response, toolCalls) {
   }
 }
 
-function appendLegacyFunctionCallOutput(response, functionCall, callId) {
+function appendLegacyFunctionCallOutput(response, functionCall, callId, options = {}) {
   if (!isPlainObject(functionCall) || !functionCall.name) return;
   response.output.push({
     id: prefixedId("fc"),
     type: "function_call",
     call_id: callId,
-    name: functionCall.name,
+    name: remapChatFunctionName(functionCall.name, options),
     ...(functionCall.namespace ? { namespace: functionCall.namespace } : {}),
     arguments: stringifyContent(functionCall.arguments ?? ""),
     status: "completed",
   });
+}
+
+function remapChatFunctionName(name, options = {}) {
+  if (typeof name !== "string") return name;
+  return options?.responseFunctionToolNameMap?.chat_to_responses?.[name]
+    || options?.response_function_tool_names?.chat_to_responses?.[name]
+    || name;
 }
 
 function legacyFunctionCallId(chat, choice = {}) {

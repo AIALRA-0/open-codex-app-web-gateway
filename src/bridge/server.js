@@ -262,6 +262,7 @@ const OPENAI_LOGIT_BIAS_MAX = 100;
 const OPENAI_RESPONSE_FORMAT_TYPES = Object.freeze(["text", "json_object", "json_schema"]);
 const OPENAI_RESPONSE_FORMAT_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
 const OPENAI_FUNCTION_NAME_RE = /^[A-Za-z0-9_-]{1,64}$/;
+const OPENAI_RESPONSES_FUNCTION_NAME_RE = /^[A-Za-z0-9_-]{1,128}$/;
 const OPENAI_RESPONSE_MODALITY_VALUES = Object.freeze(["text", "audio"]);
 const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "flac", "opus", "pcm16"]);
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
@@ -1191,7 +1192,10 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   mergeLocalToolSearchCompatibility(compatibility, toolSearchCompatibility(localToolSearch));
   Object.assign(compatibility, toolBudgetCompatibility(toolBudget));
 
-  const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  const response = chatCompletionToResponse(upstreamJson, request, {
+    responseId,
+    responseFunctionToolNameMap: compatibility.response_function_tool_names,
+  });
   attachConversationToResponse(response, conversation);
   attachShellOutput(response, localShell, { includeCodeInterpreterOutputs: true });
   attachComputerOutput(response, localComputer);
@@ -1717,7 +1721,10 @@ async function runPreparedBackgroundProviderResponse({ config, store, job, reque
   if (contexts?.tool_search) mergeLocalToolSearchCompatibility(finalCompatibility, toolSearchCompatibility(contexts.tool_search));
   Object.assign(finalCompatibility, toolBudgetCompatibility(toolBudget));
 
-  const response = chatCompletionToResponse(upstreamJson, request, { responseId });
+  const response = chatCompletionToResponse(upstreamJson, request, {
+    responseId,
+    responseFunctionToolNameMap: finalCompatibility.response_function_tool_names,
+  });
   attachConversationToResponse(response, conversation);
   prependLocalOutputItems(response, finalLocalOutputItems);
   response.background = true;
@@ -3688,8 +3695,8 @@ function validateOpenAIResponsesTools(body = {}) {
 }
 
 function validateOpenAIResponsesFunctionTool(tool, param) {
-  if (typeof tool.name !== "string" || !OPENAI_FUNCTION_NAME_RE.test(tool.name)) {
-    return requestValidationError(openAIFunctionNameMessage(param), `${param}.name`);
+  if (typeof tool.name !== "string" || !OPENAI_RESPONSES_FUNCTION_NAME_RE.test(tool.name)) {
+    return requestValidationError(openAIResponsesFunctionNameMessage(param), `${param}.name`);
   }
   if (
     Object.prototype.hasOwnProperty.call(tool, "description")
@@ -3722,8 +3729,8 @@ function validateOpenAIResponsesFunctionTool(tool, param) {
 }
 
 function validateOpenAIResponsesCustomTool(tool, param) {
-  if (typeof tool.name !== "string" || !OPENAI_FUNCTION_NAME_RE.test(tool.name)) {
-    return requestValidationError(openAIFunctionNameMessage(param), `${param}.name`);
+  if (typeof tool.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
   }
   if (
     Object.prototype.hasOwnProperty.call(tool, "description")
@@ -3807,13 +3814,12 @@ function validateOpenAIResponsesToolChoice(body = {}) {
   }
   if (toolChoice.type === "function") {
     return validateOpenAINamedToolChoice(toolChoice, "tool_choice", {
-      validateFunctionName: true,
+      functionNamePattern: OPENAI_RESPONSES_FUNCTION_NAME_RE,
+      functionNameMessage: openAIResponsesFunctionNameMessage,
     });
   }
   if (toolChoice.type === "custom") {
-    return validateOpenAINamedToolChoice(toolChoice, "tool_choice", {
-      validateFunctionName: true,
-    });
+    return validateOpenAINamedToolChoice(toolChoice, "tool_choice");
   }
   if (toolChoice.type === "mcp") {
     if (typeof toolChoice.server_label !== "string") {
@@ -3929,8 +3935,12 @@ function validateOpenAINamedToolChoice(choice, param, options = {}) {
   if (typeof choice.name !== "string") {
     return requestValidationError(`${param}.name must be a string`, `${param}.name`);
   }
-  if (options.validateFunctionName && !OPENAI_FUNCTION_NAME_RE.test(choice.name)) {
-    return requestValidationError(openAIFunctionNameMessage(param), `${param}.name`);
+  const functionNamePattern = options.functionNamePattern || (options.validateFunctionName ? OPENAI_FUNCTION_NAME_RE : null);
+  if (functionNamePattern && !functionNamePattern.test(choice.name)) {
+    const message = typeof options.functionNameMessage === "function"
+      ? options.functionNameMessage(param)
+      : openAIFunctionNameMessage(param);
+    return requestValidationError(message, `${param}.name`);
   }
   return null;
 }
@@ -4071,6 +4081,10 @@ function validateOpenAIFunctionObject(fn, param, options = {}) {
 
 function openAIFunctionNameMessage(param) {
   return `${param}.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes`;
+}
+
+function openAIResponsesFunctionNameMessage(param) {
+  return `${param}.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes`;
 }
 
 function validateOpenAIBooleanParameter(body = {}, field) {
@@ -5608,6 +5622,7 @@ async function handleStreamingResponse(req, res, config, store, request, chat, p
   attachConversationToResponse(response, conversation);
   const state = createStreamState(response, compatibility, {
     includeObfuscation: responseStreamIncludeObfuscation(request),
+    responseFunctionToolNameMap: compatibility?.response_function_tool_names,
   });
 
   res.writeHead(200, {
@@ -6018,6 +6033,7 @@ function createStreamState(response, compatibility, options = {}) {
     chatCompatibility: {},
     chatUsage: undefined,
     usage: null,
+    responseFunctionToolNameMap: options.responseFunctionToolNameMap || null,
   };
 }
 
@@ -6511,6 +6527,7 @@ function finishStreamState(state) {
         text: item.summary[0]?.text || "",
       });
     } else if (item.type === "function_call") {
+      item.name = remapStreamChatFunctionName(item.name, state);
       item.status = "completed";
       events.push({
         type: "response.function_call_arguments.done",
@@ -6530,6 +6547,11 @@ function finishStreamState(state) {
   }
 
   return events;
+}
+
+function remapStreamChatFunctionName(name, state = {}) {
+  if (typeof name !== "string") return name;
+  return state.responseFunctionToolNameMap?.chat_to_responses?.[name] || name;
 }
 
 function mergeStreamAudio(existing, deltaAudio) {

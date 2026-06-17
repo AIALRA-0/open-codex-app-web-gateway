@@ -214,6 +214,13 @@ final Chat function call is remapped back to the original Responses
 that pass `tool_search_output.tools` in `input` without repeating the `tools`
 array, plus `additional_tools` input items that inject function definitions
 without leaking raw protocol items into the prompt. Live bridge-regression
+Responses-tool coverage verifies official Responses function-name boundaries
+separately from Chat legacy function names: 128-character Responses function
+tool names are accepted, 129-character names are rejected before any provider
+call, custom tool names are treated as string-only fields, and long Responses
+function names are converted to deterministic Chat-safe aliases and remapped
+back in both non-streaming and streaming public output.
+Live bridge-regression
 coverage now exercises client-executed `tool_search` against DeepSeek: the
 first response emits only a client `tool_search_call`, the harness supplies a
 `tool_search_output` containing a namespace tool, and the follow-up response

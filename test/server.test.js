@@ -2834,6 +2834,7 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const endpoints = ["/v1/responses", "/v1/responses/input_tokens"];
+    const responseFunctionName129 = "a".repeat(129);
     const invalidCases = [
       {
         body: { tools: "lookup" },
@@ -2853,7 +2854,17 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
       {
         body: { tools: [{ type: "function", name: "bad name" }] },
         param: "tools.0.name",
-        message: "tools.0.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+        message: "tools.0.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tools: [{ type: "function", name: responseFunctionName129 }] },
+        param: "tools.0.name",
+        message: "tools.0.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tools: [{ type: "custom", name: 7 }] },
+        param: "tools.0.name",
+        message: "tools.0.name must be a string",
       },
       {
         body: { tools: [{ type: "function", name: "lookup", parameters: [] }] },
@@ -2871,6 +2882,18 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.server_label must be a string",
       },
       {
+        body: {
+          tools: [{
+            type: "namespace",
+            name: "math",
+            description: "Math tools.",
+            tools: [{ type: "function", name: responseFunctionName129 }],
+          }],
+        },
+        param: "tools.0.tools.0.name",
+        message: "tools.0.tools.0.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
         body: { tool_choice: "force" },
         param: "tool_choice",
         message: "tool_choice must be one of: none, auto, required",
@@ -2882,6 +2905,16 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
       },
       {
         body: { tool_choice: { type: "function" } },
+        param: "tool_choice.name",
+        message: "tool_choice.name must be a string",
+      },
+      {
+        body: { tool_choice: { type: "function", name: responseFunctionName129 } },
+        param: "tool_choice.name",
+        message: "tool_choice.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tool_choice: { type: "custom", name: 7 } },
         param: "tool_choice.name",
         message: "tool_choice.name must be a string",
       },
@@ -2921,6 +2954,159 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
       }
     }
     assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/responses aliases 128-character function tool names for Chat providers", async () => {
+  const responseFunctionName128 = "a".repeat(128);
+  let providerAlias = null;
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools.length, 1);
+    providerAlias = call.body.tools[0].function.name;
+    assert.notEqual(providerAlias, responseFunctionName128);
+    assert.ok(providerAlias.length <= 64);
+    assert.match(providerAlias, /^[A-Za-z0-9_-]+$/);
+    assert.equal(call.body.tool_choice.function.name, providerAlias);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_long_function_tool_name",
+      object: "chat.completion",
+      created: 1700000413,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_long_name",
+            type: "function",
+            function: { name: providerAlias, arguments: "{\"ok\":true}" },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Call the long function tool.",
+        tools: [
+          {
+            type: "function",
+            name: responseFunctionName128,
+            description: "Record a result.",
+            parameters: { type: "object", properties: { ok: { type: "boolean" } } },
+          },
+          {
+            type: "custom",
+            name: "free form tool name",
+            description: "A string-only custom tool name.",
+          },
+        ],
+        tool_choice: { type: "function", name: responseFunctionName128 },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "function_call");
+    assert.equal(json.output[0].name, responseFunctionName128);
+    assert.equal(json.output[0].arguments, "{\"ok\":true}");
+    assert.equal(json.metadata.compatibility.unsupported_tools[0], "custom");
+    assert.equal(
+      json.metadata.compatibility.response_function_tool_names.chat_to_responses[providerAlias],
+      responseFunctionName128,
+    );
+    assert.equal(
+      json.metadata.compatibility.response_function_tool_names.responses_to_chat[responseFunctionName128],
+      providerAlias,
+    );
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/responses remaps streaming aliased function tool names", async () => {
+  const responseFunctionName128 = "b".repeat(128);
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, true);
+    assert.equal(call.body.tools.length, 1);
+    const providerAlias = call.body.tools[0].function.name;
+    assert.notEqual(providerAlias, responseFunctionName128);
+    const splitAt = Math.ceil(providerAlias.length / 2);
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_long_function_tool_name",
+      object: "chat.completion.chunk",
+      created: 1700000414,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [{
+            index: 0,
+            id: "call_stream_long_name",
+            type: "function",
+            function: { name: providerAlias.slice(0, splitAt), arguments: "{\"ok\"" },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_long_function_tool_name",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            function: { name: providerAlias.slice(splitAt), arguments: ":true}" },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_long_function_tool_name",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 7, completion_tokens: 2, total_tokens: 9 },
+    })}\n\n`);
+    res.end("data: [DONE]\n\n");
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Stream the long function tool.",
+        tools: [{
+          type: "function",
+          name: responseFunctionName128,
+          description: "Record a streamed result.",
+          parameters: { type: "object", properties: { ok: { type: "boolean" } } },
+        }],
+        tool_choice: { type: "function", name: responseFunctionName128 },
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const doneItem = events.find((event) => (
+      event.event === "response.output_item.done"
+      && event.data?.item?.type === "function_call"
+    ));
+    assert.equal(doneItem.data.item.name, responseFunctionName128);
+    assert.equal(doneItem.data.item.arguments, "{\"ok\":true}");
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    const streamCall = completed.output.find((item) => item.type === "function_call");
+    assert.equal(streamCall.name, responseFunctionName128);
+    assert.equal(streamCall.arguments, "{\"ok\":true}");
+    assert.equal(completed.metadata.compatibility.chat_choices[0].finish_reason, "tool_calls");
   });
 });
 
