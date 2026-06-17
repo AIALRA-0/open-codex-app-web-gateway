@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Organization Invites List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/invites` through the OpenAI developer-docs MCP.
+- Confirmed the official list query parameters are `limit` and `after`; no
+  `order` or `before` query parameter is documented for this endpoint. The
+  official `limit` description allows values from 1 through 100 and defaults to
+  20.
+- Tightened local Organization Invites list behavior:
+  - `GET /v1/organization/invites` now validates `limit` from 1 through 100 and
+    rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `order` and `before` query values are stripped before
+    pagination, so they no longer shape official Organization Invites list
+    results.
+- Regression coverage updated:
+  - organization users/invites lifecycle tests now cover invite-list `limit`,
+    `after`, ignored `order`, ignored `before`, invalid `limit`, and repeated
+    scalar cursor values.
+- Documentation updated:
+  - compatibility matrix now records the official Organization Invites list
+    pagination contract and unsupported query handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization users and invites manage local admin lifecycle" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization Invites smoke marker `org-invite-query-smoke-mqi6j4kv`
+    created a temporary local project, created two local organization invites,
+    confirmed `limit=1` paging, verified unsupported `order=desc` and `before`
+    did not change the official list result, verified `after` advanced the
+    cursor, confirmed invalid `limit=0` returned HTTP 400 with `param:"limit"`,
+    confirmed repeated `after` returned HTTP 400 with `param:"after"`,
+    confirmed full invite pagination included both temporary invite IDs, deleted
+    the temporary invites, and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    invite secrets, user credentials, or deployment env files were added to
+    source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Users List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema for

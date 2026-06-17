@@ -22646,6 +22646,96 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     assert.equal(fetchedInvite.status, 200);
     assert.equal((await fetchedInvite.json()).email, "new-org-user@example.com");
 
+    const secondInviteResponse = await fetch(`${baseUrl}/v1/organization/invites`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        email: "second-org-user@example.com",
+        role: "reader",
+        projects: [{ id: project.id, role: "member" }],
+      }),
+    });
+    assert.equal(secondInviteResponse.status, 200);
+    const secondInvite = await secondInviteResponse.json();
+
+    const firstInvitePage = await fetch(`${baseUrl}/v1/organization/invites?limit=1`);
+    assert.equal(firstInvitePage.status, 200);
+    const firstInvitePageJson = await firstInvitePage.json();
+    assert.equal(firstInvitePageJson.object, "list");
+    assert.equal(firstInvitePageJson.data.length, 1);
+    assert.equal(firstInvitePageJson.has_more, true);
+    const firstListedInviteId = firstInvitePageJson.data[0].id;
+    const nextListedInviteId = [invite.id, secondInvite.id].find((inviteId) => inviteId !== firstListedInviteId);
+    assert.ok(nextListedInviteId);
+
+    const orderIgnoredInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=1&order=desc`);
+    assert.equal(orderIgnoredInvites.status, 200);
+    assert.equal((await orderIgnoredInvites.json()).data[0].id, firstListedInviteId);
+
+    const afterInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=1&after=${encodeURIComponent(firstListedInviteId)}`);
+    assert.equal(afterInvites.status, 200);
+    const afterInvitesJson = await afterInvites.json();
+    assert.equal(afterInvitesJson.data.length, 1);
+    assert.equal(afterInvitesJson.data[0].id, nextListedInviteId);
+
+    const allInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=10`);
+    assert.equal(allInvites.status, 200);
+    const allInvitesJson = await allInvites.json();
+    assert.equal(allInvitesJson.data.length, 2);
+
+    const beforeIgnoredInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=10&before=${encodeURIComponent(nextListedInviteId)}`);
+    assert.equal(beforeIgnoredInvites.status, 200);
+    const beforeIgnoredInvitesJson = await beforeIgnoredInvites.json();
+    assert.deepEqual(
+      beforeIgnoredInvitesJson.data.map((item) => item.id),
+      allInvitesJson.data.map((item) => item.id),
+    );
+
+    const invalidOrganizationInviteListCases = [
+      {
+        path: "/v1/organization/invites?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/invites?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/invites?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/invites?after=${encodeURIComponent(firstListedInviteId)}&after=${encodeURIComponent(nextListedInviteId)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidOrganizationInviteListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
+    const deletedSecondInvite = await fetch(`${baseUrl}/v1/organization/invites/${secondInvite.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondInvite.status, 200);
+    assert.deepEqual(await deletedSecondInvite.json(), {
+      object: "organization.invite.deleted",
+      id: secondInvite.id,
+      deleted: true,
+    });
+
     const invalidInviteRole = await fetch(`${baseUrl}/v1/organization/invites`, {
       method: "POST",
       headers: { "content-type": "application/json" },
