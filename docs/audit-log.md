@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Batches List Official Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /batches`
+  query schema:
+  - `after` is a string scalar cursor;
+  - `limit` is an integer scalar with documented range 1 through 100;
+  - `before` and `order` are not part of the official Batches list query
+    contract.
+- Tightened local Batches list behavior:
+  - `GET /v1/batches` now validates official repeated scalar `after` and
+    `limit` query parameters before listing local records;
+  - the paginator receives a sanitized URL containing only official `after`
+    and `limit`, so generic paginator parameters such as `before` and `order`
+    no longer affect Batches list output.
+- Regression coverage updated:
+  - extended the local Batch API execute/list test to verify `before` does not
+    hide an existing batch and repeated `limit` / `after` return
+    `400 invalid_request_parameter`.
+- Documentation updated:
+  - compatibility matrix now records Batches list pagination as official
+    `limit` and `after` only.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Batch API executes Responses JSONL" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public repeated-`limit` smoke against `/v1/batches` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"limit"`.
+  - Public repeated-`after` smoke against `/v1/batches` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"after"`.
+  - Public `before` smoke against `/v1/batches` returned HTTP 200 list output,
+    confirming unsupported generic paginator state no longer controls the
+    official Batches list result.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 List Query Scalar Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

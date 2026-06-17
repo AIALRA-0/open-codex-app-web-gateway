@@ -16417,11 +16417,31 @@ function scoreModelTokenUsage(usage) {
 }
 
 function handleBatchesList(res, store, fileSearchStore, url) {
+  const queryError = validateOpenAIBatchesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const batches = store.list()
     .filter((record) => record?.batch)
     .map((record) => applyBatchOutputExpiration(record, store, fileSearchStore))
     .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
-  sendJson(res, 200, paginateList(batches, url));
+  sendJson(res, 200, paginateList(batches, officialBatchListPaginationUrl(url)));
+}
+
+function validateOpenAIBatchesListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialBatchListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleBatchGet(res, store, fileSearchStore, batchId) {

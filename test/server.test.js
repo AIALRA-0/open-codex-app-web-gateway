@@ -29796,6 +29796,32 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     const listedJson = await listed.json();
     assert.equal(listedJson.data[0].id, batch.id);
 
+    const beforeIgnored = await fetch(`${baseUrl}/v1/batches?before=${batch.id}`);
+    assert.equal(beforeIgnored.status, 200);
+    assert.equal((await beforeIgnored.json()).data[0].id, batch.id);
+
+    const repeatedLimit = await fetch(`${baseUrl}/v1/batches?limit=1&limit=2`);
+    assert.equal(repeatedLimit.status, 400);
+    assert.deepEqual(await repeatedLimit.json(), {
+      error: {
+        message: "limit must be a single string query value",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedAfter = await fetch(`${baseUrl}/v1/batches?after=${batch.id}&after=batch_other`);
+    assert.equal(repeatedAfter.status, 400);
+    assert.deepEqual(await repeatedAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const cancelled = await fetch(`${baseUrl}/v1/batches/${batch.id}/cancel`, { method: "POST" });
     assert.equal(cancelled.status, 200);
     const cancelledJson = await cancelled.json();
