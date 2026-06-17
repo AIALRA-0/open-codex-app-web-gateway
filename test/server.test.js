@@ -1171,11 +1171,44 @@ test("Responses endpoints validate input image and file detail before provider c
         endpoint: "/v1/responses",
         input: [{
           type: "mcp_list_tools",
+          id: "mcpl_bad",
           server_label: "dmcp",
           tools: {},
         }],
         param: "input.0.tools",
         message: "input.0.tools must be an array",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "mcp_list_tools",
+          server_label: "dmcp",
+          tools: [],
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "mcp_call",
+          server_label: "dmcp",
+          name: "roll",
+          arguments: "{}",
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "mcp_approval_request",
+          server_label: "dmcp",
+          name: "roll",
+          arguments: "{}",
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
       },
       {
         endpoint: "/v1/responses/input_tokens",
@@ -14036,6 +14069,7 @@ test("POST /v1/responses emits local mcp_list_tools context without leaking auth
           { role: "user", content: "Use the dmcp MCP context and return mcp-ok." },
           {
             type: "mcp_call",
+            id: "mcpc_manual_roll",
             server_label: "dmcp",
             name: "roll",
             arguments: "{\"diceRollExpression\":\"2d4+1\"}",

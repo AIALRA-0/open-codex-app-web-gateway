@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Responses MCP Replay ID Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 Responses input item
+  schemas through the developer docs MCP workflow and the local official
+  `openai-openapi` YAML:
+  - `MCPListTools.id`, `MCPApprovalRequest.id`, and `MCPToolCall.id` are
+    required strings on replayed MCP protocol items.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject replayed `mcp_list_tools`, `mcp_call`,
+    and `mcp_approval_request` items without a non-empty `id`;
+  - the existing local MCP context fixture was updated to pass a realistic
+    `mcp_call.id`.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with missing-id
+    MCP replay item cases.
+- Documentation updated:
+  - compatibility matrix now records MCP required replay id validation for
+    hosted/local tool result input items.
+- Validation:
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed MCP replay smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.id"` with message
+    `input.0.id must be a non-empty string`.
+- Disk guard:
+  - root filesystem has 16 GB free and is 92% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses MCP Endpoint Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 MCP tool schema through

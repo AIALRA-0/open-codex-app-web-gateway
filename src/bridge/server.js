@@ -5878,7 +5878,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "mcp_list_tools") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
     const serverLabelError = validateOpenAIRequiredStringItemField(item, param, "server_label");
     if (serverLabelError) return serverLabelError;
@@ -5888,7 +5888,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "mcp_call") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
     const serverLabelError = validateOpenAIRequiredStringItemField(item, param, "server_label");
     if (serverLabelError) return serverLabelError;
@@ -5904,7 +5904,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "mcp_approval_request") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
     const serverLabelError = validateOpenAIRequiredStringItemField(item, param, "server_label");
     if (serverLabelError) return serverLabelError;
