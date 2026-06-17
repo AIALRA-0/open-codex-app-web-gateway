@@ -705,6 +705,63 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "message",
+          role: "tool",
+          content: "Use a tool-output item instead.",
+        }],
+        param: "input.0.role",
+        message: "input.0.role must be one of: user, assistant, system, developer",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "message",
+          role: "user",
+        }],
+        param: "input.0.content",
+        message: "input.0.content is required",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          role: "user",
+          content: { type: "input_text", text: "bad shape" },
+        }],
+        param: "input.0.content",
+        message: "input.0.content must be a string or an array",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "message",
+          role: "assistant",
+          phase: "analysis",
+          content: [{ type: "output_text", text: "bad phase", annotations: [] }],
+        }],
+        param: "input.0.phase",
+        message: "input.0.phase must be one of: commentary, final_answer",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "assistant",
+          content: [{ type: "output_text", annotations: [] }],
+        }],
+        param: "input.0.content.0.text",
+        message: "input.0.content.0.text must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          role: "assistant",
+          content: [{ type: "output_text", text: "bad annotations", annotations: {} }],
+        }],
+        param: "input.0.content.0.annotations",
+        message: "input.0.content.0.annotations must be an array or null",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "custom_tool_call_output",
           call_id: "call_custom",
           output: [{ type: "input_text" }],

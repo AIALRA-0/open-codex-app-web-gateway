@@ -68,14 +68,20 @@ function normalizeContentParts(content, role = "user", options = {}) {
       continue;
     }
 
-    if (part.type === "input_text" || part.type === "output_text" || part.type === "text") {
+    if (
+      part.type === "input_text"
+      || part.type === "output_text"
+      || part.type === "text"
+      || part.type === "summary_text"
+      || part.type === "reasoning_text"
+    ) {
       const text = stringifyContent(part.text ?? part.content ?? "");
       if (nativeTextParts) parts.push({ type: "text", text });
       else textFallback.push(text);
       continue;
     }
 
-    if (part.type === "input_image" || part.type === "image_url") {
+    if (part.type === "input_image" || part.type === "image_url" || part.type === "computer_screenshot") {
       const image = normalizeInputImageContentPart(part);
       if (role === "user" && image && imageInputMode !== "text") {
         parts.push(image);

@@ -301,6 +301,24 @@ const OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES = Object.freeze(["low", "high"])
 const OPENAI_RESPONSES_COMPUTER_CALL_OUTPUT_STATUS_VALUES = Object.freeze(["in_progress", "completed", "incomplete"]);
 const OPENAI_RESPONSES_COMPUTER_OUTPUT_TYPES = Object.freeze(["computer_screenshot", "input_image", "image_url"]);
 const OPENAI_RESPONSES_COMPACTION_ENCRYPTED_CONTENT_MAX_CHARS = 10485760;
+const OPENAI_RESPONSES_MESSAGE_ROLE_VALUES = Object.freeze(["user", "assistant", "system", "developer"]);
+const OPENAI_RESPONSES_MESSAGE_PHASE_VALUES = Object.freeze(["commentary", "final_answer"]);
+const OPENAI_RESPONSES_MESSAGE_CONTENT_PART_TYPES = Object.freeze([
+  "input_text",
+  "text",
+  "input_image",
+  "image_url",
+  "input_file",
+  "file",
+  "input_audio",
+  "audio",
+  "output_text",
+  "refusal",
+  "output_refusal",
+  "summary_text",
+  "reasoning_text",
+  "computer_screenshot",
+]);
 const OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES = Object.freeze({
   file_search_call: Object.freeze(["in_progress", "searching", "completed", "incomplete", "failed"]),
   web_search_call: Object.freeze(["in_progress", "searching", "completed", "failed"]),
@@ -5292,6 +5310,13 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
   }
   if (!isPlainObject(value)) return null;
 
+  if (
+    value.type === "message"
+    || (Object.prototype.hasOwnProperty.call(value, "role") && value.type !== "additional_tools")
+  ) {
+    const error = validateOpenAIResponsesMessageInputItem(value, param);
+    if (error) return error;
+  }
   if (value.type === "input_image" || value.type === "image_url") {
     const error = validateOpenAIResponsesInputImageDetails(value, param);
     if (error) return error;
@@ -5326,6 +5351,111 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
   }
   if (Object.prototype.hasOwnProperty.call(value, "content")) {
     return validateOpenAIResponsesInputDetailsValue(value.content, `${param}.content`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesMessageInputItem(item, param) {
+  if (Object.prototype.hasOwnProperty.call(item, "type") && item.type !== "message") {
+    return requestValidationError(`${param}.type must be message`, `${param}.type`);
+  }
+  const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+  if (idError) return idError;
+
+  if (typeof item.role !== "string" || !OPENAI_RESPONSES_MESSAGE_ROLE_VALUES.includes(item.role)) {
+    return requestValidationError(
+      `${param}.role must be one of: ${OPENAI_RESPONSES_MESSAGE_ROLE_VALUES.join(", ")}`,
+      `${param}.role`,
+    );
+  }
+
+  const statusError = validateOpenAIResponsesInputItemStatus(item, param);
+  if (statusError) return statusError;
+
+  if (Object.prototype.hasOwnProperty.call(item, "phase") && item.phase !== null) {
+    if (typeof item.phase !== "string" || !OPENAI_RESPONSES_MESSAGE_PHASE_VALUES.includes(item.phase)) {
+      return requestValidationError(
+        `${param}.phase must be one of: ${OPENAI_RESPONSES_MESSAGE_PHASE_VALUES.join(", ")}`,
+        `${param}.phase`,
+      );
+    }
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(item, "content")) {
+    return requestValidationError(`${param}.content is required`, `${param}.content`);
+  }
+  if (typeof item.content === "string") return null;
+  if (!Array.isArray(item.content)) {
+    return requestValidationError(`${param}.content must be a string or an array`, `${param}.content`);
+  }
+  for (const [index, part] of item.content.entries()) {
+    const partError = validateOpenAIResponsesMessageContentPart(part, `${param}.content.${index}`);
+    if (partError) return partError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesMessageContentPart(part, param) {
+  if (!isPlainObject(part)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof part.type !== "string" || !OPENAI_RESPONSES_MESSAGE_CONTENT_PART_TYPES.includes(part.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${OPENAI_RESPONSES_MESSAGE_CONTENT_PART_TYPES.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+
+  if (part.type === "input_text" || part.type === "text" || part.type === "summary_text" || part.type === "reasoning_text") {
+    if (typeof part.text !== "string") {
+      return requestValidationError(`${param}.text must be a string`, `${param}.text`);
+    }
+    return null;
+  }
+
+  if (part.type === "output_text") {
+    if (typeof part.text !== "string") {
+      return requestValidationError(`${param}.text must be a string`, `${param}.text`);
+    }
+    const annotationsError = validateOpenAIOptionalArrayItemField(part, param, "annotations", { nullable: true });
+    if (annotationsError) return annotationsError;
+    return validateOpenAIOptionalArrayItemField(part, param, "logprobs", { nullable: true });
+  }
+
+  if (part.type === "refusal" || part.type === "output_refusal") {
+    const field = Object.prototype.hasOwnProperty.call(part, "refusal") ? "refusal" : "text";
+    if (typeof part[field] !== "string") {
+      return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+    }
+    return null;
+  }
+
+  if (part.type === "input_image" || part.type === "image_url") {
+    return validateOpenAIResponsesInputImageDetails(part, param);
+  }
+
+  if (part.type === "computer_screenshot") {
+    return validateOpenAIResponsesComputerScreenshotOutput(part, param);
+  }
+
+  if (part.type === "input_file" || part.type === "file") {
+    return validateOpenAIResponsesInputFileDetails(part, param);
+  }
+
+  return validateOpenAIResponsesMessageAudioContentPart(part, param);
+}
+
+function validateOpenAIResponsesMessageAudioContentPart(part, param) {
+  const source = isPlainObject(part.input_audio) ? part.input_audio : part;
+  const data = source.data ?? source.audio_data ?? source.file_data ?? source.content_base64;
+  if (data != null && typeof data !== "string") {
+    return requestValidationError(`${param}.data must be a string`, `${param}.data`);
+  }
+  if (source.format != null && typeof source.format !== "string") {
+    return requestValidationError(`${param}.format must be a string`, `${param}.format`);
+  }
+  if (source.transcript != null && typeof source.transcript !== "string") {
+    return requestValidationError(`${param}.transcript must be a string`, `${param}.transcript`);
   }
   return null;
 }

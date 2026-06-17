@@ -111,6 +111,32 @@ test("maps multimodal input items to OpenAI-compatible chat content parts", () =
   }]);
 });
 
+test("maps Responses message summary and screenshot parts to Chat content", () => {
+  const messages = responseInputToChatMessages([
+    {
+      role: "user",
+      content: [
+        { type: "summary_text", text: "Prior compacted note." },
+        { type: "reasoning_text", text: "Prior hidden note." },
+        {
+          type: "computer_screenshot",
+          image_url: "https://example.test/screen.png",
+          detail: "original",
+        },
+      ],
+    },
+  ]);
+
+  assert.deepEqual(messages, [{
+    role: "user",
+    content: [
+      { type: "text", text: "Prior compacted note." },
+      { type: "text", text: "Prior hidden note." },
+      { type: "image_url", image_url: { url: "https://example.test/screen.png", detail: "high" } },
+    ],
+  }]);
+});
+
 test("falls back to text markers for user audio input when Chat audio is disabled", () => {
   const audioBase64 = "UklGRg==";
   const { chat, compatibility } = responsesToChatRequest({

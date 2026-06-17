@@ -1,5 +1,74 @@
 # Audit Log
 
+## 2026-06-17 Responses Message Input Validation
+
+- Rechecked the current official OpenAI Responses schema through the developer
+  docs MCP workflow and the official `openai-openapi` YAML for
+  `EasyInputMessage`, `InputMessage`, `OutputMessage`,
+  `InputMessageContentList`, `OutputTextContent`, `RefusalContent`,
+  `SummaryTextContent`, `ReasoningTextContent`, and `ComputerScreenshotContent`:
+  - Easy input messages accept `user`, `assistant`, `system`, or `developer`
+    roles with string or content-array input;
+  - output replay messages use `role:"assistant"` with output content such as
+    `output_text` and `refusal`;
+  - Codex message `phase` values are `commentary` and `final_answer`;
+  - message content parts require type-specific string/object/array field
+    shapes before being replayed.
+- Tightened Responses input validation before provider calls:
+  - `message` / EasyInputMessage-style input items now reject unsupported roles
+    such as `tool`, missing content, non-string/non-array content, malformed
+    output text/refusal content, bad `phase`, and malformed annotations/logprobs
+    before upstream Chat requests;
+  - `additional_tools` keeps its own loaded-tool validation path even though it
+    carries `role:"developer"`;
+  - supported `summary_text`, `reasoning_text`, and `computer_screenshot`
+    content parts now map to Chat-compatible text/image content instead of
+    generic JSON fallback text.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed message
+    roles, missing/invalid content, bad `phase`, and malformed output-text
+    content across `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`;
+  - translator coverage now asserts `summary_text`, `reasoning_text`, and
+    `computer_screenshot` message parts map into Chat content;
+  - existing `additional_tools` input loading remains green.
+- Documentation updated:
+  - compatibility matrix now records pre-provider validation for input message
+    items and prior `message` output replay items, including Codex `phase` and
+    screenshot/text content mapping.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check src/bridge/translator.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --check test/translator.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate input image and file
+    detail|summary and screenshot parts|multimodal input items|additional_tools
+    input" test/server.test.js test/translator.test.js` passes: 4 tests;
+  - full `node --test test/*.test.js` passes: 366 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `message.role:"tool"` input-token request returns
+    `400 invalid_request_parameter` with `param:"input.0.role"`;
+  - public valid `summary_text` plus `computer_screenshot` message input-token
+    request returns 200 with `input_tokens:21`.
+- Runtime/storage check:
+  - `/` has 11 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Reasoning And Compaction Input Validation
 
 - Rechecked the current official OpenAI Responses schema through the developer
