@@ -22482,6 +22482,100 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     assert.equal(usersJson.data[0].user.object, "user");
     assert.equal(usersJson.data[0].compatibility.actual_openai_admin_data, false);
 
+    const secondProjectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_org_second",
+        email: "bridge-org-second@example.com",
+        name: "Bridge Org User Second",
+        role: "member",
+      }),
+    });
+    assert.equal(secondProjectUserResponse.status, 200);
+    const secondProjectUser = await secondProjectUserResponse.json();
+
+    const firstUserPage = await fetch(`${baseUrl}/v1/organization/users?limit=1`);
+    assert.equal(firstUserPage.status, 200);
+    const firstUserPageJson = await firstUserPage.json();
+    assert.equal(firstUserPageJson.object, "list");
+    assert.equal(firstUserPageJson.data.length, 1);
+    assert.equal(firstUserPageJson.has_more, true);
+    const firstListedUserId = firstUserPageJson.data[0].id;
+    const nextListedUserId = [projectUser.id, secondProjectUser.id].find((userId) => userId !== firstListedUserId);
+    assert.ok(nextListedUserId);
+
+    const orderIgnoredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=1&order=desc`);
+    assert.equal(orderIgnoredUsers.status, 200);
+    assert.equal((await orderIgnoredUsers.json()).data[0].id, firstListedUserId);
+
+    const afterUsers = await fetch(`${baseUrl}/v1/organization/users?limit=1&after=${encodeURIComponent(firstListedUserId)}`);
+    assert.equal(afterUsers.status, 200);
+    const afterUsersJson = await afterUsers.json();
+    assert.equal(afterUsersJson.data.length, 1);
+    assert.equal(afterUsersJson.data[0].id, nextListedUserId);
+
+    const allUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10`);
+    assert.equal(allUsers.status, 200);
+    const allUsersJson = await allUsers.json();
+    assert.equal(allUsersJson.data.length, 2);
+
+    const beforeIgnoredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
+    assert.equal(beforeIgnoredUsers.status, 200);
+    const beforeIgnoredUsersJson = await beforeIgnoredUsers.json();
+    assert.deepEqual(
+      beforeIgnoredUsersJson.data.map((item) => item.id),
+      allUsersJson.data.map((item) => item.id),
+    );
+
+    const filteredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10&emails=bridge-org@example.com&emails=bridge-org-second@example.com`);
+    assert.equal(filteredUsers.status, 200);
+    assert.deepEqual(
+      (await filteredUsers.json()).data.map((item) => item.email).sort(),
+      ["bridge-org-second@example.com", "bridge-org@example.com"].sort(),
+    );
+
+    const bracketFilteredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10&emails%5B%5D=bridge-org-second@example.com`);
+    assert.equal(bracketFilteredUsers.status, 200);
+    const bracketFilteredUsersJson = await bracketFilteredUsers.json();
+    assert.equal(bracketFilteredUsersJson.data.length, 1);
+    assert.equal(bracketFilteredUsersJson.data[0].id, secondProjectUser.id);
+
+    const invalidOrganizationUserListCases = [
+      {
+        path: "/v1/organization/users?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/users?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/users?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/users?after=${encodeURIComponent(firstListedUserId)}&after=${encodeURIComponent(nextListedUserId)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidOrganizationUserListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const fetchedUser = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}`);
     assert.equal(fetchedUser.status, 200);
     assert.equal((await fetchedUser.json()).projects.data[0].name, "Bridge Org Admin Project");
@@ -22510,6 +22604,16 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     });
     assert.equal(invalidUserRole.status, 400);
     assert.equal((await invalidUserRole.json()).error.code, "invalid_organization_role");
+
+    const deletedSecondUser = await fetch(`${baseUrl}/v1/organization/users/${secondProjectUser.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondUser.status, 200);
+    assert.deepEqual(await deletedSecondUser.json(), {
+      object: "organization.user.deleted",
+      id: secondProjectUser.id,
+      deleted: true,
+    });
 
     const inviteResponse = await fetch(`${baseUrl}/v1/organization/invites`, {
       method: "POST",

@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-17 Organization Users List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/users` through the OpenAI developer-docs MCP.
+- Confirmed the official list query parameters are `limit`, `after`, and
+  `emails`; no `order` or `before` query parameter is documented for this
+  endpoint. The official `limit` description allows values from 1 through 100
+  and defaults to 20.
+- Tightened local Organization Users list behavior:
+  - `GET /v1/organization/users` now validates `limit` from 1 through 100 and
+    rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `order` and `before` query values are stripped before
+    pagination, so they no longer shape official Organization Users list
+    results;
+  - existing local compatibility for `emails[]` query filters is preserved
+    while official repeated `emails` filters remain supported.
+- Regression coverage updated:
+  - organization users/invites lifecycle tests now cover `limit`, `after`,
+    ignored `order`, ignored `before`, invalid `limit`, repeated scalar
+    cursor values, repeated official `emails` filters, and compatibility
+    `emails[]` filters.
+- Documentation updated:
+  - compatibility matrix now records the official Organization Users list
+    pagination contract, official `emails` filter support, compatibility
+    `emails[]` support, and unsupported query handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization users and invites manage local admin lifecycle" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`. systemd initially reported unit
+    file changes on disk, so `systemctl daemon-reload` was run, the services
+    were restarted again, and all three reported `active`.
+  - Public Organization Users smoke marker `org-user-query-smoke-mqi6dfo6`
+    created a temporary local project, created two local project users to seed
+    two local organization users, confirmed filtered `limit=1` paging, verified
+    unsupported `order=desc` and `before` did not change the official filtered
+    list result, verified `after` advanced the filtered cursor, confirmed
+    compatibility `emails[]` filtering still found the expected user, confirmed
+    invalid `limit=0` returned HTTP 400 with `param:"limit"`, confirmed
+    repeated `after` returned HTTP 400 with `param:"after"`, deleted the
+    temporary users, and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    user credentials, or deployment env files were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Organization Projects List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI YAML for

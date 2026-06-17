@@ -16185,10 +16185,21 @@ function handleOrganizationInviteDelete(res, organizationAdminStore, inviteId) {
 }
 
 function handleOrganizationUsersList(res, organizationAdminStore, url) {
+  const queryError = validateOpenAIOrganizationUsersListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const users = organizationAdminStore.listOrganizationUsers({
     emails: organizationUserEmailFilters(url),
   });
-  sendJson(res, 200, paginateListWithDefaultOrder(users, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    users,
+    officialOrganizationUsersListPaginationUrl(url),
+    "asc",
+    20,
+    100,
+  ));
 }
 
 function handleOrganizationUserGet(res, organizationAdminStore, userId) {
@@ -16581,6 +16592,21 @@ function validateOpenAIProjectsListQuery(url) {
 }
 
 function officialProjectsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIOrganizationUsersListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialOrganizationUsersListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));

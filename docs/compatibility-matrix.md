@@ -683,7 +683,7 @@ state.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `GET /v1/organization/users` | Implemented locally | Lists local `organization.user` records with optional `emails` filtering, nested local project memberships, and OpenAI-style pagination |
+| `GET /v1/organization/users` | Implemented locally | Lists local `organization.user` records with optional official `emails` filtering, compatibility `emails[]` filtering, nested local project memberships, and OpenAI-style pagination; validates official `limit` and `after` pagination, rejects repeated scalar values, enforces `limit` from 1 through 100 with official default 20, and ignores unsupported `order`/`before` so they cannot shape the official list result |
 | `GET /v1/organization/users/{user_id}` | Implemented locally | Retrieves a local organization user or returns `404 organization_user_not_found` |
 | `POST /v1/organization/users/{user_id}` | Implemented locally | Updates local organization user `role`, `role_id`, `developer_persona`, and `technical_level`; invalid org roles return `400 invalid_organization_role` |
 | `DELETE /v1/organization/users/{user_id}` | Implemented locally | Removes a local organization user, deletes their local project memberships, and returns `organization.user.deleted` |
