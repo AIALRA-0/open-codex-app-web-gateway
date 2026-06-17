@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Organization Admin API Keys List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/admin_api_keys` through the OpenAI developer-docs MCP.
+- Confirmed the official list query parameters are `after`, `order`, and
+  `limit`; no `before` query parameter is documented for this endpoint.
+  Official `order` values are `asc` and `desc`, defaulting to `asc`.
+- Tightened local Organization Admin API Keys list behavior:
+  - `GET /v1/organization/admin_api_keys` now validates `limit` from 1 through
+    100 and rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - official `order:"asc"|"desc"` is validated and preserved;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official Organization Admin API Keys list results;
+  - listed and retrieved local admin API-key records remain redacted and do not
+    expose the one-time `value` returned at create time.
+- Regression coverage updated:
+  - organization admin API-key lifecycle tests now cover `limit`, `after`,
+    official `order`, ignored `before`, invalid `limit`, invalid `order`,
+    repeated scalar cursor values, repeated `order`, redacted listing, and
+    one-time key value non-persistence.
+- Documentation updated:
+  - compatibility matrix now records the official Organization Admin API Keys
+    list pagination contract, official `order` support, unsupported `before`
+    handling, and redaction boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization admin API keys are local, redacted, and audited" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization Admin API Keys smoke marker
+    `admin-key-query-smoke-mqi6q17g` created two temporary local admin API keys,
+    confirmed `order=asc` listing included both redacted key records without
+    exposing `value`, verified official `order=desc` and `after` pagination,
+    confirmed unsupported `before` did not change the official list result,
+    confirmed invalid `limit=0`, invalid `order=newest`, and repeated `order`
+    returned HTTP 400 with expected params, deleted the temporary keys, and
+    printed only key IDs.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    one-time admin API-key values, or deployment env files were added to
+    source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Invites List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema for

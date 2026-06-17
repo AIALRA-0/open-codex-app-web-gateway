@@ -23122,6 +23122,58 @@ test("Organization admin API keys are local, redacted, and audited", async () =>
     assert.equal(nextPageJson.data.length, 1);
     assert.equal(nextPageJson.data[0].id, listedJson.data[0].id);
 
+    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=2&before=${encodeURIComponent(listedJson.data[0].id)}`);
+    assert.equal(beforeIgnored.status, 200);
+    assert.deepEqual(
+      (await beforeIgnored.json()).data.map((entry) => entry.id),
+      descListJson.data.concat(nextPageJson.data).map((entry) => entry.id),
+    );
+
+    const invalidAdminApiKeyListCases = [
+      {
+        path: "/v1/organization/admin_api_keys?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/admin_api_keys?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/admin_api_keys?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/admin_api_keys?after=${encodeURIComponent(expectedDescFirstId)}&after=${encodeURIComponent(listedJson.data[0].id)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: "/v1/organization/admin_api_keys?order=newest",
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: "/v1/organization/admin_api_keys?order=asc&order=desc",
+        message: "order must be a single string query value",
+        param: "order",
+      },
+    ];
+    for (const testCase of invalidAdminApiKeyListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const fetched = await fetch(`${baseUrl}/v1/organization/admin_api_keys/${created.id}`);
     assert.equal(fetched.status, 200);
     const fetchedJson = await fetched.json();

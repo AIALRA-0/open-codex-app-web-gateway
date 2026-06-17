@@ -15773,9 +15773,14 @@ async function handleOrganizationAdminApiKeyCreate(req, res, organizationAdminSt
 }
 
 function handleOrganizationAdminApiKeysList(res, organizationAdminStore, url) {
+  const queryError = validateOpenAIOrganizationAdminApiKeysListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, paginateListWithDefaultOrder(
     organizationAdminStore.listOrganizationAdminApiKeys(),
-    url,
+    officialOrganizationAdminApiKeysListPaginationUrl(url),
     "asc",
     20,
     100,
@@ -16635,6 +16640,24 @@ function validateOpenAIOrganizationInvitesListQuery(url) {
 function officialOrganizationInvitesListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIOrganizationAdminApiKeysListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAIListOrderQuery(url);
+}
+
+function officialOrganizationAdminApiKeysListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
   }
   return localUrl;
