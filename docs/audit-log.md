@@ -1,5 +1,72 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Option Validation
+
+- Rechecked official OpenAI Images API references:
+  - `POST /v1/images/generations` documents `background`,
+    `moderation`, `output_compression`, `output_format`,
+    `partial_images`, `quality`, `response_format`, `stream`, and
+    `style` parameter boundaries;
+  - `POST /v1/images/edits` documents direct edit JSON and multipart
+    request forms plus `background`, `input_fidelity`, `moderation`,
+    `output_compression`, `output_format`, `partial_images`, `quality`,
+    `size`, and `stream` request parameters.
+- Tightened local bridge behavior:
+  - direct Images generation now validates `stream` as a JSON boolean,
+    `background` as `transparent`, `opaque`, or `auto`, `moderation` as
+    `auto` or `low`, `output_compression` as an integer from 0 through
+    100, `output_format` as `png`, `jpeg`, or `webp`, `quality` as
+    `auto`, `high`, `medium`, `low`, `hd`, or `standard`,
+    `response_format` as `url` or `b64_json`, and `style` as `vivid` or
+    `natural` before placeholder generation, provider forwarding,
+    streaming event synthesis, or usage recording;
+  - direct Images edit now validates the same shared fields plus
+    `input_fidelity` as `high` or `low` before image reference resolution
+    or provider forwarding;
+  - multipart-compatible edit `stream` values such as `"true"` and
+    `"false"` continue to normalize while invalid non-boolean values fail
+    closed;
+  - normalized direct Images `tool` metadata now records the parsed
+    `partial_images` value instead of the raw client field.
+- Regression coverage updated:
+  - added direct Images negative tests for invalid generation `stream`,
+    `background`, `moderation`, `output_compression`, `output_format`,
+    `response_format`, and `style` values;
+  - added direct Images edit negative tests for invalid `input_fidelity`,
+    `output_compression`, and `quality` values;
+  - verified invalid requests return OpenAI-style
+    `invalid_request_parameter` errors and do not call the upstream
+    provider.
+- Documentation updated:
+  - compatibility matrix now records direct Images generation and edit
+    option validation boundaries in addition to `partial_images`.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/images direct" test/server.test.js`
+    passed 3/3 matched tests.
+  - Full `node --test test/*.test.js` passed 382/382 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images smokes verified invalid generation `output_format` and
+    invalid edit `input_fidelity` both return HTTP 400 with
+    `invalid_request_parameter`.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers,
+    local deployment env files, generated image bytes, provider image
+    responses, or smoke request payloads were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Partial Images Validation
 
 - Rechecked official OpenAI Images API references:

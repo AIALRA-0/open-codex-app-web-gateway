@@ -1915,7 +1915,13 @@ The bridge also exposes a direct OpenAI-compatible
 instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
 `n` from 1 to 10, `size`, `quality`, `background`, `moderation`,
 `output_format`, `output_compression`, `response_format`, `style`, `user`, and
-`stream`, with streaming `partial_images` validated from 0 through 3.
+`stream`. Direct generation validates `stream` as a JSON boolean,
+`background` as `transparent`, `opaque`, or `auto`, `moderation` as `auto` or
+`low`, `output_compression` from 0 through 100, `output_format` as `png`,
+`jpeg`, or `webp`, `quality` as `auto`, `high`, `medium`, `low`, `hd`, or
+`standard`, `response_format` as `url` or `b64_json`, `style` as `vivid` or
+`natural`, and streaming `partial_images` from 0 through 3 before placeholder
+generation, provider forwarding, or usage recording.
 Non-streaming responses use the OpenAI `ImagesResponse` shape with
 `created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
 `usage` when present. `stream:true` returns Image API SSE events
@@ -1934,7 +1940,9 @@ multipart bodies. Non-streaming direct edit responses use the same
 `ImagesResponse` shape; `stream:true` returns `image_edit.partial_image` and
 `image_edit.completed` SSE events, relaying upstream provider SSE when
 available and synthesizing compatible events for placeholder or JSON fallback
-responses. Direct edit `partial_images` is validated from 0 through 3 before
+responses. Direct edit validates `background`, `input_fidelity`, `moderation`,
+`output_compression`, `output_format`, `quality`, `response_format`, `stream`
+(including multipart-compatible boolean strings), and `partial_images` before
 image reference resolution or provider forwarding. The direct
 `POST /v1/images/variations` endpoint follows the
 official Images variation operation shape: multipart requests accept one

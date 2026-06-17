@@ -15327,6 +15327,92 @@ test("POST /v1/images direct streaming endpoints validate partial_images", async
   });
 });
 
+test("POST /v1/images direct endpoints validate official option fields", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image option fields");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const testCase of [
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", stream: "true" },
+        message: "stream must be a boolean",
+        param: "stream",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", output_compression: 101 },
+        message: "output_compression must be an integer between 0 and 100",
+        param: "output_compression",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", output_format: "gif" },
+        message: "output_format must be one of: png, jpeg, webp",
+        param: "output_format",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", background: "checkerboard" },
+        message: "background must be one of: transparent, opaque, auto",
+        param: "background",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", moderation: "strict" },
+        message: "moderation must be one of: auto, low",
+        param: "moderation",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", response_format: "bytes" },
+        message: "response_format must be one of: url, b64_json",
+        param: "response_format",
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", style: "sketch" },
+        message: "style must be one of: vivid, natural",
+        param: "style",
+      },
+      {
+        endpoint: "/v1/images/edits",
+        body: { prompt: "Edit a compact badge.", input_fidelity: "medium" },
+        message: "input_fidelity must be one of: high, low",
+        param: "input_fidelity",
+      },
+      {
+        endpoint: "/v1/images/edits",
+        body: { prompt: "Edit a compact badge.", output_compression: -1 },
+        message: "output_compression must be an integer between 0 and 100",
+        param: "output_compression",
+      },
+      {
+        endpoint: "/v1/images/edits",
+        body: { prompt: "Edit a compact badge.", quality: "draft" },
+        message: "quality must be one of: auto, high, medium, low, hd, standard",
+        param: "quality",
+      },
+    ]) {
+      const response = await fetch(`${baseUrl}${testCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.param);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

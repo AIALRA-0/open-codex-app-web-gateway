@@ -17,6 +17,13 @@ const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
 const MAX_IMAGES_GENERATION_N = 10;
+const IMAGE_API_BACKGROUND_VALUES = ["transparent", "opaque", "auto"];
+const IMAGE_API_INPUT_FIDELITY_VALUES = ["high", "low"];
+const IMAGE_API_MODERATION_VALUES = ["auto", "low"];
+const IMAGE_API_OUTPUT_FORMAT_VALUES = ["png", "jpeg", "webp"];
+const IMAGE_API_QUALITY_VALUES = ["auto", "high", "medium", "low", "hd", "standard"];
+const IMAGE_API_RESPONSE_FORMAT_VALUES = ["url", "b64_json"];
+const IMAGE_API_STYLE_VALUES = ["vivid", "natural"];
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -451,11 +458,156 @@ function normalizeImageApiPartialImageCount(value, param = "partial_images") {
   return parsed;
 }
 
-function normalizeImageApiBoolean(value) {
-  if (value === true) return true;
-  if (value === false || value === undefined || value === null) return false;
-  const text = String(value).trim().toLowerCase();
-  return text === "true" || text === "1";
+function normalizeImageApiEnum(value, param, allowedValues) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string") {
+    throw imageApiError(`${param} must be a string`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!allowedValues.includes(normalized)) {
+    throw imageApiError(`${param} must be one of: ${allowedValues.join(", ")}`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return normalized;
+}
+
+function normalizeImageApiOptionalInteger(value, param, { min, max }) {
+  if (value === undefined || value === null || value === "") return undefined;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < min || parsed > max) {
+    throw imageApiError(`${param} must be an integer between ${min} and ${max}`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return parsed;
+}
+
+function normalizeImageApiOptionalString(value, param) {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !value.trim()) {
+    throw imageApiError(`${param} must be a string`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return value.trim();
+}
+
+function normalizeImageApiJsonBoolean(value, param = "stream") {
+  if (value === undefined || value === null) return false;
+  if (value === true || value === false) return value;
+  throw imageApiError(`${param} must be a boolean`, {
+    code: "invalid_request_parameter",
+    param,
+  });
+}
+
+function normalizeImageApiFormBoolean(value, param = "stream") {
+  if (value === undefined || value === null || value === "") return false;
+  if (value === true || value === false) return value;
+  if (typeof value === "string") {
+    const text = value.trim().toLowerCase();
+    if (text === "true" || text === "1") return true;
+    if (text === "false" || text === "0") return false;
+  }
+  throw imageApiError(`${param} must be a boolean`, {
+    code: "invalid_request_parameter",
+    param,
+  });
+}
+
+function normalizeImagesGenerationOptions(request = {}) {
+  const options = {};
+  appendNormalizedOption(options, "background", normalizeImageApiEnum(
+    request.background,
+    "background",
+    IMAGE_API_BACKGROUND_VALUES,
+  ));
+  appendNormalizedOption(options, "moderation", normalizeImageApiEnum(
+    request.moderation,
+    "moderation",
+    IMAGE_API_MODERATION_VALUES,
+  ));
+  appendNormalizedOption(options, "output_compression", normalizeImageApiOptionalInteger(
+    request.output_compression,
+    "output_compression",
+    { min: 0, max: 100 },
+  ));
+  appendNormalizedOption(options, "output_format", normalizeImageApiEnum(
+    request.output_format,
+    "output_format",
+    IMAGE_API_OUTPUT_FORMAT_VALUES,
+  ));
+  appendNormalizedOption(options, "quality", normalizeImageApiEnum(
+    request.quality,
+    "quality",
+    IMAGE_API_QUALITY_VALUES,
+  ));
+  appendNormalizedOption(options, "response_format", normalizeImageApiEnum(
+    request.response_format,
+    "response_format",
+    IMAGE_API_RESPONSE_FORMAT_VALUES,
+  ));
+  appendNormalizedOption(options, "size", normalizeImageApiOptionalString(request.size, "size"));
+  appendNormalizedOption(options, "style", normalizeImageApiEnum(
+    request.style,
+    "style",
+    IMAGE_API_STYLE_VALUES,
+  ));
+  appendNormalizedOption(options, "user", normalizeImageApiOptionalString(request.user, "user"));
+  return options;
+}
+
+function normalizeImagesEditOptions(request = {}) {
+  const options = {};
+  appendNormalizedOption(options, "background", normalizeImageApiEnum(
+    request.background,
+    "background",
+    IMAGE_API_BACKGROUND_VALUES,
+  ));
+  appendNormalizedOption(options, "input_fidelity", normalizeImageApiEnum(
+    request.input_fidelity,
+    "input_fidelity",
+    IMAGE_API_INPUT_FIDELITY_VALUES,
+  ));
+  appendNormalizedOption(options, "moderation", normalizeImageApiEnum(
+    request.moderation,
+    "moderation",
+    IMAGE_API_MODERATION_VALUES,
+  ));
+  appendNormalizedOption(options, "output_compression", normalizeImageApiOptionalInteger(
+    request.output_compression,
+    "output_compression",
+    { min: 0, max: 100 },
+  ));
+  appendNormalizedOption(options, "output_format", normalizeImageApiEnum(
+    request.output_format,
+    "output_format",
+    IMAGE_API_OUTPUT_FORMAT_VALUES,
+  ));
+  appendNormalizedOption(options, "quality", normalizeImageApiEnum(
+    request.quality,
+    "quality",
+    IMAGE_API_QUALITY_VALUES,
+  ));
+  appendNormalizedOption(options, "response_format", normalizeImageApiEnum(
+    request.response_format,
+    "response_format",
+    IMAGE_API_RESPONSE_FORMAT_VALUES,
+  ));
+  appendNormalizedOption(options, "size", normalizeImageApiOptionalString(request.size, "size"));
+  appendNormalizedOption(options, "user", normalizeImageApiOptionalString(request.user, "user"));
+  return options;
+}
+
+function appendNormalizedOption(options, key, value) {
+  if (value !== undefined) options[key] = value;
 }
 
 function requestedImageOptions(tool = {}) {
@@ -1160,33 +1312,21 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
   const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
   const prompt = truncateForPrompt(request.prompt.trim(), 32000);
   const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
-  const options = {};
-  for (const key of [
-    "background",
-    "moderation",
-    "output_compression",
-    "output_format",
-    "quality",
-    "response_format",
-    "size",
-    "style",
-    "user",
-  ]) {
-    if (request[key] !== undefined) options[key] = request[key];
-  }
+  const options = normalizeImagesGenerationOptions(request);
+  const stream = normalizeImageApiJsonBoolean(request.stream);
 
   return {
     model,
     prompt,
     n,
     options,
-    stream: request.stream === true,
+    stream,
     partial_images: partialImages,
     partial_images_requested: request.partial_images !== undefined,
     tool: {
       action: "generate",
       ...options,
-      partial_images: request.partial_images,
+      partial_images: partialImages,
       n,
     },
   };
@@ -1209,20 +1349,8 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
   const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
   const prompt = truncateForPrompt(request.prompt.trim(), 32000);
   const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
-  const requestOptions = {};
-  for (const key of [
-    "background",
-    "input_fidelity",
-    "moderation",
-    "output_compression",
-    "output_format",
-    "quality",
-    "response_format",
-    "size",
-    "user",
-  ]) {
-    if (request[key] !== undefined) requestOptions[key] = request[key];
-  }
+  const requestOptions = normalizeImagesEditOptions(request);
+  const stream = normalizeImageApiFormBoolean(request.stream);
 
   const editInput = await resolveDirectImagesEditInput({ request, config, options });
   if (!editInput.images.length) {
@@ -1243,14 +1371,14 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
     prompt,
     n,
     options: requestOptions,
-    stream: normalizeImageApiBoolean(request.stream),
+    stream,
     partial_images: partialImages,
     partial_images_requested: request.partial_images !== undefined,
     editInput,
     tool: {
       action: "edit",
       ...requestOptions,
-      partial_images: request.partial_images,
+      partial_images: partialImages,
       n,
     },
   };
