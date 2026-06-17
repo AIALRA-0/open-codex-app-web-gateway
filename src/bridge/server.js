@@ -216,6 +216,7 @@ const OPENAI_TOP_LOGPROBS_MAX = 20;
 const OPENAI_LEGACY_LOGPROBS_MIN = 0;
 const OPENAI_LEGACY_LOGPROBS_MAX = 5;
 const OPENAI_RESPONSES_MAX_OUTPUT_TOKENS_MIN = 16;
+const OPENAI_CONTEXT_MANAGEMENT_COMPACT_THRESHOLD_MIN = 1000;
 const OPENAI_LEGACY_MAX_TOKENS_MIN = 0;
 const OPENAI_LEGACY_BEST_OF_MIN = 0;
 const OPENAI_LEGACY_BEST_OF_MAX = 20;
@@ -2903,9 +2904,15 @@ function validateOpenAIResponsesContextManagement(body = {}) {
     if (
       Object.prototype.hasOwnProperty.call(entry, "compact_threshold")
       && entry.compact_threshold != null
-      && (typeof entry.compact_threshold !== "number" || !Number.isFinite(entry.compact_threshold))
+      && (
+        !Number.isInteger(entry.compact_threshold)
+        || entry.compact_threshold < OPENAI_CONTEXT_MANAGEMENT_COMPACT_THRESHOLD_MIN
+      )
     ) {
-      return requestValidationError(`${param}.compact_threshold must be a number`, `${param}.compact_threshold`);
+      return requestValidationError(
+        `${param}.compact_threshold must be an integer greater than or equal to ${OPENAI_CONTEXT_MANAGEMENT_COMPACT_THRESHOLD_MIN}`,
+        `${param}.compact_threshold`,
+      );
     }
   }
   return null;

@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-18 - Responses context management compact threshold validation
+
+- Used the current official OpenAI OpenAPI schema to confirm
+  `ContextManagementParam.compact_threshold` is nullable but, when present,
+  must be an integer with minimum `1000`.
+- Closed the validation gap without adding dependencies:
+  - added the shared `OPENAI_CONTEXT_MANAGEMENT_COMPACT_THRESHOLD_MIN`
+    constant;
+  - changed `context_management[].compact_threshold` validation from any finite
+    number to an integer greater than or equal to `1000`;
+  - kept the existing Chat Completions compatibility behavior that records only
+    threshold presence/count in metadata and does not forward raw
+    `context_management` upstream.
+- Updated docs:
+  - compatibility matrix now records the official integer/minimum boundary for
+    `context_management[].compact_threshold`.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "context_management" test/server.test.js`:
+    passed 2/2, including invalid string, fractional, and below-minimum
+    thresholds plus a valid `1000` boundary request.
+  - Full `node --test test/*.test.js`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    artifacts and selected 2 expired code-benchmark workdirs totaling 13,190
+    bytes for potential cleanup, with zero deletion in dry-run mode.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 8.5 GiB
+    available at 96% used; repository size was 287 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz`: returned `ok:true`.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with
+    `context_management:[{type:"compaction",compact_threshold:999}]`: returned
+    HTTP 400 with `param:"context_management.0.compact_threshold"` and the
+    official integer/minimum boundary message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses call_id length validation
 
 - Used the current official OpenAI OpenAPI schema to confirm the next Responses

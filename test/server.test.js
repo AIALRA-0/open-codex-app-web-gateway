@@ -3330,7 +3330,21 @@ test("POST /v1/responses validates context_management before provider calls", as
       { context_management: [], param: "context_management" },
       { context_management: ["compaction"], param: "context_management.0" },
       { context_management: [{ type: "retention_ratio" }], param: "context_management.0.type" },
-      { context_management: [{ type: "compaction", compact_threshold: "4096" }], param: "context_management.0.compact_threshold" },
+      {
+        context_management: [{ type: "compaction", compact_threshold: "4096" }],
+        param: "context_management.0.compact_threshold",
+        message: "context_management.0.compact_threshold must be an integer greater than or equal to 1000",
+      },
+      {
+        context_management: [{ type: "compaction", compact_threshold: 999 }],
+        param: "context_management.0.compact_threshold",
+        message: "context_management.0.compact_threshold must be an integer greater than or equal to 1000",
+      },
+      {
+        context_management: [{ type: "compaction", compact_threshold: 1000.5 }],
+        param: "context_management.0.compact_threshold",
+        message: "context_management.0.compact_threshold must be an integer greater than or equal to 1000",
+      },
     ];
 
     for (const invalidCase of invalidCases) {
@@ -3348,6 +3362,7 @@ test("POST /v1/responses validates context_management before provider calls", as
       const json = await response.json();
       assert.equal(json.error.param, invalidCase.param);
       assert.equal(json.error.code, "invalid_request_parameter");
+      if (invalidCase.message) assert.equal(json.error.message, invalidCase.message);
     }
     assert.equal(requests.length, 0);
   });
@@ -3379,6 +3394,7 @@ test("POST /v1/responses records context_management compatibility without provid
         input: "Use local context management.",
         context_management: [
           { type: "compaction", compact_threshold: 4096 },
+          { type: "compaction", compact_threshold: 1000 },
         ],
       }),
     });
@@ -3391,9 +3407,9 @@ test("POST /v1/responses records context_management compatibility without provid
       forwarded: false,
       reason: "chat_completions_no_equivalent",
       value_type: "array",
-      entry_count: 1,
+      entry_count: 2,
       types: ["compaction"],
-      compact_threshold_count: 1,
+      compact_threshold_count: 2,
     });
     assert.equal(JSON.stringify(json.metadata.compatibility.context_management).includes("4096"), false);
   });
