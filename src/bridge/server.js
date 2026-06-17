@@ -3659,10 +3659,9 @@ function validateOpenAIJsonSchemaFormatConfig(config, param, options = {}) {
   }
   if (
     Object.prototype.hasOwnProperty.call(config, "description")
-    && config.description !== null
     && typeof config.description !== "string"
   ) {
-    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+    return requestValidationError(`${param}.description must be a string`, `${param}.description`);
   }
   return null;
 }

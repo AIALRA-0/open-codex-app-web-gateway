@@ -1589,6 +1589,14 @@ test("POST /v1/responses validates text.format response formats before provider 
         text: { format: { type: "json_schema", name: "strict_schema", schema: { type: "object" }, strict: "true" } },
         error: { message: "text.format.strict must be a boolean or null", param: "text.format.strict" },
       },
+      {
+        text: { format: { type: "json_schema", name: "description_schema", schema: { type: "object" }, description: null } },
+        error: { message: "text.format.description must be a string", param: "text.format.description" },
+      },
+      {
+        text: { format: { type: "json_schema", name: "description_schema", schema: { type: "object" }, description: 1 } },
+        error: { message: "text.format.description must be a string", param: "text.format.description" },
+      },
     ];
     for (const invalidCase of invalidCases) {
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -26612,7 +26620,11 @@ test("POST /v1/chat/completions validates response_format before provider calls"
       },
       {
         response_format: { type: "json_schema", json_schema: { name: "description_schema", description: 1 } },
-        error: { message: "response_format.json_schema.description must be a string or null", param: "response_format.json_schema.description" },
+        error: { message: "response_format.json_schema.description must be a string", param: "response_format.json_schema.description" },
+      },
+      {
+        response_format: { type: "json_schema", json_schema: { name: "description_schema", description: null } },
+        error: { message: "response_format.json_schema.description must be a string", param: "response_format.json_schema.description" },
       },
     ];
     for (const invalidCase of invalidCases) {
