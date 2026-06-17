@@ -2972,6 +2972,57 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.defer_loading must be a boolean",
       },
       {
+        body: { tools: [{ type: "computer_use_preview" }] },
+        param: "tools.0.environment",
+        message: "tools.0.environment is required",
+      },
+      {
+        body: {
+          tools: [{
+            type: "computer_use_preview",
+            environment: "ios",
+            display_width: 1024,
+            display_height: 768,
+          }],
+        },
+        param: "tools.0.environment",
+        message: "tools.0.environment must be one of: windows, mac, linux, ubuntu, browser",
+      },
+      {
+        body: {
+          tools: [{
+            type: "computer_use_preview",
+            environment: "browser",
+            display_width: "1024",
+            display_height: 768,
+          }],
+        },
+        param: "tools.0.display_width",
+        message: "tools.0.display_width must be a positive integer",
+      },
+      {
+        body: {
+          tools: [{
+            type: "computer_use_preview",
+            environment: "browser",
+            display_width: 1024,
+            display_height: 0,
+          }],
+        },
+        param: "tools.0.display_height",
+        message: "tools.0.display_height must be a positive integer",
+      },
+      {
+        body: { tools: [{ type: "computer", environment: 7 }] },
+        param: "tools.0.environment",
+        message: "tools.0.environment must be one of: windows, mac, linux, ubuntu, browser",
+      },
+      {
+        body: { tools: [{ type: "computer", display_width: "wide" }] },
+        param: "tools.0.display_width",
+        message: "tools.0.display_width must be a positive integer",
+      },
+      {
         body: { tools: [{ type: "file_search" }] },
         param: "tools.0.vector_store_ids",
         message: "tools.0.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided",

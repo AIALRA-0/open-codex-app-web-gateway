@@ -315,6 +315,13 @@ const OPENAI_MCP_CONNECTOR_ID_VALUES = Object.freeze([
   "connector_sharepoint",
 ]);
 const OPENAI_MCP_REQUIRE_APPROVAL_VALUES = Object.freeze(["always", "never"]);
+const OPENAI_RESPONSES_COMPUTER_ENVIRONMENT_VALUES = Object.freeze([
+  "windows",
+  "mac",
+  "linux",
+  "ubuntu",
+  "browser",
+]);
 const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
 const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
@@ -3751,6 +3758,14 @@ function validateOpenAIResponsesTools(body = {}) {
     } else if (tool.type === "mcp") {
       const mcpError = validateOpenAIResponsesMcpTool(tool, param);
       if (mcpError) return mcpError;
+    } else if (tool.type === "computer_use_preview") {
+      const computerError = validateOpenAIResponsesComputerTool(tool, param, {
+        requirePreviewFields: true,
+      });
+      if (computerError) return computerError;
+    } else if (tool.type === "computer" || tool.type === "computer_use") {
+      const computerError = validateOpenAIResponsesComputerTool(tool, param);
+      if (computerError) return computerError;
     } else if (tool.type === "shell") {
       const shellError = validateOpenAIResponsesShellTool(tool, param);
       if (shellError) return shellError;
@@ -3758,6 +3773,64 @@ function validateOpenAIResponsesTools(body = {}) {
       const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
       if (codeInterpreterError) return codeInterpreterError;
     }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesComputerTool(tool, param, options = {}) {
+  const requirePreviewFields = options.requirePreviewFields === true;
+  const environmentError = validateOpenAIResponsesComputerEnvironment(tool, param, {
+    required: requirePreviewFields,
+  });
+  if (environmentError) return environmentError;
+
+  const displayWidthError = validateOpenAIResponsesComputerDimension(
+    tool,
+    "display_width",
+    `${param}.display_width`,
+    { required: requirePreviewFields },
+  );
+  if (displayWidthError) return displayWidthError;
+
+  return validateOpenAIResponsesComputerDimension(
+    tool,
+    "display_height",
+    `${param}.display_height`,
+    { required: requirePreviewFields },
+  );
+}
+
+function validateOpenAIResponsesComputerEnvironment(tool, param, options = {}) {
+  const environmentParam = `${param}.environment`;
+  const hasEnvironment = Object.prototype.hasOwnProperty.call(tool, "environment");
+  if (!hasEnvironment || tool.environment == null) {
+    if (options.required) {
+      return requestValidationError(`${environmentParam} is required`, environmentParam);
+    }
+    return null;
+  }
+  if (
+    typeof tool.environment !== "string"
+    || !OPENAI_RESPONSES_COMPUTER_ENVIRONMENT_VALUES.includes(tool.environment)
+  ) {
+    return requestValidationError(
+      `${environmentParam} must be one of: ${OPENAI_RESPONSES_COMPUTER_ENVIRONMENT_VALUES.join(", ")}`,
+      environmentParam,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIResponsesComputerDimension(tool, field, param, options = {}) {
+  const hasField = Object.prototype.hasOwnProperty.call(tool, field);
+  if (!hasField || tool[field] == null) {
+    if (options.required) {
+      return requestValidationError(`${param} is required`, param);
+    }
+    return null;
+  }
+  if (!Number.isInteger(tool[field]) || tool[field] <= 0) {
+    return requestValidationError(`${param} must be a positive integer`, param);
   }
   return null;
 }

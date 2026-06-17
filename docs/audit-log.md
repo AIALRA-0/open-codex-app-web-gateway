@@ -1,5 +1,71 @@
 # Audit Log
 
+## 2026-06-17 Responses Computer Use Preview Tool Schema Validation
+
+- Rechecked current official OpenAI Computer Use guidance through the
+  developer docs:
+  - GA Computer Use uses the built-in Responses `computer` tool and valid new
+    requests may specify only `tools:[{type:"computer"}]`;
+  - the deprecated preview request shape used
+    `tools:[{type:"computer_use_preview",display_width,display_height,environment}]`;
+  - the bridge must keep the preview path only for older integrations while
+    preserving GA `computer` compatibility.
+- Tightened local Responses request validation before provider or local
+  Computer Use adapter work:
+  - `computer_use_preview` now requires `environment`, `display_width`, and
+    `display_height` before `/v1/responses` or `/v1/responses/input_tokens`
+    can proceed;
+  - `environment`, when supplied on any local computer tool alias, must be one
+    of `windows`, `mac`, `linux`, `ubuntu`, or `browser`;
+  - `display_width` and `display_height`, when supplied, must be positive
+    integers;
+  - GA `computer` remains valid as `{type:"computer"}` so the official current
+    request shape and existing CodexApp local adapter flows are not
+    over-constrained.
+- Regression coverage updated:
+  - the shared Responses tool validation table now rejects malformed
+    `computer_use_preview` and optional `computer` display metadata across
+    `/v1/responses` and `/v1/responses/input_tokens`;
+  - existing streaming and non-streaming local computer action-loop tests still
+    cover screenshot-first `computer_call`, model-requested action mapping,
+    output-image include gating, and shared `max_tool_calls` behavior.
+- Documentation updated:
+  - the compatibility matrix now distinguishes GA `computer` optional display
+    metadata from the stricter legacy preview request shape;
+  - the Local Computer Use Adapter section records the same validation
+    boundary before local adapter execution.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|local computer|computer_call|Computer Use"
+    test/server.test.js` passes: 7 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit token scan found only pre-existing documentation/test placeholders
+    and no newly added API-key or bearer-token values in this change.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `computer_use_preview` request with `environment:"ios"`
+    returns `400 invalid_request_parameter` with
+    `param:"tools.0.environment"`.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses MCP Tool Schema Validation
 
 - Rechecked the current official OpenAI OpenAPI schemas for Responses MCP
