@@ -19634,6 +19634,17 @@ test("local Conversations API validates metadata and request contracts", async (
       },
     });
 
+    const repeatedListOrder = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?order=asc&order=desc`);
+    assert.equal(repeatedListOrder.status, 400);
+    assert.deepEqual(await repeatedListOrder.json(), {
+      error: {
+        message: "order must be a single string query value",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
     for (const invalidLimit of ["abc", "1.5", "0", "101"]) {
       const invalidListLimit = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=${encodeURIComponent(invalidLimit)}`);
       assert.equal(invalidListLimit.status, 400);
@@ -19646,6 +19657,17 @@ test("local Conversations API validates metadata and request contracts", async (
         },
       });
     }
+
+    const repeatedListLimit = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=1&limit=2`);
+    assert.equal(repeatedListLimit.status, 400);
+    assert.deepEqual(await repeatedListLimit.json(), {
+      error: {
+        message: "limit must be a single string query value",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const repeatedAfter = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?after=${officialItemsJson.data[0].id}&after=${officialItemsJson.data[1].id}`);
     assert.equal(repeatedAfter.status, 400);

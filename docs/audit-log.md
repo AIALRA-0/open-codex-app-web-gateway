@@ -1,5 +1,55 @@
 # Audit Log
 
+## 2026-06-17 List Query Scalar Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `GET /conversations/{conversation_id}/items` query schema:
+  - `limit` is an integer scalar;
+  - `order` is an `asc` / `desc` string scalar;
+  - `after` is a string scalar;
+  - `include` is an array query parameter.
+- Tightened central OpenAI-style list query validation:
+  - `validateOpenAIListOrderQuery` now rejects repeated `order` query
+    parameters with `400 invalid_request_parameter`;
+  - `validateOpenAIListLimitQuery` now rejects repeated `limit` query
+    parameters with `400 invalid_request_parameter`;
+  - endpoints using these shared helpers no longer silently take the first
+    repeated list scalar.
+- Regression coverage updated:
+  - extended the local Conversations API contract test with repeated `order`
+    and repeated `limit` validation.
+- Documentation updated:
+  - compatibility matrix now records Conversation item `order`, `limit`, and
+    `after` as single query values.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Conversations API validates metadata" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public repeated-`order` smoke against
+    `/v1/conversations/conv_public_smoke/items` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"order"`.
+  - Public repeated-`limit` smoke against
+    `/v1/conversations/conv_public_smoke/items` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"limit"`.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Conversation Items Cursor Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

@@ -6619,6 +6619,9 @@ function requestValidationError(message, param) {
 function validateOpenAIListOrderQuery(url) {
   const orders = url.searchParams.getAll("order");
   if (!orders.length) return null;
+  if (orders.length > 1) {
+    return requestValidationError("order must be a single string query value", "order");
+  }
   if (orders.some((order) => order !== "asc" && order !== "desc")) {
     return requestValidationError("order must be one of: asc, desc", "order");
   }
@@ -6628,6 +6631,9 @@ function validateOpenAIListOrderQuery(url) {
 function validateOpenAIListLimitQuery(url, options = {}) {
   const limits = url.searchParams.getAll("limit");
   if (!limits.length) return null;
+  if (limits.length > 1) {
+    return requestValidationError("limit must be a single string query value", "limit");
+  }
   const max = Number.isFinite(options.max) ? options.max : null;
   const invalid = limits.some((limit) => {
     if (!/^[1-9]\d*$/.test(limit)) return true;
