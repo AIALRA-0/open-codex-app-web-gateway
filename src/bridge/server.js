@@ -11899,6 +11899,13 @@ async function handleModerations(req, res, config) {
 
 async function handleAudioSpeech(req, res, config) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     if (!canUseLocalAudio(config)) {
       sendError(res, 400, "local audio compatibility is disabled", {
         type: "invalid_request_error",
@@ -11952,6 +11959,13 @@ async function handleAudioTranslations(req, res, config) {
 
 async function handleAudioTranscriptLike(req, res, config, task) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     if (!canUseLocalAudio(config)) {
       sendError(res, 400, "local audio compatibility is disabled", {
         type: "invalid_request_error",

@@ -5881,6 +5881,26 @@ test("POST /v1/audio/speech returns local speech bytes", async () => {
     assert.fail("chat provider should not be called for local audio speech");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidQuery = await fetch(`${baseUrl}/v1/audio/speech?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini-tts",
+        input: "Query should be rejected before speech generation.",
+        voice: "alloy",
+      }),
+    });
+    assert.equal(invalidQuery.status, 400);
+    assert.deepEqual(await invalidQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const response = await fetch(`${baseUrl}/v1/audio/speech`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6066,6 +6086,28 @@ test("POST /v1/audio/transcriptions accepts multipart, verbose JSON, and streams
     assert.fail("chat provider should not be called for local audio transcriptions");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidQuery = await fetch(`${baseUrl}/v1/audio/transcriptions?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-transcribe",
+        file: {
+          data: `data:audio/wav;base64,${Buffer.from("query audio").toString("base64")}`,
+          filename: "query.wav",
+        },
+      }),
+    });
+    assert.equal(invalidQuery.status, 400);
+    assert.deepEqual(await invalidQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const form = new FormData();
     form.append("model", "gpt-4o-transcribe");
     form.append("prompt", "name the source");
@@ -6161,6 +6203,28 @@ test("POST /v1/audio/translations accepts multipart and JSON audio data", async 
     assert.fail("chat provider should not be called for local audio translations");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidQuery = await fetch(`${baseUrl}/v1/audio/translations?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "whisper-1",
+        file: {
+          data: `data:audio/wav;base64,${Buffer.from("query translation audio").toString("base64")}`,
+          filename: "query-translate.wav",
+        },
+      }),
+    });
+    assert.equal(invalidQuery.status, 400);
+    assert.deepEqual(await invalidQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const form = new FormData();
     form.append("model", "whisper-1");
     form.append("response_format", "text");

@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Audio Direct Endpoint Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/audio/speech`;
+  - `POST /v1/audio/transcriptions`;
+  - `POST /v1/audio/translations`.
+- Official schema notes:
+  - speech creation defines a JSON request body and no query parameters;
+  - transcription and translation creation define multipart request bodies and
+    no query parameters.
+- Tightened local Audio behavior:
+  - `/v1/audio/speech` now rejects unsupported query parameters before local
+    speech generation or usage recording;
+  - `/v1/audio/transcriptions` and `/v1/audio/translations` now reject
+    unsupported query parameters before multipart/JSON parsing, local
+    transcript/translation generation, or usage recording;
+  - valid direct Audio compatibility behavior is unchanged, including local
+    placeholder speech bytes, transcription SSE, JSON/base64 compatibility,
+    and local translation responses.
+- Regression coverage updated:
+  - speech, transcription, and translation tests now verify invalid query
+    rejection and confirm the upstream Chat provider mock remains unused.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for the direct
+    Audio speech/transcription/translation endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/audio/speech returns local speech bytes|POST /v1/audio/transcriptions accepts multipart, verbose JSON, and streams events|POST /v1/audio/translations accepts multipart and JSON audio data" test/server.test.js`
+    passed 3/3 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Audio query smoke marker `audio-query-smoke-1781719740621`
+    verified invalid `metadata` queries for speech, transcriptions, and
+    translations return OpenAI-style 400 errors, then verified normal speech,
+    transcription, and translation requests still succeed.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5378 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, audio payloads, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Moderations Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:
