@@ -1,5 +1,44 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat List Order Query Validation
+
+- Rechecked the official OpenAI OpenAPI schemas for:
+  - `GET /v1/chat/completions`;
+  - `GET /v1/chat/completions/{completion_id}/messages`.
+- Confirmed both stored Chat list surfaces expose `order` as the string enum
+  `asc` / `desc` with the official default `asc`.
+- Tightened the local stored Chat lifecycle handlers so unsupported `order`
+  values now return `400 invalid_request_parameter` instead of being silently
+  interpreted as ascending order.
+- Regression coverage added:
+  - stored Chat completion list default ascending order;
+  - explicit descending order;
+  - `after` cursor behavior under the default ascending order;
+  - invalid `order` rejection on both completion and message list endpoints.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now call out official stored Chat
+    list order validation and default ascending behavior.
+- Validation:
+  - targeted stored Chat lifecycle test passes;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm `GET /v1/chat/completions?order=sideways`
+    returns `400 invalid_request_parameter` with `param:"order"`, while
+    `GET /v1/chat/completions?limit=1` returns `200 object:"list"`;
+  - local and public smoke confirm
+    `GET /v1/chat/completions/{completion_id}/messages?order=sideways`
+    returns `400 invalid_request_parameter` with `param:"order"`, while
+    `GET /v1/chat/completions/{completion_id}/messages?limit=1` returns
+    `200 object:"list"`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Chat Image URL Object Validation
 
 - Rechecked the official OpenAI OpenAPI schema for

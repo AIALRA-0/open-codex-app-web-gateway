@@ -124,6 +124,10 @@ bounded local extraction supplies usable text context, and that
 `metadata.compatibility.chat_passthrough.chat_file_inputs` plus
 `metadata.compatibility.chat_passthrough.local_input_files` record the provider
 mode and extraction counts.
+Stored Chat list coverage verifies that `GET /v1/chat/completions` and
+`GET /v1/chat/completions/{completion_id}/messages` preserve the official
+`order` enum, default to ascending order, honor explicit descending order, and
+reject unsupported order values before returning local lifecycle records.
 Bridge-regression live cases and unit/mock-provider coverage also check local
 Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
 vector-store resources, injects local retrieval evidence, persists a

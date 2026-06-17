@@ -24250,12 +24250,18 @@ test("POST /v1/chat/completions validates reasoning effort before provider calls
 });
 
 test("POST /v1/chat/completions proxies and stores chat responses when requested", async () => {
-  await withMockProvider(async (_req, res) => {
+  await withMockProvider(async (_req, res, call) => {
+    const userText = call.body?.messages?.find((message) => message.role === "user")?.content;
+    const secondCompletion = userText === "hello again";
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
-      id: "chatcmpl_passthrough",
+      id: secondCompletion ? "chatcmpl_passthrough_second" : "chatcmpl_passthrough",
       object: "chat.completion",
-      choices: [{ index: 0, message: { role: "assistant", content: "chat-ok" }, finish_reason: "stop" }],
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: secondCompletion ? "chat-ok-second" : "chat-ok" },
+        finish_reason: "stop",
+      }],
     }));
   }, async ({ bridgeAddress }) => {
     const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
@@ -24324,17 +24330,79 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
+    const invalidMessagesOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=sideways`);
+    assert.equal(invalidMessagesOrder.status, 400);
+    assert.deepEqual(await invalidMessagesOrder.json(), {
+      error: {
+        message: "order must be one of: asc, desc",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const messagesDesc = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=desc&limit=1`);
+    assert.equal(messagesDesc.status, 200);
+    const messagesDescJson = await messagesDesc.json();
+    assert.equal(messagesDescJson.data.length, 1);
+    assert.equal(messagesDescJson.data[0].direction, "output");
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const secondResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: { suite: "chat-updated", owner: "bridge-test" },
+        messages: [{ role: "user", content: "hello again" }],
+      }),
+    });
+    assert.equal(secondResponse.status, 200);
+    const secondJson = await secondResponse.json();
+    assert.equal(secondJson.id, "chatcmpl_passthrough_second");
+    assert.equal(secondJson.choices[0].message.content, "chat-ok-second");
+
     const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?model=mock-model&metadata[suite]=chat-updated&limit=10`);
     assert.equal(listed.status, 200);
     const listedJson = await listed.json();
     assert.equal(listedJson.object, "list");
-    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.data.length, 2);
     assert.equal(listedJson.data[0].id, json.id);
+    assert.equal(listedJson.data[1].id, secondJson.id);
     assert.equal(listedJson.data[0].metadata.suite, "chat-updated");
     assert.equal(listedJson.data[0].metadata.owner, "bridge-test");
     assert.equal(listedJson.first_id, json.id);
-    assert.equal(listedJson.last_id, json.id);
+    assert.equal(listedJson.last_id, secondJson.id);
     assert.equal(listedJson.has_more, false);
+
+    const listedDesc = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated&order=desc&limit=10`);
+    assert.equal(listedDesc.status, 200);
+    const listedDescJson = await listedDesc.json();
+    assert.equal(listedDescJson.data.length, 2);
+    assert.equal(listedDescJson.data[0].id, secondJson.id);
+    assert.equal(listedDescJson.data[1].id, json.id);
+    assert.equal(listedDescJson.first_id, secondJson.id);
+    assert.equal(listedDescJson.last_id, json.id);
+
+    const listedAfter = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated&after=${encodeURIComponent(json.id)}`);
+    assert.equal(listedAfter.status, 200);
+    const listedAfterJson = await listedAfter.json();
+    assert.equal(listedAfterJson.data.length, 1);
+    assert.equal(listedAfterJson.data[0].id, secondJson.id);
+    assert.equal(listedAfterJson.first_id, secondJson.id);
+    assert.equal(listedAfterJson.last_id, secondJson.id);
+
+    const invalidListOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?order=sideways`);
+    assert.equal(invalidListOrder.status, 400);
+    assert.deepEqual(await invalidListOrder.json(), {
+      error: {
+        message: "order must be one of: asc, desc",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const previousMetadata = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-list`);
     assert.equal(previousMetadata.status, 200);
@@ -24359,6 +24427,11 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
 
     const messagesAfterDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages`);
     assert.equal(messagesAfterDelete.status, 404);
+
+    const deletedSecond = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${secondJson.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecond.status, 200);
 
     const listedAfterDelete = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated`);
     assert.equal(listedAfterDelete.status, 200);

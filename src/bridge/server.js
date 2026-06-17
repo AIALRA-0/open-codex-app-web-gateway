@@ -4334,6 +4334,15 @@ function requestValidationError(message, param) {
   };
 }
 
+function validateOpenAIListOrderQuery(url) {
+  const orders = url.searchParams.getAll("order");
+  if (!orders.length) return null;
+  if (orders.some((order) => order !== "asc" && order !== "desc")) {
+    return requestValidationError("order must be one of: asc, desc", "order");
+  }
+  return null;
+}
+
 function validateResponsesInputTokensStyle(request = {}) {
   if (!Object.prototype.hasOwnProperty.call(request, "style") || request.style == null) return null;
   if (typeof request.style !== "string") {
@@ -14286,6 +14295,11 @@ function handleChatCompletionDelete(res, store, completionId) {
 }
 
 function handleChatCompletionsList(res, store, url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) {
+    sendError(res, 400, orderError.message, orderError);
+    return;
+  }
   const model = url.searchParams.get("model");
   const metadataFilters = metadataFiltersFromUrl(url);
   const completions = store.list()
@@ -14325,6 +14339,11 @@ function handleChatCompletionMessages(res, store, completionId, url) {
   const record = store.get(completionId);
   if (!record?.chat_completion) {
     sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
+    return;
+  }
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) {
+    sendError(res, 400, orderError.message, orderError);
     return;
   }
 
