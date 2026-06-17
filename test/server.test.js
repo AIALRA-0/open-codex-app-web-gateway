@@ -3587,6 +3587,11 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: /^tools\.0\.connector_id must be one of:/,
       },
       {
+        body: { tools: [{ type: "mcp", server_label: "docs" }] },
+        param: "tools.0.server_url",
+        message: "tools.0.server_url or tools.0.connector_id is required",
+      },
+      {
         body: { tools: [{ type: "mcp", server_label: "docs", authorization: null }] },
         param: "tools.0.authorization",
         message: "tools.0.authorization must be a string",

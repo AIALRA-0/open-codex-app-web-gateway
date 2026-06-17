@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-17 Responses MCP Endpoint Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 MCP tool schema through
+  the developer docs MCP workflow and the local official `openai-openapi` YAML:
+  MCP tools require `server_label`, and the `server_url` / `connector_id`
+  descriptions state that one of those endpoint identifiers must be provided.
+- Tightened Responses MCP tool validation before provider or local adapter
+  execution:
+  - `/v1/responses` now rejects `tools:[{type:"mcp",server_label:"..."}]`
+    without either `server_url` or `connector_id`;
+  - existing field-specific errors for malformed `authorization`, headers,
+    allowed-tools filters, approval filters, and `defer_loading` still take
+    precedence before the missing-endpoint check.
+- Regression coverage updated:
+  - extended the shared Responses tools/input-token boundary test with an MCP
+    missing-endpoint case.
+- Documentation updated:
+  - compatibility matrix now records the local `server_url`/`connector_id`
+    one-of requirement for MCP tools.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "Responses tools"
+    test/server.test.js` passes: 1 test;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public Responses MCP request without `server_url` or `connector_id`
+    returns `400 invalid_request_parameter` with
+    `param:"tools.0.server_url"`.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Direct Chat Message Name Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 Chat message schemas

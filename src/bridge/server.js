@@ -4004,6 +4004,15 @@ function validateOpenAIResponsesMcpTool(tool, param) {
   ) {
     return requestValidationError(`${param}.defer_loading must be a boolean`, `${param}.defer_loading`);
   }
+  if (
+    !Object.prototype.hasOwnProperty.call(tool, "server_url")
+    && !Object.prototype.hasOwnProperty.call(tool, "connector_id")
+  ) {
+    return requestValidationError(
+      `${param}.server_url or ${param}.connector_id is required`,
+      `${param}.server_url`,
+    );
+  }
   return null;
 }
 
