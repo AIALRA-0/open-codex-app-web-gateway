@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Responses File/Web Tool Replay Required Fields
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `FileSearchToolCall` and
+  `WebSearchToolCall` schemas through the developer docs MCP workflow and the
+  official `openai-openapi` YAML:
+  - `file_search_call` requires `id`, `status`, and `queries`;
+  - `web_search_call` requires `id`, `status`, and `action`;
+  - both use type-specific status enums.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject missing file/web search replay ids;
+  - file/web search replay status is now required instead of only being
+    validated when present.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with missing
+    `web_search_call.status` and missing `file_search_call.id` cases.
+- Documentation updated:
+  - compatibility matrix now records required file/web search ids and statuses.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "input image and file detail|web_search|file_search" test/server.test.js`
+    passes 24/24;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `web_search_call` replay smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.status"` with message
+    `input.0.status must be one of: in_progress, searching, completed, failed`.
+- Disk guard:
+  - root filesystem has 16 GB free and is 92% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses MCP List Tools Shape Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `MCPListTools` and

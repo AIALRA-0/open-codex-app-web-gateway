@@ -1117,6 +1117,26 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses/input_tokens",
         input: [{
+          type: "web_search_call",
+          id: "ws_missing_status",
+          action: { type: "search", query: "schema" },
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, searching, completed, failed",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "file_search_call",
+          status: "completed",
+          queries: ["schema"],
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
           type: "file_search_call",
           id: "fs_bad",
           status: "completed",

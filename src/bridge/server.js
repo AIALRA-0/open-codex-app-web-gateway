@@ -5744,8 +5744,10 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (statusError) return statusError;
 
   if (item.type === "file_search_call") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
+    const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
+    if (requiredStatusError) return requiredStatusError;
     const queriesError = validateOpenAIStringArray(item.queries, `${param}.queries`, { nullable: false });
     if (queriesError) return queriesError;
     const resultsError = validateOpenAIOptionalArrayItemField(item, param, "results", { nullable: true });
@@ -5754,8 +5756,10 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "web_search_call") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
+    const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
+    if (requiredStatusError) return requiredStatusError;
     const actionError = validateOpenAIRequiredObjectItemField(item, param, "action");
     if (actionError) return actionError;
     const resultsError = validateOpenAIOptionalArrayItemField(item, param, "results", { nullable: true });
@@ -5943,6 +5947,15 @@ function validateOpenAIResponsesToolSearchItemExecution(item, param) {
 function validateOpenAIResponsesToolContextInputItemStatus(item, param) {
   const values = OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES[item.type];
   if (!values || !Object.prototype.hasOwnProperty.call(item, "status") || item.status == null) return null;
+  if (typeof item.status !== "string" || !values.includes(item.status)) {
+    return requestValidationError(`${param}.status must be one of: ${values.join(", ")}`, `${param}.status`);
+  }
+  return null;
+}
+
+function validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param) {
+  const values = OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES[item.type];
+  if (!values) return null;
   if (typeof item.status !== "string" || !values.includes(item.status)) {
     return requestValidationError(`${param}.status must be one of: ${values.join(", ")}`, `${param}.status`);
   }
