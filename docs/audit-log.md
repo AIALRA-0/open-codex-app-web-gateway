@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Responses Computer Call Output Input Validation
+
+- Rechecked the current official OpenAI Responses `ComputerCallOutputItemParam`
+  and `ComputerScreenshotImage` schemas through the developer docs MCP and the
+  official `openai-openapi` YAML:
+  - input `computer_call_output` requires `type`, `call_id`, and object
+    `output`;
+  - input status values are `in_progress`, `completed`, or `incomplete`;
+  - acknowledged safety checks are an array/null of objects with string `id`;
+  - screenshot output contains `type:"computer_screenshot"` plus `image_url` or
+    `file_id` fields.
+- Tightened Responses input validation before provider calls:
+  - `computer_call_output` now rejects missing/empty `call_id`, non-object
+    `output`, invalid status values, malformed `image_url`, invalid
+    image-detail values, non-string `file_id`, non-string text/content
+    extensions, and malformed acknowledged safety checks;
+  - existing bridge-compatible screenshot aliases remain accepted, including
+    `output.type:"input_image"` and `image_url:{url,detail}`, so current
+    computer-use continuation flows keep working.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `computer_call_output` cases across `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`;
+  - targeted computer-output projection, computer action loop, and translator
+    replay tests pass with the new schema gate.
+- Documentation updated:
+  - compatibility matrix now records `computer_call_output` as its own
+    pre-provider validated Chat-visible computer evidence item.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses endpoints validate input image and file detail|computer_call_output
+    image_url|computer_call_output|computer action" test/server.test.js`
+    passes: 5 tests;
+  - targeted `node --test --test-name-pattern "computer_call_output input"
+    test/translator.test.js` passes;
+  - full `node --test test/*.test.js` passes: 365 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `computer_call_output.output:"bad"` input-token request
+    returns `400 invalid_request_parameter` with `param:"input.0.output"`;
+  - public valid `computer_call_output` screenshot input-token request returns
+    200 with `input_tokens:80`.
+- Runtime/storage check:
+  - `/` has 13 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Tool Context Input Validation
 
 - Rechecked the current official OpenAI Responses schema through the developer

@@ -736,6 +736,67 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "computer_call_output",
+          output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
+        }],
+        param: "input.0.call_id",
+        message: "input.0.call_id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_screen",
+          status: "failed",
+          output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, completed, incomplete",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_screen",
+          output: "not-an-object",
+        }],
+        param: "input.0.output",
+        message: "input.0.output must be an object",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_screen",
+          output: { type: "computer_screenshot", image_url: { url: 7 } },
+        }],
+        param: "input.0.output.image_url.url",
+        message: "input.0.output.image_url.url must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_screen",
+          output: { type: "input_image", image_url: "https://example.test/screen.png", detail: "tiny" },
+        }],
+        param: "input.0.output.detail",
+        message: "input.0.output.detail must be one of: auto, low, high, original",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "computer_call_output",
+          call_id: "call_screen",
+          output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
+          acknowledged_safety_checks: [{ code: "missing_id" }],
+        }],
+        param: "input.0.acknowledged_safety_checks.0.id",
+        message: "input.0.acknowledged_safety_checks.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "web_search_call",
           id: "ws_bad",
           status: "done",

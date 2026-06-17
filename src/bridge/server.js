@@ -298,6 +298,8 @@ const OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES = Object.freeze(["text", "refusal
 const OPENAI_CHAT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high"]);
 const OPENAI_RESPONSES_INPUT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high", "original"]);
 const OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES = Object.freeze(["low", "high"]);
+const OPENAI_RESPONSES_COMPUTER_CALL_OUTPUT_STATUS_VALUES = Object.freeze(["in_progress", "completed", "incomplete"]);
+const OPENAI_RESPONSES_COMPUTER_OUTPUT_TYPES = Object.freeze(["computer_screenshot", "input_image", "image_url"]);
 const OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES = Object.freeze({
   file_search_call: Object.freeze(["in_progress", "searching", "completed", "incomplete", "failed"]),
   web_search_call: Object.freeze(["in_progress", "searching", "completed", "failed"]),
@@ -5298,6 +5300,10 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     const error = validateOpenAIResponsesCustomToolCallInputItem(value, param);
     if (error) return error;
   }
+  if (value.type === "computer_call_output") {
+    const error = validateOpenAIResponsesComputerCallOutputInputItem(value, param);
+    if (error) return error;
+  }
   if (OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES.has(value.type)) {
     const error = validateOpenAIResponsesToolContextInputItem(value, param);
     if (error) return error;
@@ -5365,6 +5371,107 @@ function validateOpenAIResponsesCustomToolCallInputItem(item, param) {
     return requestValidationError(`${param}.input must be a string`, `${param}.input`);
   }
   return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function validateOpenAIResponsesComputerCallOutputInputItem(item, param) {
+  const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+  if (idError) return idError;
+
+  const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+  if (callIdError) return callIdError;
+
+  const statusError = validateOpenAIResponsesComputerCallOutputStatus(item, param);
+  if (statusError) return statusError;
+
+  const outputError = validateOpenAIRequiredObjectItemField(item, param, "output");
+  if (outputError) return outputError;
+
+  const outputShapeError = validateOpenAIResponsesComputerScreenshotOutput(item.output, `${param}.output`);
+  if (outputShapeError) return outputShapeError;
+
+  const safetyError = validateOpenAIResponsesComputerSafetyChecks(
+    item.acknowledged_safety_checks,
+    `${param}.acknowledged_safety_checks`,
+    { nullable: true },
+  );
+  if (safetyError) return safetyError;
+
+  if (isPlainObject(item.output) && Object.prototype.hasOwnProperty.call(item.output, "acknowledged_safety_checks")) {
+    return validateOpenAIResponsesComputerSafetyChecks(
+      item.output.acknowledged_safety_checks,
+      `${param}.output.acknowledged_safety_checks`,
+      { nullable: true },
+    );
+  }
+  return null;
+}
+
+function validateOpenAIResponsesComputerCallOutputStatus(item, param) {
+  if (!Object.prototype.hasOwnProperty.call(item, "status") || item.status == null) return null;
+  if (
+    typeof item.status !== "string"
+    || !OPENAI_RESPONSES_COMPUTER_CALL_OUTPUT_STATUS_VALUES.includes(item.status)
+  ) {
+    return requestValidationError(
+      `${param}.status must be one of: ${OPENAI_RESPONSES_COMPUTER_CALL_OUTPUT_STATUS_VALUES.join(", ")}`,
+      `${param}.status`,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIResponsesComputerScreenshotOutput(output, param) {
+  if (Object.prototype.hasOwnProperty.call(output, "type")) {
+    if (typeof output.type !== "string" || !OPENAI_RESPONSES_COMPUTER_OUTPUT_TYPES.includes(output.type)) {
+      return requestValidationError(
+        `${param}.type must be one of: ${OPENAI_RESPONSES_COMPUTER_OUTPUT_TYPES.join(", ")}`,
+        `${param}.type`,
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(output, "image_url")) {
+    const imageUrl = output.image_url;
+    if (imageUrl !== null && typeof imageUrl !== "string" && !isPlainObject(imageUrl)) {
+      return requestValidationError(`${param}.image_url must be a string, object, or null`, `${param}.image_url`);
+    }
+    if (isPlainObject(imageUrl) && Object.prototype.hasOwnProperty.call(imageUrl, "url") && typeof imageUrl.url !== "string") {
+      return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(output, "file_id") && output.file_id !== null && typeof output.file_id !== "string") {
+    return requestValidationError(`${param}.file_id must be a string or null`, `${param}.file_id`);
+  }
+  const detailError = validateOpenAIResponsesInputImageDetails(output, param);
+  if (detailError) return detailError;
+  for (const field of ["text", "content"]) {
+    if (Object.prototype.hasOwnProperty.call(output, field) && typeof output[field] !== "string") {
+      return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesComputerSafetyChecks(value, param, options = {}) {
+  if (value === undefined) return null;
+  if (value === null && options.nullable) return null;
+  if (!Array.isArray(value)) {
+    const nullableSuffix = options.nullable ? " or null" : "";
+    return requestValidationError(`${param} must be an array${nullableSuffix}`, param);
+  }
+  for (const [index, check] of value.entries()) {
+    const checkParam = `${param}.${index}`;
+    if (!isPlainObject(check)) {
+      return requestValidationError(`${checkParam} must be an object`, checkParam);
+    }
+    const idError = validateOpenAIRequiredStringItemField(check, checkParam, "id");
+    if (idError) return idError;
+    for (const field of ["code", "message"]) {
+      if (Object.prototype.hasOwnProperty.call(check, field) && check[field] !== null && typeof check[field] !== "string") {
+        return requestValidationError(`${checkParam}.${field} must be a string or null`, `${checkParam}.${field}`);
+      }
+    }
+  }
+  return null;
 }
 
 function validateOpenAIResponsesToolContextInputItem(item, param) {
