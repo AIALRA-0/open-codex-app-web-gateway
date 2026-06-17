@@ -24376,6 +24376,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(json.created > 0, true);
     assert.equal(json.request_id, "req_stored_chat_first");
     assert.equal(json.input_user, "stored-user");
+    assert.equal(json.choices[0].logprobs, null);
+    assert.equal(json.choices[0].message.refusal, null);
     assert.deepEqual(json.metadata, { suite: "chat-list" });
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
@@ -24387,6 +24389,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(fetchedJson.created, json.created);
     assert.equal(fetchedJson.request_id, "req_stored_chat_first");
     assert.equal(fetchedJson.input_user, "stored-user");
+    assert.equal(fetchedJson.choices[0].logprobs, null);
+    assert.equal(fetchedJson.choices[0].message.refusal, null);
     assert.deepEqual(fetchedJson.metadata, { suite: "chat-list" });
 
     const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
@@ -24501,6 +24505,10 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(listedJson.data[0].input_user, "stored-user");
     assert.equal(listedJson.data[1].request_id, "req_stored_chat_second");
     assert.equal(listedJson.data[1].input_user, "stored-user-2");
+    assert.equal(listedJson.data[0].choices[0].logprobs, null);
+    assert.equal(listedJson.data[0].choices[0].message.refusal, null);
+    assert.equal(listedJson.data[1].choices[0].logprobs, null);
+    assert.equal(listedJson.data[1].choices[0].message.refusal, null);
     assert.equal(listedJson.data[0].metadata.suite, "chat-updated");
     assert.equal(listedJson.data[0].metadata.owner, "bridge-test");
     assert.equal(listedJson.first_id, json.id);
@@ -26420,9 +26428,11 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     });
     assert.deepEqual(fetchedJson.usage, { prompt_tokens: 8, completion_tokens: 6, total_tokens: 14 });
     assert.equal(fetchedJson.choices[0].message.content, "stream-store-ok");
+    assert.equal(fetchedJson.choices[0].message.refusal, null);
     assert.equal(fetchedJson.choices[0].finish_reason, "stop");
     assert.equal(fetchedJson.choices[0].logprobs.content[0].token, "store-ok");
     assert.equal(fetchedJson.choices[1].message.content, null);
+    assert.equal(fetchedJson.choices[1].message.refusal, null);
     assert.deepEqual(fetchedJson.choices[1].message.tool_calls, [{
       id: "call_stream_store",
       type: "function",
@@ -26446,6 +26456,8 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(listedJson.data[0].id, "chatcmpl_stream_store");
     assert.equal(listedJson.data[0].request_id, "req_stream_store");
     assert.equal(listedJson.data[0].input_user, "stream-user");
+    assert.equal(listedJson.data[0].choices[0].message.refusal, null);
+    assert.equal(listedJson.data[0].choices[1].message.refusal, null);
   }, { streamOptionFields: ["include_usage"] });
 });
 

@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Choice Shape
+
+- Rechecked the official OpenAI OpenAPI schema for Chat Completions:
+  - `CreateChatCompletionResponse.choices[]` requires `finish_reason`, `index`,
+    `message`, and `logprobs`;
+  - `ChatCompletionResponseMessage` requires `role`, `content`, and `refusal`;
+  - `logprobs` and `refusal` are nullable official fields and are often
+    represented as `null` in examples.
+- Tightened local stored Chat completion records:
+  - `store:true` non-streaming responses now normalize missing
+    `choices[].logprobs` to `null` before returning and storing local records;
+  - reconstructed streaming stored Chat completions apply the same choice
+    normalization;
+  - missing assistant `choices[].message.refusal` is normalized to `null`;
+  - missing assistant `content` is normalized to `null` for tool/function calls
+    and `""` for plain assistant messages, while provider-supplied values remain
+    authoritative.
+- Regression coverage added:
+  - non-streaming stored Chat create, retrieve, and list responses expose
+    `choices[].logprobs:null` and `choices[].message.refusal:null` when the
+    mock provider omits them;
+  - streaming stored Chat retrieve and list responses expose
+    `choices[].message.refusal:null` on reconstructed text and tool-call
+    choices.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe stored Chat
+    choice/message shape normalization.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle and streaming stored Chat tests pass;
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes;
+  - local and public smoke created temporary `store:true` Chat completions,
+    confirmed create, retrieve, list, and messages endpoints, verified stored
+    choices expose the official nullable `logprobs` field and assistant
+    messages expose the official nullable `refusal` field, and deleted the
+    temporary records.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Request Metadata Shape
 
 - Rechecked the official OpenAI OpenAPI schema and examples for stored Chat

@@ -8743,6 +8743,7 @@ function attachStoredChatRequestFields(completion, request = {}, options = {}) {
   if (typeof completion.model !== "string" || completion.model.length === 0) {
     completion.model = typeof request.model === "string" && request.model.length ? request.model : "unknown";
   }
+  normalizeStoredChatCompletionChoices(completion);
   const requestId = stringifyOptional(options.requestId);
   if (requestId && completion.request_id === undefined) completion.request_id = requestId;
   if (request.user !== undefined && completion.input_user === undefined) completion.input_user = clone(request.user);
@@ -8768,6 +8769,28 @@ function attachStoredChatRequestFields(completion, request = {}, options = {}) {
     }
   }
   if (!completion.metadata) completion.metadata = {};
+}
+
+function normalizeStoredChatCompletionChoices(completion) {
+  if (!Array.isArray(completion?.choices)) return;
+  completion.choices = completion.choices.map((choice, index) => normalizeStoredChatCompletionChoice(choice, index));
+}
+
+function normalizeStoredChatCompletionChoice(choice, index) {
+  const stored = isPlainObject(choice)
+    ? clone(choice)
+    : { index, message: { role: "assistant", content: stringifyContent(choice) } };
+  if (!Number.isInteger(stored.index)) stored.index = index;
+  if (!Object.prototype.hasOwnProperty.call(stored, "logprobs")) stored.logprobs = null;
+  if (!isPlainObject(stored.message)) {
+    stored.message = { role: "assistant", content: stringifyContent(stored.message) };
+  }
+  if (typeof stored.message.role !== "string" || !stored.message.role) stored.message.role = "assistant";
+  if (!Object.prototype.hasOwnProperty.call(stored.message, "content")) {
+    stored.message.content = stored.message.tool_calls || stored.message.function_call ? null : "";
+  }
+  if (!Object.prototype.hasOwnProperty.call(stored.message, "refusal")) stored.message.refusal = null;
+  return stored;
 }
 
 function normalizeStoredChatMetadata(completionMetadata, requestMetadata) {
