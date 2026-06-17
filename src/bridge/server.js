@@ -4343,6 +4343,15 @@ function validateOpenAIListOrderQuery(url) {
   return null;
 }
 
+function validateOpenAIListLimitQuery(url) {
+  const limits = url.searchParams.getAll("limit");
+  if (!limits.length) return null;
+  if (limits.some((limit) => !/^[1-9]\d*$/.test(limit))) {
+    return requestValidationError("limit must be a positive integer", "limit");
+  }
+  return null;
+}
+
 function validateResponsesInputTokensStyle(request = {}) {
   if (!Object.prototype.hasOwnProperty.call(request, "style") || request.style == null) return null;
   if (typeof request.style !== "string") {
@@ -14300,6 +14309,11 @@ function handleChatCompletionsList(res, store, url) {
     sendError(res, 400, orderError.message, orderError);
     return;
   }
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) {
+    sendError(res, 400, limitError.message, limitError);
+    return;
+  }
   const model = url.searchParams.get("model");
   const metadataFilters = metadataFiltersFromUrl(url);
   const completions = store.list()
@@ -14344,6 +14358,11 @@ function handleChatCompletionMessages(res, store, completionId, url) {
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) {
     sendError(res, 400, orderError.message, orderError);
+    return;
+  }
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) {
+    sendError(res, 400, limitError.message, limitError);
     return;
   }
 

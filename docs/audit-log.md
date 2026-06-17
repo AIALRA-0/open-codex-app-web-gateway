@@ -1,5 +1,43 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat List Limit Query Validation
+
+- Rechecked the official OpenAI OpenAPI schemas for:
+  - `GET /v1/chat/completions`;
+  - `GET /v1/chat/completions/{completion_id}/messages`.
+- Confirmed both stored Chat list surfaces define `limit` as an integer query
+  parameter with default `20`.
+- Tightened the local stored Chat lifecycle handlers so malformed `limit`
+  values such as `abc`, fractional values such as `1.5`, and non-positive
+  values such as `0` return `400 invalid_request_parameter` instead of being
+  silently replaced by local pagination defaults.
+- Regression coverage added:
+  - invalid `limit` rejection on the stored Chat completion list endpoint;
+  - invalid `limit` rejection on the stored Chat message list endpoint;
+  - existing valid `limit=1` pagination remains covered by the lifecycle test.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now call out stored Chat list
+    `limit` query validation.
+- Validation:
+  - targeted stored Chat lifecycle test passes;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm malformed stored Chat list `limit` values
+    return `400 invalid_request_parameter` with `param:"limit"`, while
+    `GET /v1/chat/completions?limit=1` returns `200 object:"list"`;
+  - local and public smoke confirm malformed stored Chat messages `limit`
+    values return `400 invalid_request_parameter` with `param:"limit"`, while
+    `GET /v1/chat/completions/{completion_id}/messages?limit=1` returns
+    `200 object:"list"`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Stored Chat List Order Query Validation
 
 - Rechecked the official OpenAI OpenAPI schemas for:

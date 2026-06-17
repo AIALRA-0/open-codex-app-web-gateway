@@ -24341,6 +24341,17 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
       },
     });
 
+    const invalidMessagesLimit = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?limit=1.5`);
+    assert.equal(invalidMessagesLimit.status, 400);
+    assert.deepEqual(await invalidMessagesLimit.json(), {
+      error: {
+        message: "limit must be a positive integer",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const messagesDesc = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=desc&limit=1`);
     assert.equal(messagesDesc.status, 200);
     const messagesDescJson = await messagesDesc.json();
@@ -24403,6 +24414,19 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
         code: "invalid_request_parameter",
       },
     });
+
+    for (const invalidLimit of ["abc", "1.5", "0"]) {
+      const invalidListLimit = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?limit=${encodeURIComponent(invalidLimit)}`);
+      assert.equal(invalidListLimit.status, 400);
+      assert.deepEqual(await invalidListLimit.json(), {
+        error: {
+          message: "limit must be a positive integer",
+          type: "invalid_request_error",
+          param: "limit",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
 
     const previousMetadata = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-list`);
     assert.equal(previousMetadata.status, 200);

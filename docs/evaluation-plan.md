@@ -127,7 +127,9 @@ mode and extraction counts.
 Stored Chat list coverage verifies that `GET /v1/chat/completions` and
 `GET /v1/chat/completions/{completion_id}/messages` preserve the official
 `order` enum, default to ascending order, honor explicit descending order, and
-reject unsupported order values before returning local lifecycle records.
+reject unsupported order values before returning local lifecycle records. The
+same coverage rejects non-integer and non-positive `limit` query values instead
+of silently replacing them with local pagination defaults.
 Bridge-regression live cases and unit/mock-provider coverage also check local
 Assistants hosted-tool adapters: `file_search` merges assistant/thread/run
 vector-store resources, injects local retrieval evidence, persists a
