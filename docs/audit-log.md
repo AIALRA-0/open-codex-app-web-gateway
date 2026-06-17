@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Organization Spend Alerts List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/spend_alerts` through the OpenAI developer-docs MCP.
+- Confirmed the official Organization Spend Alerts list query parameters are
+  `limit`, `order`, `after`, and `before`; `limit` accepts 0 through 100 with
+  default 20, and `order` accepts `asc` and `desc` with default `asc`.
+- Project-scoped note: the OpenAI endpoint inventory lists
+  `/organization/projects/{project_id}/spend_alerts`, but the MCP OpenAPI
+  lookup did not return a separate project-scoped schema fragment. The bridge
+  applies the same Spend Alerts list query contract to the project-scoped
+  family as an explicit compatibility inference.
+- Tightened local Spend Alerts list behavior:
+  - `GET /v1/organization/spend_alerts` now validates official `limit`,
+    `order`, `after`, and `before` values before listing local records;
+  - `GET /v1/organization/projects/{project_id}/spend_alerts` uses the same
+    validation for active projects;
+  - `limit=0` now returns an empty list page with correct `has_more` instead
+    of falling back to the default page size;
+  - repeated scalar query values for `limit`, `order`, `after`, and `before`
+    return OpenAI-style HTTP 400 errors;
+  - non-official query parameters are stripped before pagination so they do
+    not shape local list results.
+- Regression coverage updated:
+  - organization spend-alert lifecycle tests now cover `limit=0`, `order`,
+    `after`, `before`, invalid limits, invalid order, repeated scalar
+    parameters, cleanup of both temporary organization alerts, audit filters,
+    and zero upstream provider calls;
+  - project spend-alert lifecycle tests now create two local project alerts and
+    cover the same list-query boundaries before update/delete/archive checks.
+- Documentation updated:
+  - compatibility matrix now records the validated Spend Alerts pagination
+    contract for organization and project-scoped list endpoints, including
+    official `limit=0` support and repeated scalar rejection.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization spend alerts manage local organization and project thresholds" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Spend Alerts smoke marker `spend-query-smoke-mqi7e8wk` created two
+    temporary organization alerts and two temporary project alerts, verified
+    `limit=0`, `order=desc`, `after`, `before`, invalid limits, invalid order,
+    repeated scalar errors, then deleted the temporary alerts and archived the
+    temporary project.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or alert notification secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Certificates List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema for

@@ -15904,10 +15904,14 @@ async function handleOrganizationSpendAlertUpdate(req, res, organizationAdminSto
 }
 
 function handleOrganizationSpendAlertsList(res, organizationAdminStore, url) {
-  sendJson(res, 200, paginateListWithDefaultOrder(
+  const queryError = validateOpenAISpendAlertsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateListAllowingZeroLimit(
     organizationAdminStore.listOrganizationSpendAlerts(),
-    url,
-    "asc",
+    officialSpendAlertsListPaginationUrl(url),
     20,
     100,
   ));
@@ -16520,8 +16524,18 @@ async function handleOrganizationProjectSpendAlertUpdate(req, res, organizationA
 }
 
 function handleOrganizationProjectSpendAlertsList(res, organizationAdminStore, projectId, url) {
+  const queryError = validateOpenAISpendAlertsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const alerts = organizationAdminStore.listProjectSpendAlerts(projectId);
-  sendJson(res, 200, paginateListWithDefaultOrder(alerts, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListAllowingZeroLimit(
+    alerts,
+    officialSpendAlertsListPaginationUrl(url),
+    20,
+    100,
+  ));
 }
 
 function handleOrganizationProjectSpendAlertDelete(res, organizationAdminStore, projectId, alertId) {
@@ -16681,6 +16695,27 @@ function validateOpenAIOrganizationCertificatesListQuery(url) {
 function officialOrganizationCertificatesListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAISpendAlertsListQuery(url) {
+  const limitError = validateOpenAIListZeroLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const beforeError = validateOpenAISingleQueryValue(url, "before");
+  if (beforeError) return beforeError;
+
+  return validateOpenAIListOrderQuery(url);
+}
+
+function officialSpendAlertsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "before", "order", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
   }
   return localUrl;

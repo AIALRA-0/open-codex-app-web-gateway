@@ -23633,15 +23633,84 @@ test("Organization spend alerts manage local organization and project thresholds
       organizationAlert.id,
       secondOrganizationAlert.id,
     ]));
+    const organizationAlertIdsAscending = organizationAlertsJson.data.map((entry) => entry.id);
+
+    const organizationZeroLimit = await fetch(`${baseUrl}/v1/organization/spend_alerts?limit=0`);
+    assert.equal(organizationZeroLimit.status, 200);
+    assert.deepEqual(await organizationZeroLimit.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: true,
+    });
 
     const organizationDesc = await fetch(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1`);
     assert.equal(organizationDesc.status, 200);
     const organizationDescJson = await organizationDesc.json();
     assert.equal(organizationDescJson.data.length, 1);
+    assert.equal(organizationDescJson.data[0].id, organizationAlertIdsAscending.at(-1));
     assert.equal(organizationDescJson.has_more, true);
     const organizationNext = await fetch(`${baseUrl}/v1/organization/spend_alerts?order=desc&limit=1&after=${encodeURIComponent(organizationDescJson.last_id)}`);
     assert.equal(organizationNext.status, 200);
-    assert.equal((await organizationNext.json()).data.length, 1);
+    const organizationNextJson = await organizationNext.json();
+    assert.equal(organizationNextJson.data.length, 1);
+    assert.equal(organizationNextJson.data[0].id, organizationAlertIdsAscending[0]);
+
+    const organizationBefore = await fetch(`${baseUrl}/v1/organization/spend_alerts?order=asc&limit=10&before=${encodeURIComponent(organizationAlertIdsAscending[1])}`);
+    assert.equal(organizationBefore.status, 200);
+    assert.deepEqual((await organizationBefore.json()).data.map((entry) => entry.id), [
+      organizationAlertIdsAscending[0],
+    ]);
+
+    for (const testCase of [
+      {
+        path: "/v1/organization/spend_alerts?limit=-1",
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: "/v1/organization/spend_alerts?limit=101",
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: "/v1/organization/spend_alerts?limit=1&limit=2",
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/organization/spend_alerts?after=${encodeURIComponent(organizationAlertIdsAscending[0])}&after=alert_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: `/v1/organization/spend_alerts?before=${encodeURIComponent(organizationAlertIdsAscending[1])}&before=alert_other`,
+        param: "before",
+        message: "before must be a single string query value",
+      },
+      {
+        path: "/v1/organization/spend_alerts?order=newest",
+        param: "order",
+        message: "order must be one of: asc, desc",
+      },
+      {
+        path: "/v1/organization/spend_alerts?order=asc&order=desc",
+        param: "order",
+        message: "order must be a single string query value",
+      },
+    ]) {
+      const invalidOrganizationList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidOrganizationList.status, 400, testCase.path);
+      assert.deepEqual(await invalidOrganizationList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const updatedOrganizationAlert = await fetch(`${baseUrl}/v1/organization/spend_alerts/${organizationAlert.id}`, {
       method: "POST",
@@ -23677,6 +23746,12 @@ test("Organization spend alerts manage local organization and project thresholds
     assert.equal(missingOrganizationDelete.status, 404);
     assert.equal((await missingOrganizationDelete.json()).error.code, "organization_spend_alert_not_found");
 
+    const deletedSecondOrganizationAlert = await fetch(`${baseUrl}/v1/organization/spend_alerts/${secondOrganizationAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondOrganizationAlert.status, 200);
+    assert.equal((await deletedSecondOrganizationAlert.json()).id, secondOrganizationAlert.id);
+
     const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -23701,11 +23776,101 @@ test("Organization spend alerts manage local organization and project thresholds
     assert.equal(projectAlert.threshold_amount, 50000);
     assert.equal(projectAlert.compatibility.project_id, project.id);
 
+    const secondProjectAlertResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(spendAlertBody(125000, ["project-owner@example.com"])),
+    });
+    assert.equal(secondProjectAlertResponse.status, 200);
+    const secondProjectAlert = await secondProjectAlertResponse.json();
+
     const projectAlerts = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?limit=20`);
     assert.equal(projectAlerts.status, 200);
     const projectAlertsJson = await projectAlerts.json();
     assert.equal(projectAlertsJson.object, "list");
-    assert.equal(projectAlertsJson.data[0].id, projectAlert.id);
+    assert.deepEqual(new Set(projectAlertsJson.data.map((entry) => entry.id)), new Set([
+      projectAlert.id,
+      secondProjectAlert.id,
+    ]));
+    const projectAlertIdsAscending = projectAlertsJson.data.map((entry) => entry.id);
+
+    const projectZeroLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?limit=0`);
+    assert.equal(projectZeroLimit.status, 200);
+    assert.deepEqual(await projectZeroLimit.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: true,
+    });
+
+    const projectDesc = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?order=desc&limit=1`);
+    assert.equal(projectDesc.status, 200);
+    const projectDescJson = await projectDesc.json();
+    assert.equal(projectDescJson.data.length, 1);
+    assert.equal(projectDescJson.data[0].id, projectAlertIdsAscending.at(-1));
+    assert.equal(projectDescJson.has_more, true);
+
+    const projectNext = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?order=desc&limit=1&after=${encodeURIComponent(projectDescJson.last_id)}`);
+    assert.equal(projectNext.status, 200);
+    const projectNextJson = await projectNext.json();
+    assert.equal(projectNextJson.data.length, 1);
+    assert.equal(projectNextJson.data[0].id, projectAlertIdsAscending[0]);
+
+    const projectBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts?order=asc&limit=10&before=${encodeURIComponent(projectAlertIdsAscending[1])}`);
+    assert.equal(projectBefore.status, 200);
+    assert.deepEqual((await projectBefore.json()).data.map((entry) => entry.id), [
+      projectAlertIdsAscending[0],
+    ]);
+
+    for (const testCase of [
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?limit=-1`,
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?limit=101`,
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?limit=1&limit=2`,
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?after=${encodeURIComponent(projectAlertIdsAscending[0])}&after=alert_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?before=${encodeURIComponent(projectAlertIdsAscending[1])}&before=alert_other`,
+        param: "before",
+        message: "before must be a single string query value",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?order=newest`,
+        param: "order",
+        message: "order must be one of: asc, desc",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/spend_alerts?order=asc&order=desc`,
+        param: "order",
+        message: "order must be a single string query value",
+      },
+    ]) {
+      const invalidProjectList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidProjectList.status, 400, testCase.path);
+      assert.deepEqual(await invalidProjectList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const updatedProjectAlert = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts/${projectAlert.id}`, {
       method: "POST",
@@ -23734,6 +23899,12 @@ test("Organization spend alerts manage local organization and project thresholds
     });
     assert.equal(missingProjectAlert.status, 404);
     assert.equal((await missingProjectAlert.json()).error.code, "project_spend_alert_not_found");
+
+    const deletedSecondProjectAlert = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/spend_alerts/${secondProjectAlert.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondProjectAlert.status, 200);
+    assert.equal((await deletedSecondProjectAlert.json()).id, secondProjectAlert.id);
 
     const archivedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/archive`, {
       method: "POST",
