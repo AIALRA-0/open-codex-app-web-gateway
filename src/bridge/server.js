@@ -16977,7 +16977,7 @@ function handleOrganizationProjectCertificatesList(res, organizationAdminStore, 
     sendError(res, 400, queryError.message, queryError);
     return;
   }
-  sendJson(res, 200, paginateConversationCursorListWithDefaultOrder(
+  sendJson(res, 200, paginateListWithDefaultOrder(
     organizationAdminStore.listProjectCertificates(projectId),
     officialProjectCertificatesListPaginationUrl(url),
     "desc",

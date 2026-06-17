@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Project Certificates List First ID Parity
+
+- Rechecked official OpenAI API references:
+  - official OpenAPI 2.3.0 for
+    `GET /v1/organization/projects/{project_id}/certificates` returns an
+    OpenAI list envelope with `first_id`, `last_id`, and `has_more`;
+  - the endpoint supports `limit`, `after`, and `order`, with default
+    `limit=20` and default `order=desc`.
+- Tightened local bridge behavior:
+  - project certificate listing now uses the standard OpenAI list paginator
+    instead of the conversation-cursor paginator, so non-empty and empty pages
+    include `first_id` as well as `last_id`;
+  - existing certificate filtering, project-active checks, official query
+    validation, default order, and pagination limits remain unchanged.
+- Regression coverage updated:
+  - the organization certificates lifecycle test now asserts `first_id:null`
+    on empty project certificate lists and matching `first_id` / `last_id`
+    values on listed, default-order, and `after` pages.
+- Documentation updated:
+  - compatibility matrix now records project certificate list fields
+    `first_id`, `last_id`, and `has_more`, replacing the previous documented
+    no-`first_id` local behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization certificates manage local organization and project activation" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public project certificate smoke verified health, invalid `limit=0`
+    rejection, and unsupported `before` query rejection without creating live
+    certificate or project state.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available,
+    93% used.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, PEM certificate material, generated
+    project ids, generated certificate ids, or smoke payload secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Group Users List Default Pagination Validation
 
 - Rechecked official OpenAI API references:

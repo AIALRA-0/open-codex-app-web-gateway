@@ -24713,6 +24713,7 @@ test("Organization certificates manage local organization and project activation
     assert.deepEqual(await emptyProjectCertificates.json(), {
       object: "list",
       data: [],
+      first_id: null,
       has_more: false,
       last_id: null,
     });
@@ -24743,8 +24744,8 @@ test("Organization certificates manage local organization and project activation
     ]));
     assert.ok(listedProjectCertificatesJson.data.every((entry) => entry.active === true));
     assert.equal(listedProjectCertificatesJson.has_more, false);
+    assert.equal(listedProjectCertificatesJson.first_id, listedProjectCertificatesJson.data[0].id);
     assert.equal(listedProjectCertificatesJson.last_id, listedProjectCertificatesJson.data.at(-1).id);
-    assert.equal(Object.prototype.hasOwnProperty.call(listedProjectCertificatesJson, "first_id"), false);
     const projectCertificateIdsAscending = listedProjectCertificatesJson.data.map((entry) => entry.id);
 
     const defaultProjectCertificatePage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?limit=1`);
@@ -24753,6 +24754,7 @@ test("Organization certificates manage local organization and project activation
     assert.equal(defaultProjectCertificatePageJson.data.length, 1);
     assert.equal(defaultProjectCertificatePageJson.data[0].id, projectCertificateIdsAscending.at(-1));
     assert.equal(defaultProjectCertificatePageJson.has_more, true);
+    assert.equal(defaultProjectCertificatePageJson.first_id, projectCertificateIdsAscending.at(-1));
     assert.equal(defaultProjectCertificatePageJson.last_id, projectCertificateIdsAscending.at(-1));
 
     const nextProjectCertificatePage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=1&after=${encodeURIComponent(projectCertificateIdsAscending[0])}`);
@@ -24761,6 +24763,7 @@ test("Organization certificates manage local organization and project activation
     assert.equal(nextProjectCertificatePageJson.data.length, 1);
     assert.equal(nextProjectCertificatePageJson.data[0].id, projectCertificateIdsAscending[1]);
     assert.equal(nextProjectCertificatePageJson.has_more, false);
+    assert.equal(nextProjectCertificatePageJson.first_id, projectCertificateIdsAscending[1]);
     assert.equal(nextProjectCertificatePageJson.last_id, projectCertificateIdsAscending[1]);
 
     const projectCertificatesWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=2&before=${encodeURIComponent(projectCertificateIdsAscending[1])}`);
