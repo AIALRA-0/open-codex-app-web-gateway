@@ -16912,7 +16912,12 @@ function officialAuditLogsListPaginationUrl(url) {
   return localUrl;
 }
 
-async function handleFineTuningJobCreate(req, res, fineTuningStore) {
+async function handleFineTuningJobCreate(req, res, fineTuningStore, url) {
+  const queryError = validateOpenAIFineTuningNoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const validationError = validateOpenAIFineTuningJobCreateBody(body);
   if (validationError) {
@@ -17343,7 +17348,12 @@ function handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url) {
   sendJson(res, 200, paginateListWithDefaultOrder(checkpoints, officialFineTuningListPaginationUrl(url), "desc", 10, 100));
 }
 
-async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint) {
+async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint, url) {
+  const queryError = validateOpenAIFineTuningNoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const bodyError = validateOpenAIFineTuningCheckpointPermissionsCreateBody(body);
   if (bodyError) throw bodyError;
@@ -22574,7 +22584,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleFineTuningJobCreate(req, res, fineTuningStore);
+          await handleFineTuningJobCreate(req, res, fineTuningStore, url);
           return;
         }
       }
@@ -22612,7 +22622,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!permissionId && req.method === "POST") {
-          await handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint);
+          await handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint, url);
           return;
         }
         if (permissionId && req.method === "DELETE") {

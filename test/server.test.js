@@ -26473,6 +26473,28 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
       }, testCase.param);
     }
 
+    const invalidQueryCreate = await fetch(`${baseUrl}/v1/fine_tuning/jobs?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        training_file: "file_train_query_rejected",
+        metadata: { suite: "fine-tuning-query-rejected" },
+      }),
+    });
+    assert.equal(invalidQueryCreate.status, 400);
+    assert.deepEqual(await invalidQueryCreate.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const invalidQueryCreateList = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata%5Bsuite%5D=fine-tuning-query-rejected`);
+    assert.equal(invalidQueryCreateList.status, 200);
+    assert.equal((await invalidQueryCreateList.json()).data.length, 0);
+
     const createResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -26695,6 +26717,24 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
       last_id: null,
       has_more: false,
     });
+
+    const invalidQueryPermissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project_ids: ["proj_local_query_rejected"] }),
+    });
+    assert.equal(invalidQueryPermissionCreate.status, 400);
+    assert.deepEqual(await invalidQueryPermissionCreate.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const invalidQueryPermissionList = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?project_id=proj_local_query_rejected`);
+    assert.equal(invalidQueryPermissionList.status, 200);
+    assert.equal((await invalidQueryPermissionList.json()).data.length, 0);
 
     for (const testCase of [
       {

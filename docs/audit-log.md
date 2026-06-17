@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Create Query Validation
+
+- Rechecked official OpenAI API reference/OpenAPI coverage for:
+  - `POST /v1/fine_tuning/jobs`;
+  - `POST /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions`.
+- Official schema notes:
+  - Fine-tuning job create accepts a JSON request body and does not define
+    query parameters;
+  - checkpoint permission create accepts the `project_ids` JSON request body
+    field and does not define query parameters.
+- Tightened local Fine-tuning behavior:
+  - `POST /v1/fine_tuning/jobs` now rejects unsupported query parameters
+    before body validation or local state mutation;
+  - `POST /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions`
+    now rejects unsupported query parameters before body validation or local
+    permission mutation;
+  - valid create requests keep the existing local compatibility behavior and
+    still never call the upstream Chat Completions provider.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now verifies invalid job-create query
+    rejection and confirms the rejected job metadata is not stored;
+  - the same test verifies invalid checkpoint-permission create query rejection
+    and confirms the rejected project permission is not stored.
+- Documentation updated:
+  - compatibility matrix now records the no-query create boundary for
+    Fine-tuning jobs and checkpoint permissions.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Fine-tuning create-query smoke marker
+    `ft-create-query-smoke-1781719004932` verified invalid job-create query
+    returns 400 without storing the rejected metadata, then created one valid
+    local job and verified invalid checkpoint-permission create query returns
+    400 without storing the rejected project permission. No upstream provider
+    training or model call was performed.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5373 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Retrieve And Permission Delete Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:
