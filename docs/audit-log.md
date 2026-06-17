@@ -1,5 +1,35 @@
 # Audit Log
 
+## 2026-06-17 Logit Bias Integer Validation
+
+- Rechecked the official OpenAI OpenAPI schemas for Chat Completions and legacy
+  Completions:
+  - `logit_bias` is an object map;
+  - map values are `integer` values, not arbitrary JSON numbers;
+  - accepted bias range remains `-100` through `100`.
+- Tightened local request validation across Responses Chat-native aliases,
+  direct `/v1/chat/completions`, and legacy `/v1/completions` so fractional
+  values such as `1.5` are rejected before provider calls.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe `logit_bias` values
+    as integers rather than numbers.
+- Validation:
+  - targeted logit-bias tests pass for Responses, direct Chat, and legacy
+    Completions;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm fractional `logit_bias` values return
+    `400 invalid_request_parameter` on Responses, direct Chat, and legacy
+    Completions, while integer boundary direct Chat requests return `200`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Compact Schema Endpoint Split
 
 - Rechecked the official OpenAI OpenAPI schema for `/v1/responses/compact` and

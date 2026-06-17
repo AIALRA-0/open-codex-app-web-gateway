@@ -2833,19 +2833,20 @@ function validateOpenAILogitBias(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "logit_bias") || body.logit_bias == null) return null;
   if (!isPlainObject(body.logit_bias)) {
     return requestValidationError(
-      `logit_bias must be an object mapping token IDs to numbers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
+      `logit_bias must be an object mapping token IDs to integers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
       "logit_bias",
     );
   }
   for (const [tokenId, bias] of Object.entries(body.logit_bias)) {
     if (
       typeof bias !== "number"
+      || !Number.isInteger(bias)
       || !Number.isFinite(bias)
       || bias < OPENAI_LOGIT_BIAS_MIN
       || bias > OPENAI_LOGIT_BIAS_MAX
     ) {
       return requestValidationError(
-        `logit_bias values must be numbers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
+        `logit_bias values must be integers between ${OPENAI_LOGIT_BIAS_MIN} and ${OPENAI_LOGIT_BIAS_MAX}`,
         `logit_bias.${tokenId}`,
       );
     }

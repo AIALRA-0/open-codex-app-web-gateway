@@ -2979,27 +2979,32 @@ test("POST /v1/responses validates logit_bias before provider calls", async () =
       {
         body: { logit_bias: [] },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: "bad" },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: { "7": -101 } },
         param: "logit_bias.7",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "7": 101 } },
         param: "logit_bias.7",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "7": 1.5 } },
+        param: "logit_bias.7",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "7": "-1" } },
         param: "logit_bias.7",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
     ];
     for (const invalidCase of invalidCases) {
@@ -21644,27 +21649,32 @@ test("POST /v1/completions validates logit_bias before provider calls", async ()
       {
         body: { logit_bias: [] },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: "bad" },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: { "11": -101 } },
         param: "logit_bias.11",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "11": 101 } },
         param: "logit_bias.11",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "11": 1.5 } },
+        param: "logit_bias.11",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "11": "-1" }, stream: true },
         param: "logit_bias.11",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
     ];
     for (const invalidCase of invalidCases) {
@@ -23543,27 +23553,32 @@ test("POST /v1/chat/completions validates logit_bias before provider calls", asy
       {
         body: { logit_bias: [] },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: "bad" },
         param: "logit_bias",
-        message: "logit_bias must be an object mapping token IDs to numbers between -100 and 100",
+        message: "logit_bias must be an object mapping token IDs to integers between -100 and 100",
       },
       {
         body: { logit_bias: { "42": -101 } },
         param: "logit_bias.42",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "42": 101 } },
         param: "logit_bias.42",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
+      },
+      {
+        body: { logit_bias: { "42": 1.5 } },
+        param: "logit_bias.42",
+        message: "logit_bias values must be integers between -100 and 100",
       },
       {
         body: { logit_bias: { "42": "-1" } },
         param: "logit_bias.42",
-        message: "logit_bias values must be numbers between -100 and 100",
+        message: "logit_bias values must be integers between -100 and 100",
       },
     ];
     for (const invalidCase of invalidCases) {

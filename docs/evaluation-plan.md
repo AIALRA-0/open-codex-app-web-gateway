@@ -671,7 +671,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   sequences validate the official string-or-1-to-4-strings shape locally,
   forward valid values to upstream Chat providers, and verify the stop marker
   is omitted from visible output.
-- Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-number bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
+- Responses and direct Chat requests that include Chat-native `logit_bias` validate the official object/value contract locally before provider calls, including invalid object shapes, non-integer bias values, and out-of-range values, while valid -100 and 100 boundaries still pass through to upstream Chat providers unchanged.
 - Responses and direct Chat requests that include Chat-native output
   `modalities`, `audio`, or `prediction` validate the official Chat create
   request contract locally before provider calls: modalities must be text/audio
