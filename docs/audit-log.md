@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Project Rate Limits List Query Allowlist Validation
+
+- Rechecked official OpenAI API references and existing audit evidence:
+  - the earlier 2026-06-17 Project Rate Limits list audit recorded the current
+    official OpenAPI 2.3.0 contract for this endpoint as `limit`, `after`, and
+    `before`, with no documented `order` query parameter.
+- Tightened local bridge behavior:
+  - project rate-limit listing now rejects unsupported query parameters before
+    reading or lazily seeding local rate-limit state, so ignored `order`
+    pagination can no longer shape or appear to shape list output;
+  - existing official `limit`, `after`, and `before` scalar/range validation
+    remains unchanged, including `limit` from 1 through 100 and the default
+    100 item limit.
+- Regression coverage updated:
+  - changed the Organization project users/rate-limits lifecycle test from
+    ignored rate-limit `order` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the project rate limits list query
+    allowlist and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local users and rate limits" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Project Rate Limits smoke verified health and unsupported `order`
+    query rejection before local project lookup, without creating local
+    project or rate-limit state.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available,
+    93% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated project ids, generated
+    rate-limit ids, or smoke payload secrets were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Project API Keys And Service Accounts List Query Allowlist Validation
 
 - Rechecked official OpenAI API references and existing audit evidence:

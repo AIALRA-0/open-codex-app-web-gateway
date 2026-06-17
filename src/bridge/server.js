@@ -17330,6 +17330,9 @@ function officialAdminNextCursorListPaginationUrl(url) {
 }
 
 function validateOpenAIProjectRateLimitsListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "before", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 

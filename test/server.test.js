@@ -26488,9 +26488,16 @@ test("Organization projects manage local users and rate limits", async () => {
     const firstRateLimitPageJson = await firstRateLimitPage.json();
     assert.equal(firstRateLimitPageJson.data.length, 1);
     assert.equal(firstRateLimitPageJson.has_more, true);
-    const orderIgnoredRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1&order=desc`);
-    assert.equal(orderIgnoredRateLimits.status, 200);
-    assert.equal((await orderIgnoredRateLimits.json()).data[0].id, firstRateLimitPageJson.data[0].id);
+    const rateLimitsWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1&order=desc`);
+    assert.equal(rateLimitsWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await rateLimitsWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
     const afterRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1&after=${firstRateLimitPageJson.data[0].id}`);
     assert.equal(afterRateLimits.status, 200);
     const afterRateLimitsJson = await afterRateLimits.json();
