@@ -6299,6 +6299,22 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     assert.fail("chat provider should not be called for local custom voice endpoints");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidConsentCreateQuery = await fetch(`${baseUrl}/v1/audio/voice_consents?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(invalidConsentCreateQuery.status, 400);
+    assert.deepEqual(await invalidConsentCreateQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const consentForm = new FormData();
     consentForm.append("name", "Test Consent");
     consentForm.append("language", "en-US");
@@ -6348,13 +6364,16 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     const consentAfterJson = await consentAfter.json();
     assert.deepEqual(consentAfterJson.data.map((item) => item.id), [secondConsent.id]);
 
-    const consentBeforeIgnored = await fetch(`${baseUrl}/v1/audio/voice_consents?order=desc&before=${encodeURIComponent(secondConsent.id)}&limit=10`);
-    assert.equal(consentBeforeIgnored.status, 200);
-    const consentBeforeIgnoredJson = await consentBeforeIgnored.json();
-    assert.deepEqual(
-      consentBeforeIgnoredJson.data.map((item) => item.id),
-      [consent.id, secondConsent.id],
-    );
+    const invalidConsentBefore = await fetch(`${baseUrl}/v1/audio/voice_consents?order=desc&before=${encodeURIComponent(secondConsent.id)}&limit=10`);
+    assert.equal(invalidConsentBefore.status, 400);
+    assert.deepEqual(await invalidConsentBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidConsentLimit = await fetch(`${baseUrl}/v1/audio/voice_consents?limit=101`);
     assert.equal(invalidConsentLimit.status, 400);
@@ -6381,6 +6400,17 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     const consentGet = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
     assert.equal(consentGet.status, 200);
     assert.equal((await consentGet.json()).id, consent.id);
+
+    const invalidConsentGetQuery = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}?metadata=debug`);
+    assert.equal(invalidConsentGetQuery.status, 400);
+    assert.deepEqual(await invalidConsentGetQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const voiceForm = new FormData();
     voiceForm.append("name", "Test Voice");
@@ -6431,6 +6461,21 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     const missingVoiceGet = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`);
     assert.equal(missingVoiceGet.status, 404);
     assert.equal((await missingVoiceGet.json()).error.code, "voice_not_found");
+
+    const invalidConsentDeleteQuery = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}?metadata=debug`, {
+      method: "DELETE",
+    });
+    assert.equal(invalidConsentDeleteQuery.status, 400);
+    assert.deepEqual(await invalidConsentDeleteQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const consentStillPresent = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
+    assert.equal(consentStillPresent.status, 200);
 
     const consentDelete = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`, {
       method: "DELETE",

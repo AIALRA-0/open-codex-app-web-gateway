@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Audio Voice Consents Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Audio voice consents:
+  - `POST /v1/audio/voice_consents` declares a multipart request body and no
+    query parameters;
+  - `GET /v1/audio/voice_consents` declares only `after` and `limit` query
+    parameters.
+- Tightened local bridge behavior:
+  - voice consent create now rejects unsupported query parameters before
+    multipart/JSON body parsing;
+  - voice consent list now allows only official `after` and `limit`, so
+    unsupported `before` / `order` queries return 400 instead of being
+    ignored;
+  - voice consent retrieve/delete now reject unsupported query parameters
+    before local state reads or deletion.
+- Regression coverage updated:
+  - extended the custom voice lifecycle test to cover invalid
+    create/list/retrieve/delete query parameters;
+  - verified invalid create query with a malformed JSON body fails on query
+    validation first;
+  - verified invalid delete query leaves the local consent retrievable.
+- Documentation updated:
+  - compatibility matrix now records voice consent create/list/retrieve/delete
+    query boundaries.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Audio custom voice consent and voice endpoints store local metadata" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Audio voice consent smoke verified health, invalid create/list/
+    retrieve/delete query rejection, normal temporary voice-consent creation,
+    invalid delete preserving the consent, and cleanup deletion.
+  - Disk guard after deployment: `/` 193G size, 185G used, 8.7G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated consent ids, temporary voice recordings,
+    recording hashes, or smoke request payloads were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Models Retrieve/Delete Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / endpoint metadata for Models:

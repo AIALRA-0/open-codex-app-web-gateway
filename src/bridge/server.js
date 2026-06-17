@@ -12960,6 +12960,13 @@ function writeAudioTranscriptStream(res, normalized, text) {
 
 async function handleAudioVoiceConsentsCreate(req, res, config, audioVoiceStore) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     if (!canUseLocalAudio(config)) {
       sendError(res, 400, "local audio compatibility is disabled", {
         type: "invalid_request_error",
@@ -12994,6 +13001,9 @@ function handleAudioVoiceConsentsList(res, audioVoiceStore, url) {
 }
 
 function validateOpenAIAudioVoiceConsentsListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
@@ -13008,7 +13018,13 @@ function officialAudioVoiceConsentsListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId) {
+function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const consent = audioVoiceStore.getConsent(consentId);
   if (!consent) {
     sendError(res, 404, `voice consent not found: ${consentId}`, {
@@ -13021,7 +13037,13 @@ function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId) {
   sendJson(res, 200, consent);
 }
 
-function handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId) {
+function handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   try {
     const deleted = audioVoiceStore.deleteConsent(consentId);
     if (!deleted) {
@@ -23395,11 +23417,11 @@ function createServer(config = loadConfig()) {
       if (voiceConsentRoute) {
         const consentId = decodeURIComponent(voiceConsentRoute[1]);
         if (req.method === "GET") {
-          handleAudioVoiceConsentGet(res, audioVoiceStore, consentId);
+          handleAudioVoiceConsentGet(res, audioVoiceStore, consentId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId);
+          handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId, url);
           return;
         }
       }
