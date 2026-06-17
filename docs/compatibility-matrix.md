@@ -719,15 +719,15 @@ state.
 | `GET /v1/organization/groups/{group_id}` | Implemented locally | Retrieves a local group or returns `404 organization_group_not_found` |
 | `POST /v1/organization/groups/{group_id}` | Implemented locally | Updates the local group `name`; SCIM-managed groups are reserved and reject updates |
 | `DELETE /v1/organization/groups/{group_id}` | Implemented locally | Deletes a local group, its local memberships, and its local role assignments with `group.deleted` |
-| `GET /v1/organization/groups/{group_id}/users` | Implemented locally | Lists local users assigned to a local group |
+| `GET /v1/organization/groups/{group_id}/users` | Implemented locally | Lists local users assigned to a local group with OpenAI SDK `NextCursorPage` semantics; validates `limit` from 0 through 1000 with local default 20, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and ignores unsupported `before` |
 | `POST /v1/organization/groups/{group_id}/users` | Implemented locally | Adds an existing local organization user to a local group and returns `group.user` |
 | `GET /v1/organization/groups/{group_id}/users/{user_id}` | Implemented locally | Retrieves a local group user detail projection or returns `404 organization_group_user_not_found` |
 | `DELETE /v1/organization/groups/{group_id}/users/{user_id}` | Implemented locally | Removes a local user from a local group and returns `group.user.deleted` |
-| `GET /v1/organization/users/{user_id}/roles` | Implemented locally | Lists local organization roles directly assigned to a local user, including assignment-source metadata |
+| `GET /v1/organization/users/{user_id}/roles` | Implemented locally | Lists local organization roles directly assigned to a local user, including assignment-source metadata, with OpenAI SDK `NextCursorPage` semantics; validates `limit` from 0 through 1000 with local default 20, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and ignores unsupported `before` |
 | `POST /v1/organization/users/{user_id}/roles` | Implemented locally | Assigns an existing local role to an existing local organization user and returns `user.role` |
 | `GET /v1/organization/users/{user_id}/roles/{role_id}` | Implemented locally | Retrieves a local user role assignment or returns `404 organization_user_role_not_found` |
 | `DELETE /v1/organization/users/{user_id}/roles/{role_id}` | Implemented locally | Removes a local user role assignment and returns `user.role.deleted` |
-| `GET /v1/organization/groups/{group_id}/roles` | Implemented locally | Lists local organization roles assigned to a local group, including assignment-source metadata |
+| `GET /v1/organization/groups/{group_id}/roles` | Implemented locally | Lists local organization roles assigned to a local group, including assignment-source metadata, with OpenAI SDK `NextCursorPage` semantics; validates `limit` from 0 through 1000 with local default 20, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and ignores unsupported `before` |
 | `POST /v1/organization/groups/{group_id}/roles` | Implemented locally | Assigns an existing local role to an existing local group and returns `group.role` |
 | `GET /v1/organization/groups/{group_id}/roles/{role_id}` | Implemented locally | Retrieves a local group role assignment or returns `404 organization_group_role_not_found` |
 | `DELETE /v1/organization/groups/{group_id}/roles/{role_id}` | Implemented locally | Removes a local group role assignment and returns `group.role.deleted` |

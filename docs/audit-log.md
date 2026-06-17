@@ -1,5 +1,82 @@
 # Audit Log
 
+## 2026-06-17 Organization RBAC Sublist Query Validation
+
+- Rechecked current official/generated OpenAI SDK sources for the next
+  Organization RBAC child-list slice:
+  - `openai-node` generated
+    `src/resources/admin/organization/groups/users.ts` documents
+    `client.admin.organization.groups.users.list()` as a `NextCursorPage` and
+    `UserListParams extends NextCursorPageParams` with `order:"asc"|"desc"`;
+  - `openai-node` generated
+    `src/resources/admin/organization/users/roles.ts` documents
+    `client.admin.organization.users.roles.list()` as a `NextCursorPage` and
+    `RoleListParams extends NextCursorPageParams` with `order:"asc"|"desc"`;
+  - `openai-node` generated
+    `src/resources/admin/organization/groups/roles.ts` documents
+    `client.admin.organization.groups.roles.list()` as a `NextCursorPage` and
+    `RoleListParams extends NextCursorPageParams` with `order:"asc"|"desc"`;
+  - `openai-node` `src/core/pagination.ts` defines
+    `NextCursorPageParams` as `after?: string` and `limit?: number`, and
+    `NextCursorPage` response fields as `data`, `has_more`, and `next`.
+- Tightened local Organization RBAC child-list behavior:
+  - `GET /v1/organization/groups/{group_id}/users`,
+    `GET /v1/organization/users/{user_id}/roles`, and
+    `GET /v1/organization/groups/{group_id}/roles` now validate official SDK
+    list parameters before listing local records;
+  - each endpoint validates `limit` from 0 through 1000, single `after`, and
+    `order:"asc"|"desc"`;
+  - repeated scalar values for `limit`, `after`, and `order` return
+    OpenAI-style HTTP 400 errors;
+  - `limit=0` is now preserved for these next-cursor child lists and returns
+    an empty page with `has_more:true` when data exists and `next:null`;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official SDK child-list results;
+  - existing local default `limit=20` is preserved for these child lists
+    because the generated SDK source confirms the parameter shape but does not
+    document a child-list-specific default.
+- Regression coverage updated:
+  - the Organization roles/groups lifecycle test now creates two local group
+    members, two direct user role assignments, and two direct group role
+    assignments to verify `limit=0`, `order=desc`, `after`, ignored `before`,
+    invalid limits, invalid order, repeated scalar errors, cleanup of all
+    temporary records, and zero upstream provider calls for all three child
+    list endpoints.
+- Documentation updated:
+  - compatibility matrix now records the SDK `NextCursorPage` contract and
+    local default limit boundary for group users, user roles, and group roles.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization roles and groups manage local memberships and assignments" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public RBAC child-list smoke marker `rbac-sublist-query-smoke-mqia30jj`
+    created two temporary roles, one temporary group, one temporary project,
+    two temporary users, two group memberships, two direct user role
+    assignments, and two direct group role assignments; verified `limit=0`,
+    `order=desc`, `after`, ignored `before`, invalid limits, invalid order,
+    repeated scalar errors, then deleted the temporary assignments, roles, and
+    group and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.5G available,
+    96% used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5295 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or RBAC smoke-test secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Roles and Groups List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema through the

@@ -22808,6 +22808,79 @@ test("Organization roles and groups manage local memberships and assignments", a
         },
       }, path);
     };
+    const assertNextCursorListQuery = async (path, expectedIds) => {
+      const listed = await fetch(`${baseUrl}${path}?limit=20`);
+      assert.equal(listed.status, 200, path);
+      const listedJson = await listed.json();
+      assert.equal(listedJson.object, "list");
+      assert.deepEqual(new Set(listedJson.data.map((entry) => entry.id)), new Set(expectedIds));
+      const idsAscending = listedJson.data.map((entry) => entry.id);
+
+      const zeroLimit = await fetch(`${baseUrl}${path}?limit=0`);
+      assert.equal(zeroLimit.status, 200, path);
+      assert.deepEqual(await zeroLimit.json(), {
+        object: "list",
+        data: [],
+        has_more: true,
+        next: null,
+      });
+
+      const desc = await fetch(`${baseUrl}${path}?order=desc&limit=1`);
+      assert.equal(desc.status, 200, path);
+      const descJson = await desc.json();
+      assert.equal(descJson.data.length, 1);
+      assert.equal(descJson.data[0].id, idsAscending.at(-1));
+      assert.equal(descJson.has_more, true);
+      assert.equal(descJson.next, idsAscending.at(-1));
+
+      const next = await fetch(`${baseUrl}${path}?order=desc&limit=1&after=${encodeURIComponent(descJson.next)}`);
+      assert.equal(next.status, 200, path);
+      const nextJson = await next.json();
+      assert.equal(nextJson.data.length, 1);
+      assert.equal(nextJson.data[0].id, idsAscending[0]);
+      assert.equal(nextJson.has_more, false);
+      assert.equal(nextJson.next, null);
+
+      const beforeIgnored = await fetch(`${baseUrl}${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`);
+      assert.equal(beforeIgnored.status, 200, path);
+      assert.deepEqual(
+        (await beforeIgnored.json()).data.map((entry) => entry.id),
+        [idsAscending.at(-1), idsAscending[0]],
+      );
+
+      await assertInvalidListQuery(
+        `${path}?limit=-1`,
+        "limit",
+        "limit must be an integer between 0 and 1000",
+      );
+      await assertInvalidListQuery(
+        `${path}?limit=1001`,
+        "limit",
+        "limit must be an integer between 0 and 1000",
+      );
+      await assertInvalidListQuery(
+        `${path}?limit=1&limit=2`,
+        "limit",
+        "limit must be a single string query value",
+      );
+      await assertInvalidListQuery(
+        `${path}?after=${encodeURIComponent(idsAscending[0])}&after=${encodeURIComponent(idsAscending.at(-1))}`,
+        "after",
+        "after must be a single string query value",
+      );
+      await assertInvalidListQuery(
+        `${path}?order=newest`,
+        "order",
+        "order must be one of: asc, desc",
+      );
+      await assertInvalidListQuery(
+        `${path}?order=asc&order=desc`,
+        "order",
+        "order must be a single string query value",
+      );
+
+      return listedJson;
+    };
 
     const roleResponse = await fetch(`${baseUrl}/v1/organization/roles`, {
       method: "POST",
@@ -23067,6 +23140,19 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(projectUserResponse.status, 200);
     const projectUser = await projectUserResponse.json();
 
+    const secondProjectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_role_member_two",
+        email: "bridge-role-member-two@example.com",
+        name: "Bridge Role Member Two",
+        role: "member",
+      }),
+    });
+    assert.equal(secondProjectUserResponse.status, 200);
+    const secondProjectUser = await secondProjectUserResponse.json();
+
     const groupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -23079,13 +23165,25 @@ test("Organization roles and groups manage local memberships and assignments", a
       user_id: projectUser.id,
     });
 
-    const groupUsers = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users?limit=20`);
-    assert.equal(groupUsers.status, 200);
-    const groupUsersJson = await groupUsers.json();
-    assert.equal(groupUsersJson.object, "list");
-    assert.equal(groupUsersJson.data[0].id, projectUser.id);
-    assert.equal(groupUsersJson.data[0].email, "bridge-role-member@example.com");
-    assert.equal(groupUsersJson.data[0].name, "Bridge Role Member");
+    const secondGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ user_id: secondProjectUser.id }),
+    });
+    assert.equal(secondGroupUser.status, 200);
+    assert.deepEqual(await secondGroupUser.json(), {
+      object: "group.user",
+      group_id: group.id,
+      user_id: secondProjectUser.id,
+    });
+
+    const groupUsersJson = await assertNextCursorListQuery(
+      `/v1/organization/groups/${group.id}/users`,
+      [projectUser.id, secondProjectUser.id],
+    );
+    const listedGroupUser = groupUsersJson.data.find((entry) => entry.id === projectUser.id);
+    assert.equal(listedGroupUser.email, "bridge-role-member@example.com");
+    assert.equal(listedGroupUser.name, "Bridge Role Member");
 
     const fetchedGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/${projectUser.id}`);
     assert.equal(fetchedGroupUser.status, 200);
@@ -23105,12 +23203,23 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(userRoleJson.role.id, role.id);
     assert.equal(userRoleJson.user.id, projectUser.id);
 
-    const userRoles = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles?limit=20`);
-    assert.equal(userRoles.status, 200);
-    const userRolesJson = await userRoles.json();
-    assert.equal(userRolesJson.object, "list");
-    assert.equal(userRolesJson.data[0].id, role.id);
-    assert.equal(userRolesJson.data[0].assignment_sources[0].principal_type, "user");
+    const secondUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: secondRole.id }),
+    });
+    assert.equal(secondUserRole.status, 200);
+    const secondUserRoleJson = await secondUserRole.json();
+    assert.equal(secondUserRoleJson.object, "user.role");
+    assert.equal(secondUserRoleJson.role.id, secondRole.id);
+    assert.equal(secondUserRoleJson.user.id, projectUser.id);
+
+    const userRolesJson = await assertNextCursorListQuery(
+      `/v1/organization/users/${projectUser.id}/roles`,
+      [role.id, secondRole.id],
+    );
+    const listedUserRole = userRolesJson.data.find((entry) => entry.id === role.id);
+    assert.equal(listedUserRole.assignment_sources[0].principal_type, "user");
 
     const fetchedUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${role.id}`);
     assert.equal(fetchedUserRole.status, 200);
@@ -23127,12 +23236,23 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(groupRoleJson.role.id, role.id);
     assert.equal(groupRoleJson.group.id, group.id);
 
-    const groupRoles = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles?limit=20`);
-    assert.equal(groupRoles.status, 200);
-    const groupRolesJson = await groupRoles.json();
-    assert.equal(groupRolesJson.object, "list");
-    assert.equal(groupRolesJson.data[0].id, role.id);
-    assert.equal(groupRolesJson.data[0].assignment_sources[0].principal_type, "group");
+    const secondGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: secondRole.id }),
+    });
+    assert.equal(secondGroupRole.status, 200);
+    const secondGroupRoleJson = await secondGroupRole.json();
+    assert.equal(secondGroupRoleJson.object, "group.role");
+    assert.equal(secondGroupRoleJson.role.id, secondRole.id);
+    assert.equal(secondGroupRoleJson.group.id, group.id);
+
+    const groupRolesJson = await assertNextCursorListQuery(
+      `/v1/organization/groups/${group.id}/roles`,
+      [role.id, secondRole.id],
+    );
+    const listedGroupRole = groupRolesJson.data.find((entry) => entry.id === role.id);
+    assert.equal(listedGroupRole.assignment_sources[0].principal_type, "group");
 
     const fetchedGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles/${role.id}`);
     assert.equal(fetchedGroupRole.status, 200);
@@ -23155,6 +23275,15 @@ test("Organization roles and groups manage local memberships and assignments", a
       deleted: true,
     });
 
+    const deletedSecondUserRole = await fetch(`${baseUrl}/v1/organization/users/${projectUser.id}/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondUserRole.status, 200);
+    assert.deepEqual(await deletedSecondUserRole.json(), {
+      object: "user.role.deleted",
+      deleted: true,
+    });
+
     const deletedGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles/${role.id}`, {
       method: "DELETE",
     });
@@ -23164,11 +23293,29 @@ test("Organization roles and groups manage local memberships and assignments", a
       deleted: true,
     });
 
+    const deletedSecondGroupRole = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondGroupRole.status, 200);
+    assert.deepEqual(await deletedSecondGroupRole.json(), {
+      object: "group.role.deleted",
+      deleted: true,
+    });
+
     const deletedGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/${projectUser.id}`, {
       method: "DELETE",
     });
     assert.equal(deletedGroupUser.status, 200);
     assert.deepEqual(await deletedGroupUser.json(), {
+      object: "group.user.deleted",
+      deleted: true,
+    });
+
+    const deletedSecondGroupUser = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users/${secondProjectUser.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondGroupUser.status, 200);
+    assert.deepEqual(await deletedSecondGroupUser.json(), {
       object: "group.user.deleted",
       deleted: true,
     });

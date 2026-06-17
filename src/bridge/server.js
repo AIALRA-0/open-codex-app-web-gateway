@@ -16057,9 +16057,14 @@ async function handleOrganizationGroupUserCreate(req, res, organizationAdminStor
 }
 
 function handleOrganizationGroupUsersList(res, organizationAdminStore, groupId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationGroupUsers(groupId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     20,
     1000,
@@ -16085,9 +16090,14 @@ async function handleOrganizationUserRoleCreate(req, res, organizationAdminStore
 }
 
 function handleOrganizationUserRolesList(res, organizationAdminStore, userId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationUserRoles(userId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     20,
     1000,
@@ -16113,9 +16123,14 @@ async function handleOrganizationGroupRoleCreate(req, res, organizationAdminStor
 }
 
 function handleOrganizationGroupRolesList(res, organizationAdminStore, groupId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationGroupRoles(groupId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     20,
     1000,
