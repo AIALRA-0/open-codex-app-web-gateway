@@ -926,7 +926,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   follow-up action requests through a generated Chat function tool and
   compatibility metadata for pending and acknowledged safety checks.
 - Local Skills API can create, version, retrieve zip content, delete, and mount
-  `skill_reference` bundles into local shell/code-interpreter containers.
+  `skill_reference` bundles into local shell/code-interpreter containers from
+  either tool-level `environment.skills` or container-level
+  `POST /v1/containers` `skills` defaults.
 - P95 bridge overhead stays below 750 ms excluding upstream model latency.
 - State/log growth remains bounded under the configured cleanup policy, with
   `npm run prune:runtime -- --dry-run` producing an auditable candidate report

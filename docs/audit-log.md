@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Container-Level Skill Mounting
+
+- Rechecked the official OpenAI Containers API through the OpenAI developer
+  docs MCP:
+  - `POST /v1/containers` examples include `skills` with
+    `type:"skill_reference"` entries;
+  - container create/list/retrieve objects expose runtime environment metadata
+    such as `expires_after`, `last_active_at`, `memory_limit`, `name`, and
+    `network_policy`.
+- Closed a local Codex container compatibility gap:
+  - local container creation now preserves normalized `skill_reference` entries
+    supplied in the `skills` field;
+  - local shell/code-interpreter execution now merges container-level default
+    skills with tool-level `environment.skills`;
+  - duplicate materialized skill versions are mounted once;
+  - missing container-level skills fail through the same auditable
+    `skill_not_found` path with `param:"containers.skills"`.
+- Regression coverage updated:
+  - the local Skills API lifecycle test now creates a container with
+    `skills:[{type:"skill_reference",skill_id:*}]`;
+  - the Responses shell request passes only a `container_reference`;
+  - the test verifies the mounted skill file is readable from
+    `/mnt/data/.skills/<name>/v<version>/` and that
+    `metadata.compatibility.local_shell.mounted_skills` records the mount.
+- Documentation updated:
+  - compatibility matrix now records container-level `skills` defaults for
+    `POST /v1/containers` and local shell compatibility;
+  - evaluation plan now requires coverage for both tool-level and
+    container-level skill references.
+- Validation:
+  - `node --check src/bridge/local_shell.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted Skills API shell mounting regression passes;
+  - targeted Containers/shell/code-interpreter regressions pass: 3 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 348 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` creates a tiny
+    local Skill and a container whose `skills` field references it, calls
+    `/v1/responses` with only a `container_reference`, confirms shell stdout
+    contains the mounted `SKILL.md` marker, confirms mounted-skill metadata, and
+    deletes the temporary container and skill.
+- Runtime/storage check:
+  - `/` has 16 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Batch Output Expiration Cleanup
 
 - Rechecked the official OpenAI Batch OpenAPI surface through the OpenAI

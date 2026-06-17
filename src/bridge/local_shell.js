@@ -45,6 +45,7 @@ class LocalContainerStore {
       memory_limit: body.memory_limit || this.defaultMemoryLimit,
       name: body.name || null,
       network_policy: isPlainObject(body.network_policy) ? body.network_policy : null,
+      skills: normalizeSkillReferences(body.skills),
       metadata: isPlainObject(body.metadata) ? body.metadata : {},
     };
     this.writeJson(this.containerJsonPath(container.id), { container });
@@ -89,6 +90,10 @@ class LocalContainerStore {
       name: tool.name || "local-shell-auto",
       memory_limit: environment.memory_limit,
       network_policy: environment.network_policy,
+      skills: [
+        ...(Array.isArray(environment.skills) ? environment.skills : []),
+        ...(Array.isArray(tool.skills) ? tool.skills : []),
+      ],
     });
   }
 
@@ -475,17 +480,21 @@ function shellPrompt(context) {
 
 function mountToolSkills(tool, container, containerStore, skillStore) {
   if (!skillStore) return [];
-  const references = extractSkillReferences(tool);
+  const references = extractSkillReferences(tool, container);
   const mounted = [];
+  const mountedKeys = new Set();
   for (const reference of references) {
     const materialized = skillStore.materializeSkillVersion(reference.skill_id, reference.version || "default");
     if (!materialized) {
       const error = new Error(`skill not found: ${reference.skill_id}`);
       error.status = 404;
       error.code = "skill_not_found";
-      error.param = "tools.environment.skills";
+      error.param = reference.source || "tools.environment.skills";
       throw error;
     }
+    const materializedKey = `${materialized.skill.id}\0${materialized.version.version}`;
+    if (mountedKeys.has(materializedKey)) continue;
+    mountedKeys.add(materializedKey);
     const mountName = sanitizeSkillMountName(materialized.skill.name || materialized.skill.id);
     const mountRoot = path.posix.join(".skills", mountName, `v${materialized.version.version}`);
     for (const file of materialized.files) {
@@ -542,15 +551,46 @@ function extractToolFileIds(tool = {}) {
   return Array.from(new Set(candidates.map((item) => stringifyContent(item).trim()).filter(Boolean)));
 }
 
-function extractSkillReferences(tool = {}) {
+function extractSkillReferences(tool = {}, container = {}) {
   const environment = tool.environment || tool.container || {};
-  const skills = [
-    ...(Array.isArray(environment.skills) ? environment.skills : []),
-    ...(Array.isArray(tool.skills) ? tool.skills : []),
-  ];
-  return skills
-    .filter((skill) => isPlainObject(skill) && skill.type === "skill_reference" && typeof skill.skill_id === "string")
-    .map((skill) => ({ skill_id: skill.skill_id, version: skill.version || "default" }));
+  const references = [];
+  const seen = new Set();
+  const add = (skills, source) => {
+    for (const skill of normalizeSkillReferences(skills)) {
+      const version = skill.version || "default";
+      const key = `${skill.skill_id}\0${version}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      references.push({ skill_id: skill.skill_id, version, source });
+    }
+  };
+  add(container.skills, "containers.skills");
+  add(environment.skills, "tools.environment.skills");
+  add(tool.skills, "tools.skills");
+  return references;
+}
+
+function normalizeSkillReferences(skills = []) {
+  if (!Array.isArray(skills)) return [];
+  const normalized = [];
+  const seen = new Set();
+  for (const skill of skills) {
+    if (!isPlainObject(skill) || skill.type !== "skill_reference" || typeof skill.skill_id !== "string") continue;
+    const skillId = skill.skill_id.trim();
+    if (!skillId) continue;
+    const version = typeof skill.version === "string" || typeof skill.version === "number"
+      ? String(skill.version).trim()
+      : "";
+    const key = `${skillId}\0${version || "default"}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push({
+      type: "skill_reference",
+      skill_id: skillId,
+      ...(version ? { version } : {}),
+    });
+  }
+  return normalized;
 }
 
 async function runShellCommand(command, container, store, config = {}) {

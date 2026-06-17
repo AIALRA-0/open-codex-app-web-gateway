@@ -15539,10 +15539,14 @@ test("local Skills API manages versions and mounts skill references for shell", 
     const containerResponse = await fetch(`${baseUrl}/v1/containers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ name: "skill-shell" }),
+      body: JSON.stringify({
+        name: "skill-shell",
+        skills: [{ type: "skill_reference", skill_id: skill.id }],
+      }),
     });
     assert.equal(containerResponse.status, 200);
     const container = await containerResponse.json();
+    assert.deepEqual(container.skills, [{ type: "skill_reference", skill_id: skill.id }]);
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -15555,7 +15559,6 @@ test("local Skills API manages versions and mounts skill references for shell", 
           environment: {
             type: "container_reference",
             container_id: container.id,
-            skills: [{ type: "skill_reference", skill_id: skill.id }],
           },
         }],
         store: false,

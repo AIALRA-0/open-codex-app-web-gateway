@@ -178,7 +178,7 @@ requests.
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page/find_in_page items and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
-| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries under `tools[].environment.skills` are mounted into the local container workspace |
+| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries from `POST /v1/containers` `skills` and `tools[].environment.skills` are mounted into the local container workspace |
 | `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context and action proxy | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, exposes a generated Chat function tool for the next model-requested Computer Use action on follow-up turns, maps that action back to `computer_call`, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
@@ -1074,7 +1074,7 @@ not in Git.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata |
+| `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata, preserves `memory_limit`, `expires_after`, `network_policy`, `metadata`, and local `skill_reference` defaults from `skills` |
 | `GET /v1/containers` | Implemented | Lists local containers with `name`, `limit`, `after`, `before`, and `order` pagination |
 | `GET /v1/containers/{container_id}` | Implemented | Returns local container metadata |
 | `DELETE /v1/containers/{container_id}` | Implemented | Deletes the local container workspace and artifacts |
@@ -1439,7 +1439,7 @@ local container workspace. The adapter:
 - creates or reuses local container workspaces through `container_auto` and
   `container_reference`-style tool configuration;
 - mounts local Skills API `skill_reference` entries from
-  `tools[].environment.skills` under
+  `POST /v1/containers` `skills` and `tools[].environment.skills` under
   `/mnt/data/.skills/<skill-name>/v<version>/` and records mounted skill
   metadata in `metadata.compatibility.local_shell.mounted_skills`;
 - maps `/mnt/data` in commands to the local container workspace;
