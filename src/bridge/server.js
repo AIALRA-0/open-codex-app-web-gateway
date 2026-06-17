@@ -3207,6 +3207,8 @@ function validateOpenAIChatImageUrlPart(part, param) {
   if (typeof imageUrl.url !== "string") {
     return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
   }
+  const imageUriError = validateOpenAIUriString(imageUrl.url, `${param}.image_url.url`);
+  if (imageUriError) return imageUriError;
   return validateOpenAIChatImageDetail(imageUrl.detail, `${param}.image_url.detail`);
 }
 

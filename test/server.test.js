@@ -25391,6 +25391,16 @@ test("POST /v1/chat/completions validates messages before provider calls", async
         body: {
           messages: [{
             role: "user",
+            content: [{ type: "image_url", image_url: { url: "not a uri" } }],
+          }],
+        },
+        param: "messages.0.content.0.image_url.url",
+        message: "messages.0.content.0.image_url.url must be a valid URI",
+      },
+      {
+        body: {
+          messages: [{
+            role: "user",
             content: [{ type: "image_url", image_url: "https://example.test/a.png" }],
           }],
         },

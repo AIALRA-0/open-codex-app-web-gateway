@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-17 Direct Chat Image URI Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `ChatCompletionRequestMessageContentPartImage` schema through the developer
+  docs MCP workflow and the official `openai-openapi` YAML:
+  - Chat `image_url` content parts require `image_url:{url,detail?}`;
+  - `image_url.url` is a URI string.
+- Tightened direct Chat validation before provider calls:
+  - `/v1/chat/completions` now rejects malformed official
+    `messages[].content[].image_url.url` URI strings while keeping existing
+    bridge aliases such as `input_image`, `image_file`, `audio`, and
+    `input_file` unchanged.
+- Regression coverage updated:
+  - extended the direct Chat message boundary test with a malformed
+    `image_url.url` case.
+- Documentation updated:
+  - compatibility matrix now records direct Chat `image_url.url` URI
+    validation.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "validates messages before provider calls|direct Chat image" test/server.test.js`
+    passes 3/3;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed direct Chat `image_url.url` smoke against
+    `https://opencodexapp.aialra.online/v1/chat/completions` returns 400
+    `invalid_request_parameter` for
+    `param:"messages.0.content.0.image_url.url"` with message
+    `messages.0.content.0.image_url.url must be a valid URI`.
+- Disk guard:
+  - root filesystem has 15 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Input URI Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0
