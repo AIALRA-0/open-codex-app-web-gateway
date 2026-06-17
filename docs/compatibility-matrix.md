@@ -1112,17 +1112,17 @@ bundles are stored under the configured bridge state directory, not in Git.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/skills` | Implemented locally | Accepts JSON, multipart directory-style `files[]`, or raw `SKILL.md`; validates exactly one `SKILL.md` manifest and extracts `name` / `description` |
-| `GET /v1/skills` | Implemented locally | Lists local skill records with official `limit`, `after`, and `order` pagination; repeated scalar query values return 400, `limit` is validated from 0 through 100, `limit=0` returns an empty page with `has_more` when records exist, and unsupported `before` is ignored |
-| `GET /v1/skills/{skill_id}` | Implemented locally | Returns local skill metadata, `default_version`, `latest_version`, and `version_count` |
-| `POST /v1/skills/{skill_id}` | Implemented locally | Updates `metadata` and `default_version`; deleting the default version is rejected until another default is selected |
-| `DELETE /v1/skills/{skill_id}` | Implemented locally | Deletes the local skill and all versions |
-| `GET /v1/skills/{skill_id}/content` | Implemented locally | Returns the default version as an `application/zip` bundle |
-| `POST /v1/skills/{skill_id}/versions` | Implemented locally | Creates a new immutable local skill version from JSON, multipart, or raw upload |
-| `GET /v1/skills/{skill_id}/versions` | Implemented locally | Lists local skill versions with official `limit`, `after`, and `order` pagination; repeated scalar query values return 400, `limit` is validated from 0 through 100, `limit=0` returns an empty page with `has_more` when versions exist, and unsupported `before` is ignored |
-| `GET /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Retrieves a numeric version, `latest`, or `default` |
-| `DELETE /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Deletes a non-default version; deleting the last version deletes the skill |
-| `GET /v1/skills/{skill_id}/versions/{version}/content` | Implemented locally | Returns the selected version as an `application/zip` bundle |
+| `POST /v1/skills` | Implemented locally | Rejects unsupported query parameters before JSON/multipart/raw body parsing, then accepts JSON, multipart directory-style `files[]`, or raw `SKILL.md`; validates exactly one `SKILL.md` manifest and extracts `name` / `description` |
+| `GET /v1/skills` | Implemented locally | Lists local skill records with official `limit`, `after`, and `order` pagination only; repeated scalar query values, `limit` outside 0 through 100, and unsupported parameters such as `before` return 400 before listing; `limit=0` returns an empty page with `has_more` when records exist |
+| `GET /v1/skills/{skill_id}` | Implemented locally | Rejects unsupported query parameters before reading local state, then returns local skill metadata, `default_version`, `latest_version`, and `version_count` |
+| `POST /v1/skills/{skill_id}` | Implemented locally | Rejects unsupported query parameters before JSON body parsing or mutation, then updates `metadata` and `default_version`; deleting the default version is rejected until another default is selected |
+| `DELETE /v1/skills/{skill_id}` | Implemented locally | Rejects unsupported query parameters before deletion, then deletes the local skill and all versions |
+| `GET /v1/skills/{skill_id}/content` | Implemented locally | Rejects unsupported query parameters before reading ZIP bytes, then returns the default version as an `application/zip` bundle |
+| `POST /v1/skills/{skill_id}/versions` | Implemented locally | Rejects unsupported query parameters before JSON/multipart/raw body parsing, then creates a new immutable local skill version from JSON, multipart, or raw upload |
+| `GET /v1/skills/{skill_id}/versions` | Implemented locally | Lists local skill versions with official `limit`, `after`, and `order` pagination only; repeated scalar query values, `limit` outside 0 through 100, and unsupported parameters such as `before` return 400 before listing; `limit=0` returns an empty page with `has_more` when versions exist |
+| `GET /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Rejects unsupported query parameters before reading local state, then retrieves a numeric version, `latest`, or `default` |
+| `DELETE /v1/skills/{skill_id}/versions/{version}` | Implemented locally | Rejects unsupported query parameters before deletion, then deletes a non-default version; deleting the last version deletes the skill |
+| `GET /v1/skills/{skill_id}/versions/{version}/content` | Implemented locally | Rejects unsupported query parameters before reading ZIP bytes, then returns the selected version as an `application/zip` bundle |
 
 ## Streaming Mapping
 

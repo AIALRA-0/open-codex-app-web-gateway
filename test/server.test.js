@@ -19147,6 +19147,24 @@ test("local Skills API manages versions and mounts skill references for shell", 
     }));
   }, async ({ bridgeAddress }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectUnsupportedQuery = async (response, param) => {
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: `Unsupported query parameter: ${param}`,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      });
+    };
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+
     const createResponse = await fetch(`${baseUrl}/v1/skills`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -19175,6 +19193,8 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.equal(skill.latest_version, 1);
     assert.equal(skill.version_count, 1);
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}?metadata=debug`), "metadata");
+
     const listResponse = await fetch(`${baseUrl}/v1/skills?order=asc`);
     assert.equal(listResponse.status, 200);
     const listed = await listResponse.json();
@@ -19186,9 +19206,7 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.deepEqual(zeroLimitSkillsJson.data, []);
     assert.equal(zeroLimitSkillsJson.has_more, true);
 
-    const skillsBeforeIgnored = await fetch(`${baseUrl}/v1/skills?before=${skill.id}&limit=1`);
-    assert.equal(skillsBeforeIgnored.status, 200);
-    assert.equal((await skillsBeforeIgnored.json()).data[0].id, skill.id);
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills?before=${skill.id}&limit=1`), "before");
 
     const invalidSkillListCases = [
       {
@@ -19225,6 +19243,15 @@ test("local Skills API manages versions and mounts skill references for shell", 
       }, testCase.path);
     }
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    const versionsAfterInvalidCreate = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?limit=10&order=asc`);
+    assert.equal(versionsAfterInvalidCreate.status, 200);
+    assert.deepEqual((await versionsAfterInvalidCreate.json()).data.map((item) => item.version), [1]);
+
     const versionResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -19246,8 +19273,18 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.equal(version.object, "skill.version");
     assert.equal(version.version, 2);
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/1?metadata=debug`, { method: "DELETE" }), "metadata");
     const defaultDelete = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/1`, { method: "DELETE" });
     assert.equal(defaultDelete.status, 400);
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    const skillAfterInvalidUpdate = await fetch(`${baseUrl}/v1/skills/${skill.id}`);
+    assert.equal(skillAfterInvalidUpdate.status, 200);
+    assert.deepEqual((await skillAfterInvalidUpdate.json()).metadata, { suite: "skills-api" });
 
     const updateResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}`, {
       method: "POST",
@@ -19271,9 +19308,10 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.deepEqual(zeroLimitVersionsJson.data, []);
     assert.equal(zeroLimitVersionsJson.has_more, true);
 
-    const versionsBeforeIgnored = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?before=${version.id}&limit=1&order=desc`);
-    assert.equal(versionsBeforeIgnored.status, 200);
-    assert.equal((await versionsBeforeIgnored.json()).data[0].id, version.id);
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/skills/${skill.id}/versions?before=${version.id}&limit=1&order=desc`),
+      "before",
+    );
 
     const invalidSkillVersionListCases = [
       {
@@ -19305,10 +19343,13 @@ test("local Skills API manages versions and mounts skill references for shell", 
       }, testCase.path);
     }
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/latest?metadata=debug`), "metadata");
     const latestResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/latest`);
     assert.equal(latestResponse.status, 200);
     assert.equal((await latestResponse.json()).version, 2);
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/latest/content?metadata=debug`), "metadata");
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/content?metadata=debug`), "metadata");
     const contentResponse = await fetch(`${baseUrl}/v1/skills/${skill.id}/content`);
     assert.equal(contentResponse.status, 200);
     assert.match(contentResponse.headers.get("content-type"), /application\/zip/);
@@ -19355,6 +19396,11 @@ test("local Skills API manages versions and mounts skill references for shell", 
     assert.equal(json.metadata.compatibility.local_shell.mounted_skills[0].version, 2);
     assert.equal(json.output[2].content[0].text, "skill-mounted-ok");
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/2?metadata=debug`, { method: "DELETE" }), "metadata");
+    const versionAfterInvalidDelete = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/2`);
+    assert.equal(versionAfterInvalidDelete.status, 200);
+    assert.equal((await versionAfterInvalidDelete.json()).version, 2);
+
     const setDefaultOne = await fetch(`${baseUrl}/v1/skills/${skill.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -19364,6 +19410,11 @@ test("local Skills API manages versions and mounts skill references for shell", 
     const deletedVersion = await fetch(`${baseUrl}/v1/skills/${skill.id}/versions/2`, { method: "DELETE" });
     assert.equal(deletedVersion.status, 200);
     assert.equal((await deletedVersion.json()).deleted, true);
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/skills/${skill.id}?metadata=debug`, { method: "DELETE" }), "metadata");
+    const skillAfterInvalidDelete = await fetch(`${baseUrl}/v1/skills/${skill.id}`);
+    assert.equal(skillAfterInvalidDelete.status, 200);
+    assert.equal((await skillAfterInvalidDelete.json()).id, skill.id);
 
     const deleteSkill = await fetch(`${baseUrl}/v1/skills/${skill.id}`, { method: "DELETE" });
     assert.equal(deleteSkill.status, 200);

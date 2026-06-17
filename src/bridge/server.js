@@ -7685,7 +7685,13 @@ function validateOpenAIVectorStoreSearchRequest(body) {
   return null;
 }
 
-async function handleSkillCreate(req, res, config, skillStore) {
+async function handleSkillCreate(req, res, config, skillStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const upload = await readSkillCreateRequest(req, config);
   sendJson(res, 200, skillStore.createSkill(upload));
 }
@@ -7700,6 +7706,9 @@ function handleSkillsList(res, skillStore, url) {
 }
 
 function validateOpenAISkillsListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "order"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -7709,7 +7718,13 @@ function validateOpenAISkillsListQuery(url) {
   return validateOpenAISingleQueryValue(url, "after");
 }
 
-function handleSkillGet(res, skillStore, skillId) {
+function handleSkillGet(res, skillStore, skillId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const skill = skillStore.getSkill(skillId);
   if (!skill) {
     sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
@@ -7718,7 +7733,13 @@ function handleSkillGet(res, skillStore, skillId) {
   sendJson(res, 200, skill);
 }
 
-async function handleSkillUpdate(req, res, skillStore, skillId) {
+async function handleSkillUpdate(req, res, skillStore, skillId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   const skill = skillStore.updateSkill(skillId, body);
   if (!skill) {
@@ -7728,7 +7749,13 @@ async function handleSkillUpdate(req, res, skillStore, skillId) {
   sendJson(res, 200, skill);
 }
 
-function handleSkillDelete(res, skillStore, skillId) {
+function handleSkillDelete(res, skillStore, skillId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = skillStore.deleteSkill(skillId);
   if (!deleted) {
     sendError(res, 404, `skill not found: ${skillId}`, { code: "skill_not_found" });
@@ -7737,7 +7764,13 @@ function handleSkillDelete(res, skillStore, skillId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleSkillVersionCreate(req, res, config, skillStore, skillId) {
+async function handleSkillVersionCreate(req, res, config, skillStore, skillId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const upload = await readSkillCreateRequest(req, config);
   const version = skillStore.createSkillVersion(skillId, upload);
   if (!version) {
@@ -7761,7 +7794,13 @@ function handleSkillVersionsList(res, skillStore, skillId, url) {
   sendJson(res, 200, page);
 }
 
-function handleSkillVersionGet(res, skillStore, skillId, version) {
+function handleSkillVersionGet(res, skillStore, skillId, version, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const resource = skillStore.getSkillVersion(skillId, version);
   if (!resource) {
     sendError(res, 404, `skill version not found: ${version}`, { code: "skill_version_not_found" });
@@ -7770,7 +7809,13 @@ function handleSkillVersionGet(res, skillStore, skillId, version) {
   sendJson(res, 200, resource);
 }
 
-function handleSkillVersionDelete(res, skillStore, skillId, version) {
+function handleSkillVersionDelete(res, skillStore, skillId, version, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = skillStore.deleteSkillVersion(skillId, version);
   if (!deleted) {
     sendError(res, 404, `skill version not found: ${version}`, { code: "skill_version_not_found" });
@@ -7779,7 +7824,13 @@ function handleSkillVersionDelete(res, skillStore, skillId, version) {
   sendJson(res, 200, deleted);
 }
 
-function handleSkillContent(res, skillStore, skillId, version) {
+function handleSkillContent(res, skillStore, skillId, version, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const content = skillStore.getSkillContentZip(skillId, version);
   if (!content) {
     sendError(res, 404, `skill content not found: ${skillId}`, { code: "skill_content_not_found" });
@@ -23666,7 +23717,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleSkillCreate(req, res, config, skillStore);
+          await handleSkillCreate(req, res, config, skillStore, url);
           return;
         }
       }
@@ -23681,19 +23732,19 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!version && req.method === "POST") {
-          await handleSkillVersionCreate(req, res, config, skillStore, skillId);
+          await handleSkillVersionCreate(req, res, config, skillStore, skillId, url);
           return;
         }
         if (version && action === "content" && req.method === "GET") {
-          handleSkillContent(res, skillStore, skillId, version);
+          handleSkillContent(res, skillStore, skillId, version, url);
           return;
         }
         if (version && !action && req.method === "GET") {
-          handleSkillVersionGet(res, skillStore, skillId, version);
+          handleSkillVersionGet(res, skillStore, skillId, version, url);
           return;
         }
         if (version && !action && req.method === "DELETE") {
-          handleSkillVersionDelete(res, skillStore, skillId, version);
+          handleSkillVersionDelete(res, skillStore, skillId, version, url);
           return;
         }
       }
@@ -23703,19 +23754,19 @@ function createServer(config = loadConfig()) {
         const skillId = decodeURIComponent(skillRoute[1]);
         const action = skillRoute[2] || "";
         if (action === "content" && req.method === "GET") {
-          handleSkillContent(res, skillStore, skillId, "default");
+          handleSkillContent(res, skillStore, skillId, "default", url);
           return;
         }
         if (!action && req.method === "GET") {
-          handleSkillGet(res, skillStore, skillId);
+          handleSkillGet(res, skillStore, skillId, url);
           return;
         }
         if (!action && req.method === "POST") {
-          await handleSkillUpdate(req, res, skillStore, skillId);
+          await handleSkillUpdate(req, res, skillStore, skillId, url);
           return;
         }
         if (!action && req.method === "DELETE") {
-          handleSkillDelete(res, skillStore, skillId);
+          handleSkillDelete(res, skillStore, skillId, url);
           return;
         }
       }

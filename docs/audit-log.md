@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Skills Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
+  Skills:
+  - `POST /v1/skills` declares no query parameters;
+  - `GET /v1/skills` declares only `limit`, `order`, and `after`, with
+    `limit` accepting 0 through 100;
+  - the official endpoint list includes `GET` / `POST` / `DELETE
+    /v1/skills/{skill_id}`, `GET /v1/skills/{skill_id}/content`, `POST` /
+    `GET /v1/skills/{skill_id}/versions`, `GET` / `DELETE
+    /v1/skills/{skill_id}/versions/{version}`, and `GET
+    /v1/skills/{skill_id}/versions/{version}/content`.
+- Tightened local bridge behavior:
+  - `POST /v1/skills` and `POST /v1/skills/{skill_id}/versions` now reject
+    unsupported query parameters before JSON/multipart/raw body parsing;
+  - skill retrieve/update/delete, default content, version retrieve/delete,
+    and version content reject unsupported query parameters before local state
+    or ZIP byte reads and before mutations;
+  - skill and skill-version lists now allow only official `after`, `limit`,
+    and `order`, so unsupported `before`/`metadata` queries return 400 before
+    listing.
+- Regression coverage updated:
+  - extended the local Skills lifecycle and shell-mount test to verify invalid
+    create/version-create queries with `not-json` bodies fail on query
+    validation first;
+  - verified invalid skill update/delete and version delete requests leave
+    skill/version state intact;
+  - verified invalid default-content and version-content queries do not read
+    ZIP bytes;
+  - changed previous `before` list behavior on skills and skill versions from
+    ignored-success to official 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records Skills no-query boundaries and official
+    list query allowlists across skill, content, version, and version-content
+    endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Skills API" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Skills query smoke marker `skills-query-smoke-1781724705281`
+    verified invalid query rejection on skill create/list/retrieve/update/
+    delete, skill-version create/list/retrieve/content/delete, and default
+    content; it cleaned up the temporary Skill after validation.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.3G available,
+    96% used.
+  - Runtime prune dry-run scanned 5391 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Skill/Version ids, prompt payload secrets,
+    ZIP contents containing secrets, or smoke-test request secrets were added
+    to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Containers Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
