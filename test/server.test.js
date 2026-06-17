@@ -23838,6 +23838,57 @@ test("Organization projects manage local service accounts and redacted API keys"
     const secondServiceAccount = await secondServiceAccountResponse.json();
     assert.match(secondServiceAccount.id, /^svc_acct_/);
 
+    const apiKeysLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1`);
+    assert.equal(apiKeysLimit.status, 200);
+    const apiKeysLimitJson = await apiKeysLimit.json();
+    assert.equal(apiKeysLimitJson.object, "list");
+    assert.equal(apiKeysLimitJson.data.length, 1);
+    assert.equal(apiKeysLimitJson.has_more, true);
+    const firstListedApiKeyId = apiKeysLimitJson.data[0].id;
+    const nextListedApiKeyId = [serviceAccount.api_key.id, secondServiceAccount.api_key.id]
+      .find((apiKeyId) => apiKeyId !== firstListedApiKeyId);
+    assert.ok(nextListedApiKeyId);
+
+    const apiKeysOrderIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&order=desc`);
+    assert.equal(apiKeysOrderIgnored.status, 200);
+    const apiKeysOrderIgnoredJson = await apiKeysOrderIgnored.json();
+    assert.equal(apiKeysOrderIgnoredJson.data[0].id, firstListedApiKeyId);
+
+    const apiKeysAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&after=${encodeURIComponent(firstListedApiKeyId)}`);
+    assert.equal(apiKeysAfter.status, 200);
+    const apiKeysAfterJson = await apiKeysAfter.json();
+    assert.equal(apiKeysAfterJson.data.length, 1);
+    assert.equal(apiKeysAfterJson.data[0].id, nextListedApiKeyId);
+
+    const apiKeysAll = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=10`);
+    assert.equal(apiKeysAll.status, 200);
+    const apiKeysAllJson = await apiKeysAll.json();
+    assert.equal(apiKeysAllJson.data.length, 2);
+
+    const apiKeysBeforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=10&before=${encodeURIComponent(nextListedApiKeyId)}`);
+    assert.equal(apiKeysBeforeIgnored.status, 200);
+    const apiKeysBeforeIgnoredJson = await apiKeysBeforeIgnored.json();
+    assert.deepEqual(
+      apiKeysBeforeIgnoredJson.data.map((item) => item.id),
+      apiKeysAllJson.data.map((item) => item.id),
+    );
+
+    const invalidApiKeyLimitZero = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=0`);
+    assert.equal(invalidApiKeyLimitZero.status, 400);
+    assert.equal((await invalidApiKeyLimitZero.json()).error.param, "limit");
+
+    const invalidApiKeyLimitHigh = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=101`);
+    assert.equal(invalidApiKeyLimitHigh.status, 400);
+    assert.equal((await invalidApiKeyLimitHigh.json()).error.param, "limit");
+
+    const repeatedApiKeyLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&limit=2`);
+    assert.equal(repeatedApiKeyLimit.status, 400);
+    assert.equal((await repeatedApiKeyLimit.json()).error.param, "limit");
+
+    const repeatedApiKeyAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?after=${encodeURIComponent(firstListedApiKeyId)}&after=${encodeURIComponent(nextListedApiKeyId)}`);
+    assert.equal(repeatedApiKeyAfter.status, 400);
+    assert.equal((await repeatedApiKeyAfter.json()).error.param, "after");
+
     const serviceAccountsLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1`);
     assert.equal(serviceAccountsLimit.status, 200);
     const serviceAccountsLimitJson = await serviceAccountsLimit.json();

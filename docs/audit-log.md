@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Project API Keys List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI YAML for
+  `GET /organization/projects/{project_id}/api_keys`.
+- Confirmed the official list query parameters are `limit` and `after`; no
+  `order` or `before` query parameter is documented for this endpoint. The
+  official `limit` description allows values from 1 through 100 and defaults to
+  20.
+- Tightened local Project API Keys list behavior:
+  - `GET /v1/organization/projects/{project_id}/api_keys` now validates
+    `limit` from 1 through 100 and rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `order` and `before` query values are stripped before
+    pagination, so they no longer shape official Project API Keys list results.
+- Regression coverage updated:
+  - organization/project admin tests now cover `limit`, `after`, ignored
+    `order`, ignored `before`, invalid `limit`, and repeated scalar cursor
+    values for Project API Keys listing;
+  - coverage also asserts that listed project API keys remain redacted and do
+    not expose secret `value` fields.
+- Documentation updated:
+  - compatibility matrix now records the official Project API Keys list
+    pagination contract and unsupported query handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local service accounts and redacted API keys" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 371/371 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Project API Keys smoke marker `api-key-query-smoke-mqi5rh9q`
+    created a temporary local project, created two local service accounts to
+    produce two redacted project API-key records, confirmed `limit=1` paging,
+    verified unsupported `order=desc` did not change the official list result,
+    verified `after` advanced the cursor, confirmed unsupported `before` did
+    not change the official list result, confirmed invalid `limit=0` returned
+    HTTP 400 with `param:"limit"`, confirmed repeated `after` returned HTTP
+    400 with `param:"after"`, deleted the temporary service accounts, and
+    archived the temporary project. The smoke output included key IDs only, not
+    one-time key values.
+  - Disk guard after deployment: `/` 193G size, 178G used, 15G available,
+    93% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    one-time service-account key values, or deployment env files were added to
+    source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Service Accounts List Query Validation
 
 - Rechecked the official OpenAI endpoint inventory for
