@@ -17252,7 +17252,12 @@ function officialFineTuningListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleFineTuningJobGet(res, fineTuningStore, jobId) {
+function handleFineTuningJobGet(res, fineTuningStore, jobId, url) {
+  const queryError = validateOpenAIFineTuningNoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const job = fineTuningStore.getJob(jobId);
   if (!job) {
     sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
@@ -17265,13 +17270,13 @@ function handleFineTuningJobGet(res, fineTuningStore, jobId) {
 }
 
 async function handleFineTuningJobAction(req, res, fineTuningStore, jobId, action, url) {
-  const queryError = validateOpenAIFineTuningJobActionQuery(url);
+  const queryError = validateOpenAIFineTuningNoQuery(url);
   if (queryError) {
     sendError(res, 400, queryError.message, queryError);
     return;
   }
   const body = await readJson(req);
-  const bodyError = validateOpenAIFineTuningJobActionBody(body);
+  const bodyError = validateOpenAIFineTuningEmptyJsonObjectBody(body);
   if (bodyError) {
     sendError(res, 400, bodyError.message, bodyError);
     return;
@@ -17287,16 +17292,16 @@ async function handleFineTuningJobAction(req, res, fineTuningStore, jobId, actio
   sendJson(res, 200, job);
 }
 
-function validateOpenAIFineTuningJobActionQuery(url) {
+function validateOpenAIFineTuningNoQuery(url) {
   for (const key of url.searchParams.keys()) {
     return requestValidationError(`Unsupported query parameter: ${key}`, key);
   }
   return null;
 }
 
-function validateOpenAIFineTuningJobActionBody(body) {
+function validateOpenAIFineTuningEmptyJsonObjectBody(body) {
   if (!isPlainObject(body)) {
-    return requestValidationError("Fine-tuning job action request body must be an empty JSON object", null);
+    return requestValidationError("Fine-tuning request body must be an empty JSON object", null);
   }
   for (const key of Object.keys(body)) {
     return requestValidationError(`Unsupported parameter: ${key}`, key);
@@ -17431,7 +17436,18 @@ function officialFineTuningCheckpointPermissionsListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleFineTuningCheckpointPermissionDelete(res, fineTuningStore, checkpoint, permissionId) {
+async function handleFineTuningCheckpointPermissionDelete(req, res, fineTuningStore, checkpoint, permissionId, url) {
+  const queryError = validateOpenAIFineTuningNoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const body = await readJson(req);
+  const bodyError = validateOpenAIFineTuningEmptyJsonObjectBody(body);
+  if (bodyError) {
+    sendError(res, 400, bodyError.message, bodyError);
+    return;
+  }
   const deleted = fineTuningStore.deleteCheckpointPermission(checkpoint, permissionId);
   if (!deleted) {
     sendError(res, 404, `Fine-tuning checkpoint permission not found: ${permissionId}`, {
@@ -22568,7 +22584,7 @@ function createServer(config = loadConfig()) {
         const jobId = decodeURIComponent(fineTuningJobRoute[1]);
         const action = fineTuningJobRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleFineTuningJobGet(res, fineTuningStore, jobId);
+          handleFineTuningJobGet(res, fineTuningStore, jobId, url);
           return;
         }
         if (["cancel", "pause", "resume"].includes(action) && req.method === "POST") {
@@ -22600,7 +22616,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (permissionId && req.method === "DELETE") {
-          handleFineTuningCheckpointPermissionDelete(res, fineTuningStore, checkpoint, permissionId);
+          await handleFineTuningCheckpointPermissionDelete(req, res, fineTuningStore, checkpoint, permissionId, url);
           return;
         }
       }

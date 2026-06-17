@@ -26524,6 +26524,17 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(fetched.status, 200);
     assert.equal((await fetched.json()).id, job.id);
 
+    const invalidRetrieve = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}?metadata=debug`);
+    assert.equal(invalidRetrieve.status, 400);
+    assert.deepEqual(await invalidRetrieve.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const listed = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata%5Bsuite%5D=fine-tuning-local`);
     assert.equal(listed.status, 200);
     const listedJson = await listed.json();
@@ -26817,6 +26828,50 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
       }, testCase.path);
     }
 
+    for (const testCase of [
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}?metadata=debug`,
+        options: { method: "DELETE" },
+        param: "metadata",
+        message: "Unsupported query parameter: metadata",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}`,
+        options: {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ metadata: { reason: "debug" } }),
+        },
+        param: "metadata",
+        message: "Unsupported parameter: metadata",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}`,
+        options: {
+          method: "DELETE",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify([]),
+        },
+        param: null,
+        message: "Fine-tuning request body must be an empty JSON object",
+      },
+    ]) {
+      const invalidPermissionDelete = await fetch(`${baseUrl}${testCase.path}`, testCase.options);
+      assert.equal(invalidPermissionDelete.status, 400, testCase.path);
+      assert.deepEqual(await invalidPermissionDelete.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
+    const permissionStillPresent = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?project_id=proj_local_a`);
+    assert.equal(permissionStillPresent.status, 200);
+    assert.equal((await permissionStillPresent.json()).data.length, 1);
+
     const deletePermission = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}`, {
       method: "DELETE",
     });
@@ -26850,7 +26905,7 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
           body: JSON.stringify([]),
         },
         param: null,
-        message: "Fine-tuning job action request body must be an empty JSON object",
+        message: "Fine-tuning request body must be an empty JSON object",
       },
     ]) {
       const invalidAction = await fetch(`${baseUrl}${testCase.path}`, testCase.options);

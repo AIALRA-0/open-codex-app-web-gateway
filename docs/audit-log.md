@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Retrieve And Permission Delete Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}`;
+  - `DELETE /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions/{permission_id}`.
+- Official schema notes:
+  - Fine-tuning job retrieve has only the path parameter
+    `fine_tuning_job_id`;
+  - checkpoint permission delete has only the path parameters
+    `fine_tuned_model_checkpoint` and `permission_id`;
+  - neither endpoint defines query parameters;
+  - checkpoint permission delete does not define a request body.
+- Tightened local Fine-tuning behavior:
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}` now rejects unsupported
+    query parameters before reading local state;
+  - checkpoint permission delete now rejects unsupported query parameters,
+    non-empty JSON object fields, and non-object JSON bodies before local
+    mutation;
+  - omitted delete body and explicit `{}` remain accepted for SDK
+    compatibility;
+  - valid deletes still return OpenAI-style
+    `{object:"checkpoint.permission", deleted:true}` and never call the
+    upstream Chat Completions provider.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now verifies invalid retrieve query
+    rejection, invalid checkpoint-permission delete query/body rejection, no
+    mutation after rejected deletes, and the existing valid delete path.
+- Documentation updated:
+  - compatibility matrix now records retrieve query rejection and checkpoint
+    permission delete no-query/no-body behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Fine-tuning retrieve/delete smoke marker
+    `ft-retrieve-delete-smoke-1781718587556` created one local Fine-tuning job,
+    verified invalid retrieve query rejection, verified invalid checkpoint
+    permission delete query/body/non-object-body rejection without deleting the
+    permission, then verified valid checkpoint permission deletion. No upstream
+    provider training or model call was performed.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5372 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Job Lifecycle Action Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:
