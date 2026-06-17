@@ -25681,9 +25681,16 @@ test("Organization projects list validates official query parameters", async () 
     const nextListedProjectId = [firstProject.id, secondProject.id].find((projectId) => projectId !== firstListedProjectId);
     assert.ok(nextListedProjectId);
 
-    const orderIgnored = await fetch(`${baseUrl}/v1/organization/projects?limit=1&order=desc`);
-    assert.equal(orderIgnored.status, 200);
-    assert.equal((await orderIgnored.json()).data[0].id, firstListedProjectId);
+    const projectsWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/projects?limit=1&order=desc`);
+    assert.equal(projectsWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await projectsWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const afterProjects = await fetch(`${baseUrl}/v1/organization/projects?limit=1&after=${encodeURIComponent(firstListedProjectId)}`);
     assert.equal(afterProjects.status, 200);
@@ -25696,13 +25703,16 @@ test("Organization projects list validates official query parameters", async () 
     const activeProjectsJson = await activeProjects.json();
     assert.equal(activeProjectsJson.data.length, 2);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/projects?limit=10&before=${encodeURIComponent(nextListedProjectId)}`);
-    assert.equal(beforeIgnored.status, 200);
-    const beforeIgnoredJson = await beforeIgnored.json();
-    assert.deepEqual(
-      beforeIgnoredJson.data.map((item) => item.id),
-      activeProjectsJson.data.map((item) => item.id),
-    );
+    const projectsWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects?limit=10&before=${encodeURIComponent(nextListedProjectId)}`);
+    assert.equal(projectsWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await projectsWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidProjectListCases = [
       {

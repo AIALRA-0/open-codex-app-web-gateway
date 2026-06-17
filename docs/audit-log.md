@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-17 Organization Projects List Query Allowlist Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Projects:
+  - `GET /v1/organization/projects` declares only `limit`, `after`, and
+    `include_archived` query parameters;
+  - `POST /v1/organization/projects` declares a JSON request body and no query
+    parameters.
+- Tightened local bridge behavior:
+  - organization project listing now rejects unsupported query parameters
+    before reading local project state, so ignored `order` / `before`
+    pagination can no longer shape or appear to shape list output;
+  - existing official `limit`, `after`, and `include_archived` validation
+    remains unchanged, including `limit` from 1 through 100 and boolean
+    parsing for `include_archived`.
+- Regression coverage updated:
+  - changed the Organization projects list test from ignored `order` /
+    `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the official organization projects list
+    query allowlist and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects list validates official query parameters" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization projects smoke verified health, allowed
+    `limit=1&include_archived=false` list access, unsupported `order` query
+    rejection, and unsupported `before` query rejection without creating local
+    project state.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated project ids, or smoke
+    payload secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Certificates List Query Allowlist Validation
 
 - Rechecked official OpenAI API references:
