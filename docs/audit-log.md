@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Containers List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:
+  - `GET /containers`;
+  - `GET /containers/{container_id}/files`.
+- Confirmed `GET /containers` supports:
+  - `limit` as an integer scalar with documented range 1 through 100;
+  - `order` as an `asc` / `desc` string scalar;
+  - `after` as a string cursor scalar;
+  - `name` as a string scalar filter.
+- Confirmed `GET /containers/{container_id}/files` supports:
+  - `limit` as an integer scalar with documented range 1 through 100;
+  - `order` as an `asc` / `desc` string scalar;
+  - `after` as a string cursor scalar.
+- Tightened local Containers list behavior:
+  - `GET /v1/containers` now validates repeated scalar `limit`, `order`,
+    `after`, and `name` query parameters before listing containers;
+  - `GET /v1/containers/{container_id}/files` now validates repeated scalar
+    `limit`, `order`, and `after` query parameters before listing files;
+  - `limit` is validated with the official 100 maximum on both list routes;
+  - unsupported `before` is removed before calling the local paginator so it
+    no longer changes official container list results.
+- Regression coverage updated:
+  - local Containers shell compatibility tests now cover official container
+    list pagination/filtering, unsupported `before` sanitization, invalid
+    `limit`, invalid/repeated `order`, repeated `after`, and repeated `name`;
+  - container file list tests now cover official pagination, unsupported
+    `before` sanitization, invalid `limit`, repeated `order`, and repeated
+    `after`.
+- Documentation updated:
+  - compatibility matrix now records official Containers and Container Files
+    list query behavior and explicitly notes unsupported `before` sanitization.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Containers back Responses shell compatibility and artifacts" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`.
+  - Public Containers smoke created one temporary container and one temporary
+    container file; container and file lists returned the expected resources
+    with official `limit` and `order` parameters.
+  - Public unsupported-`before` smokes for both container list and container
+    file list returned the expected resources, confirming `before` no longer
+    controls those official list results.
+  - Public invalid list smokes returned HTTP 400 with
+    `code:"invalid_request_parameter"` for container `limit`, repeated
+    container `name`, and container file `limit`.
+  - Public smoke cleanup deleted the temporary container successfully.
+  - Disk guard after deployment: `/` 193G size, 182G used, 11G available,
+    95% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Vector Store Search Request Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

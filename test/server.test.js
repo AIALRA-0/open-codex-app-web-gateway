@@ -17574,9 +17574,48 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     assert.equal(container.object, "container");
     assert.equal(container.status, "running");
 
-    const listed = await fetch(`${baseUrl}/v1/containers?name=shell-fixture`);
+    const listed = await fetch(`${baseUrl}/v1/containers?name=shell-fixture&limit=1&order=desc`);
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, container.id);
+
+    const listedBeforeIgnored = await fetch(`${baseUrl}/v1/containers?name=shell-fixture&before=${container.id}&limit=1`);
+    assert.equal(listedBeforeIgnored.status, 200);
+    assert.equal((await listedBeforeIgnored.json()).data[0].id, container.id);
+
+    const invalidContainerListCases = [
+      {
+        path: "/v1/containers?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/containers?name=shell-fixture&name=other",
+        message: "name must be a single string query value",
+        param: "name",
+      },
+      {
+        path: "/v1/containers?order=newest",
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: `/v1/containers?after=${container.id}&after=cntr_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidContainerListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -17609,10 +17648,44 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     assert.equal(json.metadata.compatibility.local_shell.artifact_count, 1);
     assert.equal(json.metadata.compatibility.local_shell.deepseek_thinking, "disabled_for_local_shell");
 
-    const files = await fetch(`${baseUrl}/v1/containers/${container.id}/files`);
+    const files = await fetch(`${baseUrl}/v1/containers/${container.id}/files?limit=1&order=desc`);
     assert.equal(files.status, 200);
     const filesJson = await files.json();
     assert.equal(filesJson.data[0].path, "/artifact.txt");
+
+    const filesBeforeIgnored = await fetch(`${baseUrl}/v1/containers/${container.id}/files?before=${filesJson.data[0].id}&limit=1`);
+    assert.equal(filesBeforeIgnored.status, 200);
+    assert.equal((await filesBeforeIgnored.json()).data[0].id, filesJson.data[0].id);
+
+    const invalidContainerFileListCases = [
+      {
+        path: `/v1/containers/${container.id}/files?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/containers/${container.id}/files?order=asc&order=desc`,
+        message: "order must be a single string query value",
+        param: "order",
+      },
+      {
+        path: `/v1/containers/${container.id}/files?after=${filesJson.data[0].id}&after=cfile_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidContainerFileListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content`);
     assert.equal(content.status, 200);

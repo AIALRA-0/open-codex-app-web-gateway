@@ -7251,6 +7251,14 @@ function officialVectorStoreFileListPaginationUrl(url) {
   return localUrl;
 }
 
+function officialAfterListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit", "order"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
 function handleVectorStoreGet(res, fileSearchStore, storeId) {
   const store = fileSearchStore.getVectorStore(storeId);
   if (!store) {
@@ -7561,10 +7569,28 @@ async function handleContainerCreate(req, res, containerStore) {
 }
 
 function handleContainersList(res, containerStore, url) {
+  const queryError = validateOpenAIContainersListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, containerStore.listContainers({
     name: url.searchParams.get("name") || undefined,
-    url,
+    url: officialAfterListPaginationUrl(url),
   }));
+}
+
+function validateOpenAIContainersListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "name");
 }
 
 function handleContainerGet(res, containerStore, containerId) {
@@ -7596,12 +7622,29 @@ async function handleContainerFileCreate(req, res, config, containerStore, conta
 }
 
 function handleContainerFilesList(res, containerStore, containerId, url) {
-  const page = containerStore.listContainerFiles(containerId, { url });
+  const queryError = validateOpenAIContainerFilesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const page = containerStore.listContainerFiles(containerId, {
+    url: officialAfterListPaginationUrl(url),
+  });
   if (!page) {
     sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
     return;
   }
   sendJson(res, 200, page);
+}
+
+function validateOpenAIContainerFilesListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
 }
 
 function handleContainerFileGet(res, containerStore, containerId, fileId) {
