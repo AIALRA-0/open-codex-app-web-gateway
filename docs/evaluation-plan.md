@@ -99,7 +99,10 @@ the Conversation-specific include projections intact. Conversation lifecycle
 coverage also verifies the official delete boundary: deleting a conversation
 returns `conversation.deleted` and makes the parent conversation unavailable
 for retrieval, updates, new items, and Responses replay, while existing
-conversation items remain listable and individually retrievable.
+conversation items remain listable and individually retrievable. Conversation
+update coverage verifies the official nullable Metadata contract by accepting
+`metadata:null` as a local metadata clear while still rejecting missing
+metadata, non-string metadata values, and unsupported fields before storage.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local

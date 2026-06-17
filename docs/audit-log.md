@@ -1,5 +1,38 @@
 # Audit Log
 
+## 2026-06-17 Conversation Update Nullable Metadata
+
+- Rechecked the official `openai/openai-openapi` schema for
+  `UpdateConversationBody`:
+  - `metadata` is still required on update;
+  - it references the shared `Metadata` schema, whose `anyOf` includes an
+    object map of string values or `null`.
+- Tightened the local Conversation update compatibility boundary:
+  - `POST /v1/conversations/{conversation_id}` now accepts `metadata:null`;
+  - local storage maps the nullable update to an empty metadata object `{}`,
+    matching the local `ConversationResource` shape while preserving the
+    official nullable request contract;
+  - missing `metadata`, non-string metadata values, non-object bodies, and
+    unsupported fields still fail before storage or provider calls.
+- Regression coverage added:
+  - update to object metadata still works;
+  - update with `metadata:null` clears the local metadata;
+  - refetch verifies the cleared metadata persisted;
+  - invalid update cases remain local-only and do not call the provider.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe nullable Conversation
+    metadata update behavior.
+- Validation:
+  - targeted local Conversations lifecycle and request-contract tests pass;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Delete Item Retention
 
 - Rechecked the official OpenAI OpenAPI schema for

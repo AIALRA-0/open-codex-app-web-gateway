@@ -17179,12 +17179,6 @@ test("local Conversations API validates metadata and request contracts", async (
         param: "metadata",
       },
       {
-        name: "update-metadata-null",
-        body: { metadata: null },
-        message: "metadata must be an object",
-        param: "metadata",
-      },
-      {
         name: "update-metadata-value-type",
         body: { metadata: { topic: "demo", owner: 7 } },
         message: "metadata values must be strings",
@@ -17217,6 +17211,18 @@ test("local Conversations API validates metadata and request contracts", async (
     });
     assert.equal(updated.status, 200);
     assert.deepEqual((await updated.json()).metadata, { topic: "validated" });
+
+    const cleared = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: null }),
+    });
+    assert.equal(cleared.status, 200);
+    assert.deepEqual((await cleared.json()).metadata, {});
+
+    const refetched = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`);
+    assert.equal(refetched.status, 200);
+    assert.deepEqual((await refetched.json()).metadata, {});
     assert.equal(requests.length, 0);
   });
 });

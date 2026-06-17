@@ -14464,9 +14464,6 @@ function validateConversationUpdateRequest(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "metadata")) {
     return requestValidationError("metadata is required", "metadata");
   }
-  if (body.metadata == null) {
-    return metadataValidationError("metadata must be an object", "metadata");
-  }
   return validateOpenAIStringMetadata(body);
 }
 
