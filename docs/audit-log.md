@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Container Memory and Network Policy Validation
+
+- Rechecked the official OpenAI OpenAPI schema for Containers:
+  - `CreateContainerBody.memory_limit` is limited to `1g`, `4g`, `16g`, and
+    `64g`;
+  - `CreateContainerBody.network_policy` is discriminated by `type` and accepts
+    `disabled` or `allowlist`;
+  - `allowlist` requires a non-empty `allowed_domains` array;
+  - optional `domain_secrets` entries require non-empty `domain`, `name`, and
+    `value`, with `value` allowed up to 10 MiB.
+- Tightened local Container create request validation:
+  - invalid `memory_limit` types or enum values return
+    `400 invalid_container_request`;
+  - invalid `network_policy` shapes return `400 invalid_container_request`
+    with precise `param` paths;
+  - `network_policy:{type:"disabled"}` is normalized to `{type:"disabled"}`;
+  - `network_policy:{type:"allowlist",allowed_domains:[...]}` is normalized
+    to the public resource shape;
+  - `domain_secrets` are validated but their secret `value` fields are not
+    persisted or returned; local metadata records only a count and a redaction
+    flag.
+- Regression coverage added:
+  - invalid memory limit type/value, invalid network policy type, missing or
+    empty allowlist domains, non-string domain entries, and missing
+    `domain_secrets[].value` fail locally before any provider call;
+  - valid allowlist policy with a domain secret returns the public
+    `network_policy` shape and proves the secret value is absent from the
+    response;
+  - valid disabled policy returns `{type:"disabled"}` with the default `1g`
+    memory limit.
+- Documentation updated:
+  - compatibility matrix now records container memory/network-policy
+    validation and domain-secret redaction;
+  - evaluation plan now includes these checks in the hosted-tool emulation
+    coverage.
+- Validation:
+  - `node --check src/bridge/local_shell.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "local Containers"
+    test/server.test.js` passes: 4 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 351 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` verifies an
+    empty allowlist returns `400 invalid_container_request`, then creates a
+    `memory_limit:"4g"` allowlist container with a domain secret, confirms the
+    returned container omits the secret value while recording a redacted count,
+    and deletes the temporary container.
+- Runtime/storage check:
+  - `/` has 15 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits;
+  - local container `domain_secrets.value` inputs are intentionally redacted
+    from persisted/returned container state.
+
 ## 2026-06-17 Missing Container Reference Fail-Closed
 
 - Rechecked the official OpenAI Containers and Responses OpenAPI references

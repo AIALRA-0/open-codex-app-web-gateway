@@ -8,6 +8,7 @@ const { reserveToolCall } = require("./local_tool_budget");
 const { prefixedId, stringifyContent } = require("./translator");
 
 const SHELL_TOOL_TYPES = new Set(["shell", "code_interpreter"]);
+const CONTAINER_MEMORY_LIMITS = new Set(["1g", "4g", "16g", "64g"]);
 
 function isShellTool(tool) {
   return !!tool && typeof tool === "object" && SHELL_TOOL_TYPES.has(tool.type);
@@ -27,7 +28,7 @@ function canUseLocalShell(config = {}) {
 class LocalContainerStore {
   constructor(config = {}) {
     this.dir = path.resolve(config.shellStateDir || path.join(config.stateDir || process.cwd(), "local-containers"));
-    this.defaultMemoryLimit = config.shellMemoryLimit || "1g";
+    this.defaultMemoryLimit = CONTAINER_MEMORY_LIMITS.has(config.shellMemoryLimit) ? config.shellMemoryLimit : "1g";
     this.maxFileBytes = config.shellMaxFileBytes || 16 * 1024 * 1024;
   }
 
@@ -36,6 +37,19 @@ class LocalContainerStore {
       throw invalidContainerRequest("container request body must be a JSON object", null);
     }
     const expiresAfter = normalizeContainerExpiresAfter(body.expires_after);
+    const memoryLimit = normalizeContainerMemoryLimit(body.memory_limit, this.defaultMemoryLimit);
+    const networkPolicy = normalizeContainerNetworkPolicy(body.network_policy);
+    const metadata = isPlainObject(body.metadata) ? clone(body.metadata) : {};
+    if (networkPolicy.domain_secret_count) {
+      metadata.compatibility = {
+        ...(isPlainObject(metadata.compatibility) ? metadata.compatibility : {}),
+        local_container: {
+          ...(isPlainObject(metadata.compatibility?.local_container) ? metadata.compatibility.local_container : {}),
+          network_policy_domain_secret_count: networkPolicy.domain_secret_count,
+          network_policy_domain_secrets_redacted: true,
+        },
+      };
+    }
     const now = nowSeconds();
     const container = {
       id: prefixedId("cntr"),
@@ -44,11 +58,11 @@ class LocalContainerStore {
       status: "running",
       expires_after: expiresAfter,
       last_active_at: now,
-      memory_limit: body.memory_limit || this.defaultMemoryLimit,
+      memory_limit: memoryLimit,
       name: body.name || null,
-      network_policy: isPlainObject(body.network_policy) ? body.network_policy : null,
+      network_policy: networkPolicy.policy,
       skills: normalizeSkillReferences(body.skills),
-      metadata: isPlainObject(body.metadata) ? body.metadata : {},
+      metadata,
     };
     this.writeJson(this.containerJsonPath(container.id), { container });
     fs.mkdirSync(this.workdir(container.id), { recursive: true, mode: 0o700 });
@@ -872,6 +886,98 @@ function normalizeContainerExpiresAfter(policy) {
     throw invalidContainerRequest("expires_after.minutes must be a positive integer", "expires_after.minutes");
   }
   return { anchor: "last_active_at", minutes };
+}
+
+function normalizeContainerMemoryLimit(value, fallback = "1g") {
+  if (value == null) return CONTAINER_MEMORY_LIMITS.has(fallback) ? fallback : "1g";
+  if (typeof value !== "string") {
+    throw invalidContainerRequest("memory_limit must be a string", "memory_limit");
+  }
+  if (!CONTAINER_MEMORY_LIMITS.has(value)) {
+    throw invalidContainerRequest("memory_limit must be one of 1g, 4g, 16g, or 64g", "memory_limit");
+  }
+  return value;
+}
+
+function normalizeContainerNetworkPolicy(policy) {
+  if (policy == null) return { policy: null, domain_secret_count: 0 };
+  if (!isPlainObject(policy)) {
+    throw invalidContainerRequest("network_policy must be an object", "network_policy");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "type")) {
+    throw invalidContainerRequest("network_policy.type is required", "network_policy.type");
+  }
+  if (typeof policy.type !== "string") {
+    throw invalidContainerRequest("network_policy.type must be a string", "network_policy.type");
+  }
+  if (policy.type === "disabled") {
+    return { policy: { type: "disabled" }, domain_secret_count: 0 };
+  }
+  if (policy.type !== "allowlist") {
+    throw invalidContainerRequest("network_policy.type must be allowlist or disabled", "network_policy.type");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "allowed_domains")) {
+    throw invalidContainerRequest("network_policy.allowed_domains is required", "network_policy.allowed_domains");
+  }
+  if (!Array.isArray(policy.allowed_domains) || policy.allowed_domains.length < 1) {
+    throw invalidContainerRequest("network_policy.allowed_domains must be a non-empty array", "network_policy.allowed_domains");
+  }
+  const allowedDomains = policy.allowed_domains.map((domain, index) => {
+    if (typeof domain !== "string") {
+      throw invalidContainerRequest(
+        `network_policy.allowed_domains[${index}] must be a string`,
+        `network_policy.allowed_domains[${index}]`,
+      );
+    }
+    if (!domain.trim()) {
+      throw invalidContainerRequest(
+        `network_policy.allowed_domains[${index}] must be non-empty`,
+        `network_policy.allowed_domains[${index}]`,
+      );
+    }
+    return domain;
+  });
+  const domainSecretCount = validateContainerNetworkPolicyDomainSecrets(policy.domain_secrets);
+  return {
+    policy: { type: "allowlist", allowed_domains: allowedDomains },
+    domain_secret_count: domainSecretCount,
+  };
+}
+
+function validateContainerNetworkPolicyDomainSecrets(domainSecrets) {
+  if (domainSecrets == null) return 0;
+  if (!Array.isArray(domainSecrets) || domainSecrets.length < 1) {
+    throw invalidContainerRequest(
+      "network_policy.domain_secrets must be a non-empty array",
+      "network_policy.domain_secrets",
+    );
+  }
+  for (let index = 0; index < domainSecrets.length; index += 1) {
+    const secret = domainSecrets[index];
+    const prefix = `network_policy.domain_secrets[${index}]`;
+    if (!isPlainObject(secret)) {
+      throw invalidContainerRequest(`${prefix} must be an object`, prefix);
+    }
+    validateRequiredNonEmptyString(secret, "domain", `${prefix}.domain`);
+    validateRequiredNonEmptyString(secret, "name", `${prefix}.name`);
+    validateRequiredNonEmptyString(secret, "value", `${prefix}.value`, 10485760);
+  }
+  return domainSecrets.length;
+}
+
+function validateRequiredNonEmptyString(object, field, param, maxLength = Infinity) {
+  if (!Object.prototype.hasOwnProperty.call(object, field)) {
+    throw invalidContainerRequest(`${param} is required`, param);
+  }
+  if (typeof object[field] !== "string") {
+    throw invalidContainerRequest(`${param} must be a string`, param);
+  }
+  if (!object[field]) {
+    throw invalidContainerRequest(`${param} must be non-empty`, param);
+  }
+  if (object[field].length > maxLength) {
+    throw invalidContainerRequest(`${param} is too long`, param);
+  }
 }
 
 function containerExpiresAt(container = {}) {

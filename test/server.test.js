@@ -15317,7 +15317,7 @@ test("local Containers back Responses shell compatibility and artifacts", async 
   });
 });
 
-test("local Containers validate create expires_after request shape", async () => {
+test("local Containers validate create request shape", async () => {
   await withMockProvider(async () => {
     assert.fail("provider should not be called for local container create validation");
   }, async ({ bridgeAddress }) => {
@@ -15350,6 +15350,48 @@ test("local Containers validate create expires_after request shape", async () =>
       body: { expires_after: { anchor: "last_active_at", minutes: 0 } },
       message: "expires_after.minutes must be a positive integer",
       param: "expires_after.minutes",
+    }, {
+      body: { memory_limit: 4 },
+      message: "memory_limit must be a string",
+      param: "memory_limit",
+    }, {
+      body: { memory_limit: "2g" },
+      message: "memory_limit must be one of 1g, 4g, 16g, or 64g",
+      param: "memory_limit",
+    }, {
+      body: { network_policy: "allowlist" },
+      message: "network_policy must be an object",
+      param: "network_policy",
+    }, {
+      body: { network_policy: {} },
+      message: "network_policy.type is required",
+      param: "network_policy.type",
+    }, {
+      body: { network_policy: { type: "open" } },
+      message: "network_policy.type must be allowlist or disabled",
+      param: "network_policy.type",
+    }, {
+      body: { network_policy: { type: "allowlist" } },
+      message: "network_policy.allowed_domains is required",
+      param: "network_policy.allowed_domains",
+    }, {
+      body: { network_policy: { type: "allowlist", allowed_domains: [] } },
+      message: "network_policy.allowed_domains must be a non-empty array",
+      param: "network_policy.allowed_domains",
+    }, {
+      body: { network_policy: { type: "allowlist", allowed_domains: ["api.example.com", 42] } },
+      message: "network_policy.allowed_domains[1] must be a string",
+      param: "network_policy.allowed_domains[1]",
+    }, {
+      body: {
+        network_policy: {
+          type: "allowlist",
+          allowed_domains: ["api.example.com"],
+          domain_secrets: [{ domain: "api.example.com", name: "TOKEN" }],
+        },
+      },
+      message: "network_policy.domain_secrets[0].value is required",
+      param: "network_policy.domain_secrets[0].value",
     }];
 
     for (const item of invalidCases) {
@@ -15370,15 +15412,48 @@ test("local Containers validate create expires_after request shape", async () =>
       headers: { "content-type": "application/json" },
       body: JSON.stringify({
         name: "container-validation-ok",
+        memory_limit: "4g",
+        network_policy: {
+          type: "allowlist",
+          allowed_domains: ["api.example.com"],
+          domain_secrets: [{
+            domain: "api.example.com",
+            name: "TOKEN",
+            value: "domain-secret-value",
+          }],
+        },
         expires_after: { anchor: "last_active_at", minutes: 30 },
       }),
     });
     assert.equal(valid.status, 200);
     const container = await valid.json();
+    assert.equal(container.memory_limit, "4g");
+    assert.deepEqual(container.network_policy, {
+      type: "allowlist",
+      allowed_domains: ["api.example.com"],
+    });
     assert.deepEqual(container.expires_after, { anchor: "last_active_at", minutes: 30 });
+    assert.equal(container.metadata.compatibility.local_container.network_policy_domain_secret_count, 1);
+    assert.equal(container.metadata.compatibility.local_container.network_policy_domain_secrets_redacted, true);
+    assert.equal(JSON.stringify(container).includes("domain-secret-value"), false);
 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
+
+    const disabled = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "container-validation-disabled-network",
+        network_policy: { type: "disabled" },
+      }),
+    });
+    assert.equal(disabled.status, 200);
+    const disabledContainer = await disabled.json();
+    assert.equal(disabledContainer.memory_limit, "1g");
+    assert.deepEqual(disabledContainer.network_policy, { type: "disabled" });
+    const deletedDisabled = await fetch(`${baseUrl}/v1/containers/${disabledContainer.id}`, { method: "DELETE" });
+    assert.equal(deletedDisabled.status, 200);
   });
 });
 
