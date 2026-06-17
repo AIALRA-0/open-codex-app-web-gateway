@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Models And Embeddings Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `GET /v1/models`;
+  - `POST /v1/embeddings`.
+- Official schema notes:
+  - model listing defines no query parameters;
+  - embedding creation defines a JSON request body and no query parameters.
+- Tightened local compatibility behavior:
+  - `GET /v1/models` now rejects unsupported query parameters before
+    upstream proxying or local catalog fallback;
+  - `POST /v1/embeddings` now rejects unsupported query parameters before
+    local vector generation or usage recording;
+  - both endpoints share a generic no-query validator, while existing
+    Fine-tuning no-query behavior continues through a wrapper.
+- Regression coverage updated:
+  - model proxy/fallback test now verifies invalid model-list query rejection
+    and confirms no upstream provider request is made;
+  - embeddings deterministic-vector test now verifies invalid create query
+    rejection and confirms the local upstream mock remains unused.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for model listing
+    and embedding creation.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/embeddings returns deterministic local OpenAI-compatible vectors|GET /v1/models/\\{model\\} proxies direct retrieval and falls back to model list" test/server.test.js`
+    passed 2/2 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public models/embeddings query smoke marker
+    `models-embeddings-query-smoke-1781719289011` verified invalid
+    `/v1/models?metadata=debug` and `/v1/embeddings?metadata=debug` requests
+    return OpenAI-style 400 errors, then verified normal model listing and an
+    8-dimensional local embedding request still succeed.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5374 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, prompts, embedding inputs, or smoke-test request
+    secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Create Query Validation
 
 - Rechecked official OpenAI API reference/OpenAPI coverage for:

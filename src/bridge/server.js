@@ -11606,6 +11606,13 @@ function storedChatMessageContentParts(content) {
 }
 
 async function handleModels(req, res, config) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   if (config.providerApiKey) {
     try {
       const upstream = await fetchProviderGet(config, config.modelsPath, req.headers);
@@ -11767,6 +11774,13 @@ function localModelCatalog(config) {
 }
 
 async function handleEmbeddings(req, res, config) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const request = await readJson(req);
   let inputs = [];
   try {
@@ -17297,11 +17311,15 @@ async function handleFineTuningJobAction(req, res, fineTuningStore, jobId, actio
   sendJson(res, 200, job);
 }
 
-function validateOpenAIFineTuningNoQuery(url) {
+function validateOpenAINoQuery(url) {
   for (const key of url.searchParams.keys()) {
     return requestValidationError(`Unsupported query parameter: ${key}`, key);
   }
   return null;
+}
+
+function validateOpenAIFineTuningNoQuery(url) {
+  return validateOpenAINoQuery(url);
 }
 
 function validateOpenAIFineTuningEmptyJsonObjectBody(body) {

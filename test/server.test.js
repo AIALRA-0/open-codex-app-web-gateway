@@ -21945,6 +21945,25 @@ test("POST /v1/embeddings returns deterministic local OpenAI-compatible vectors"
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "embeddings should not call upstream" } }));
   }, async ({ bridgeAddress, requests }) => {
+    const invalidQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "text-embedding-3-small",
+        input: "query should be rejected before embedding generation",
+      }),
+    });
+    assert.equal(invalidQuery.status, 400);
+    assert.deepEqual(await invalidQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/embeddings`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -34902,6 +34921,18 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
     res.end(JSON.stringify({ error: { message: "not found" } }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidModelList = await fetch(`${baseUrl}/v1/models?metadata=debug`);
+    assert.equal(invalidModelList.status, 400);
+    assert.deepEqual(await invalidModelList.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const modelList = await fetch(`${baseUrl}/v1/models`);
     assert.equal(modelList.status, 200);
     assert.deepEqual(await modelList.json(), {
