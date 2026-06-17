@@ -257,6 +257,43 @@ test("maps Responses function tools and tool_choice", () => {
   });
 });
 
+test("maps Responses allowed_tools tool_choice to Chat allowed_tools shape", () => {
+  const longName = "a".repeat(96);
+  const { chat, compatibility } = responsesToChatRequest({
+    model: "deepseek-chat",
+    input: "Use the allowed function.",
+    tools: [{
+      type: "function",
+      name: longName,
+      description: "Record a result.",
+      parameters: { type: "object", properties: { ok: { type: "boolean" } } },
+    }, {
+      type: "image_generation",
+    }],
+    tool_choice: {
+      type: "allowed_tools",
+      mode: "required",
+      tools: [
+        { type: "function", name: longName },
+        { type: "image_generation" },
+      ],
+    },
+  });
+
+  const chatName = chat.tools[0].function.name;
+  assert.notEqual(chatName, longName);
+  assert.ok(chatName.length <= 64);
+  assert.deepEqual(chat.tool_choice, {
+    type: "allowed_tools",
+    allowed_tools: {
+      mode: "required",
+      tools: [{ type: "function", function: { name: chatName } }],
+    },
+  });
+  assert.equal(compatibility.response_function_tool_names.chat_to_responses[chatName], longName);
+  assert.deepEqual(compatibility.unsupported_tools, ["image_generation"]);
+});
+
 test("can reserve hosted tools for local bridge execution", () => {
   const { chat, compatibility } = responsesToChatRequest({
     model: "deepseek-v4-pro",

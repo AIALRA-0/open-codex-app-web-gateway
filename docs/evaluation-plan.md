@@ -96,6 +96,13 @@ limits, memory-limit enums, network-policy allowlists, skill-reference limits,
 required code-interpreter containers, official `{type:"auto"}` containers, and
 local Files API mounting through shell/code-interpreter auto containers.
 
+Responses and Chat tool-choice coverage must distinguish Responses
+`allowed_tools` from Chat's nested `allowed_tools` envelope. The unit track
+checks malformed selector items, Responses function/MCP/custom selector names,
+Chat function/custom selector names, deterministic aliasing for 65-128
+character Responses function selectors, and provider-visible Chat
+`tool_choice.allowed_tools` shape.
+
 Responses input-items coverage verifies that
 `GET /v1/responses/{response_id}/input_items` defaults to descending order,
 honors explicit ascending order, rejects unsupported `order` values, and

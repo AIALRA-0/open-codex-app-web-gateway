@@ -3017,6 +3017,41 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         param: "tool_choice.mode",
         message: "tool_choice.mode must be one of: auto, required",
       },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: "all" } },
+        param: "tool_choice.tools",
+        message: "tool_choice.tools must be an array",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [null] } },
+        param: "tool_choice.tools.0",
+        message: "tool_choice.tools.0 must be an object",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "namespace" }] } },
+        param: "tool_choice.tools.0.type",
+        message: /^tool_choice\.tools\.0\.type must be one of:/,
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "function" }] } },
+        param: "tool_choice.tools.0.name",
+        message: "tool_choice.tools.0.name must be a string",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "function", name: responseFunctionName129 }] } },
+        param: "tool_choice.tools.0.name",
+        message: "tool_choice.tools.0.name must be 1-128 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "mcp" }] } },
+        param: "tool_choice.tools.0.server_label",
+        message: "tool_choice.tools.0.server_label must be a string",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", mode: "auto", tools: [{ type: "mcp", server_label: "docs", name: 7 }] } },
+        param: "tool_choice.tools.0.name",
+        message: "tool_choice.tools.0.name must be a string or null",
+      },
     ];
 
     for (const endpoint of endpoints) {
@@ -3112,6 +3147,64 @@ test("POST /v1/responses aliases 128-character function tool names for Chat prov
     assert.equal(
       json.metadata.compatibility.response_function_tool_names.responses_to_chat[responseFunctionName128],
       providerAlias,
+    );
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/responses maps allowed_tools function selectors for Chat providers", async () => {
+  const responseFunctionName128 = "c".repeat(128);
+  let providerAlias = null;
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools.length, 1);
+    providerAlias = call.body.tools[0].function.name;
+    assert.notEqual(providerAlias, responseFunctionName128);
+    assert.deepEqual(call.body.tool_choice, {
+      type: "allowed_tools",
+      allowed_tools: {
+        mode: "required",
+        tools: [{ type: "function", function: { name: providerAlias } }],
+      },
+    });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_responses_allowed_tools_alias",
+      object: "chat.completion",
+      created: 1700000415,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "allowed tools ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 3, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Use an allowed tool if needed.",
+        tools: [{
+          type: "function",
+          name: responseFunctionName128,
+          description: "Record a result.",
+          parameters: { type: "object", properties: { ok: { type: "boolean" } } },
+        }],
+        tool_choice: {
+          type: "allowed_tools",
+          mode: "required",
+          tools: [{ type: "function", name: responseFunctionName128 }],
+        },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "allowed tools ok");
+    assert.equal(
+      json.metadata.compatibility.response_function_tool_names.chat_to_responses[providerAlias],
+      responseFunctionName128,
     );
     assert.equal(requests.length, 1);
   });
@@ -24867,6 +24960,39 @@ test("POST /v1/chat/completions validates tools and tool_choice before provider 
         body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: "all" } } },
         param: "tool_choice.allowed_tools.tools",
         message: "tool_choice.allowed_tools.tools must be an array",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: [null] } } },
+        param: "tool_choice.allowed_tools.tools.0",
+        message: "tool_choice.allowed_tools.tools.0 must be an object",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: [{ type: "file_search" }] } } },
+        param: "tool_choice.allowed_tools.tools.0.type",
+        message: "tool_choice.allowed_tools.tools.0.type must be one of: function, custom",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: [{ type: "function" }] } } },
+        param: "tool_choice.allowed_tools.tools.0.function",
+        message: "tool_choice.allowed_tools.tools.0.function must be an object",
+      },
+      {
+        body: {
+          tool_choice: {
+            type: "allowed_tools",
+            allowed_tools: {
+              mode: "auto",
+              tools: [{ type: "function", function: { name: "bad name" } }],
+            },
+          },
+        },
+        param: "tool_choice.allowed_tools.tools.0.function.name",
+        message: "tool_choice.allowed_tools.tools.0.function.name must be 1-64 characters and contain only letters, numbers, underscores, or dashes",
+      },
+      {
+        body: { tool_choice: { type: "allowed_tools", allowed_tools: { mode: "auto", tools: [{ type: "custom", custom: {} }] } } },
+        param: "tool_choice.allowed_tools.tools.0.custom.name",
+        message: "tool_choice.allowed_tools.tools.0.custom.name must be a string",
       },
     ];
     for (const invalidCase of invalidCases) {

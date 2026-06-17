@@ -1,5 +1,77 @@
 # Audit Log
 
+## 2026-06-17 Responses and Chat `allowed_tools` Tool Choice Mapping
+
+- Rechecked the official OpenAI OpenAPI schemas for tool choice through the
+  OpenAI developer docs/OpenAPI source:
+  - Responses `ToolChoiceAllowed` uses the top-level shape
+    `{type:"allowed_tools", mode, tools}`;
+  - Chat Completions `ChatCompletionAllowedToolsChoice` uses
+    `{type:"allowed_tools", allowed_tools:{mode, tools}}`;
+  - both schemas keep selector items as expandable objects, but examples and
+    provider behavior depend on selector `type` and the relevant name fields.
+- Tightened local request validation before provider calls:
+  - Responses `tool_choice:{type:"allowed_tools"}` now validates selector item
+    objects, selector `type`, function/custom names, and MCP
+    `server_label`/optional `name`;
+  - direct Chat `tool_choice:{type:"allowed_tools"}` now validates selector
+    item objects, function selector names, and custom selector names.
+- Fixed Responses-to-Chat mapping:
+  - Responses allowed-tools function selectors are converted into Chat's nested
+    `allowed_tools` envelope before upstream Chat provider calls;
+  - Responses function names longer than Chat's 64-character function limit are
+    mapped to the same deterministic Chat-safe aliases in allowed-tools
+    selectors that ordinary function tools use;
+  - hosted/custom/MCP allowed-tools selectors remain accepted in Responses
+    validation but are not mis-forwarded to Chat when no corresponding Chat
+    tool was mapped.
+- Regression coverage updated:
+  - invalid Responses tool tests cover malformed allowed-tools selector arrays
+    across create and `/input_tokens`;
+  - invalid direct Chat tests cover malformed nested allowed-tools selector
+    arrays;
+  - translator tests cover Responses allowed-tools function selector aliasing
+    and hosted selector omission from Chat `tool_choice`;
+  - mock-provider integration tests verify the upstream Chat request receives
+    the nested `tool_choice.allowed_tools` shape with the aliased function
+    name.
+- Documentation updated:
+  - compatibility matrix now distinguishes the Responses and Chat
+    `allowed_tools` envelopes and documents aliasing in allowed-tools
+    selectors;
+  - evaluation plan now requires selector validation and provider-visible
+    nested Chat shape coverage.
+- Validation:
+  - `node --check src/bridge/server.js src/bridge/translator.js
+    test/server.test.js test/translator.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|allowed_tools function selectors|validates tools and
+    tool_choice|maps Responses allowed_tools" test/server.test.js
+    test/translator.test.js` passes: 4 tests.
+  - `git diff --check` passes;
+  - an explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions;
+  - `npm test` passes: 356 tests;
+  - `npm run secret-scan` exits successfully.
+- Runtime/storage check:
+  - `/` has 13 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200;
+  - public `POST /v1/responses` with a malformed Responses
+    `tool_choice:{type:"allowed_tools"}` function selector returns
+    `400 invalid_request_parameter` with
+    `param:"tool_choice.tools.0.name"` before any upstream provider work.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or deployment env files
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Responses Shell and Code Interpreter Container Schema Validation
 
 - Rechecked the official OpenAI Responses/OpenAPI tool schemas through the

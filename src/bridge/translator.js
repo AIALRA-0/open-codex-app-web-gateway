@@ -516,7 +516,31 @@ function mapToolChoice(toolChoice, options = {}) {
       return { type: "function", function: { name: mappedName } };
     }
   }
+  if (toolChoice.type === "allowed_tools") {
+    const allowedTools = mapResponsesAllowedToolsChoice(toolChoice, options);
+    return allowedTools || undefined;
+  }
   return toolChoice;
+}
+
+function mapResponsesAllowedToolsChoice(toolChoice, options = {}) {
+  if (!Array.isArray(toolChoice.tools)) return null;
+  const tools = [];
+  for (const tool of toolChoice.tools) {
+    if (!isPlainObject(tool)) continue;
+    if (tool.type === "function" && tool.name) {
+      const mappedName = options.functionToolNameMap?.responses_to_chat?.[tool.name] || tool.name;
+      tools.push({ type: "function", function: { name: mappedName } });
+    }
+  }
+  if (!tools.length) return null;
+  return {
+    type: "allowed_tools",
+    allowed_tools: {
+      mode: toolChoice.mode,
+      tools,
+    },
+  };
 }
 
 function mapTextFormat(text, options = {}) {

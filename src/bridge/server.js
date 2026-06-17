@@ -330,6 +330,24 @@ const OPENAI_RESPONSES_TOOL_CHOICE_OBJECT_TYPES = Object.freeze([
   "apply_patch",
   "shell",
 ]);
+const OPENAI_RESPONSES_ALLOWED_TOOL_SELECTOR_TYPES = Object.freeze([
+  "function",
+  "mcp",
+  "custom",
+  "file_search",
+  "web_search",
+  "web_search_2025_08_26",
+  "web_search_preview",
+  "web_search_preview_2025_03_11",
+  "computer",
+  "computer_use_preview",
+  "computer_use",
+  "image_generation",
+  "code_interpreter",
+  "tool_search",
+  "apply_patch",
+  "shell",
+]);
 const OPENAI_ALLOWED_TOOLS_MODE_VALUES = Object.freeze(["auto", "required"]);
 const OPENAI_CUSTOM_TOOL_FORMAT_TYPES = Object.freeze(["text", "grammar"]);
 const OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES = Object.freeze(["lark", "regex"]);
@@ -4083,7 +4101,7 @@ function validateOpenAIResponsesToolChoice(body = {}) {
     );
   }
   if (toolChoice.type === "allowed_tools") {
-    return validateOpenAIAllowedToolsChoice(toolChoice, "tool_choice");
+    return validateOpenAIResponsesAllowedToolsChoice(toolChoice, "tool_choice");
   }
   if (toolChoice.type === "function") {
     return validateOpenAINamedToolChoice(toolChoice, "tool_choice", {
@@ -4174,10 +4192,10 @@ function validateOpenAIChatToolChoice(body = {}) {
   if (toolChoice.type === "custom") {
     return validateOpenAINamedToolChoice(toolChoice.custom, "tool_choice.custom");
   }
-  return validateOpenAIAllowedToolsChoice(toolChoice.allowed_tools, "tool_choice.allowed_tools");
+  return validateOpenAIChatAllowedToolsChoice(toolChoice.allowed_tools, "tool_choice.allowed_tools");
 }
 
-function validateOpenAIAllowedToolsChoice(allowedTools, param) {
+function validateOpenAIAllowedToolsEnvelope(allowedTools, param) {
   if (!isPlainObject(allowedTools)) {
     return requestValidationError(`${param} must be an object`, param);
   }
@@ -4193,9 +4211,73 @@ function validateOpenAIAllowedToolsChoice(allowedTools, param) {
   if (!Array.isArray(allowedTools.tools)) {
     return requestValidationError(`${param}.tools must be an array`, `${param}.tools`);
   }
+  return null;
+}
+
+function validateOpenAIResponsesAllowedToolsChoice(allowedTools, param) {
+  const envelopeError = validateOpenAIAllowedToolsEnvelope(allowedTools, param);
+  if (envelopeError) return envelopeError;
   for (const [index, tool] of allowedTools.tools.entries()) {
+    const toolParam = `${param}.tools.${index}`;
     if (!isPlainObject(tool)) {
-      return requestValidationError(`${param}.tools.${index} must be an object`, `${param}.tools.${index}`);
+      return requestValidationError(`${toolParam} must be an object`, toolParam);
+    }
+    if (
+      typeof tool.type !== "string"
+      || !OPENAI_RESPONSES_ALLOWED_TOOL_SELECTOR_TYPES.includes(tool.type)
+    ) {
+      return requestValidationError(
+        `${toolParam}.type must be one of: ${OPENAI_RESPONSES_ALLOWED_TOOL_SELECTOR_TYPES.join(", ")}`,
+        `${toolParam}.type`,
+      );
+    }
+    if (tool.type === "function") {
+      const functionError = validateOpenAINamedToolChoice(tool, toolParam, {
+        functionNamePattern: OPENAI_RESPONSES_FUNCTION_NAME_RE,
+        functionNameMessage: openAIResponsesFunctionNameMessage,
+      });
+      if (functionError) return functionError;
+    } else if (tool.type === "custom") {
+      const customError = validateOpenAINamedToolChoice(tool, toolParam);
+      if (customError) return customError;
+    } else if (tool.type === "mcp") {
+      if (typeof tool.server_label !== "string") {
+        return requestValidationError(`${toolParam}.server_label must be a string`, `${toolParam}.server_label`);
+      }
+      if (
+        Object.prototype.hasOwnProperty.call(tool, "name")
+        && tool.name !== null
+        && typeof tool.name !== "string"
+      ) {
+        return requestValidationError(`${toolParam}.name must be a string or null`, `${toolParam}.name`);
+      }
+    }
+  }
+  return null;
+}
+
+function validateOpenAIChatAllowedToolsChoice(allowedTools, param) {
+  const envelopeError = validateOpenAIAllowedToolsEnvelope(allowedTools, param);
+  if (envelopeError) return envelopeError;
+  for (const [index, tool] of allowedTools.tools.entries()) {
+    const toolParam = `${param}.tools.${index}`;
+    if (!isPlainObject(tool)) {
+      return requestValidationError(`${toolParam} must be an object`, toolParam);
+    }
+    if (typeof tool.type !== "string" || !OPENAI_CHAT_TOOL_TYPES.includes(tool.type)) {
+      return requestValidationError(
+        `${toolParam}.type must be one of: ${OPENAI_CHAT_TOOL_TYPES.join(", ")}`,
+        `${toolParam}.type`,
+      );
+    }
+    if (tool.type === "function") {
+      const functionError = validateOpenAINamedToolChoice(tool.function, `${toolParam}.function`, {
+        validateFunctionName: true,
+      });
+      if (functionError) return functionError;
+    } else if (tool.type === "custom") {
+      const customError = validateOpenAINamedToolChoice(tool.custom, `${toolParam}.custom`);
+      if (customError) return customError;
     }
   }
   return null;
