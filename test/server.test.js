@@ -15582,6 +15582,81 @@ test("POST /v1/images/variations accepts multipart placeholder requests", async 
   });
 });
 
+test("POST /v1/images/variations validates official option fields and image contract", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const nonSquarePng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=";
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image variation requests");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertJsonVariationError = async (body, message, param) => {
+      const response = await fetch(`${baseUrl}/v1/images/variations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      assert.equal(response.status, 400, param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, param);
+    };
+    const assertMultipartVariationError = async (form, message, param = "image") => {
+      const response = await fetch(`${baseUrl}/v1/images/variations`, {
+        method: "POST",
+        body: form,
+      });
+      assert.equal(response.status, 400, param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, param);
+    };
+
+    await assertJsonVariationError(
+      { response_format: "bytes" },
+      "response_format must be one of: url, b64_json",
+      "response_format",
+    );
+    await assertJsonVariationError(
+      { size: "2048x2048" },
+      "size must be one of: 256x256, 512x512, 1024x1024",
+      "size",
+    );
+    await assertJsonVariationError(
+      { user: { id: "direct-variation-user" } },
+      "user must be a string",
+      "user",
+    );
+
+    const jpegForm = new FormData();
+    jpegForm.append("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }), "source.jpg");
+    await assertMultipartVariationError(jpegForm, "image must be a PNG file for image variations");
+
+    const nonSquareForm = new FormData();
+    nonSquareForm.append("image", new Blob([Buffer.from(nonSquarePng, "base64")], { type: "image/png" }), "wide.png");
+    await assertMultipartVariationError(nonSquareForm, "image must be square for image variations");
+
+    const oversizedForm = new FormData();
+    oversizedForm.append(
+      "image",
+      new Blob([Buffer.concat([Buffer.from(sourcePng, "base64"), Buffer.alloc(4 * 1024 * 1024)])], { type: "image/png" }),
+      "large.png",
+    );
+    await assertMultipartVariationError(oversizedForm, "image must be less than 4MB for image variations");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/variations can call an OpenAI-compatible Images API", async () => {
   const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   const variationPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR42mP8DwQACfsD/QVQH6UAAAAASUVORK5CYII=";

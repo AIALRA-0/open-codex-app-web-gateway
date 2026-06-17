@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Variation Validation
+
+- Rechecked official OpenAI Images API references:
+  - OpenAPI 2.3.0 includes `POST /v1/images/variations` as
+    `createImageVariation`;
+  - the reference states that image variations only support `dall-e-2`, accept
+    one PNG image, `n` from 1 through 10, `response_format` values `url` or
+    `b64_json`, `size` values `256x256`, `512x512`, or `1024x1024`, and a
+    string `user` identifier;
+  - the source image must be a valid PNG file, less than 4MB, and square.
+- Tightened local bridge behavior:
+  - direct Images variation now validates `response_format`, `size`, and `user`
+    before image resolution, placeholder generation, provider forwarding, or
+    usage recording;
+  - variation images now fail closed unless they resolve to `image/png`, are
+    under 4MB, have a parseable PNG IHDR header, and have matching width and
+    height;
+  - provider-backed variation calls still preserve the configured/direct model
+    field for OpenAI-compatible providers while enforcing the official request
+    option and source-image boundaries.
+- Regression coverage updated:
+  - added direct variation negative tests for invalid `response_format`,
+    `size`, and `user`;
+  - added multipart image-contract tests for non-PNG, non-square PNG, and
+    oversized PNG variation inputs;
+  - verified invalid variation requests return OpenAI-style
+    `invalid_request_parameter` errors and do not call the upstream provider;
+  - confirmed existing placeholder, provider-backed, and Batch JSONL variation
+    tests still pass.
+- Documentation updated:
+  - compatibility matrix now records direct Images variation option validation
+    and PNG/4MB/square image requirements.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "images/variations|image variation|Images variation" test/server.test.js`
+    passed 4/4 matched tests.
+  - Full `node --test test/*.test.js` passed 383/383 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images variation smokes verified invalid `size` and non-PNG image
+    requests both return HTTP 400 with `invalid_request_parameter`.
+  - Disk guard after deployment: `/` 193G size, 181G used, 12G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Option Validation
 
 - Rechecked official OpenAI Images API references:

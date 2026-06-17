@@ -1947,10 +1947,14 @@ image reference resolution or provider forwarding. The direct
 `POST /v1/images/variations` endpoint follows the
 official Images variation operation shape: multipart requests accept one
 `image` file plus `model`, `n`, `size`, `response_format`, and `user`, default
-to `dall-e-2` when the client omits `model`, and return the same
-`ImagesResponse` shape. Provider-backed mode forwards multipart form data to
-the configured `/images/variations` path. Placeholder mode returns deterministic
-PNG variations for protocol/UI testing. For local Batch compatibility, the
+to `dall-e-2` when the client omits `model`, validate `n` from 1 through 10,
+`response_format` as `url` or `b64_json`, `size` as `256x256`, `512x512`, or
+`1024x1024`, `user` as a string, and require the source image to resolve to a
+PNG under 4MB with square dimensions before placeholder generation, provider
+forwarding, or usage recording. The endpoint returns the same `ImagesResponse`
+shape. Provider-backed mode forwards multipart form data to the configured
+`/images/variations` path. Placeholder mode returns deterministic PNG
+variations for protocol/UI testing. For local Batch compatibility, the
 bridge also accepts JSON variation bodies with `image`, `images`, or
 `image_url` entries that use data URLs, HTTP(S) URLs, or local `file_id`
 references, because Batch JSONL cannot carry multipart file parts. Direct

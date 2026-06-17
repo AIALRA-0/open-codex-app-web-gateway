@@ -17,6 +17,7 @@ const DEFAULT_MAX_EDIT_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
 const MAX_IMAGES_GENERATION_N = 10;
+const MAX_IMAGE_VARIATION_BYTES = 4 * 1024 * 1024;
 const IMAGE_API_BACKGROUND_VALUES = ["transparent", "opaque", "auto"];
 const IMAGE_API_INPUT_FIDELITY_VALUES = ["high", "low"];
 const IMAGE_API_MODERATION_VALUES = ["auto", "low"];
@@ -24,6 +25,7 @@ const IMAGE_API_OUTPUT_FORMAT_VALUES = ["png", "jpeg", "webp"];
 const IMAGE_API_QUALITY_VALUES = ["auto", "high", "medium", "low", "hd", "standard"];
 const IMAGE_API_RESPONSE_FORMAT_VALUES = ["url", "b64_json"];
 const IMAGE_API_STYLE_VALUES = ["vivid", "natural"];
+const IMAGE_API_VARIATION_SIZE_VALUES = ["256x256", "512x512", "1024x1024"];
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -602,6 +604,22 @@ function normalizeImagesEditOptions(request = {}) {
     IMAGE_API_RESPONSE_FORMAT_VALUES,
   ));
   appendNormalizedOption(options, "size", normalizeImageApiOptionalString(request.size, "size"));
+  appendNormalizedOption(options, "user", normalizeImageApiOptionalString(request.user, "user"));
+  return options;
+}
+
+function normalizeImagesVariationOptions(request = {}) {
+  const options = {};
+  appendNormalizedOption(options, "response_format", normalizeImageApiEnum(
+    request.response_format,
+    "response_format",
+    IMAGE_API_RESPONSE_FORMAT_VALUES,
+  ));
+  appendNormalizedOption(options, "size", normalizeImageApiEnum(
+    request.size,
+    "size",
+    IMAGE_API_VARIATION_SIZE_VALUES,
+  ));
   appendNormalizedOption(options, "user", normalizeImageApiOptionalString(request.user, "user"));
   return options;
 }
@@ -1393,10 +1411,7 @@ async function normalizeImagesVariationRequest(request = {}, config = {}, option
 
   const n = normalizeImagesGenerationN(request.n);
   const model = stringifyContent(request.model || config.imageGenerationVariationModel || "dall-e-2");
-  const requestOptions = {};
-  for (const key of ["response_format", "size", "user"]) {
-    if (request[key] !== undefined) requestOptions[key] = request[key];
-  }
+  const requestOptions = normalizeImagesVariationOptions(request);
 
   const variationInputRequest = { ...request };
   delete variationInputRequest.mask;
@@ -1415,6 +1430,7 @@ async function normalizeImagesVariationRequest(request = {}, config = {}, option
       param: "image",
     });
   }
+  validateImageVariationInput(editInput.images[0]);
 
   return {
     model,
@@ -1893,6 +1909,50 @@ function completedEditableImage({ source, file_id, call_id, filename, media_type
     status: "completed",
     buffer,
   };
+}
+
+function validateImageVariationInput(image = {}) {
+  if (image.media_type !== "image/png") {
+    throw imageApiError("image must be a PNG file for image variations", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+  if (!Buffer.isBuffer(image.buffer) || !image.buffer.length) {
+    throw imageApiError("image must be a valid PNG file for image variations", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+  if (image.buffer.length > MAX_IMAGE_VARIATION_BYTES) {
+    throw imageApiError("image must be less than 4MB for image variations", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+  const dimensions = pngDimensions(image.buffer);
+  if (!dimensions) {
+    throw imageApiError("image must be a valid PNG file for image variations", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+  if (dimensions.width !== dimensions.height) {
+    throw imageApiError("image must be square for image variations", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+}
+
+function pngDimensions(buffer) {
+  if (!Buffer.isBuffer(buffer) || buffer.length < 24) return null;
+  if (!buffer.subarray(0, 8).equals(Buffer.from("89504e470d0a1a0a", "hex"))) return null;
+  if (buffer.subarray(12, 16).toString("ascii") !== "IHDR") return null;
+  const width = buffer.readUInt32BE(16);
+  const height = buffer.readUInt32BE(20);
+  if (!width || !height) return null;
+  return { width, height };
 }
 
 function failedEditableImage({ source, file_id, call_id, filename, media_type, bytes, error }) {
