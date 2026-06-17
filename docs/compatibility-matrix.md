@@ -780,7 +780,7 @@ state.
 | `GET /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Retrieves a local service account for an active project |
 | `POST /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Updates local service-account `name` and `role`, then refreshes owner metadata on its redacted key records |
 | `DELETE /v1/organization/projects/{project_id}/service_accounts/{service_account_id}` | Implemented locally | Deletes the service account and its locally owned project API keys |
-| `GET /v1/organization/projects/{project_id}/rate_limits` | Implemented locally | Lazily seeds and lists local `project.rate_limit` records with model, requests-per-minute, tokens-per-minute, and relevant optional limits such as requests/day, images/min, audio MB/min, and batch input tokens/day |
+| `GET /v1/organization/projects/{project_id}/rate_limits` | Implemented locally | Lazily seeds and lists local `project.rate_limit` records with model, requests-per-minute, tokens-per-minute, and relevant optional limits such as requests/day, images/min, audio MB/min, and batch input tokens/day; validates official `limit`, `after`, and `before` pagination, rejects repeated scalar query values, enforces `limit` from 1 through 100 with official default 100, and ignores unsupported `order` so it cannot shape the official list result |
 | `POST /v1/organization/projects/{project_id}/rate_limits/{rate_limit_id}` | Implemented locally | Updates numeric local rate-limit fields and returns `project.rate_limit`; invalid values return `400 invalid_rate_limit_value` |
 
 Local Organization admin state lives under

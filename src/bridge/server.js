@@ -16453,8 +16453,19 @@ function handleOrganizationProjectSpendAlertDelete(res, organizationAdminStore, 
 }
 
 function handleOrganizationProjectRateLimitsList(res, organizationAdminStore, projectId, url) {
+  const queryError = validateOpenAIProjectRateLimitsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const rateLimits = organizationAdminStore.listProjectRateLimits(projectId);
-  sendJson(res, 200, paginateListWithDefaultOrder(rateLimits, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    rateLimits,
+    officialProjectRateLimitsListPaginationUrl(url),
+    "asc",
+    100,
+    100,
+  ));
 }
 
 async function handleOrganizationProjectRateLimitUpdate(req, res, organizationAdminStore, projectId, rateLimitId) {
@@ -16465,6 +16476,24 @@ async function handleOrganizationProjectRateLimitUpdate(req, res, organizationAd
     });
   }
   sendJson(res, 200, organizationAdminStore.updateProjectRateLimit(projectId, rateLimitId, body));
+}
+
+function validateOpenAIProjectRateLimitsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "before");
+}
+
+function officialProjectRateLimitsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "before", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 async function handleFineTuningJobCreate(req, res, fineTuningStore) {

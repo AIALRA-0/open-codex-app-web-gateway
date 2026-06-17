@@ -1,5 +1,51 @@
 # Audit Log
 
+## 2026-06-17 Project Rate Limits List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/projects/{project_id}/rate_limits`.
+- Confirmed the official list query parameters are `limit`, `after`, and
+  `before`; no `order` query parameter is documented for this endpoint.
+- Tightened local Project Rate Limits behavior:
+  - `GET /v1/organization/projects/{project_id}/rate_limits` now validates
+    `limit` from 1 through 100 and rejects repeated `limit` values;
+  - repeated `after` and `before` cursor values now return OpenAI-style
+    HTTP 400 before listing local records;
+  - pagination now defaults to the official 100 item limit instead of the
+    generic local 20 item fallback;
+  - unsupported `order` query values are stripped before pagination, so they no
+    longer shape official Project Rate Limits list results.
+- Regression coverage updated:
+  - organization/project admin tests now cover `limit`, `after`, `before`,
+    ignored `order`, invalid `limit`, and repeated scalar cursor values for
+    Project Rate Limits listing.
+- Documentation updated:
+  - compatibility matrix now records the official Project Rate Limits list
+    pagination contract.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local users and rate limits" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 371/371 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Project Rate Limits smoke marker `rate-limit-query-smoke-mqi5cv3h`
+    created a temporary local project, confirmed `limit=1` paging,
+    verified unsupported `order=desc` did not change the official list result,
+    verified `after` advanced the cursor, confirmed invalid `limit=0` returned
+    HTTP 400 with `param:"limit"`, confirmed repeated `after` returned HTTP
+    400 with `param:"after"`, and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 178G used, 16G available,
+    93% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Models Delete Route Compatibility
 
 - Rechecked the current official OpenAI Models OpenAPI path

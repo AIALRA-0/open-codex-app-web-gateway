@@ -24096,6 +24096,64 @@ test("Organization projects manage local users and rate limits", async () => {
     const rateLimitsJson = await rateLimits.json();
     assert.equal(rateLimitsJson.object, "list");
     assert.equal(rateLimitsJson.data.length >= 3, true);
+    const firstRateLimitPage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1`);
+    assert.equal(firstRateLimitPage.status, 200);
+    const firstRateLimitPageJson = await firstRateLimitPage.json();
+    assert.equal(firstRateLimitPageJson.data.length, 1);
+    assert.equal(firstRateLimitPageJson.has_more, true);
+    const orderIgnoredRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1&order=desc`);
+    assert.equal(orderIgnoredRateLimits.status, 200);
+    assert.equal((await orderIgnoredRateLimits.json()).data[0].id, firstRateLimitPageJson.data[0].id);
+    const afterRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=1&after=${firstRateLimitPageJson.data[0].id}`);
+    assert.equal(afterRateLimits.status, 200);
+    const afterRateLimitsJson = await afterRateLimits.json();
+    assert.equal(afterRateLimitsJson.data.length, 1);
+    assert.notEqual(afterRateLimitsJson.data[0].id, firstRateLimitPageJson.data[0].id);
+    const beforeRateLimits = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/rate_limits?limit=10&before=${afterRateLimitsJson.data[0].id}`);
+    assert.equal(beforeRateLimits.status, 200);
+    const beforeRateLimitsJson = await beforeRateLimits.json();
+    assert.equal(beforeRateLimitsJson.data.at(-1).id, firstRateLimitPageJson.data[0].id);
+
+    const invalidRateLimitListCases = [
+      {
+        path: `/v1/organization/projects/${project.id}/rate_limits?limit=0`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/rate_limits?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/rate_limits?limit=1&limit=2`,
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/rate_limits?after=${firstRateLimitPageJson.data[0].id}&after=rl_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/rate_limits?before=${afterRateLimitsJson.data[0].id}&before=rl_other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+    ];
+    for (const testCase of invalidRateLimitListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const deepseekLimit = rateLimitsJson.data.find((entry) => entry.model === "deepseek-v4-pro")
       || rateLimitsJson.data[0];
     assert.equal(deepseekLimit.object, "project.rate_limit");
