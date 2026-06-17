@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Checkpoint Permission Create Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for
+  `POST /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions`:
+  - request body schema `CreateFineTuningCheckpointPermissionRequest` is an
+    object with `additionalProperties:false`;
+  - `project_ids` is required;
+  - `project_ids` is an array whose items are strings;
+  - the schema does not specify a `minItems` constraint.
+- Tightened local Fine-tuning checkpoint permission create behavior:
+  - unknown JSON body fields are now rejected with OpenAI-style HTTP 400
+    `invalid_request_parameter` errors;
+  - missing `project_ids`, non-array `project_ids`, and non-string array items
+    are rejected before local state mutation;
+  - `project_ids:[]` now returns an empty OpenAI-style list without mutating
+    local permissions, matching the documented schema instead of imposing an
+    unstated non-empty array rule;
+  - normal string-array creates still return created or existing local
+    `checkpoint.permission` records.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now verifies empty-array create, missing
+    `project_ids`, non-array `project_ids`, non-string array items, unsupported
+    body fields, and the existing successful permission create path.
+- Documentation updated:
+  - compatibility matrix now records the official `project_ids` string-array
+    create body, unknown-field rejection, and empty-array behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public checkpoint-permission create smoke marker
+    `ft-permission-create-smoke-mqic869l` created one local Fine-tuning job and
+    synthetic checkpoint, verified `project_ids:[]`, missing `project_ids`,
+    non-array `project_ids`, non-string array items, unsupported body fields,
+    and one valid create, then deleted the temporary permission. No provider
+    fine-tuning or upstream model call was performed.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5366 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Checkpoint Permission List Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for

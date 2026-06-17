@@ -26453,6 +26453,62 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     }
 
     const checkpointPath = encodeURIComponent(checkpoint.fine_tuned_model_checkpoint);
+    const emptyPermissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ project_ids: [] }),
+    });
+    assert.equal(emptyPermissionCreate.status, 200);
+    assert.deepEqual(await emptyPermissionCreate.json(), {
+      object: "list",
+      data: [],
+      first_id: null,
+      last_id: null,
+      has_more: false,
+    });
+
+    for (const testCase of [
+      {
+        body: {},
+        param: "project_ids",
+        code: "missing_required_parameter",
+        message: "project_ids is required",
+      },
+      {
+        body: { project_ids: "proj_local_a" },
+        param: "project_ids",
+        code: "invalid_request_parameter",
+        message: "project_ids must be an array of strings",
+      },
+      {
+        body: { project_ids: ["proj_local_a", 42] },
+        param: "project_ids.1",
+        code: "invalid_request_parameter",
+        message: "project_ids must be an array of strings",
+      },
+      {
+        body: { project_ids: ["proj_local_a"], metadata: {} },
+        param: "metadata",
+        code: "invalid_request_parameter",
+        message: "Unsupported parameter: metadata",
+      },
+    ]) {
+      const invalidPermissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(invalidPermissionCreate.status, 400, testCase.param);
+      assert.deepEqual(await invalidPermissionCreate.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: testCase.code,
+        },
+      }, testCase.param);
+    }
+
     const permissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {
       method: "POST",
       headers: { "content-type": "application/json" },

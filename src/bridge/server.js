@@ -17038,21 +17038,47 @@ function handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url) {
 
 async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint) {
   const body = await readJson(req);
+  const bodyError = validateOpenAIFineTuningCheckpointPermissionsCreateBody(body);
+  if (bodyError) throw bodyError;
+  const projectIds = body.project_ids;
+  sendJson(res, 200, fineTuningStore.createCheckpointPermissions(checkpoint, projectIds));
+}
+
+function validateOpenAIFineTuningCheckpointPermissionsCreateBody(body) {
   if (!isPlainObject(body)) {
-    throw requestError("checkpoint permission request body must be a JSON object", {
+    return requestError("checkpoint permission request body must be a JSON object", {
       code: "invalid_checkpoint_permission_request",
     });
   }
-  const projectIds = Array.isArray(body.project_ids)
-    ? body.project_ids.map((id) => String(id || "").trim()).filter(Boolean)
-    : [];
-  if (!projectIds.length) {
-    throw requestError("project_ids is required", {
+  const allowed = new Set(["project_ids"]);
+  for (const key of Object.keys(body)) {
+    if (!allowed.has(key)) {
+      return requestError(`Unsupported parameter: ${key}`, {
+        code: "invalid_request_parameter",
+        param: key,
+      });
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(body, "project_ids")) {
+    return requestError("project_ids is required", {
       code: "missing_required_parameter",
       param: "project_ids",
     });
   }
-  sendJson(res, 200, fineTuningStore.createCheckpointPermissions(checkpoint, projectIds));
+  if (!Array.isArray(body.project_ids)) {
+    return requestError("project_ids must be an array of strings", {
+      code: "invalid_request_parameter",
+      param: "project_ids",
+    });
+  }
+  const invalidIndex = body.project_ids.findIndex((projectId) => typeof projectId !== "string");
+  if (invalidIndex !== -1) {
+    return requestError("project_ids must be an array of strings", {
+      code: "invalid_request_parameter",
+      param: `project_ids.${invalidIndex}`,
+    });
+  }
+  return null;
 }
 
 function handleFineTuningCheckpointPermissionsList(res, fineTuningStore, checkpoint, url) {
