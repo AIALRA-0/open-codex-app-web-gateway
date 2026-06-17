@@ -23740,6 +23740,139 @@ test("Organization audit logs list local admin lifecycle events and filters", as
   });
 });
 
+test("Organization projects list validates official query parameters", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Organization project list compatibility should not call upstream provider");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const firstResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project List First" }),
+    });
+    assert.equal(firstResponse.status, 200);
+    const firstProject = await firstResponse.json();
+
+    const secondResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project List Second" }),
+    });
+    assert.equal(secondResponse.status, 200);
+    const secondProject = await secondResponse.json();
+
+    const firstPage = await fetch(`${baseUrl}/v1/organization/projects?limit=1`);
+    assert.equal(firstPage.status, 200);
+    const firstPageJson = await firstPage.json();
+    assert.equal(firstPageJson.object, "list");
+    assert.equal(firstPageJson.data.length, 1);
+    assert.equal(firstPageJson.has_more, true);
+    const firstListedProjectId = firstPageJson.data[0].id;
+    const nextListedProjectId = [firstProject.id, secondProject.id].find((projectId) => projectId !== firstListedProjectId);
+    assert.ok(nextListedProjectId);
+
+    const orderIgnored = await fetch(`${baseUrl}/v1/organization/projects?limit=1&order=desc`);
+    assert.equal(orderIgnored.status, 200);
+    assert.equal((await orderIgnored.json()).data[0].id, firstListedProjectId);
+
+    const afterProjects = await fetch(`${baseUrl}/v1/organization/projects?limit=1&after=${encodeURIComponent(firstListedProjectId)}`);
+    assert.equal(afterProjects.status, 200);
+    const afterProjectsJson = await afterProjects.json();
+    assert.equal(afterProjectsJson.data.length, 1);
+    assert.equal(afterProjectsJson.data[0].id, nextListedProjectId);
+
+    const activeProjects = await fetch(`${baseUrl}/v1/organization/projects?limit=10`);
+    assert.equal(activeProjects.status, 200);
+    const activeProjectsJson = await activeProjects.json();
+    assert.equal(activeProjectsJson.data.length, 2);
+
+    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/projects?limit=10&before=${encodeURIComponent(nextListedProjectId)}`);
+    assert.equal(beforeIgnored.status, 200);
+    const beforeIgnoredJson = await beforeIgnored.json();
+    assert.deepEqual(
+      beforeIgnoredJson.data.map((item) => item.id),
+      activeProjectsJson.data.map((item) => item.id),
+    );
+
+    const invalidProjectListCases = [
+      {
+        path: "/v1/organization/projects?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/projects?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/projects?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects?after=${encodeURIComponent(firstListedProjectId)}&after=${encodeURIComponent(nextListedProjectId)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: "/v1/organization/projects?include_archived=maybe",
+        message: "include_archived must be a boolean",
+        param: "include_archived",
+      },
+      {
+        path: "/v1/organization/projects?include_archived=true&include_archived=false",
+        message: "include_archived must be a single string query value",
+        param: "include_archived",
+      },
+    ];
+    for (const testCase of invalidProjectListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
+    const archivedFirst = await fetch(`${baseUrl}/v1/organization/projects/${firstProject.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedFirst.status, 200);
+
+    const activeOnlyAfterArchive = await fetch(`${baseUrl}/v1/organization/projects`);
+    assert.equal(activeOnlyAfterArchive.status, 200);
+    assert.deepEqual((await activeOnlyAfterArchive.json()).data.map((item) => item.id), [secondProject.id]);
+
+    const includeArchived = await fetch(`${baseUrl}/v1/organization/projects?include_archived=true&limit=10`);
+    assert.equal(includeArchived.status, 200);
+    const includeArchivedJson = await includeArchived.json();
+    assert.deepEqual(
+      includeArchivedJson.data.map((item) => item.id).sort(),
+      [firstProject.id, secondProject.id].sort(),
+    );
+
+    const includeArchivedNumeric = await fetch(`${baseUrl}/v1/organization/projects?include_archived=1&limit=10`);
+    assert.equal(includeArchivedNumeric.status, 200);
+    assert.deepEqual(
+      (await includeArchivedNumeric.json()).data.map((item) => item.id).sort(),
+      [firstProject.id, secondProject.id].sort(),
+    );
+
+    const archivedSecond = await fetch(`${baseUrl}/v1/organization/projects/${secondProject.id}/archive`, {
+      method: "POST",
+    });
+    assert.equal(archivedSecond.status, 200);
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Organization projects manage local service accounts and redacted API keys", async () => {
   await withMockProvider(async () => {
     assert.fail("Organization project admin compatibility should not call upstream provider");

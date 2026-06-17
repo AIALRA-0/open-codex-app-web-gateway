@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Organization Projects List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI YAML for
+  `GET /organization/projects`.
+- Confirmed the official list query parameters are `limit`, `after`, and
+  `include_archived`; no `order` or `before` query parameter is documented for
+  this endpoint. The official `limit` description allows values from 1 through
+  100 and defaults to 20; `include_archived` defaults to false.
+- Tightened local Organization Projects list behavior:
+  - `GET /v1/organization/projects` now validates `limit` from 1 through 100
+    and rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - `include_archived` now validates as a single boolean query value before it
+    changes archived-project visibility;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `order` and `before` query values are stripped before
+    pagination, so they no longer shape official Organization Projects list
+    results.
+- Regression coverage updated:
+  - added a dedicated organization/projects list test covering `limit`,
+    `after`, ignored `order`, ignored `before`, invalid `limit`, invalid and
+    repeated `include_archived`, active-only behavior, and archived-inclusive
+    listing.
+- Documentation updated:
+  - compatibility matrix now records the official Organization Projects list
+    pagination and `include_archived` query contract.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects list validates official query parameters" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - First public smoke used only the first `include_archived=true&limit=100`
+    page and failed to find the newly archived project because the public local
+    admin state already had more than 100 archived project records; this was a
+    smoke assertion issue, not an implementation or unit-test failure.
+  - Public Organization Projects smoke marker `project-list-query-smoke-mqi65t12`
+    reran with full cursor pagination, created two temporary local projects,
+    confirmed `limit=1` paging, verified unsupported `order=desc` and `before`
+    did not change the official list result, verified `after` advanced the
+    cursor, confirmed invalid `limit=0`, invalid `include_archived=maybe`, and
+    repeated `include_archived` returned HTTP 400 with the expected params,
+    archived one temporary project, verified it was excluded from the active
+    list across all pages, verified `include_archived=true` included it across
+    all pages, and archived the remaining temporary project.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    project secrets, or deployment env files were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Project Users List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI YAML for

@@ -16220,9 +16220,20 @@ async function handleOrganizationProjectCreate(req, res, organizationAdminStore)
 }
 
 function handleOrganizationProjectsList(res, organizationAdminStore, url) {
-  const includeArchived = /^true$/i.test(String(url.searchParams.get("include_archived") || ""));
+  const queryError = validateOpenAIProjectsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const includeArchived = queryBooleanFromUrl(url, "include_archived", false);
   const projects = organizationAdminStore.listProjects({ includeArchived });
-  sendJson(res, 200, paginateListWithDefaultOrder(projects, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    projects,
+    officialProjectsListPaginationUrl(url),
+    "asc",
+    20,
+    100,
+  ));
 }
 
 function handleOrganizationProjectGet(res, organizationAdminStore, projectId) {
@@ -16549,6 +16560,27 @@ function validateOpenAIProjectUsersListQuery(url) {
 }
 
 function officialProjectUsersListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIProjectsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const includeArchivedSingleError = validateOpenAISingleQueryValue(url, "include_archived");
+  if (includeArchivedSingleError) return includeArchivedSingleError;
+
+  return validateOpenAIQueryBoolean(url, "include_archived");
+}
+
+function officialProjectsListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
