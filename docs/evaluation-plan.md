@@ -471,10 +471,15 @@ runs:
 - `--min-free-gb 120` unless overridden for a known smaller local smoke
 - local JSONL subsets are preferred through `--dataset-jsonl`
 
-Use `--dry-run` first. Dry-run still validates predictions, derives instance
-IDs, computes patch hashes, checks Docker/Python/SWE-bench availability, checks
-free disk, and emits the exact official harness command. Live scoring is just
-the same command without `--dry-run`.
+Use `--dry-run` first for a command/report preview. Dry-run validates
+predictions, derives instance IDs, computes patch hashes, checks
+Docker/Python/SWE-bench availability, checks free disk, emits the exact official
+harness command, and still exits successfully when inputs parse so CI can
+produce a preview artifact. Use `--preflight-only` as the live scorer gate: it
+performs the same environment, secret, instance-count, and disk checks without
+invoking Docker, and exits nonzero when any preflight error would block a live
+run. Live scoring is the same command without `--dry-run` or
+`--preflight-only`.
 
 Example:
 
@@ -482,6 +487,11 @@ Example:
 npm run bench:swe:score -- \
   --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json \
   --dry-run
+
+npm run bench:swe:score -- \
+  --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json \
+  --preflight-only \
+  --min-free-gb 120
 
 npm run bench:swe:score -- \
   --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json \

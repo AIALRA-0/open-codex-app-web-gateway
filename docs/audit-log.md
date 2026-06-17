@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 SWE-bench Preflight-Only Scorer Gate
+
+- Tightened the disk-bounded SWE-bench scorer workflow so evaluation operators
+  can test live readiness without starting the official Docker harness:
+  - added `--preflight-only` to `scripts/swebench-evaluate.mjs`;
+  - `--preflight-only` is mutually exclusive with `--dry-run`;
+  - it runs the same prediction, secret, instance-count, Python/SWE-bench,
+    Docker, and free-disk checks as live scoring;
+  - it writes the normal JSON and Markdown reports, marks
+    `preflight_only:true`, uses `harness.status:"preflight_passed"` or
+    `"preflight_failed"`, keeps `harness.exit_code:null`, and exits nonzero on
+    preflight errors without invoking `swebench.harness.run_evaluation`.
+- Clarified the evaluation docs:
+  - `--dry-run` is now documented as a command/report preview that should exit
+    successfully when inputs parse;
+  - `--preflight-only` is documented as the CI/ops gate that fails closed before
+    a live scorer run when environment, secret, instance-count, or disk checks
+    are not satisfied;
+  - deployment command snippets now include the guarded
+    `bench:swe:score -- --preflight-only --min-free-gb 120` path.
+- Regression coverage added:
+  - existing scorer dry-run test now verifies `preflight_only:false`;
+  - new scorer test forces a disk guard failure with `--preflight-only`,
+    verifies process exit code `1`, `harness.status:"preflight_failed"`,
+    `harness.exit_code:null`, `preflight.ok:false`, and confirms patch content
+    is not emitted to stdout or Markdown.
+- Validation:
+  - `node --check scripts/swebench-evaluate.mjs` passes;
+  - `node --check test/swebench_evaluate.test.js` passes;
+  - targeted `node --test test/swebench_evaluate.test.js` passes: 2 tests;
+  - live local preflight smoke created a tiny synthetic prediction report under
+    `/srv/aialra/data/opencodexapp/eval/swebench/preflight-smoke-*`, ran
+    `--preflight-only --min-free-gb 120`, and correctly exited `1` with
+    `harness.status:"preflight_failed"` without running the harness; current
+    blockers were missing `swebench` Python import and 16.3 GB free disk below
+    the 120 GB guard;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level key/token pattern scan over scripts, tests, docs, and package
+    manifests returns no matches;
+  - `npm test` passes: 348 tests.
+- Runtime/storage check:
+  - services `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` remain active;
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB after the small preflight smoke
+    reports;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Audio Custom Voice Cleanup Extensions
 
 - Rechecked the official OpenAI audio custom voice OpenAPI surface through the

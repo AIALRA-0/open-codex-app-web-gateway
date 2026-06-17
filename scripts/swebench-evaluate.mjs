@@ -35,11 +35,13 @@ const minFreeGb = parseNonNegativeNumber(args.get("min-free-gb"), 120);
 const cacheLevel = String(args.get("cache-level") || "env");
 const clean = !args.has("no-clean");
 const dryRun = args.has("dry-run");
+const preflightOnly = args.has("preflight-only");
 const allowLargeRun = args.has("allow-large-run");
 const skipDiskCheck = args.has("skip-disk-check");
 const skipEnvCheck = args.has("skip-env-check");
 const instanceIds = parseInstanceIds(args.values("instance-id"), predictionReport?.dataset?.selected_instance_ids || []);
 
+if (dryRun && preflightOnly) usage("Use either --dry-run or --preflight-only, not both.");
 if (!predictionsPath) usage("Missing --predictions <path> or --prediction-report <path> with artifacts.predictions_path.");
 if (!fs.existsSync(predictionsPath)) usage(`Predictions file does not exist: ${predictionsPath}`);
 if (datasetJsonl && !fs.existsSync(path.resolve(String(datasetJsonl)))) {
@@ -74,7 +76,7 @@ const command = buildHarnessCommand({
 });
 
 let harness = {
-  status: dryRun ? "dry_run" : "not_started",
+  status: dryRun ? "dry_run" : preflightOnly ? "preflight_pending" : "not_started",
   command: command.shell,
   exit_code: null,
   stdout_preview: "",
@@ -82,7 +84,11 @@ let harness = {
   error: null,
 };
 
-if (!dryRun) {
+if (preflightOnly) {
+  const fatal = preflight.problems.filter((problem) => problem.level === "error");
+  harness.status = fatal.length ? "preflight_failed" : "preflight_passed";
+  harness.error = fatal.length ? fatal.map((problem) => problem.message).join("; ") : null;
+} else if (!dryRun) {
   const fatal = preflight.problems.filter((problem) => problem.level === "error");
   if (fatal.length) {
     harness.status = "preflight_failed";
@@ -111,6 +117,7 @@ const scoreSummary = summarizeScores(parsedResults);
 const report = {
   kind: "swebench_score_report",
   dry_run: dryRun,
+  preflight_only: preflightOnly,
   started_at: startedAt,
   finished_at: new Date().toISOString(),
   dataset: {
@@ -138,7 +145,8 @@ fs.writeFileSync(outputPath, serialized, { mode: 0o600 });
 fs.writeFileSync(summaryMdPath, renderMarkdown(report), { mode: 0o600 });
 console.log(serialized);
 
-const ok = dryRun || (harness.status === "completed" && preflight.problems.every((problem) => problem.level !== "error"));
+const preflightOk = preflight.problems.every((problem) => problem.level !== "error");
+const ok = dryRun || (preflightOnly ? preflightOk : (harness.status === "completed" && preflightOk));
 process.exit(ok ? 0 : 1);
 
 function parseArgs(argv) {
@@ -164,9 +172,12 @@ function usage(message) {
   console.error([
     "Usage:",
     "  node scripts/swebench-evaluate.mjs --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json --dry-run",
+    "  node scripts/swebench-evaluate.mjs --prediction-report /srv/aialra/data/opencodexapp/eval/swebench/report.json --preflight-only",
     "  node scripts/swebench-evaluate.mjs --predictions /srv/aialra/data/opencodexapp/eval/swebench/predictions.jsonl --dataset-jsonl /srv/aialra/data/swebench/verified-smoke.jsonl",
     "",
-    "This wrapper invokes the official SWE-bench Docker harness only when --dry-run is omitted.",
+    "--dry-run writes a command/report preview and always exits successfully when inputs parse.",
+    "--preflight-only performs the live environment/disk guard and exits nonzero on preflight errors without invoking the harness.",
+    "The official SWE-bench Docker harness is invoked only when both --dry-run and --preflight-only are omitted.",
   ].join("\n"));
   process.exit(2);
 }
@@ -416,6 +427,7 @@ function renderMarkdown(report) {
     "",
     `- Status: ${report.harness.status}`,
     `- Dry run: ${report.dry_run}`,
+    `- Preflight only: ${report.preflight_only}`,
     `- Dataset: ${report.dataset.label}`,
     `- Dataset path/name: ${report.dataset.name_or_path}`,
     `- Split: ${report.dataset.split}`,
