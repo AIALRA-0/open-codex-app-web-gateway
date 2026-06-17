@@ -23723,11 +23723,10 @@ test("Organization roles and groups manage local memberships and assignments", a
       assert.equal(nextJson.has_more, false);
       assert.equal(nextJson.next, null);
 
-      const beforeIgnored = await fetch(`${baseUrl}${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`);
-      assert.equal(beforeIgnored.status, 200, path);
-      assert.deepEqual(
-        (await beforeIgnored.json()).data.map((entry) => entry.id),
-        [idsAscending.at(-1), idsAscending[0]],
+      await assertInvalidListQuery(
+        `${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`,
+        "before",
+        "Unsupported query parameter: before",
       );
 
       await assertInvalidListQuery(
@@ -23829,11 +23828,10 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(rolesNextJson.has_more, false);
     assert.equal(rolesNextJson.next, null);
 
-    const rolesBeforeIgnored = await fetch(`${baseUrl}/v1/organization/roles?order=desc&limit=2&before=${encodeURIComponent(roleIdsAscending[0])}`);
-    assert.equal(rolesBeforeIgnored.status, 200);
-    assert.deepEqual(
-      (await rolesBeforeIgnored.json()).data.map((entry) => entry.id),
-      [roleIdsAscending.at(-1), roleIdsAscending[0]],
+    await assertInvalidListQuery(
+      `/v1/organization/roles?order=desc&limit=2&before=${encodeURIComponent(roleIdsAscending[0])}`,
+      "before",
+      "Unsupported query parameter: before",
     );
 
     await assertInvalidListQuery(
@@ -23951,11 +23949,10 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(groupsNextJson.has_more, false);
     assert.equal(groupsNextJson.next, null);
 
-    const groupsBeforeIgnored = await fetch(`${baseUrl}/v1/organization/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`);
-    assert.equal(groupsBeforeIgnored.status, 200);
-    assert.deepEqual(
-      (await groupsBeforeIgnored.json()).data.map((entry) => entry.id),
-      [groupIdsAscending.at(-1), groupIdsAscending[0]],
+    await assertInvalidListQuery(
+      `/v1/organization/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`,
+      "before",
+      "Unsupported query parameter: before",
     );
 
     await assertInvalidListQuery(
@@ -26215,11 +26212,10 @@ test("Organization projects manage local group access", async () => {
     assert.equal(nextPageJson.has_more, false);
     assert.equal(nextPageJson.next, null);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`);
-    assert.equal(beforeIgnored.status, 200);
-    assert.deepEqual(
-      (await beforeIgnored.json()).data.map((entry) => entry.group_id),
-      [groupIdsAscending.at(-1), groupIdsAscending[0]],
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`,
+      "before",
+      "Unsupported query parameter: before",
     );
 
     await assertInvalidListQuery(
@@ -26680,11 +26676,10 @@ test("Project role short paths manage local project role assignments", async () 
       assert.equal(nextJson.has_more, false);
       assert.equal(nextJson.next, null);
 
-      const beforeIgnored = await fetch(`${baseUrl}${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`);
-      assert.equal(beforeIgnored.status, 200, path);
-      assert.deepEqual(
-        (await beforeIgnored.json()).data.map((entry) => entry.id),
-        [idsAscending.at(-1), idsAscending[0]],
+      await assertInvalidListQuery(
+        `${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`,
+        "before",
+        "Unsupported query parameter: before",
       );
 
       await assertInvalidListQuery(

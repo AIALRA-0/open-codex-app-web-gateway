@@ -17312,6 +17312,9 @@ function officialSpendAlertsListPaginationUrl(url) {
 }
 
 function validateOpenAIAdminNextCursorListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "order", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListZeroLimitQuery(url, { max: 1000 });
   if (limitError) return limitError;
 

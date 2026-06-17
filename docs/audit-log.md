@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Admin Next-Cursor List Query Allowlist Validation
+
+- Rechecked official OpenAI API references:
+  - official OpenAPI 2.3.0 for `GET /v1/organization/roles`,
+    `GET /v1/organization/groups`,
+    `GET /v1/organization/groups/{group_id}/users`,
+    `GET /v1/organization/users/{user_id}/roles`,
+    `GET /v1/projects/{project_id}/roles`, and
+    `GET /v1/organization/projects/{project_id}/groups` documents
+    query pagination through `limit`, `after`, and `order`;
+  - no official `before` query parameter is documented for these
+    next-cursor Admin list endpoints.
+- Tightened local bridge behavior:
+  - the shared Admin next-cursor list validator now rejects unsupported query
+    parameters before reading or filtering local state, so ignored `before` or
+    arbitrary query parameters can no longer shape or appear to shape list
+    output;
+  - existing `limit`, `after`, and `order` validation remains unchanged,
+    including zero-limit support, repeated scalar checks, and the official
+    `order:"asc"|"desc"` enum.
+- Regression coverage updated:
+  - changed organization roles/groups, group users, organization user/group
+    role assignments, project group access, project roles, project user role
+    assignments, and project group role assignment coverage from ignored
+    `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records unsupported-query rejection for the
+    affected Admin next-cursor list endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - Focused tests passed for:
+    `Organization roles and groups manage local memberships and assignments`,
+    `Organization projects manage local group access`, and
+    `Project role short paths manage local project role assignments`.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Admin next-cursor smoke verified health, allowed organization role
+    listing with `limit=1&order=asc`, and unsupported `before` query rejection.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available,
+    93% used.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated organization role ids,
+    generated group ids, generated project ids, or smoke payload secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Audit Logs List Query Allowlist Validation
 
 - Rechecked official OpenAI API references:
