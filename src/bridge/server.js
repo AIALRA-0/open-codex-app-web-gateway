@@ -3770,12 +3770,24 @@ function validateOpenAIResponsesTools(body = {}) {
     } else if (tool.type === "tool_search") {
       const toolSearchError = validateOpenAIResponsesToolSearchTool(tool, param);
       if (toolSearchError) return toolSearchError;
+    } else if (tool.type === "local_shell" || tool.type === "apply_patch") {
+      const typeOnlyError = validateOpenAIResponsesTypeOnlyObject(tool, param);
+      if (typeOnlyError) return typeOnlyError;
     } else if (tool.type === "shell") {
       const shellError = validateOpenAIResponsesShellTool(tool, param);
       if (shellError) return shellError;
     } else if (tool.type === "code_interpreter") {
       const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
       if (codeInterpreterError) return codeInterpreterError;
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesTypeOnlyObject(value, param) {
+  for (const field of Object.keys(value)) {
+    if (field !== "type") {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
     }
   }
   return null;
@@ -4834,6 +4846,9 @@ function validateOpenAIResponsesToolChoice(body = {}) {
     ) {
       return requestValidationError("tool_choice.name must be a string or null", "tool_choice.name");
     }
+  }
+  if (toolChoice.type === "shell" || toolChoice.type === "apply_patch") {
+    return validateOpenAIResponsesTypeOnlyObject(toolChoice, "tool_choice");
   }
   return null;
 }

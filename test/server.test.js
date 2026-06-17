@@ -3043,6 +3043,16 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.parameters must be an object or null",
       },
       {
+        body: { tools: [{ type: "local_shell", environment: { type: "local" } }] },
+        param: "tools.0.environment",
+        message: "tools.0.environment is not supported",
+      },
+      {
+        body: { tools: [{ type: "apply_patch", path: "README.md" }] },
+        param: "tools.0.path",
+        message: "tools.0.path is not supported",
+      },
+      {
         body: { tools: [{ type: "file_search" }] },
         param: "tools.0.vector_store_ids",
         message: "tools.0.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided",
@@ -3355,6 +3365,16 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         body: { tool_choice: { type: "mcp", server_label: "docs", name: 7 } },
         param: "tool_choice.name",
         message: "tool_choice.name must be a string or null",
+      },
+      {
+        body: { tool_choice: { type: "apply_patch", name: "patch" } },
+        param: "tool_choice.name",
+        message: "tool_choice.name is not supported",
+      },
+      {
+        body: { tool_choice: { type: "shell", environment: { type: "local" } } },
+        param: "tool_choice.environment",
+        message: "tool_choice.environment is not supported",
       },
       {
         body: { tool_choice: { type: "allowed_tools", mode: "all", tools: [] } },

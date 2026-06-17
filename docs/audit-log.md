@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Responses Type-Only Tool Schema Validation
+
+- Rechecked the current official OpenAI Responses schema through the developer
+  docs MCP `/v1/responses` OpenAPI endpoint and the official `openai-openapi`
+  schema:
+  - `LocalShellToolParam` and `ApplyPatchToolParam` are type-only tool
+    envelopes;
+  - `SpecificFunctionShellParam` and `SpecificApplyPatchParam` are type-only
+    `tool_choice` selector envelopes;
+  - `shell` tool definitions remain separate from `local_shell` and keep their
+    existing optional `environment` object validation.
+- Tightened local Responses request validation before provider calls:
+  - `tools:[{type:"local_shell", ...}]` now rejects fields other than `type`;
+  - `tools:[{type:"apply_patch", ...}]` now rejects fields other than `type`;
+  - `tool_choice:{type:"shell", ...}` and
+    `tool_choice:{type:"apply_patch", ...}` now reject fields other than
+    `type`;
+  - existing local `shell` / `code_interpreter` execution behavior is
+    unchanged for valid requests.
+- Regression coverage updated:
+  - the shared Responses tools validation table now rejects malformed
+    `local_shell` and `apply_patch` tools across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - the same table now rejects extra fields on type-only `shell` and
+    `apply_patch` tool-choice selectors before any provider request is made.
+- Documentation updated:
+  - the compatibility matrix now records `local_shell` and `apply_patch` as
+    type-only protocol envelopes / compatibility notices;
+  - the aggregate Responses `tools` / `tool_choice` row records this strict
+    pre-provider validation boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|apply_patch|local_shell|shell" test/server.test.js`
+    passes: 6 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit token scan found only pre-existing environment-variable names,
+    documentation health-check placeholders, and test fake bearer values; no
+    real API-key or bearer-token values were introduced.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `apply_patch` request with an extra `path` field returns
+    `400 invalid_request_parameter` with `param:"tools.0.path"`.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses Tool Search Tool Schema Validation
 
 - Rechecked the official OpenAI `tool_search` guide through the developer docs:
