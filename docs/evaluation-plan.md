@@ -89,6 +89,12 @@ validation as `low`/`high`. Malformed values must fail locally before any Chat
 provider call while valid strings, prompt references, and multimodal detail
 values continue to map into model-visible system guidance.
 
+Responses input-items coverage verifies that
+`GET /v1/responses/{response_id}/input_items` defaults to descending order,
+honors explicit ascending order, rejects unsupported `order` values, and
+enforces the official `limit` range from 1 through 100 before returning stored
+input items.
+
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
 `file_search` adds vector-store PDF text-layer and OCR tests. These tests force

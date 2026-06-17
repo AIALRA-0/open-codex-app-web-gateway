@@ -3402,6 +3402,30 @@ test("Responses input_items validate include query and default to descending ord
     assert.match(invalidIncludeJson.error.message, /^include\.0 must be one of:/);
     assert.equal(invalidIncludeJson.error.param, "include.0");
 
+    const invalidOrder = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?order=sideways`);
+    assert.equal(invalidOrder.status, 400);
+    assert.deepEqual(await invalidOrder.json(), {
+      error: {
+        message: "order must be one of: asc, desc",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    for (const invalidLimit of ["abc", "1.5", "0", "101"]) {
+      const invalidLimitResponse = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?limit=${encodeURIComponent(invalidLimit)}`);
+      assert.equal(invalidLimitResponse.status, 400);
+      assert.deepEqual(await invalidLimitResponse.json(), {
+        error: {
+          message: "limit must be an integer between 1 and 100",
+          type: "invalid_request_error",
+          param: "limit",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+
     const defaultItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items`);
     assert.equal(defaultItems.status, 200);
     const defaultItemsJson = await defaultItems.json();

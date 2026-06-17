@@ -4343,10 +4343,17 @@ function validateOpenAIListOrderQuery(url) {
   return null;
 }
 
-function validateOpenAIListLimitQuery(url) {
+function validateOpenAIListLimitQuery(url, options = {}) {
   const limits = url.searchParams.getAll("limit");
   if (!limits.length) return null;
-  if (limits.some((limit) => !/^[1-9]\d*$/.test(limit))) {
+  const max = Number.isFinite(options.max) ? options.max : null;
+  const invalid = limits.some((limit) => {
+    if (!/^[1-9]\d*$/.test(limit)) return true;
+    const parsed = Number(limit);
+    return !Number.isSafeInteger(parsed) || (max !== null && parsed > max);
+  });
+  if (invalid) {
+    if (max !== null) return requestValidationError(`limit must be an integer between 1 and ${max}`, "limit");
     return requestValidationError("limit must be a positive integer", "limit");
   }
   return null;
@@ -14219,6 +14226,16 @@ function handleResponseInputItems(res, store, responseId, url) {
   const includeError = validateOpenAIIncludeQuery(url);
   if (includeError) {
     sendError(res, 400, includeError.message, includeError);
+    return;
+  }
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) {
+    sendError(res, 400, orderError.message, orderError);
+    return;
+  }
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) {
+    sendError(res, 400, limitError.message, limitError);
     return;
   }
   const record = store.get(responseId);

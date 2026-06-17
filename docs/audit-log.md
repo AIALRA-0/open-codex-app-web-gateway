@@ -1,5 +1,41 @@
 # Audit Log
 
+## 2026-06-17 Responses Input Items Pagination Query Validation
+
+- Rechecked the official OpenAI OpenAPI schema for
+  `GET /v1/responses/{response_id}/input_items`:
+  - `order` is the enum `asc` / `desc`, with default `desc`;
+  - `limit` is an integer query parameter with documented range 1 through 100
+    and default `20`;
+  - `after` and `include` remain the other official query fields.
+- Tightened local Responses input-items listing so invalid `order` values and
+  malformed, fractional, non-positive, or over-100 `limit` values now return
+  `400 invalid_request_parameter` before local stored input items are returned.
+- Regression coverage added:
+  - invalid `order` rejection;
+  - invalid `limit` values `abc`, `1.5`, `0`, and `101`;
+  - existing default descending order and explicit ascending order coverage.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now call out input-items `order`
+    and `limit` query validation.
+- Validation:
+  - targeted Responses input-items and lifecycle tests pass;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm invalid input-items `order` returns
+    `400 invalid_request_parameter` with `param:"order"`, invalid
+    input-items `limit=101` returns `400 invalid_request_parameter` with
+    `param:"limit"`, and a valid query against a missing response proceeds to
+    `404 response_not_found` instead of failing query validation.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Stored Chat List Limit Query Validation
 
 - Rechecked the official OpenAI OpenAPI schemas for:
