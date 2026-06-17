@@ -1075,14 +1075,14 @@ not in Git.
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata, preserves `memory_limit`, `expires_after`, `network_policy`, `metadata`, and local `skill_reference` defaults from `skills` |
-| `GET /v1/containers` | Implemented | Lists local containers with `name`, `limit`, `after`, `before`, and `order` pagination |
-| `GET /v1/containers/{container_id}` | Implemented | Returns local container metadata |
+| `GET /v1/containers` | Implemented | Lists local containers with `name`, `limit`, `after`, `before`, and `order` pagination; lazily marks elapsed `expires_after` containers `expired` and prunes the local `/mnt/data` workspace |
+| `GET /v1/containers/{container_id}` | Implemented | Returns local container metadata, lazily refreshing elapsed `expires_after` containers to `status:"expired"` with local compatibility metadata |
 | `DELETE /v1/containers/{container_id}` | Implemented | Deletes the local container workspace and artifacts |
-| `POST /v1/containers/{container_id}/files` | Implemented | Writes a local container file from JSON or raw body |
-| `GET /v1/containers/{container_id}/files` | Implemented | Lists files under the local `/mnt/data` workspace |
-| `GET /v1/containers/{container_id}/files/{file_id}` | Implemented | Returns local container file metadata |
-| `GET /v1/containers/{container_id}/files/{file_id}/content` | Implemented | Downloads local container file content |
-| `DELETE /v1/containers/{container_id}/files/{file_id}` | Implemented | Deletes a local container file |
+| `POST /v1/containers/{container_id}/files` | Implemented | Writes a local container file from JSON or raw body; expired containers fail closed with `container_expired` |
+| `GET /v1/containers/{container_id}/files` | Implemented | Lists files under the local `/mnt/data` workspace; expired containers fail closed with `container_expired` because their workspace has been pruned |
+| `GET /v1/containers/{container_id}/files/{file_id}` | Implemented | Returns local container file metadata; expired containers fail closed with `container_expired` |
+| `GET /v1/containers/{container_id}/files/{file_id}/content` | Implemented | Downloads local container file content; expired containers fail closed with `container_expired` |
+| `DELETE /v1/containers/{container_id}/files/{file_id}` | Implemented | Deletes a local container file; expired containers fail closed with `container_expired` |
 
 ## Skills Endpoint Coverage
 
@@ -1438,6 +1438,9 @@ local container workspace. The adapter:
   code block commands;
 - creates or reuses local container workspaces through `container_auto` and
   `container_reference`-style tool configuration;
+- lazily expires referenced containers whose `expires_after` policy has elapsed,
+  prunes their local `/mnt/data` workspace, and fails shell/code-interpreter
+  execution with `container_expired` instead of forwarding a stale tool context;
 - mounts local Skills API `skill_reference` entries from
   `POST /v1/containers` `skills` and `tools[].environment.skills` under
   `/mnt/data/.skills/<skill-name>/v<version>/` and records mounted skill

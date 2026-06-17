@@ -919,7 +919,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Local file-search supports deterministic local hashed-semantic search, exposes
   `text_score` and `embedding_score`, and honors
   `hybrid_search.embedding_weight` / `hybrid_search.text_weight`.
-- Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests.
+- Hosted-tool emulation returns auditable shell call/output items and downloadable artifacts for shell/code-interpreter requests, and local Containers honor `expires_after` by lazily marking elapsed containers expired, pruning their workspaces, rejecting container file access, and blocking stale Responses shell/code-interpreter reuse with `container_expired`.
 - Hosted-tool emulation returns auditable screenshot-first `computer_call`
   items for computer-use requests and maps returned `computer_call_output`
   screenshot/result context into follow-up Chat requests, including streaming

@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-17 Container Expiration Lifecycle
+
+- Rechecked the official OpenAI Containers and data-retention documentation
+  through the OpenAI developer docs MCP:
+  - Container retrieve metadata includes `status`, `expires_after`,
+    `last_active_at`, `memory_limit`, and `network_policy`;
+  - hosted shell/code-interpreter container data is discarded when the
+    container expires or is explicitly deleted;
+  - hosted container-based Skills follow the same lifecycle and remain
+    available only while the container is active.
+- Closed a local container lifecycle gap:
+  - local container list/get now lazily evaluates
+    `expires_after:{anchor:"last_active_at",minutes:*}`;
+  - elapsed containers are persisted as `status:"expired"` with `expired_at`;
+  - expiration evidence is recorded under
+    `metadata.compatibility.local_container`;
+  - the local `/mnt/data` workspace is pruned when expiration is detected while
+    `container.json` is retained for audit/list/get visibility;
+  - container file create/list/get/content/delete operations fail closed with
+    `container_expired` after expiration;
+  - Responses `shell` / `code_interpreter` execution using an expired
+    `container_reference` fails before any upstream Chat provider call.
+- Regression coverage added:
+  - creates a local container with `expires_after`;
+  - writes and reads a file before expiration;
+  - ages the stored `last_active_at` past the policy;
+  - verifies `GET /v1/containers/{id}` and list projection show
+    `status:"expired"`;
+  - verifies file listing/content and Responses shell reuse return
+    `container_expired`.
+- Documentation updated:
+  - compatibility matrix now records lazy container expiration, workspace
+    pruning, file endpoint rejection, and shell/code-interpreter stale-reference
+    rejection;
+  - evaluation plan now includes container `expires_after` lifecycle coverage.
+- Validation:
+  - `node --check src/bridge/local_shell.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "local Containers"
+    test/server.test.js` passes: 2 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 349 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` creates a tiny
+    container and file, simulates expiration on the temporary container record,
+    confirms `GET /v1/containers/{id}` returns `status:"expired"`, confirms
+    file listing returns `container_expired`, confirms Responses shell reuse of
+    the expired `container_reference` returns `container_expired`, and deletes
+    the temporary container.
+- Runtime/storage check:
+  - `/` has 16 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Container-Level Skill Mounting
 
 - Rechecked the official OpenAI Containers API through the OpenAI developer

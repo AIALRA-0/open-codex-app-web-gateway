@@ -81,6 +81,7 @@ class LocalContainerStore {
       || (typeof tool.container === "string" && tool.container !== "auto" ? tool.container : "");
     if (referenceId) {
       const container = this.getContainer(referenceId);
+      if (container && !isActiveContainer(container)) throw containerExpiredError(referenceId);
       if (container) {
         this.markActive(referenceId);
         return this.getContainer(referenceId);
@@ -98,6 +99,8 @@ class LocalContainerStore {
   }
 
   markActive(containerId) {
+    const container = this.getContainer(containerId);
+    if (!isActiveContainer(container)) return null;
     const record = this.readJson(this.containerJsonPath(containerId));
     if (!record?.container) return null;
     record.container.last_active_at = nowSeconds();
@@ -106,7 +109,7 @@ class LocalContainerStore {
   }
 
   createContainerFile(containerId, { filename, path: filePath, content = "" } = {}) {
-    const container = this.getContainer(containerId);
+    const container = this.getActiveContainer(containerId);
     if (!container) return null;
     const body = Buffer.isBuffer(content) ? content : Buffer.from(stringifyContent(content), "utf8");
     if (body.length > this.maxFileBytes) {
@@ -123,13 +126,13 @@ class LocalContainerStore {
   }
 
   listContainerFiles(containerId, { url } = {}) {
-    if (!this.getContainer(containerId)) return null;
+    if (!this.getActiveContainer(containerId)) return null;
     const files = this.scanContainerFiles(containerId);
     return paginateList(files, url);
   }
 
   getContainerFile(containerId, fileId) {
-    if (!this.getContainer(containerId)) return null;
+    if (!this.getActiveContainer(containerId)) return null;
     return this.scanContainerFiles(containerId).find((file) => file.id === fileId) || null;
   }
 
@@ -185,7 +188,40 @@ class LocalContainerStore {
     const record = this.readJson(this.containerJsonPath(containerId));
     const container = record?.container;
     if (!container) return null;
-    return { ...container };
+    return this.expireContainerIfNeeded(container);
+  }
+
+  getActiveContainer(containerId) {
+    const container = this.getContainer(containerId);
+    if (!container) return null;
+    if (!isActiveContainer(container)) throw containerExpiredError(containerId);
+    return container;
+  }
+
+  expireContainerIfNeeded(container, now = nowSeconds()) {
+    if (!container?.id || !isActiveContainer(container)) return container ? { ...container } : null;
+    const expiresAt = containerExpiresAt(container);
+    if (!expiresAt || expiresAt > now) return { ...container };
+    const expired = {
+      ...container,
+      status: "expired",
+      expired_at: now,
+      metadata: {
+        ...(isPlainObject(container.metadata) ? container.metadata : {}),
+        compatibility: {
+          ...(isPlainObject(container.metadata?.compatibility) ? container.metadata.compatibility : {}),
+          local_container: {
+            provider: "local",
+            expiration: "expires_after_elapsed",
+            expired_expires_at: expiresAt,
+            checked_at: now,
+          },
+        },
+      },
+    };
+    this.deletePath(this.workdir(container.id));
+    this.writeJson(this.containerJsonPath(container.id), { container: expired });
+    return { ...expired };
   }
 
   containersDir() {
@@ -808,6 +844,28 @@ function parseLimit(value, fallback, max) {
 
 function nowSeconds() {
   return Math.floor(Date.now() / 1000);
+}
+
+function containerExpiresAt(container = {}) {
+  const policy = container.expires_after;
+  if (!isPlainObject(policy)) return 0;
+  const minutes = Number(policy.minutes);
+  if (!Number.isFinite(minutes) || minutes <= 0) return 0;
+  const anchor = policy.anchor === "created_at" ? Number(container.created_at) : Number(container.last_active_at);
+  if (!Number.isFinite(anchor) || anchor <= 0) return 0;
+  return Math.floor(anchor + minutes * 60);
+}
+
+function isActiveContainer(container) {
+  return !!container && !["deleted", "expired"].includes(container.status);
+}
+
+function containerExpiredError(containerId) {
+  const error = new Error(`container expired: ${containerId}`);
+  error.status = 400;
+  error.code = "container_expired";
+  error.param = "container_id";
+  return error;
 }
 
 function clone(value) {

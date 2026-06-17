@@ -93,6 +93,15 @@ function expireBatchOutputFileForTest(stateDir, fileId) {
   return record.file;
 }
 
+function expireContainerForTest(stateDir, containerId) {
+  const containerPath = path.join(stateDir, "local-containers", containerId, "container.json");
+  const record = JSON.parse(fs.readFileSync(containerPath, "utf8"));
+  record.container.expires_after = { anchor: "last_active_at", minutes: 1 };
+  record.container.last_active_at = Math.floor(Date.now() / 1000) - 120;
+  fs.writeFileSync(containerPath, `${JSON.stringify(record, null, 2)}\n`);
+  return record.container;
+}
+
 function readUploadRecordForTest(stateDir, uploadId) {
   const uploadPath = path.join(stateDir, "local-uploads", "uploads", uploadId, "upload.json");
   return JSON.parse(fs.readFileSync(uploadPath, "utf8"));
@@ -15301,6 +15310,82 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content`);
     assert.equal(content.status, 200);
     assert.equal(await content.text(), "artifact-ok");
+
+    const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.equal((await deleted.json()).deleted, true);
+  });
+});
+
+test("local Containers expire workspaces and block shell reuse", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called when a referenced local container is expired");
+  }, async ({ bridgeAddress, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createdContainer = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "expiring-shell-fixture",
+        expires_after: { anchor: "last_active_at", minutes: 20 },
+      }),
+    });
+    assert.equal(createdContainer.status, 200);
+    const container = await createdContainer.json();
+    assert.equal(container.status, "running");
+    assert.deepEqual(container.expires_after, { anchor: "last_active_at", minutes: 20 });
+
+    const createdFile = await fetch(`${baseUrl}/v1/containers/${container.id}/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "ttl.txt", content: "container-ttl-ok" }),
+    });
+    assert.equal(createdFile.status, 200);
+    const file = await createdFile.json();
+
+    const contentBeforeExpiration = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${file.id}/content`);
+    assert.equal(contentBeforeExpiration.status, 200);
+    assert.equal(await contentBeforeExpiration.text(), "container-ttl-ok");
+
+    const aged = expireContainerForTest(stateDir, container.id);
+    assert.equal(aged.status, "running");
+
+    const expiredResponse = await fetch(`${baseUrl}/v1/containers/${container.id}`);
+    assert.equal(expiredResponse.status, 200);
+    const expired = await expiredResponse.json();
+    assert.equal(expired.status, "expired");
+    assert.ok(Number.isInteger(expired.expired_at));
+    assert.equal(expired.metadata.compatibility.local_container.expiration, "expires_after_elapsed");
+
+    const listed = await fetch(`${baseUrl}/v1/containers?name=expiring-shell-fixture`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.data[0].id, container.id);
+    assert.equal(listedJson.data[0].status, "expired");
+
+    const filesAfterExpiration = await fetch(`${baseUrl}/v1/containers/${container.id}/files`);
+    assert.equal(filesAfterExpiration.status, 400);
+    assert.equal((await filesAfterExpiration.json()).error.code, "container_expired");
+
+    const contentAfterExpiration = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${file.id}/content`);
+    assert.equal(contentAfterExpiration.status, 400);
+    assert.equal((await contentAfterExpiration.json()).error.code, "container_expired");
+
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: cat /mnt/data/ttl.txt",
+        tools: [{
+          type: "shell",
+          environment: { type: "container_reference", container_id: container.id },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "container_expired");
 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
