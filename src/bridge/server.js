@@ -3101,11 +3101,25 @@ function validateOpenAIChatAssistantMessage(message, param) {
     }
     return null;
   }
-  return validateOpenAIChatMessageContent(
+  const contentError = validateOpenAIChatMessageContent(
     message.content,
     `${param}.content`,
     OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES,
   );
+  if (contentError) return contentError;
+  return validateOpenAIChatAssistantContentParts(message.content, `${param}.content`);
+}
+
+function validateOpenAIChatAssistantContentParts(content, param) {
+  if (!Array.isArray(content)) return null;
+  const refusalCount = content.filter((part) => part?.type === "refusal").length;
+  if (refusalCount > 0 && (content.length !== 1 || refusalCount !== 1)) {
+    return requestValidationError(
+      `${param} must contain either one refusal part or one or more text parts`,
+      param,
+    );
+  }
+  return null;
 }
 
 function validateOpenAIChatToolMessage(message, param) {

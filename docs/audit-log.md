@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Direct Chat Assistant Refusal Content Validation
+
+- Rechecked the current official OpenAI Chat Completions schema through the
+  developer docs MCP workflow and the local official `openai-openapi` YAML:
+  assistant message `content` arrays may contain one or more `text` parts, or
+  exactly one `refusal` part.
+- Tightened direct `/v1/chat/completions` validation before provider calls:
+  - valid single assistant `refusal` content parts remain accepted;
+  - mixed `text` + `refusal` arrays and multiple `refusal` parts now return
+    `400 invalid_request_parameter` locally instead of being forwarded to
+    Chat-only providers such as DeepSeek.
+- Regression coverage updated:
+  - extended the existing direct Chat message-boundary test with a valid single
+    `refusal` part and two invalid assistant content array combinations;
+  - the mock provider request count remains zero for rejected message shapes.
+- Documentation updated:
+  - compatibility matrix now records the assistant `content` array refusal
+    cardinality rule under direct Chat `messages`.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validates messages before
+    provider calls" test/server.test.js` passes: 1 test;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed direct Chat assistant `text` + `refusal` content request
+    returns `400 invalid_request_parameter` with
+    `param:"messages.0.content"`.
+- Runtime/storage check:
+  - `/` has 18 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Input Image Field Validation
 
 - Rechecked the current official OpenAI schema through the developer docs MCP

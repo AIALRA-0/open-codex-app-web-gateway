@@ -24980,6 +24980,10 @@ test("POST /v1/chat/completions validates messages before provider calls", async
     },
     {
       role: "assistant",
+      content: [{ type: "refusal", refusal: "I cannot inspect that." }],
+    },
+    {
+      role: "assistant",
       content: null,
       tool_calls: [{
         id: "call_1",
@@ -25082,6 +25086,32 @@ test("POST /v1/chat/completions validates messages before provider calls", async
         body: { messages: [{ role: "assistant" }] },
         param: "messages.0.content",
         message: "messages.0.content is required unless tool_calls or function_call is specified",
+      },
+      {
+        body: {
+          messages: [{
+            role: "assistant",
+            content: [
+              { type: "text", text: "partial answer" },
+              { type: "refusal", refusal: "I cannot continue." },
+            ],
+          }],
+        },
+        param: "messages.0.content",
+        message: "messages.0.content must contain either one refusal part or one or more text parts",
+      },
+      {
+        body: {
+          messages: [{
+            role: "assistant",
+            content: [
+              { type: "refusal", refusal: "I cannot do that." },
+              { type: "refusal", refusal: "Still refused." },
+            ],
+          }],
+        },
+        param: "messages.0.content",
+        message: "messages.0.content must contain either one refusal part or one or more text parts",
       },
       {
         body: {
