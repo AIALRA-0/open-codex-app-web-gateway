@@ -2167,6 +2167,11 @@ test("POST /v1/responses validates legacy Chat function fields before provider c
         message: "functions.0.parameters must be an object",
       },
       {
+        body: { functions: [{ name: "legacy_noop", description: null }] },
+        param: "functions.0.description",
+        message: "functions.0.description must be a string",
+      },
+      {
         body: { function_call: "required" },
         param: "function_call",
         message: "function_call must be one of: none, auto",
@@ -26231,7 +26236,12 @@ test("POST /v1/chat/completions validates tools and tool_choice before provider 
       {
         body: { tools: [{ type: "function", function: { name: "lookup_weather", description: 1 } }] },
         param: "tools.0.function.description",
-        message: "tools.0.function.description must be a string or null",
+        message: "tools.0.function.description must be a string",
+      },
+      {
+        body: { tools: [{ type: "function", function: { name: "lookup_weather", description: null } }] },
+        param: "tools.0.function.description",
+        message: "tools.0.function.description must be a string",
       },
       {
         body: { tools: [{ type: "function", function: { name: "lookup_weather", parameters: [] } }] },
@@ -26247,6 +26257,11 @@ test("POST /v1/chat/completions validates tools and tool_choice before provider 
         body: { tools: [{ type: "custom", custom: { name: "run_code", format: { type: "json" } } }] },
         param: "tools.0.custom.format.type",
         message: "tools.0.custom.format.type must be one of: text, grammar",
+      },
+      {
+        body: { tools: [{ type: "custom", custom: { name: "run_code", description: null } }] },
+        param: "tools.0.custom.description",
+        message: "tools.0.custom.description must be a string",
       },
       {
         body: {

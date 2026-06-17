@@ -5148,10 +5148,9 @@ function validateOpenAICustomToolObject(custom, param) {
   }
   if (
     Object.prototype.hasOwnProperty.call(custom, "description")
-    && custom.description !== null
     && typeof custom.description !== "string"
   ) {
-    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+    return requestValidationError(`${param}.description must be a string`, `${param}.description`);
   }
   if (!Object.prototype.hasOwnProperty.call(custom, "format")) return null;
   return validateOpenAICustomToolFormat(custom.format, `${param}.format`);
@@ -5256,10 +5255,9 @@ function validateOpenAIFunctionObject(fn, param, options = {}) {
   }
   if (
     Object.prototype.hasOwnProperty.call(fn, "description")
-    && fn.description !== null
     && typeof fn.description !== "string"
   ) {
-    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+    return requestValidationError(`${param}.description must be a string`, `${param}.description`);
   }
   if (
     Object.prototype.hasOwnProperty.call(fn, "parameters")

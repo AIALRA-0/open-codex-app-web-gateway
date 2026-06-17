@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Direct Chat Tool Description Validation
+
+- Rechecked the current official OpenAI Chat Completions schema through the
+  developer docs MCP workflow and the local official `openai-openapi` YAML:
+  - Chat `FunctionObject.description` is a string when present;
+  - deprecated Chat `functions[].description` is a string when present;
+  - Chat `custom.description` is a string when present;
+  - Responses `FunctionToolParam.description` remains string/null, so the
+    Responses-native function-tool validator was left unchanged.
+- Tightened Chat-native validation before provider calls:
+  - direct `/v1/chat/completions` now rejects function-tool
+    `description:null` and custom-tool `description:null`;
+  - Responses requests using deprecated Chat `functions` now reject
+    `functions[].description:null` before mapping to Chat tools;
+  - non-string descriptions still fail locally with zero upstream provider
+    calls.
+- Regression coverage updated:
+  - extended the direct Chat tools/tool_choice boundary test with null
+    function and custom descriptions;
+  - extended the Responses legacy Chat function boundary test with null
+    function descriptions.
+- Documentation updated:
+  - compatibility matrix now records string-only Chat-native function/custom
+    descriptions and keeps the Responses-native nullable distinction separate.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "legacy Chat function
+    fields|validates tools and tool_choice" test/server.test.js` passes:
+    2 tests;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public direct Chat function-tool `description:null` request returns
+    `400 invalid_request_parameter` with
+    `param:"tools.0.function.description"`.
+- Runtime/storage check:
+  - `/` has 18 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Direct Chat Assistant Refusal Content Validation
 
 - Rechecked the current official OpenAI Chat Completions schema through the
