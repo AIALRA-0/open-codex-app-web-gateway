@@ -30809,6 +30809,43 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(evalList.status, 200);
     assert.equal((await evalList.json()).data[0].id, evalObject.id);
 
+    const beforeIgnored = await fetch(`${baseUrl}/v1/evals?before=${evalObject.id}&limit=1`);
+    assert.equal(beforeIgnored.status, 200);
+    assert.equal((await beforeIgnored.json()).data[0].id, evalObject.id);
+
+    const invalidOrderBy = await fetch(`${baseUrl}/v1/evals?order_by=name`);
+    assert.equal(invalidOrderBy.status, 400);
+    assert.deepEqual(await invalidOrderBy.json(), {
+      error: {
+        message: "order_by must be one of: created_at, updated_at",
+        type: "invalid_request_error",
+        param: "order_by",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedOrderBy = await fetch(`${baseUrl}/v1/evals?order_by=created_at&order_by=updated_at`);
+    assert.equal(repeatedOrderBy.status, 400);
+    assert.deepEqual(await repeatedOrderBy.json(), {
+      error: {
+        message: "order_by must be a single string query value",
+        type: "invalid_request_error",
+        param: "order_by",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedAfter = await fetch(`${baseUrl}/v1/evals?after=${evalObject.id}&after=eval_other`);
+    assert.equal(repeatedAfter.status, 400);
+    assert.deepEqual(await repeatedAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const deleteEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, { method: "DELETE" });
     assert.equal(deleteEvalResponse.status, 200);
     assert.deepEqual(await deleteEvalResponse.json(), {

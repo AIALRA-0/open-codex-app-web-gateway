@@ -14343,10 +14343,43 @@ async function handleEvalCreate(req, res, evalStore) {
 }
 
 function handleEvalsList(res, evalStore, url) {
+  const queryError = validateOpenAIEvalsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const orderBy = url.searchParams.get("order_by") === "updated_at" ? "updated_at" : "created_at";
   const evals = evalStore.listEvals()
     .sort((a, b) => Number(a[orderBy] || 0) - Number(b[orderBy] || 0));
-  sendJson(res, 200, paginateList(evals, url));
+  sendJson(res, 200, paginateList(evals, officialEvalsListPaginationUrl(url)));
+}
+
+function validateOpenAIEvalsListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const orderByError = validateOpenAISingleQueryValue(url, "order_by");
+  if (orderByError) return orderByError;
+
+  const orderBy = url.searchParams.get("order_by");
+  if (orderBy != null && !["created_at", "updated_at"].includes(orderBy)) {
+    return requestValidationError("order_by must be one of: created_at, updated_at", "order_by");
+  }
+  return null;
+}
+
+function officialEvalsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit", "order"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleEvalGet(res, evalStore, evalId) {

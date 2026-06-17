@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Evals List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /evals`
+  query schema:
+  - `after` is a string scalar cursor;
+  - `limit` is an integer scalar;
+  - `order` is an `asc` / `desc` string scalar;
+  - `order_by` is a `created_at` / `updated_at` string scalar;
+  - `before` is not part of the official Evals list query contract.
+- Tightened local Evals list behavior:
+  - `GET /v1/evals` now validates repeated scalar `after`, `limit`,
+    `order`, and `order_by` query parameters before listing local records;
+  - invalid `order_by` values now return `400 invalid_request_parameter`
+    instead of silently falling back to `created_at`;
+  - the paginator receives a sanitized URL containing only official pagination
+    parameters, so generic `before` no longer affects Evals list output.
+- Regression coverage updated:
+  - extended the local Evals lifecycle test to verify `before` does not hide an
+    existing eval, invalid `order_by` returns 400, repeated `order_by` returns
+    400, and repeated `after` returns 400.
+- Documentation updated:
+  - compatibility matrix now records Evals list pagination as official
+    `limit`, `after`, `order`, and `order_by`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Evals API creates local runs" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public invalid-`order_by` smoke against `/v1/evals` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"order_by"`.
+  - Public repeated-`order_by` smoke against `/v1/evals` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"order_by"`.
+  - Public `before` smoke against `/v1/evals?before=...&limit=1` returned
+    HTTP 200 list output.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Batches List Official Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /batches`

@@ -956,7 +956,7 @@ transition tooling, not a dependency on the hosted Evals dashboard.
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/evals` | Implemented locally | Requires `name`, `data_source_config`, and non-empty `testing_criteria`; stores OpenAI-style `eval_...` objects with local metadata |
-| `GET /v1/evals` | Implemented locally | Lists local evals with `limit`, `after`, `before`, `order`, and `order_by=created_at|updated_at` pagination |
+| `GET /v1/evals` | Implemented locally | Lists local evals with official `limit`, `after`, `order`, and `order_by=created_at|updated_at` pagination; repeated scalar query values return 400, invalid `order_by` values return 400, and unsupported generic paginator parameters such as `before` do not affect the official list result |
 | `GET /v1/evals/{eval_id}` | Implemented locally | Returns the stored local eval definition |
 | `POST /v1/evals/{eval_id}` | Implemented locally | Updates local `name`, `data_source_config`, `testing_criteria`, and `metadata` |
 | `DELETE /v1/evals/{eval_id}` | Implemented locally | Deletes the eval definition, local runs, and output items |
