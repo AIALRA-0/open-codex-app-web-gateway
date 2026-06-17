@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Legacy Projection
+
+- Rechecked the official Chat Completions stored-list endpoint:
+  - `GET /v1/chat/completions` lists stored `chat.completion` records;
+  - list records use the same stored Chat completion object shape documented in
+    the current OpenAI endpoint example;
+  - clients can page and filter stored records independent of when a local
+    record was originally created.
+- Closed a local lifecycle consistency gap:
+  - `GET /v1/chat/completions/{completion_id}` now projects stored records
+    through the current Chat completion normalizer before returning them;
+  - `GET /v1/chat/completions` now applies the same projection before metadata
+    filtering and pagination;
+  - `POST /v1/chat/completions/{completion_id}` returns and persists the
+    metadata-updated record with the current projected shape;
+  - `GET /v1/chat/completions/{completion_id}/messages` now projects legacy
+    message records through the current message normalizer before pagination.
+- Regression coverage added:
+  - a test writes an older minimal stored Chat JSON directly into the local
+    state directory, then verifies retrieve, list, metadata update, metadata
+    filter, and message-list endpoints expose current official fields with no
+    upstream provider call.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe read-time projection
+    for older local stored Chat records.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle, streaming stored Chat, and legacy
+    projection tests pass;
+  - `npm test` passes: 346 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes;
+  - local and public smoke wrote a temporary older-format stored Chat JSON
+    directly into the deployment state directory, confirmed retrieve, list, and
+    message-list endpoints project it to the current shape, and deleted the
+    temporary record.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat List Envelope Shape
 
 - Rechecked the official Chat Completions OpenAPI endpoint metadata and stored

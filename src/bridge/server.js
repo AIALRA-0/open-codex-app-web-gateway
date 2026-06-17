@@ -14349,7 +14349,7 @@ function handleChatCompletionGet(res, store, completionId) {
     return;
   }
 
-  sendJson(res, 200, record.chat_completion);
+  sendJson(res, 200, projectStoredChatCompletion(record));
 }
 
 async function handleChatCompletionUpdate(req, res, store, completionId) {
@@ -14377,19 +14377,24 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
   }
 
   const metadata = body.metadata == null ? {} : clone(body.metadata);
+  const chatRequest = {
+    ...(record.chat_request || {}),
+    metadata,
+  };
   const updatedRecord = {
     ...record,
+    chat_request: chatRequest,
+  };
+  updatedRecord.chat_completion = projectStoredChatCompletion({
+    ...updatedRecord,
     chat_completion: {
       ...record.chat_completion,
       metadata,
     },
-    chat_request: {
-      ...(record.chat_request || {}),
-      metadata,
-    },
-  };
+    chat_request: chatRequest,
+  });
   store.put(completionId, updatedRecord);
-  sendJson(res, 200, updatedRecord.chat_completion);
+  sendJson(res, 200, projectStoredChatCompletion(updatedRecord));
 }
 
 function handleChatCompletionDelete(res, store, completionId) {
@@ -14434,13 +14439,20 @@ function handleChatCompletionsList(res, store, url) {
 }
 
 function normalizeListedChatCompletion(record) {
+  return projectStoredChatCompletion(record);
+}
+
+function projectStoredChatCompletion(record) {
   const completion = clone(record.chat_completion);
-  if (!completion.model && record.chat_request?.model) completion.model = record.chat_request.model;
+  if (!completion.id && record.id) completion.id = record.id;
+  if (!Number.isInteger(completion.created) && Number.isFinite(Number(record.created_at))) {
+    completion.created = Math.floor(Number(record.created_at) / 1000);
+  }
   const requestMetadata = record.chat_request?.metadata;
   if (!completion.metadata && requestMetadata && typeof requestMetadata === "object" && !Array.isArray(requestMetadata)) {
     completion.metadata = clone(requestMetadata);
   }
-  if (!completion.metadata) completion.metadata = {};
+  attachStoredChatRequestFields(completion, isPlainObject(record.chat_request) ? record.chat_request : {});
   return completion;
 }
 
@@ -14475,8 +14487,19 @@ function handleChatCompletionMessages(res, store, completionId, url) {
     return;
   }
 
-  const messages = Array.isArray(record.chat_messages) ? record.chat_messages : [];
+  const messages = projectStoredChatMessages(record);
   sendJson(res, 200, paginateList(messages, url));
+}
+
+function projectStoredChatMessages(record) {
+  const messages = Array.isArray(record.chat_messages)
+    ? record.chat_messages
+    : normalizeStoredChatMessages(record.chat_request?.messages, projectStoredChatCompletion(record));
+  return messages.map((message, index) => addStoredChatMessageId(
+    message,
+    index,
+    message?.direction || (message?.role === "assistant" ? "output" : "input"),
+  ));
 }
 
 async function handleConversationCreate(req, res, conversationStore) {

@@ -26553,6 +26553,115 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
   }, { streamOptionFields: ["include_usage"] });
 });
 
+test("Stored Chat retrieval, list, update, and messages project legacy records to current shape", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "legacy projection test should not call provider" } }));
+  }, async ({ bridgeAddress, stateDir, requests }) => {
+    const legacyId = "chatcmpl_legacy_projection";
+    const legacyTools = [{
+      type: "function",
+      function: {
+        name: "legacy_noop",
+        parameters: { type: "object", properties: {} },
+      },
+    }];
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(path.join(stateDir, `${legacyId}.json`), `${JSON.stringify({
+      id: legacyId,
+      created_at: 1700000777000,
+      chat_completion: {
+        id: legacyId,
+        choices: [{
+          message: { content: "legacy-shape-ok" },
+          finish_reason: "stop",
+        }],
+      },
+      chat_request: {
+        model: "mock-model",
+        metadata: { suite: "legacy-shape" },
+        user: "legacy-user",
+        temperature: 0.4,
+        top_p: 0.8,
+        response_format: { type: "text" },
+        tools: legacyTools,
+        messages: [{ role: "user", content: "legacy prompt" }],
+      },
+      chat_messages: [
+        { role: "user", content: "legacy prompt", direction: "input" },
+        { role: "assistant", content: "legacy-shape-ok", direction: "output" },
+      ],
+    }, null, 2)}\n`);
+
+    const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${legacyId}`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.id, legacyId);
+    assert.equal(fetchedJson.object, "chat.completion");
+    assert.equal(fetchedJson.created, 1700000777);
+    assert.equal(fetchedJson.model, "mock-model");
+    assert.equal(fetchedJson.request_id, null);
+    assert.equal(fetchedJson.input_user, "legacy-user");
+    assert.equal(fetchedJson.temperature, 0.4);
+    assert.equal(fetchedJson.top_p, 0.8);
+    assert.equal(fetchedJson.seed, null);
+    assert.equal(fetchedJson.tool_choice, null);
+    assert.deepEqual(fetchedJson.tools, legacyTools);
+    assert.deepEqual(fetchedJson.response_format, { type: "text" });
+    assert.deepEqual(fetchedJson.metadata, { suite: "legacy-shape" });
+    assert.equal(fetchedJson.choices[0].index, 0);
+    assert.equal(fetchedJson.choices[0].logprobs, null);
+    assert.equal(fetchedJson.choices[0].message.role, "assistant");
+    assert.equal(fetchedJson.choices[0].message.refusal, null);
+    assert.deepEqual(fetchedJson.choices[0].message.annotations, []);
+    assert.equal(fetchedJson.choices[0].message.tool_calls, null);
+    assert.equal(fetchedJson.choices[0].message.function_call, null);
+
+    const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=legacy-shape`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(listedJson.data.length, 1);
+    assert.equal(listedJson.data[0].id, legacyId);
+    assert.equal(listedJson.data[0].object, "chat.completion");
+    assert.equal(listedJson.data[0].input_user, "legacy-user");
+    assert.equal(listedJson.data[0].choices[0].message.refusal, null);
+    assert.equal(listedJson.data[0].choices[0].message.tool_calls, null);
+
+    const messages = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${legacyId}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    const messagesJson = await messages.json();
+    assert.equal(messagesJson.data.length, 2);
+    assert.equal(messagesJson.data[0].id, "chatmsg_000000");
+    assert.equal(messagesJson.data[0].object, "chat.completion.message");
+    assert.equal(messagesJson.data[0].name, null);
+    assert.equal(messagesJson.data[0].content_parts, null);
+    assert.equal(messagesJson.data[1].id, "chatmsg_000001");
+    assert.equal(messagesJson.data[1].object, "chat.completion.message");
+    assert.equal(messagesJson.data[1].name, null);
+    assert.equal(messagesJson.data[1].content_parts, null);
+
+    const updated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${legacyId}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { suite: "legacy-updated" } }),
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.object, "chat.completion");
+    assert.equal(updatedJson.input_user, "legacy-user");
+    assert.deepEqual(updatedJson.metadata, { suite: "legacy-updated" });
+    assert.equal(updatedJson.choices[0].message.refusal, null);
+
+    const oldFilter = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=legacy-shape`);
+    assert.equal(oldFilter.status, 200);
+    assert.equal((await oldFilter.json()).data.length, 0);
+    const newFilter = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=legacy-updated`);
+    assert.equal(newFilter.status, 200);
+    assert.equal((await newFilter.json()).data[0].id, legacyId);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Chat completion retrieval only returns explicitly stored chat completions", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(200, { "content-type": "application/json" });

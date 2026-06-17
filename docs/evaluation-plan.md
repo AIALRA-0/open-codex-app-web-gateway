@@ -123,7 +123,10 @@ defaults. Stored Chat message-list coverage verifies official `name` and
 `content_parts` fields for string and pure text/image content-part inputs,
 verifies audio/file extension parts keep
 official `content_parts:null`, and preserves local `direction` metadata for
-replay assertions.
+replay assertions. A legacy-record regression writes an older minimal
+`chat_completion` JSON directly to the local state store and verifies retrieve,
+list, metadata update, and message-list endpoints all project it to the current
+stored Chat shape without a provider call.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
@@ -528,7 +531,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   stored `request_id`, `input_user`, choice `logprobs`, and message `refusal`
   fields when known or officially nullable, plus stored-list request envelope
   fields such as `tools`, `response_format`, sampling parameters, and null
-  `system_fingerprint` / `tool_choice` values when unknown.
+  `system_fingerprint` / `tool_choice` values when unknown. Older local stored
+  Chat records must be projected to the same shape at read time for retrieve,
+  list, update, and messages endpoints.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,
