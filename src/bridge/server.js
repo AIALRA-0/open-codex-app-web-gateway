@@ -15019,7 +15019,13 @@ function batchErrorLine(customId, line, code, message, param = null, body = null
   };
 }
 
-async function handleEvalCreate(req, res, evalStore) {
+async function handleEvalCreate(req, res, evalStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   validateEvalBody(body, { requireCore: true });
   sendJson(res, 201, evalStore.createEval(body));
@@ -15038,6 +15044,9 @@ function handleEvalsList(res, evalStore, url) {
 }
 
 function validateOpenAIEvalsListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "order", "order_by"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -15065,7 +15074,13 @@ function officialEvalsListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleEvalGet(res, evalStore, evalId) {
+function handleEvalGet(res, evalStore, evalId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const evalObject = evalStore.getEval(evalId);
   if (!evalObject) {
     sendError(res, 404, `eval not found: ${evalId}`, {
@@ -15078,7 +15093,13 @@ function handleEvalGet(res, evalStore, evalId) {
   sendJson(res, 200, evalObject);
 }
 
-async function handleEvalUpdate(req, res, evalStore, evalId) {
+async function handleEvalUpdate(req, res, evalStore, evalId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   validateEvalBody(body, { requireCore: false });
   const evalObject = evalStore.updateEval(evalId, body);
@@ -15093,7 +15114,13 @@ async function handleEvalUpdate(req, res, evalStore, evalId) {
   sendJson(res, 200, evalObject);
 }
 
-function handleEvalDelete(res, evalStore, evalId) {
+function handleEvalDelete(res, evalStore, evalId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = evalStore.deleteEval(evalId);
   if (!deleted) {
     sendError(res, 404, `eval not found: ${evalId}`, {
@@ -15106,7 +15133,13 @@ function handleEvalDelete(res, evalStore, evalId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleEvalRunCreate(req, res, config, responseStore, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId) {
+async function handleEvalRunCreate(req, res, config, responseStore, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const evalObject = evalStore.getEval(evalId);
   if (!evalObject) {
     sendError(res, 404, `eval not found: ${evalId}`, {
@@ -15242,7 +15275,13 @@ function evalRunStatusMatches(actual, expected) {
   return normalized === expected || (expected === "canceled" && normalized === "cancelled");
 }
 
-function handleEvalRunGet(res, evalStore, evalId, runId) {
+function handleEvalRunGet(res, evalStore, evalId, runId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const run = evalStore.getRun(evalId, runId);
   if (!run) {
     sendError(res, 404, `eval run not found: ${runId}`, {
@@ -15255,7 +15294,13 @@ function handleEvalRunGet(res, evalStore, evalId, runId) {
   sendJson(res, 200, run);
 }
 
-function handleEvalRunCancel(res, evalStore, evalId, runId) {
+function handleEvalRunCancel(res, evalStore, evalId, runId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const run = evalStore.cancelRun(evalId, runId);
   if (!run) {
     sendError(res, 404, `eval run not found: ${runId}`, {
@@ -15302,6 +15347,9 @@ function validateOpenAIEvalRunOutputItemsListQuery(url) {
 }
 
 function validateOpenAIEvalSubListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "order", "status"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -15328,7 +15376,13 @@ function evalOutputItemStatusMatches(actual, expected) {
   return normalized === "fail" || normalized === "failed" || normalized === "errored";
 }
 
-function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId) {
+function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const item = evalStore.getOutputItem(evalId, runId, outputItemId);
   if (!item) {
     sendError(res, 404, `eval run output item not found: ${outputItemId}`, {
@@ -23354,7 +23408,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleEvalCreate(req, res, evalStore);
+          await handleEvalCreate(req, res, evalStore, url);
           return;
         }
       }
@@ -23369,7 +23423,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (outputItemId && req.method === "GET") {
-          handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId);
+          handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId, url);
           return;
         }
       }
@@ -23384,15 +23438,15 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!runId && req.method === "POST") {
-          await handleEvalRunCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId);
+          await handleEvalRunCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, evalStore, evalId, url);
           return;
         }
         if (runId && !action && req.method === "GET") {
-          handleEvalRunGet(res, evalStore, evalId, runId);
+          handleEvalRunGet(res, evalStore, evalId, runId, url);
           return;
         }
         if (runId && action === "cancel" && req.method === "POST") {
-          handleEvalRunCancel(res, evalStore, evalId, runId);
+          handleEvalRunCancel(res, evalStore, evalId, runId, url);
           return;
         }
       }
@@ -23401,15 +23455,15 @@ function createServer(config = loadConfig()) {
       if (evalRoute) {
         const evalId = decodeURIComponent(evalRoute[1]);
         if (req.method === "GET") {
-          handleEvalGet(res, evalStore, evalId);
+          handleEvalGet(res, evalStore, evalId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleEvalUpdate(req, res, evalStore, evalId);
+          await handleEvalUpdate(req, res, evalStore, evalId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleEvalDelete(res, evalStore, evalId);
+          handleEvalDelete(res, evalStore, evalId, url);
           return;
         }
       }

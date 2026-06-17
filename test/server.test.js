@@ -34805,6 +34805,24 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     res.end(JSON.stringify({ error: { message: "provider should not be called for sample-driven evals" } }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectUnsupportedQuery = async (response, param) => {
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: `Unsupported query parameter: ${param}`,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      });
+    };
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    assert.equal(requests.length, 0);
 
     const createdEvalResponse = await fetch(`${baseUrl}/v1/evals`, {
       method: "POST",
@@ -34840,6 +34858,8 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(evalObject.testing_criteria.length, 1);
     assert.match(evalObject.testing_criteria[0].id, /^Exact-label-match-/);
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}?metadata=debug`), "metadata");
+
     const jsonl = [
       {
         item: { ticket_text: "My monitor will not turn on", correct_label: "Hardware" },
@@ -34863,6 +34883,16 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     });
     assert.equal(fileResponse.status, 200);
     const file = await fileResponse.json();
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    const runListAfterInvalidCreate = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?limit=10`);
+    assert.equal(runListAfterInvalidCreate.status, 200);
+    assert.deepEqual((await runListAfterInvalidCreate.json()).data, []);
+    assert.equal(requests.length, 0);
 
     const runResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs`, {
       method: "POST",
@@ -34919,9 +34949,10 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(failedOutputItems.data.length, 1);
     assert.equal(failedOutputItems.data[0].status, "fail");
 
-    const outputItemsBeforeIgnored = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?before=${outputItems.data[0].id}&limit=1`);
-    assert.equal(outputItemsBeforeIgnored.status, 200);
-    assert.equal((await outputItemsBeforeIgnored.json()).data[0].id, outputItems.data[0].id);
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?before=${outputItems.data[0].id}&limit=1`),
+      "before",
+    );
 
     const invalidOutputItemsStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=passed`);
     assert.equal(invalidOutputItemsStatus.status, 400);
@@ -34953,9 +34984,16 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(outputItem.metadata.compatibility.local_status, "passed");
     assert.equal(outputItem.datasource_item.item.correct_label, "Hardware");
 
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items/${outputItems.data[0].id}?metadata=debug`),
+      "metadata",
+    );
+
     const runGet = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}`);
     assert.equal(runGet.status, 200);
     assert.equal((await runGet.json()).id, run.id);
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}?metadata=debug`), "metadata");
 
     const runList = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?limit=1`);
     assert.equal(runList.status, 200);
@@ -34965,9 +35003,10 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(completedRunList.status, 200);
     assert.equal((await completedRunList.json()).data[0].id, run.id);
 
-    const runListBeforeIgnored = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?before=${run.id}&limit=1`);
-    assert.equal(runListBeforeIgnored.status, 200);
-    assert.equal((await runListBeforeIgnored.json()).data[0].id, run.id);
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?before=${run.id}&limit=1`),
+      "before",
+    );
 
     const invalidRunStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?status=done`);
     assert.equal(invalidRunStatus.status, 400);
@@ -34991,6 +35030,22 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
       },
     });
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/cancel?metadata=debug`, {
+      method: "POST",
+    }), "metadata");
+    const runAfterInvalidCancel = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}`);
+    assert.equal(runAfterInvalidCancel.status, 200);
+    assert.equal((await runAfterInvalidCancel.json()).status, "completed");
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    const evalAfterInvalidUpdate = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`);
+    assert.equal(evalAfterInvalidUpdate.status, 200);
+    assert.deepEqual((await evalAfterInvalidUpdate.json()).metadata, { suite: "evals-local" });
+
     const updatedEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -35003,9 +35058,7 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(evalList.status, 200);
     assert.equal((await evalList.json()).data[0].id, evalObject.id);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/evals?before=${evalObject.id}&limit=1`);
-    assert.equal(beforeIgnored.status, 200);
-    assert.equal((await beforeIgnored.json()).data[0].id, evalObject.id);
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals?before=${evalObject.id}&limit=1`), "before");
 
     const invalidOrderBy = await fetch(`${baseUrl}/v1/evals?order_by=name`);
     assert.equal(invalidOrderBy.status, 400);
@@ -35039,6 +35092,11 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
         code: "invalid_request_parameter",
       },
     });
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/evals/${evalObject.id}?metadata=debug`, { method: "DELETE" }), "metadata");
+    const evalAfterInvalidDelete = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`);
+    assert.equal(evalAfterInvalidDelete.status, 200);
+    assert.equal((await evalAfterInvalidDelete.json()).id, evalObject.id);
 
     const deleteEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, { method: "DELETE" });
     assert.equal(deleteEvalResponse.status, 200);

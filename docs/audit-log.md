@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Evals Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
+  Evals:
+  - `GET /v1/evals` declares only `after`, `limit`, `order`, and `order_by`
+    query parameters;
+  - `POST /v1/evals` is a JSON body operation and declares no query
+    parameters;
+  - the official endpoint list includes `GET` / `POST` / `DELETE
+    /v1/evals/{eval_id}`, `POST` / `GET
+    /v1/evals/{eval_id}/runs`, `GET
+    /v1/evals/{eval_id}/runs/{run_id}`, `GET
+    /v1/evals/{eval_id}/runs/{run_id}/output_items`, and `GET
+    /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}`.
+- Tightened local bridge behavior:
+  - `POST /v1/evals`, `POST /v1/evals/{eval_id}`, and `POST
+    /v1/evals/{eval_id}/runs` now reject unsupported query parameters before
+    JSON body parsing;
+  - eval retrieve/update/delete, run retrieve/cancel, and output-item retrieve
+    now reject unsupported query parameters before local state reads or
+    mutations;
+  - Evals top-level list now rejects unknown parameters such as `before`
+    before listing;
+  - Evals run and output-item lists now allow only `after`, `limit`, `order`,
+    and `status`, so unsupported `before` queries return OpenAI-style 400s
+    before listing.
+- Regression coverage updated:
+  - extended the local Evals lifecycle test to verify invalid create/update/run
+    create queries with `not-json` bodies fail on query validation first;
+  - verified invalid run create does not persist a run;
+  - verified invalid update/delete/cancel requests leave eval/run state intact;
+  - changed previous `before` list behavior on evals, runs, and output items
+    from ignored-success to official 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records Evals no-query boundaries and official
+    list query allowlists across evals, runs, and output items.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Evals API|Graders API" test/server.test.js`
+    passed 5/5 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Evals query smoke marker `evals-query-smoke-1781723983525`
+    verified invalid query rejection on eval create/list/retrieve/update/
+    delete, run create/list/retrieve/cancel, and output item list/retrieve;
+    it used inline local data with `string_check`, performed no provider call,
+    and cleaned up the temporary Eval after validation.
+  - Disk guard after deployment: `/` 193G size, 183G used, 9.8G available,
+    95% used.
+  - Runtime prune dry-run scanned 5391 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Eval/Run/Output Item ids, prompt payload
+    secrets, or smoke-test request secrets were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Batches Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
