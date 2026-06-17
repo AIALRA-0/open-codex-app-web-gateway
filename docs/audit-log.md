@@ -1,5 +1,54 @@
 # Audit Log
 
+## 2026-06-17 Responses MCP List Tools Shape Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `MCPListTools` and
+  `MCPListToolsTool` schemas through the developer docs MCP workflow and the
+  official `openai-openapi` YAML:
+  - `mcp_list_tools.error` is an optional string/null field;
+  - each listed MCP tool requires string `name` and object `input_schema`;
+  - listed tool `description` remains string/null and `annotations` is
+    object/null.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject malformed `mcp_list_tools.error`;
+  - replayed MCP list tool entries now reject missing `name`, missing
+    `input_schema`, and non-object/non-null `annotations`.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with
+    `mcp_list_tools.error`, tool `name`, tool `input_schema`, and tool
+    `annotations` cases.
+- Documentation updated:
+  - compatibility matrix now records MCP list-tools field shape validation.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "input image and file detail|reuses input mcp_list_tools|emits local mcp_list_tools context" test/server.test.js`
+    passes 3/3;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed MCP list-tools smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.tools.0.input_schema"`
+    with message `input.0.tools.0.input_schema must be an object`.
+- Disk guard:
+  - root filesystem has 16 GB free and is 92% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses MCP Replay ID Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 Responses input item

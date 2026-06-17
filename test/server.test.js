@@ -1191,6 +1191,55 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses/input_tokens",
         input: [{
+          type: "mcp_list_tools",
+          id: "mcpl_bad_error",
+          server_label: "dmcp",
+          tools: [],
+          error: { message: "bad" },
+        }],
+        param: "input.0.error",
+        message: "input.0.error must be a string or null",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "mcp_list_tools",
+          id: "mcpl_bad_tool_name",
+          server_label: "dmcp",
+          tools: [{ input_schema: { type: "object" } }],
+        }],
+        param: "input.0.tools.0.name",
+        message: "input.0.tools.0.name must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "mcp_list_tools",
+          id: "mcpl_bad_tool_schema",
+          server_label: "dmcp",
+          tools: [{ name: "roll" }],
+        }],
+        param: "input.0.tools.0.input_schema",
+        message: "input.0.tools.0.input_schema must be an object",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "mcp_list_tools",
+          id: "mcpl_bad_tool_annotations",
+          server_label: "dmcp",
+          tools: [{
+            name: "roll",
+            input_schema: { type: "object" },
+            annotations: [],
+          }],
+        }],
+        param: "input.0.tools.0.annotations",
+        message: "input.0.tools.0.annotations must be an object or null",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
           type: "mcp_call",
           server_label: "dmcp",
           name: "roll",

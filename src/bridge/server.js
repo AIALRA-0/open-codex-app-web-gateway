@@ -5884,6 +5884,8 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (serverLabelError) return serverLabelError;
     const toolsError = validateOpenAIRequiredArrayItemField(item, param, "tools");
     if (toolsError) return toolsError;
+    const errorFieldError = validateOpenAIOptionalStringItemField(item, param, "error", { nullable: true });
+    if (errorFieldError) return errorFieldError;
     return validateOpenAIResponsesMcpListTools(item.tools, `${param}.tools`);
   }
 
@@ -6082,9 +6084,8 @@ function validateOpenAIResponsesMcpListTools(tools, param) {
     if (!isPlainObject(tool)) {
       return requestValidationError(`${toolParam} must be an object`, toolParam);
     }
-    if (Object.prototype.hasOwnProperty.call(tool, "name") && typeof tool.name !== "string") {
-      return requestValidationError(`${toolParam}.name must be a string`, `${toolParam}.name`);
-    }
+    const nameError = validateOpenAIRequiredStringItemField(tool, toolParam, "name");
+    if (nameError) return nameError;
     if (
       Object.prototype.hasOwnProperty.call(tool, "description")
       && tool.description !== null
@@ -6092,9 +6093,10 @@ function validateOpenAIResponsesMcpListTools(tools, param) {
     ) {
       return requestValidationError(`${toolParam}.description must be a string or null`, `${toolParam}.description`);
     }
-    if (Object.prototype.hasOwnProperty.call(tool, "input_schema") && !isPlainObject(tool.input_schema)) {
-      return requestValidationError(`${toolParam}.input_schema must be an object`, `${toolParam}.input_schema`);
-    }
+    const inputSchemaError = validateOpenAIRequiredObjectItemField(tool, toolParam, "input_schema");
+    if (inputSchemaError) return inputSchemaError;
+    const annotationsError = validateOpenAIOptionalObjectItemField(tool, toolParam, "annotations", { nullable: true });
+    if (annotationsError) return annotationsError;
   }
   return null;
 }
