@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `GET
+  /v1/chat/completions` schema through the developer docs MCP workflow:
+  - list parameters are `model`, `metadata`, `after`, `limit`, and `order`;
+  - `metadata` uses deep-object-style `metadata[key]=value` filters and shares
+    the official string metadata limits.
+- Tightened local stored Chat list validation before store filtering:
+  - scalar `model` and `after` query parameters now reject repeated values;
+  - bare `metadata=...`, repeated `metadata[key]`, more than 16 metadata
+    filters, metadata keys longer than 64 characters, and metadata values
+    longer than 512 characters now return OpenAI-style 400 errors;
+  - existing valid `model`, `metadata[key]`, `limit`, `after`, and `order`
+    filtering behavior is unchanged.
+- Regression coverage updated:
+  - added focused `GET /v1/chat/completions` invalid-query tests that verify
+    these failures happen before any provider call.
+- Documentation updated:
+  - compatibility matrix now records stored Chat list query validation.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "stored Chat list query|retrieval, list, update" test/server.test.js`
+    passes 2/2;
+  - `node --test test/*.test.js` passes 368/368;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public stored Chat list smoke against
+    `https://opencodexapp.aialra.online/v1/chat/completions?metadata=bad`
+    returns 400 `invalid_request_parameter` for `param:"metadata"`.
+- Disk guard:
+  - root filesystem has 15 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Direct Chat Image URI Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

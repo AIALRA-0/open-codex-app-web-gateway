@@ -16950,14 +16950,9 @@ function handleChatCompletionDelete(res, store, completionId) {
 }
 
 function handleChatCompletionsList(res, store, url) {
-  const orderError = validateOpenAIListOrderQuery(url);
-  if (orderError) {
-    sendError(res, 400, orderError.message, orderError);
-    return;
-  }
-  const limitError = validateOpenAIListLimitQuery(url);
-  if (limitError) {
-    sendError(res, 400, limitError.message, limitError);
+  const queryError = validateOpenAIChatCompletionsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
     return;
   }
   const model = url.searchParams.get("model");
@@ -16995,6 +16990,56 @@ function metadataFiltersFromUrl(url) {
     if (bracket) filters.push([bracket[1], value]);
   }
   return filters;
+}
+
+function validateOpenAIChatCompletionsListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  const modelError = validateOpenAISingleQueryValue(url, "model");
+  if (modelError) return modelError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAIStringMetadataQueryFilters(url);
+}
+
+function validateOpenAISingleQueryValue(url, name) {
+  if ((url?.searchParams?.getAll?.(name) || []).length > 1) {
+    return requestValidationError(`${name} must be a single string query value`, name);
+  }
+  return null;
+}
+
+function validateOpenAIStringMetadataQueryFilters(url) {
+  if (url?.searchParams?.has?.("metadata")) {
+    return requestValidationError("metadata filters must use metadata[key]=value query parameters", "metadata");
+  }
+
+  const filters = metadataFiltersFromUrl(url);
+  if (filters.length > OPENAI_STRING_METADATA_MAX_PAIRS) {
+    return metadataValidationError(`metadata must contain at most ${OPENAI_STRING_METADATA_MAX_PAIRS} key-value pairs`, "metadata");
+  }
+
+  const seen = new Set();
+  for (const [key, value] of filters) {
+    if (seen.has(key)) {
+      return metadataValidationError("metadata query filters must not repeat keys", `metadata.${key}`);
+    }
+    seen.add(key);
+
+    if (Array.from(key).length > OPENAI_STRING_METADATA_MAX_KEY_CHARS) {
+      return metadataValidationError(`metadata keys must be at most ${OPENAI_STRING_METADATA_MAX_KEY_CHARS} characters`, `metadata.${key}`);
+    }
+    if (Array.from(value).length > OPENAI_STRING_METADATA_MAX_VALUE_CHARS) {
+      return metadataValidationError(`metadata values must be at most ${OPENAI_STRING_METADATA_MAX_VALUE_CHARS} characters`, `metadata.${key}`);
+    }
+  }
+  return null;
 }
 
 function matchesMetadataFilters(metadata, filters) {

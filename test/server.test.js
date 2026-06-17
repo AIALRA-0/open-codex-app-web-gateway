@@ -29466,6 +29466,83 @@ test("Chat completion retrieval only returns explicitly stored chat completions"
   });
 });
 
+test("GET /v1/chat/completions validates stored Chat list query filters", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(500, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "list query validation should not call provider" } }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`;
+    const manyMetadataFilters = Array.from({ length: 17 }, (_, index) => `metadata[k${index}]=v`).join("&");
+    const longMetadataKey = "k".repeat(65);
+    const longMetadataValue = "v".repeat(513);
+    const invalidCases = [
+      {
+        query: "model=mock-model&model=other",
+        error: {
+          message: "model must be a single string query value",
+          param: "model",
+        },
+      },
+      {
+        query: "after=chatcmpl_a&after=chatcmpl_b",
+        error: {
+          message: "after must be a single string query value",
+          param: "after",
+        },
+      },
+      {
+        query: "metadata=not-a-deep-object",
+        error: {
+          message: "metadata filters must use metadata[key]=value query parameters",
+          param: "metadata",
+        },
+      },
+      {
+        query: "metadata[suite]=a&metadata[suite]=b",
+        error: {
+          message: "metadata query filters must not repeat keys",
+          param: "metadata.suite",
+        },
+      },
+      {
+        query: manyMetadataFilters,
+        error: {
+          message: "metadata must contain at most 16 key-value pairs",
+          param: "metadata",
+        },
+      },
+      {
+        query: `metadata[${longMetadataKey}]=v`,
+        error: {
+          message: "metadata keys must be at most 64 characters",
+          param: `metadata.${longMetadataKey}`,
+        },
+      },
+      {
+        query: `metadata[suite]=${longMetadataValue}`,
+        error: {
+          message: "metadata values must be at most 512 characters",
+          param: "metadata.suite",
+        },
+      },
+    ];
+
+    for (const { query, error } of invalidCases) {
+      const response = await fetch(`${baseUrl}?${query}`);
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: error.message,
+          type: "invalid_request_error",
+          param: error.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Batch API executes Responses JSONL and exposes output and error files", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");
