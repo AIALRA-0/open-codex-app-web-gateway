@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Core Create Endpoint Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/responses`;
+  - `POST /v1/responses/input_tokens`;
+  - `POST /v1/responses/compact`;
+  - `POST /v1/chat/completions`;
+  - `POST /v1/completions`.
+- Official schema notes:
+  - Responses create, Chat Completions create, and legacy Completions create
+    are JSON body create operations with no POST query parameters declared;
+  - Responses `input_tokens` and `compact` declare `parameters: []` and JSON
+    request bodies;
+  - `GET /v1/chat/completions` still has official query filters and is outside
+    this no-query POST create boundary.
+- Tightened local bridge behavior:
+  - `/v1/responses`, `/v1/responses/input_tokens`,
+    `/v1/responses/compact`, `/v1/chat/completions`, and `/v1/completions`
+    now reject unsupported query parameters before JSON body parsing;
+  - invalid query parameters therefore return the shared OpenAI-style
+    `invalid_request_parameter` response even when the body is malformed JSON;
+  - normal Responses, Direct Chat, legacy Completions, input-token probe, and
+    compaction flows continue to use the existing request-body validation and
+    provider mapping paths.
+- Regression coverage updated:
+  - added a core create endpoint test that sends invalid query parameters and
+    malformed JSON to all five POST create endpoints and asserts zero upstream
+    provider calls;
+  - reran focused coverage for normal Responses create, Direct Chat create,
+    legacy Completions create, `/input_tokens`, and `/compact`.
+- Documentation updated:
+  - compatibility matrix now records the body-only create boundary for the
+    five core create endpoints while preserving documented query behavior for
+    Chat list/retrieve style endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Core create endpoints reject unsupported query parameters before body parsing" test/server.test.js`
+    passed 1/1 test.
+  - `node --test --test-name-pattern "POST /v1/responses maps to /v1/chat/completions|POST /v1/chat/completions|POST /v1/completions" test/server.test.js`
+    passed 62/62 tests.
+  - `node --test --test-name-pattern "input_tokens|compact|Responses endpoints validate input image and file detail" test/server.test.js`
+    passed 14/14 tests.
+  - Full `node --test test/*.test.js` passed 376/376 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public core-create query smoke verified invalid `metadata` queries on
+    `/v1/responses`, `/v1/responses/input_tokens`,
+    `/v1/responses/compact`, `/v1/chat/completions`, and `/v1/completions`
+    return OpenAI-style 400 errors before malformed JSON is parsed; a normal
+    `/v1/chat/completions` request returned `object:"chat.completion"` with one
+    choice.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5385 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, request payload secrets, or smoke-test credentials
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Realtime Direct Endpoint Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

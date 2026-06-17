@@ -386,6 +386,40 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("Core create endpoints reject unsupported query parameters before body parsing", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid create endpoint query parameters");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const endpoints = [
+      "/v1/responses",
+      "/v1/responses/input_tokens",
+      "/v1/responses/compact",
+      "/v1/chat/completions",
+      "/v1/completions",
+    ];
+
+    for (const endpoint of endpoints) {
+      const response = await fetch(`${baseUrl}${endpoint}?metadata=debug`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not-json",
+      });
+
+      assert.equal(response.status, 400, endpoint);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "Unsupported query parameter: metadata",
+          type: "invalid_request_error",
+          param: "metadata",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses replays Responses tool items as readable Chat context", async () => {
   await withMockProvider(async (_req, res, call) => {
     const content = call.body.messages.map((message) => message.content || "").join("\n---\n");

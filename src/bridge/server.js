@@ -1057,6 +1057,12 @@ function clearForcedToolSearchChoiceAfterExecution(chat, localToolSearch) {
 }
 
 async function handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const request = await readJson(req);
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
@@ -6884,6 +6890,12 @@ function conversationOutputItems(output) {
 }
 
 async function handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const request = await readJson(req);
   const styleError = validateResponsesInputTokensStyle(request);
   if (styleError) {
@@ -7020,6 +7032,12 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
 }
 
 async function handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const request = await readJson(req);
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
@@ -9320,6 +9338,12 @@ async function* iterateSseJson(stream) {
 }
 
 async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const modelError = validateOpenAIRequiredStringParameter(body, "model");
   if (modelError) {
@@ -10832,6 +10856,12 @@ function parseJsonOrNull(text) {
 }
 
 async function handleLegacyCompletions(req, res, config) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const request = await readJson(req);
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
