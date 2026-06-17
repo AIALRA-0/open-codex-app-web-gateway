@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-17 Containers Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
+  Containers:
+  - `GET /v1/containers` declares only `limit`, `order`, `after`, and `name`
+    query parameters;
+  - `POST /v1/containers` declares no query parameters;
+  - the official endpoint list includes `GET` / `DELETE
+    /v1/containers/{container_id}`, `POST` / `GET
+    /v1/containers/{container_id}/files`, `GET` / `DELETE
+    /v1/containers/{container_id}/files/{file_id}`, and `GET
+    /v1/containers/{container_id}/files/{file_id}/content`.
+- Tightened local bridge behavior:
+  - `POST /v1/containers` and `POST
+    /v1/containers/{container_id}/files` now reject unsupported query
+    parameters before JSON/raw body parsing;
+  - container retrieve/delete and container-file retrieve/content/delete reject
+    unsupported query parameters before local state reads, byte reads, or
+    deletion;
+  - container list now allows only official `after`, `limit`, `name`, and
+    `order`, so unsupported `before`/`metadata` queries return 400 before
+    listing;
+  - container-file list now allows only official `after`, `limit`, and
+    `order`, so unsupported `before`/`metadata` queries return 400 before
+    listing.
+- Regression coverage updated:
+  - extended the local Containers shell/artifact test to verify invalid create
+    queries with `not-json` bodies fail on query validation first;
+  - verified invalid container-file create does not persist a file;
+  - verified invalid container-file delete leaves file content readable;
+  - verified invalid container delete leaves the container retrievable;
+  - changed previous `before` list behavior on containers and container files
+    from ignored-success to official 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records Containers no-query boundaries and
+    official list query allowlists across container and container-file
+    endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Containers" test/server.test.js`
+    passed 4/4 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Containers query smoke marker
+    `containers-query-smoke-1781724393898` verified invalid query rejection on
+    container create/list/retrieve/delete and container-file create/list/
+    retrieve/content/delete, confirmed invalid mutations did not persist or
+    remove state, and cleaned up the temporary container after validation.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.5G available,
+    96% used.
+  - Runtime prune dry-run scanned 5391 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Container or Container File ids, prompt
+    payload secrets, or smoke-test request secrets were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Evals Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for

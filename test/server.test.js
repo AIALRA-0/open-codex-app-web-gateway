@@ -18510,6 +18510,24 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     }));
   }, async ({ bridgeAddress }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectUnsupportedQuery = async (response, param) => {
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: `Unsupported query parameter: ${param}`,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      });
+    };
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/containers?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+
     const createdContainer = await fetch(`${baseUrl}/v1/containers`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -18520,13 +18538,16 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     assert.equal(container.object, "container");
     assert.equal(container.status, "running");
 
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/containers/${container.id}?metadata=debug`), "metadata");
+
     const listed = await fetch(`${baseUrl}/v1/containers?name=shell-fixture&limit=1&order=desc`);
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, container.id);
 
-    const listedBeforeIgnored = await fetch(`${baseUrl}/v1/containers?name=shell-fixture&before=${container.id}&limit=1`);
-    assert.equal(listedBeforeIgnored.status, 200);
-    assert.equal((await listedBeforeIgnored.json()).data[0].id, container.id);
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/containers?name=shell-fixture&before=${container.id}&limit=1`),
+      "before",
+    );
 
     const invalidContainerListCases = [
       {
@@ -18562,6 +18583,15 @@ test("local Containers back Responses shell compatibility and artifacts", async 
         },
       }, testCase.path);
     }
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/containers/${container.id}/files?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    }), "metadata");
+    const emptyFilesAfterInvalidCreate = await fetch(`${baseUrl}/v1/containers/${container.id}/files?limit=10`);
+    assert.equal(emptyFilesAfterInvalidCreate.status, 200);
+    assert.deepEqual((await emptyFilesAfterInvalidCreate.json()).data, []);
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -18599,9 +18629,10 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     const filesJson = await files.json();
     assert.equal(filesJson.data[0].path, "/artifact.txt");
 
-    const filesBeforeIgnored = await fetch(`${baseUrl}/v1/containers/${container.id}/files?before=${filesJson.data[0].id}&limit=1`);
-    assert.equal(filesBeforeIgnored.status, 200);
-    assert.equal((await filesBeforeIgnored.json()).data[0].id, filesJson.data[0].id);
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/containers/${container.id}/files?before=${filesJson.data[0].id}&limit=1`),
+      "before",
+    );
 
     const invalidContainerFileListCases = [
       {
@@ -18632,6 +18663,19 @@ test("local Containers back Responses shell compatibility and artifacts", async 
         },
       }, testCase.path);
     }
+
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}?metadata=debug`),
+      "metadata",
+    );
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content?metadata=debug`),
+      "metadata",
+    );
+    await expectUnsupportedQuery(
+      await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}?metadata=debug`, { method: "DELETE" }),
+      "metadata",
+    );
 
     const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content`);
     assert.equal(content.status, 200);
@@ -18679,6 +18723,11 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     assert.ok((await autoFiles.json()).data.some((file) => file.path === "/shell-auto-file.txt"));
     const deletedAuto = await fetch(`${baseUrl}/v1/containers/${autoJson.output[0].container_id}`, { method: "DELETE" });
     assert.equal(deletedAuto.status, 200);
+
+    await expectUnsupportedQuery(await fetch(`${baseUrl}/v1/containers/${container.id}?metadata=debug`, { method: "DELETE" }), "metadata");
+    const containerAfterInvalidDelete = await fetch(`${baseUrl}/v1/containers/${container.id}`);
+    assert.equal(containerAfterInvalidDelete.status, 200);
+    assert.equal((await containerAfterInvalidDelete.json()).id, container.id);
 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);

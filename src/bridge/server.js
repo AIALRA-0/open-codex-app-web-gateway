@@ -7795,7 +7795,13 @@ function handleSkillContent(res, skillStore, skillId, version) {
   res.end(content.content);
 }
 
-async function handleContainerCreate(req, res, containerStore) {
+async function handleContainerCreate(req, res, containerStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   sendJson(res, 200, containerStore.createContainer(body));
 }
@@ -7813,6 +7819,9 @@ function handleContainersList(res, containerStore, url) {
 }
 
 function validateOpenAIContainersListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "name", "order"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -7825,7 +7834,13 @@ function validateOpenAIContainersListQuery(url) {
   return validateOpenAISingleQueryValue(url, "name");
 }
 
-function handleContainerGet(res, containerStore, containerId) {
+function handleContainerGet(res, containerStore, containerId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const container = containerStore.getContainer(containerId);
   if (!container) {
     sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
@@ -7834,7 +7849,13 @@ function handleContainerGet(res, containerStore, containerId) {
   sendJson(res, 200, container);
 }
 
-function handleContainerDelete(res, containerStore, containerId) {
+function handleContainerDelete(res, containerStore, containerId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = containerStore.deleteContainer(containerId);
   if (!deleted) {
     sendError(res, 404, `container not found: ${containerId}`, { code: "container_not_found" });
@@ -7843,7 +7864,13 @@ function handleContainerDelete(res, containerStore, containerId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleContainerFileCreate(req, res, config, containerStore, containerId) {
+async function handleContainerFileCreate(req, res, config, containerStore, containerId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const upload = await readContainerFileCreateRequest(req, config);
   const file = containerStore.createContainerFile(containerId, upload);
   if (!file) {
@@ -7870,6 +7897,9 @@ function handleContainerFilesList(res, containerStore, containerId, url) {
 }
 
 function validateOpenAIContainerFilesListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "order"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -7879,7 +7909,13 @@ function validateOpenAIContainerFilesListQuery(url) {
   return validateOpenAISingleQueryValue(url, "after");
 }
 
-function handleContainerFileGet(res, containerStore, containerId, fileId) {
+function handleContainerFileGet(res, containerStore, containerId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const file = containerStore.getContainerFile(containerId, fileId);
   if (!file) {
     sendError(res, 404, `container file not found: ${fileId}`, { code: "container_file_not_found" });
@@ -7888,7 +7924,13 @@ function handleContainerFileGet(res, containerStore, containerId, fileId) {
   sendJson(res, 200, file);
 }
 
-function handleContainerFileContent(res, containerStore, containerId, fileId) {
+function handleContainerFileContent(res, containerStore, containerId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const file = containerStore.getContainerFile(containerId, fileId);
   const content = file ? containerStore.getContainerFileContent(containerId, fileId) : null;
   if (content == null) {
@@ -7903,7 +7945,13 @@ function handleContainerFileContent(res, containerStore, containerId, fileId) {
   res.end(content);
 }
 
-function handleContainerFileDelete(res, containerStore, containerId, fileId) {
+function handleContainerFileDelete(res, containerStore, containerId, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = containerStore.deleteContainerFile(containerId, fileId);
   if (!deleted) {
     sendError(res, 404, `container file not found: ${fileId}`, { code: "container_file_not_found" });
@@ -23607,7 +23655,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleContainerCreate(req, res, containerStore);
+          await handleContainerCreate(req, res, containerStore, url);
           return;
         }
       }
@@ -23682,19 +23730,19 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!fileId && req.method === "POST") {
-          await handleContainerFileCreate(req, res, config, containerStore, containerId);
+          await handleContainerFileCreate(req, res, config, containerStore, containerId, url);
           return;
         }
         if (fileId && !action && req.method === "GET") {
-          handleContainerFileGet(res, containerStore, containerId, fileId);
+          handleContainerFileGet(res, containerStore, containerId, fileId, url);
           return;
         }
         if (fileId && !action && req.method === "DELETE") {
-          handleContainerFileDelete(res, containerStore, containerId, fileId);
+          handleContainerFileDelete(res, containerStore, containerId, fileId, url);
           return;
         }
         if (fileId && action === "content" && req.method === "GET") {
-          handleContainerFileContent(res, containerStore, containerId, fileId);
+          handleContainerFileContent(res, containerStore, containerId, fileId, url);
           return;
         }
       }
@@ -23703,11 +23751,11 @@ function createServer(config = loadConfig()) {
       if (containerRoute) {
         const containerId = decodeURIComponent(containerRoute[1]);
         if (req.method === "GET") {
-          handleContainerGet(res, containerStore, containerId);
+          handleContainerGet(res, containerStore, containerId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleContainerDelete(res, containerStore, containerId);
+          handleContainerDelete(res, containerStore, containerId, url);
           return;
         }
       }
