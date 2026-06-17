@@ -14271,7 +14271,7 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
 
   const keys = Object.keys(isPlainObject(body) ? body : {});
   const unsupported = keys.filter((key) => key !== "metadata");
-  if (!keys.includes("metadata") || unsupported.length || !isPlainObject(body.metadata)) {
+  if (!keys.includes("metadata") || unsupported.length || (body.metadata != null && !isPlainObject(body.metadata))) {
     sendError(res, 400, "only metadata updates are supported for stored chat completions", {
       type: "invalid_request_error",
       param: unsupported[0] || "metadata",
@@ -14285,7 +14285,7 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
     return;
   }
 
-  const metadata = clone(body.metadata);
+  const metadata = body.metadata == null ? {} : clone(body.metadata);
   const updatedRecord = {
     ...record,
     chat_completion: {

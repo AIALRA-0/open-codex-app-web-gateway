@@ -1,5 +1,41 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Update Nullable Metadata
+
+- Rechecked the official OpenAI OpenAPI schema for
+  `POST /v1/chat/completions/{completion_id}`:
+  - the update body requires `metadata`;
+  - `metadata` references the shared `Metadata` schema, which permits either a
+    string-valued metadata object or `null`;
+  - stored Chat update remains limited to the `metadata` field.
+- Tightened the local stored Chat lifecycle update compatibility boundary:
+  - `POST /v1/chat/completions/{completion_id}` now accepts `metadata:null`;
+  - local storage maps the nullable update to an empty metadata object `{}`;
+  - missing metadata, unsupported update fields, non-object bodies, and
+    non-string metadata values remain rejected before any provider call.
+- Regression coverage added:
+  - stored Chat update to object metadata still works;
+  - update with `metadata:null` clears metadata and persists across retrieve;
+  - metadata filters no longer match the cleared stored completion while still
+    matching other stored completions.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe nullable stored Chat
+    metadata update behavior.
+- Validation:
+  - targeted stored Chat lifecycle tests pass;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - local and public smoke created temporary `store:true` Chat completions,
+    updated them with `metadata:null`, confirmed retrieved metadata is `{}`,
+    confirmed missing `metadata` still returns `400` with `param:"metadata"`,
+    and deleted the temporary records.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Conversation Update Nullable Metadata
 
 - Rechecked the official `openai/openai-openapi` schema for

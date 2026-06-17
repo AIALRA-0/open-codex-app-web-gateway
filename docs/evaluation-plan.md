@@ -500,7 +500,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 
 - At least 95% of native baseline task success on the chosen task suite.
 - No critical UI workflow regressions.
-- Stored Chat completion list/get/messages endpoints preserve local `store:true` lifecycle records with pagination and filters.
+- Stored Chat completion list/get/messages endpoints preserve local `store:true`
+  lifecycle records with pagination, filters, object metadata updates, and
+  nullable `metadata:null` clears.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,

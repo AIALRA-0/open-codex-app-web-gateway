@@ -24516,6 +24516,26 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
       });
     }
 
+    const cleared = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: null }),
+    });
+    assert.equal(cleared.status, 200);
+    const clearedJson = await cleared.json();
+    assert.equal(clearedJson.id, json.id);
+    assert.deepEqual(clearedJson.metadata, {});
+
+    const refetchedCleared = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(refetchedCleared.status, 200);
+    assert.deepEqual((await refetchedCleared.json()).metadata, {});
+
+    const listedAfterClear = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated`);
+    assert.equal(listedAfterClear.status, 200);
+    const listedAfterClearJson = await listedAfterClear.json();
+    assert.equal(listedAfterClearJson.data.length, 1);
+    assert.equal(listedAfterClearJson.data[0].id, secondJson.id);
+
     const previousMetadata = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-list`);
     assert.equal(previousMetadata.status, 200);
     assert.equal((await previousMetadata.json()).data.length, 0);
