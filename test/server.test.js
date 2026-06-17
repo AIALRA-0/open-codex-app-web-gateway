@@ -15785,6 +15785,66 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(vectorFile.object, "vector_store.file");
     assert.equal(vectorFile.status, "completed");
 
+    const listedVectorFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files?filter=completed&limit=1&order=desc`);
+    assert.equal(listedVectorFiles.status, 200);
+    const listedVectorFilesJson = await listedVectorFiles.json();
+    assert.equal(listedVectorFilesJson.data.length, 1);
+    assert.equal(listedVectorFilesJson.data[0].id, file.id);
+
+    const failedVectorFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files?filter=failed`);
+    assert.equal(failedVectorFiles.status, 200);
+    assert.deepEqual((await failedVectorFiles.json()).data, []);
+
+    const invalidVectorStoreFileListCases = [
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?limit=1&limit=2`,
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?order=asc&order=desc`,
+        message: "order must be a single string query value",
+        param: "order",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?after=${file.id}&after=file-other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?before=${file.id}&before=file-other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?filter=queued`,
+        message: "filter must be one of: in_progress, completed, failed, cancelled",
+        param: "filter",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/files?filter=completed&filter=failed`,
+        message: "filter must be a single string query value",
+        param: "filter",
+      },
+    ];
+    for (const testCase of invalidVectorStoreFileListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const search = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -16904,7 +16964,7 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     assert.deepEqual(attachedContentJson.attributes, { suite: "batch-global-updated", topic: "content" });
     assert.match(attachedContentJson.content[0].text, /batch-global-ok/);
 
-    const perFileFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files`);
+    const perFileFiles = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?filter=completed&limit=1&order=desc`);
     assert.equal(perFileFiles.status, 200);
     const perFileFilesJson = await perFileFiles.json();
     assert.equal(perFileFilesJson.data.length, 1);
@@ -16914,6 +16974,36 @@ test("local Vector Store file batches attach files and expose batch lifecycle", 
     const failedFilter = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?filter=failed`);
     assert.equal(failedFilter.status, 200);
     assert.deepEqual((await failedFilter.json()).data, []);
+
+    const invalidBatchFileListCases = [
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?filter=queued`,
+        message: "filter must be one of: in_progress, completed, failed, cancelled",
+        param: "filter",
+      },
+      {
+        path: `/v1/vector_stores/${vectorStore.id}/file_batches/${perFileBatch.id}/files?before=${fileB.id}&before=file-other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+    ];
+    for (const testCase of invalidBatchFileListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const search = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",

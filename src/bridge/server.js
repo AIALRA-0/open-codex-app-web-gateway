@@ -7222,6 +7222,35 @@ function officialCursorListPaginationUrl(url) {
   return localUrl;
 }
 
+function validateOpenAIVectorStoreFileListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const beforeError = validateOpenAISingleQueryValue(url, "before");
+  if (beforeError) return beforeError;
+
+  const filterError = validateOpenAISingleQueryValue(url, "filter");
+  if (filterError) return filterError;
+
+  const filter = url.searchParams.get("filter");
+  if (filter && !["in_progress", "completed", "failed", "cancelled"].includes(filter)) {
+    return requestValidationError("filter must be one of: in_progress, completed, failed, cancelled", "filter");
+  }
+  return null;
+}
+
+function officialVectorStoreFileListPaginationUrl(url) {
+  const localUrl = officialCursorListPaginationUrl(url);
+  if (url.searchParams.has("filter")) localUrl.searchParams.set("filter", url.searchParams.get("filter"));
+  return localUrl;
+}
+
 function handleVectorStoreGet(res, fileSearchStore, storeId) {
   const store = fileSearchStore.getVectorStore(storeId);
   if (!store) {
@@ -7294,7 +7323,14 @@ function handleVectorStoreFileBatchCancel(res, fileSearchStore, storeId, batchId
 }
 
 function handleVectorStoreFileBatchFilesList(res, fileSearchStore, storeId, batchId, url) {
-  const page = fileSearchStore.listVectorStoreFileBatchFiles(storeId, batchId, { url });
+  const queryError = validateOpenAIVectorStoreFileListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const page = fileSearchStore.listVectorStoreFileBatchFiles(storeId, batchId, {
+    url: officialVectorStoreFileListPaginationUrl(url),
+  });
   if (!page) {
     sendError(res, 404, `vector store file batch not found: ${batchId}`, { code: "vector_store_file_batch_not_found" });
     return;
@@ -7303,7 +7339,14 @@ function handleVectorStoreFileBatchFilesList(res, fileSearchStore, storeId, batc
 }
 
 function handleVectorStoreFilesList(res, fileSearchStore, storeId, url) {
-  const page = fileSearchStore.listVectorStoreFiles(storeId, { url });
+  const queryError = validateOpenAIVectorStoreFileListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const page = fileSearchStore.listVectorStoreFiles(storeId, {
+    url: officialVectorStoreFileListPaginationUrl(url),
+  });
   if (!page) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
     return;

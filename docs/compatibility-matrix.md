@@ -1067,14 +1067,14 @@ not in Git; clearly text-like files also keep a text index for local
 | `POST /v1/vector_stores/{vector_store_id}` | Implemented | Updates local vector-store `name`, `metadata`, and `expires_after`; computes `expires_at` from the local `last_active_at` timestamp |
 | `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |
 | `POST /v1/vector_stores/{vector_store_id}/files` | Implemented | Attaches an uploaded file; supports per-file `attributes` for filtering and validates `chunking_strategy` |
-| `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with pagination |
+| `GET /v1/vector_stores/{vector_store_id}/files` | Implemented | Lists attached files with official `limit`, `after`, `before`, `order`, and `filter` pagination; repeated scalar query values return 400, `limit` is validated from 1 through 100, and `filter` accepts `in_progress`, `completed`, `failed`, or `cancelled` |
 | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Returns local vector-store file metadata |
 | `POST /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Updates local vector-store file `attributes` for later `file_search` filters |
 | `GET /v1/vector_stores/{vector_store_id}/files/{file_id}/content` | Implemented | Returns local extracted text chunks for a vector-store file, with chunk metadata and effective chunking strategy |
 | `DELETE /v1/vector_stores/{vector_store_id}/files/{file_id}` | Implemented | Detaches a file from the vector store |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches` | Implemented | Synchronously attaches up to 2000 local files; accepts either `file_ids` with global `attributes`/`chunking_strategy` or `files[]` with per-file values; validates static chunking limits |
 | `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}` | Implemented | Returns the local batch record with OpenAI-style `vector_store.file_batch`, `status`, and `file_counts` fields |
-| `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with pagination and `filter` by file status |
+| `GET /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/files` | Implemented | Lists the vector-store files attached by the batch with official `limit`, `after`, `before`, `order`, and `filter` pagination; repeated scalar query values return 400, `limit` is validated from 1 through 100, and `filter` accepts `in_progress`, `completed`, `failed`, or `cancelled` |
 | `POST /v1/vector_stores/{vector_store_id}/file_batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns the completed batch unless a future async batch is still `in_progress`, in which case it is marked `cancelled` |
 | `POST /v1/vector_stores/{vector_store_id}/search` | Implemented | Hybrid local keyword + hashed-semantic chunk search with string or array `query`, `search_queries`, `matched_queries`, `max_num_results` default 10 / max 50, chunk metadata, static chunk overlap, ranking options, OpenAI-style attribute filters, `last_active_at` refresh, and `400 vector_store_expired` for expired stores |
 

@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Vector Store File List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:
+  - `GET /vector_stores/{vector_store_id}/files`;
+  - `GET /vector_stores/{vector_store_id}/file_batches/{batch_id}/files`.
+- Confirmed both endpoints support:
+  - `limit` as an integer scalar with documented range 1 through 100;
+  - `order` as an `asc` / `desc` string scalar;
+  - `after` and `before` as string cursor scalars;
+  - `filter` as one of `in_progress`, `completed`, `failed`, or
+    `cancelled`.
+- Tightened local Vector Store file list behavior:
+  - direct vector-store file lists and batch file lists now validate repeated
+    scalar `limit`, `order`, `after`, `before`, and `filter` query
+    parameters before listing files;
+  - `limit` is validated with the official 100 maximum;
+  - invalid `filter` values now return HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"filter"`;
+  - both handlers pass a sanitized official-list URL to the local paginator.
+- Completed direct-list filtering:
+  - `GET /v1/vector_stores/{vector_store_id}/files?filter=...` now filters by
+    vector-store file status, matching the already-supported batch file list
+    behavior.
+- Regression coverage updated:
+  - extended the local Responses file_search compatibility test with direct
+    vector-store file list pagination, `filter=completed`, `filter=failed`,
+    repeated scalar query checks, invalid limit, and invalid filter checks;
+  - extended the local Vector Store file batch lifecycle test with
+    `filter=completed`, official pagination, invalid limit, invalid filter,
+    and repeated `before` checks.
+- Documentation updated:
+  - compatibility matrix now records official Vector Store file list and batch
+    file list pagination/filter validation behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/local_file_search.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search|Vector Store file batches" test/server.test.js`
+    passed 2/2 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`.
+  - Public Vector Store file-list smoke created two temporary local files and
+    one temporary vector store; direct `GET .../files?filter=completed`
+    returned the attached file, and invalid `filter=queued` returned HTTP 400
+    with `param:"filter"`.
+  - Public Vector Store batch-file-list smoke created one temporary file batch;
+    `GET .../file_batches/{batch_id}/files?filter=completed` returned the
+    attached file, and invalid `limit=101` returned HTTP 400 with
+    `param:"limit"`.
+  - Public smoke cleanup deleted the temporary vector store and both temporary
+    files successfully.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Vector Stores List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

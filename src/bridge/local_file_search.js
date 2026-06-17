@@ -354,9 +354,11 @@ class LocalFileSearchStore {
 
   listVectorStoreFiles(storeId, { url } = {}) {
     if (!this.getVectorStore(storeId)) return null;
+    const status = url?.searchParams?.get("filter") || "";
     const files = this.listJson(this.vectorStoreFilesDir(storeId))
       .map((record) => record.vector_store_file)
-      .filter(Boolean);
+      .filter(Boolean)
+      .filter((file) => !status || file.status === status);
     return paginateList(files, url);
   }
 
