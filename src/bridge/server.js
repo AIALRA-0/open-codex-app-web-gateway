@@ -333,6 +333,11 @@ const OPENAI_RESPONSES_TOOL_CHOICE_OBJECT_TYPES = Object.freeze([
 const OPENAI_ALLOWED_TOOLS_MODE_VALUES = Object.freeze(["auto", "required"]);
 const OPENAI_CUSTOM_TOOL_FORMAT_TYPES = Object.freeze(["text", "grammar"]);
 const OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES = Object.freeze(["lark", "regex"]);
+const OPENAI_CONTAINER_MEMORY_LIMIT_VALUES = Object.freeze(["1g", "4g", "16g", "64g"]);
+const OPENAI_CONTAINER_AUTO_FILE_IDS_MAX = 50;
+const OPENAI_CONTAINER_SKILLS_MAX = 200;
+const OPENAI_CONTAINER_DOMAIN_SECRET_VALUE_MAX_CHARS = 10485760;
+const OPENAI_INLINE_SKILL_SOURCE_DATA_MAX_CHARS = 70254592;
 const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
 const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
@@ -1127,7 +1132,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
   if (localInputFiles) {
     applyInputFilesToChat(chat, compatibility, localInputFiles, config);
   }
-  const localShell = await prepareShellContext(request, config, containerStore, { toolBudget, skillStore });
+  const localShell = await prepareShellContext(request, config, containerStore, { toolBudget, skillStore, fileSearchStore });
   if (localShell) {
     applyLocalShellToChat(chat, compatibility, localShell, config);
   }
@@ -1548,7 +1553,11 @@ async function runBackgroundPrepareStep(step, { config, store, job, request, pre
   }
 
   if (step === "shell") {
-    const localShell = await prepareShellContext(request, config, containerStore, { toolBudget: runtime.toolBudget, skillStore });
+    const localShell = await prepareShellContext(request, config, containerStore, {
+      toolBudget: runtime.toolBudget,
+      skillStore,
+      fileSearchStore,
+    });
     runtime.contexts.shell = localShell;
     if (localShell) {
       runtime.compatibility = applyLocalShellToChat(runtime.chat, { ...runtime.compatibility }, localShell, config);
@@ -3689,6 +3698,12 @@ function validateOpenAIResponsesTools(body = {}) {
       if (typeof tool.server_label !== "string") {
         return requestValidationError(`${param}.server_label must be a string`, `${param}.server_label`);
       }
+    } else if (tool.type === "shell") {
+      const shellError = validateOpenAIResponsesShellTool(tool, param);
+      if (shellError) return shellError;
+    } else if (tool.type === "code_interpreter") {
+      const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
+      if (codeInterpreterError) return codeInterpreterError;
     }
   }
   return null;
@@ -3777,6 +3792,264 @@ function validateOpenAIResponsesNamespaceTool(tool, param) {
         `${nestedParam}.type must be one of: function, custom`,
         `${nestedParam}.type`,
       );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesShellTool(tool, param) {
+  if (!Object.prototype.hasOwnProperty.call(tool, "environment") || tool.environment == null) return null;
+  const environmentParam = `${param}.environment`;
+  if (!isPlainObject(tool.environment)) {
+    return requestValidationError(`${environmentParam} must be an object or null`, environmentParam);
+  }
+  if (typeof tool.environment.type !== "string") {
+    return requestValidationError(`${environmentParam}.type must be a string`, `${environmentParam}.type`);
+  }
+  if (tool.environment.type === "container_reference") {
+    return validateOpenAIContainerReference(tool.environment, environmentParam);
+  }
+  if (tool.environment.type === "container_auto") {
+    return validateOpenAIContainerAuto(tool.environment, environmentParam, { allowSkills: true });
+  }
+  if (tool.environment.type === "local") {
+    return validateOpenAILocalEnvironment(tool.environment, environmentParam);
+  }
+  return requestValidationError(
+    `${environmentParam}.type must be one of: container_auto, local, container_reference`,
+    `${environmentParam}.type`,
+  );
+}
+
+function validateOpenAIResponsesCodeInterpreterTool(tool, param) {
+  if (!Object.prototype.hasOwnProperty.call(tool, "container") || tool.container == null) {
+    return requestValidationError(`${param}.container is required`, `${param}.container`);
+  }
+  if (typeof tool.container === "string") {
+    if (!tool.container) {
+      return requestValidationError(`${param}.container must be a non-empty string or an object`, `${param}.container`);
+    }
+    return null;
+  }
+  const containerParam = `${param}.container`;
+  if (!isPlainObject(tool.container)) {
+    return requestValidationError(`${containerParam} must be a non-empty string or an object`, containerParam);
+  }
+  if (typeof tool.container.type !== "string") {
+    return requestValidationError(`${containerParam}.type must be a string`, `${containerParam}.type`);
+  }
+  if (tool.container.type === "auto") {
+    return validateOpenAIContainerAuto(tool.container, containerParam);
+  }
+  if (tool.container.type === "container_reference") {
+    return validateOpenAIContainerReference(tool.container, containerParam);
+  }
+  return requestValidationError(
+    `${containerParam}.type must be one of: auto, container_reference`,
+    `${containerParam}.type`,
+  );
+}
+
+function validateOpenAIContainerReference(container, param) {
+  if (typeof container.container_id !== "string" || !container.container_id) {
+    return requestValidationError(`${param}.container_id must be a non-empty string`, `${param}.container_id`);
+  }
+  return null;
+}
+
+function validateOpenAIContainerAuto(container, param, options = {}) {
+  const fileIdsError = validateOpenAIContainerFileIds(container.file_ids, `${param}.file_ids`);
+  if (fileIdsError) return fileIdsError;
+  const memoryLimitError = validateOpenAIContainerMemoryLimit(container.memory_limit, `${param}.memory_limit`);
+  if (memoryLimitError) return memoryLimitError;
+  const networkPolicyError = validateOpenAIContainerNetworkPolicy(container.network_policy, `${param}.network_policy`);
+  if (networkPolicyError) return networkPolicyError;
+  if (options.allowSkills) {
+    return validateOpenAIContainerSkills(container.skills, `${param}.skills`);
+  }
+  return null;
+}
+
+function validateOpenAIContainerFileIds(fileIds, param) {
+  if (fileIds == null) return null;
+  if (!Array.isArray(fileIds)) {
+    return requestValidationError(`${param} must be an array`, param);
+  }
+  if (fileIds.length > OPENAI_CONTAINER_AUTO_FILE_IDS_MAX) {
+    return requestValidationError(
+      `${param} must contain at most ${OPENAI_CONTAINER_AUTO_FILE_IDS_MAX} items`,
+      param,
+    );
+  }
+  for (const [index, fileId] of fileIds.entries()) {
+    if (typeof fileId !== "string") {
+      return requestValidationError(`${param}.${index} must be a string`, `${param}.${index}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIContainerMemoryLimit(memoryLimit, param) {
+  if (memoryLimit == null) return null;
+  if (typeof memoryLimit !== "string") {
+    return requestValidationError(`${param} must be a string`, param);
+  }
+  if (!OPENAI_CONTAINER_MEMORY_LIMIT_VALUES.includes(memoryLimit)) {
+    return requestValidationError(
+      `${param} must be one of: ${OPENAI_CONTAINER_MEMORY_LIMIT_VALUES.join(", ")}`,
+      param,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIContainerNetworkPolicy(networkPolicy, param) {
+  if (networkPolicy == null) return null;
+  if (!isPlainObject(networkPolicy)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof networkPolicy.type !== "string") {
+    return requestValidationError(`${param}.type must be a string`, `${param}.type`);
+  }
+  if (networkPolicy.type === "disabled") return null;
+  if (networkPolicy.type !== "allowlist") {
+    return requestValidationError(`${param}.type must be one of: disabled, allowlist`, `${param}.type`);
+  }
+  if (!Array.isArray(networkPolicy.allowed_domains) || networkPolicy.allowed_domains.length < 1) {
+    return requestValidationError(`${param}.allowed_domains must be a non-empty array`, `${param}.allowed_domains`);
+  }
+  for (const [index, domain] of networkPolicy.allowed_domains.entries()) {
+    if (typeof domain !== "string") {
+      return requestValidationError(`${param}.allowed_domains.${index} must be a string`, `${param}.allowed_domains.${index}`);
+    }
+    if (!domain) {
+      return requestValidationError(`${param}.allowed_domains.${index} must be non-empty`, `${param}.allowed_domains.${index}`);
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(networkPolicy, "domain_secrets") || networkPolicy.domain_secrets == null) {
+    return null;
+  }
+  if (!Array.isArray(networkPolicy.domain_secrets) || networkPolicy.domain_secrets.length < 1) {
+    return requestValidationError(`${param}.domain_secrets must be a non-empty array`, `${param}.domain_secrets`);
+  }
+  for (const [index, secret] of networkPolicy.domain_secrets.entries()) {
+    const secretParam = `${param}.domain_secrets.${index}`;
+    if (!isPlainObject(secret)) {
+      return requestValidationError(`${secretParam} must be an object`, secretParam);
+    }
+    for (const field of ["domain", "name", "value"]) {
+      const fieldParam = `${secretParam}.${field}`;
+      if (typeof secret[field] !== "string" || !secret[field]) {
+        return requestValidationError(`${fieldParam} must be a non-empty string`, fieldParam);
+      }
+    }
+    if (secret.value.length > OPENAI_CONTAINER_DOMAIN_SECRET_VALUE_MAX_CHARS) {
+      return requestValidationError(
+        `${secretParam}.value must be at most ${OPENAI_CONTAINER_DOMAIN_SECRET_VALUE_MAX_CHARS} characters`,
+        `${secretParam}.value`,
+      );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIContainerSkills(skills, param) {
+  if (skills == null) return null;
+  if (!Array.isArray(skills)) {
+    return requestValidationError(`${param} must be an array`, param);
+  }
+  if (skills.length > OPENAI_CONTAINER_SKILLS_MAX) {
+    return requestValidationError(`${param} must contain at most ${OPENAI_CONTAINER_SKILLS_MAX} items`, param);
+  }
+  for (const [index, skill] of skills.entries()) {
+    const skillError = validateOpenAIContainerSkill(skill, `${param}.${index}`);
+    if (skillError) return skillError;
+  }
+  return null;
+}
+
+function validateOpenAIContainerSkill(skill, param) {
+  if (!isPlainObject(skill)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (skill.type === "skill_reference") {
+    return validateOpenAISkillReference(skill, param);
+  }
+  if (skill.type === "inline") {
+    return validateOpenAIInlineSkill(skill, param);
+  }
+  return requestValidationError(`${param}.type must be one of: skill_reference, inline`, `${param}.type`);
+}
+
+function validateOpenAISkillReference(skill, param) {
+  if (typeof skill.skill_id !== "string" || !skill.skill_id) {
+    return requestValidationError(`${param}.skill_id must be a non-empty string`, `${param}.skill_id`);
+  }
+  if (skill.skill_id.length > 64) {
+    return requestValidationError(`${param}.skill_id must be at most 64 characters`, `${param}.skill_id`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(skill, "version")
+    && skill.version != null
+    && typeof skill.version !== "string"
+  ) {
+    return requestValidationError(`${param}.version must be a string or null`, `${param}.version`);
+  }
+  return null;
+}
+
+function validateOpenAIInlineSkill(skill, param) {
+  for (const field of ["name", "description"]) {
+    if (typeof skill[field] !== "string" || !skill[field]) {
+      return requestValidationError(`${param}.${field} must be a non-empty string`, `${param}.${field}`);
+    }
+  }
+  if (!isPlainObject(skill.source)) {
+    return requestValidationError(`${param}.source must be an object`, `${param}.source`);
+  }
+  if (skill.source.type !== "base64") {
+    return requestValidationError(`${param}.source.type must be base64`, `${param}.source.type`);
+  }
+  if (skill.source.media_type !== "application/zip") {
+    return requestValidationError(`${param}.source.media_type must be application/zip`, `${param}.source.media_type`);
+  }
+  if (typeof skill.source.data !== "string" || !skill.source.data) {
+    return requestValidationError(`${param}.source.data must be a non-empty string`, `${param}.source.data`);
+  }
+  if (skill.source.data.length > OPENAI_INLINE_SKILL_SOURCE_DATA_MAX_CHARS) {
+    return requestValidationError(
+      `${param}.source.data must be at most ${OPENAI_INLINE_SKILL_SOURCE_DATA_MAX_CHARS} characters`,
+      `${param}.source.data`,
+    );
+  }
+  return null;
+}
+
+function validateOpenAILocalEnvironment(environment, param) {
+  if (!Object.prototype.hasOwnProperty.call(environment, "skills") || environment.skills == null) return null;
+  if (!Array.isArray(environment.skills)) {
+    return requestValidationError(`${param}.skills must be an array`, `${param}.skills`);
+  }
+  if (environment.skills.length > OPENAI_CONTAINER_SKILLS_MAX) {
+    return requestValidationError(`${param}.skills must contain at most ${OPENAI_CONTAINER_SKILLS_MAX} items`, `${param}.skills`);
+  }
+  for (const [index, skill] of environment.skills.entries()) {
+    const skillParam = `${param}.skills.${index}`;
+    if (!isPlainObject(skill)) {
+      return requestValidationError(`${skillParam} must be an object`, skillParam);
+    }
+    if (skill.type === "skill_reference") {
+      const referenceError = validateOpenAISkillReference(skill, skillParam);
+      if (referenceError) return referenceError;
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(skill, "type")) {
+      return requestValidationError(`${skillParam}.type must be skill_reference when provided`, `${skillParam}.type`);
+    }
+    for (const field of ["name", "description", "path"]) {
+      if (typeof skill[field] !== "string" || !skill[field]) {
+        return requestValidationError(`${skillParam}.${field} must be a non-empty string`, `${skillParam}.${field}`);
+      }
     }
   }
   return null;

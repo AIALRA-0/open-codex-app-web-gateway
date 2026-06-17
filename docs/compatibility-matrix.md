@@ -178,8 +178,8 @@ requests.
 | `tools[type=web_search_preview]` | local search adapter plus injected Chat context | Emulated locally; emits `web_search_call` search/open_page/find_in_page items and `url_citation` annotations |
 | `tools[type=file_search]` | local vector-store search plus injected Chat context | Emulated locally; emits `file_search_call`, optional results, and `file_citation` annotations |
 | `tool_resources.file_search.vector_store_ids` | local vector-store lookup targets | Emulated locally when the tool omits `vector_store_ids` |
-| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; local `skill_reference` entries from `POST /v1/containers` `skills` and `tools[].environment.skills` are mounted into the local container workspace |
-| `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
+| `tools[type=shell]` | local container command execution plus injected Chat context | Emulated locally for explicit `Execute:` prompts and shell code blocks; emits `shell_call` and `shell_call_output`; `environment` is validated before provider calls as `container_auto`, `container_reference`, or `local`; `container_auto.file_ids` are mounted from the local Files API; local `skill_reference` entries from `POST /v1/containers` `skills` and `tools[].environment.skills` are mounted into the local container workspace |
+| `tools[type=code_interpreter]` | local container Python execution plus injected Chat context | Emulated locally for explicit Python code blocks; `container` is required before provider calls and accepts official `{type:"auto"}` or a non-empty string; the bridge also accepts `{type:"container_reference",container_id}` as a local extension for existing local container reuse; `container.file_ids` are mounted from the local Files API; emits `code_interpreter_call` and executes the block through `python3` in the local container workspace |
 | `tools[type=computer]` | local computer action-loop adapter plus injected Chat context and action proxy | Emulated locally; emits a `computer_call` with GA `actions[]` and preview-compatible `action`, accepts returned `computer_call_output` items as Chat context, exposes a generated Chat function tool for the next model-requested Computer Use action on follow-up turns, maps that action back to `computer_call`, and preserves loop/audit metadata |
 | `tools[type=computer_use_preview]` | local computer action-loop adapter | Compatibility alias for the deprecated preview tool name |
 | `tools[type=mcp]` | local MCP protocol-context adapter plus injected Chat context and non-streaming/streaming/background remote call/approval proxy | Emulated locally for Chat-only providers; emits `mcp_list_tools`, imports explicit/allowed tool definitions, can fetch remote server `tools/list` over Streamable HTTP-style JSON-RPC with JSON or SSE responses, exposes imported remote MCP tools to upstream Chat as function tools on non-streaming, streaming, and active background requests, maps exact MCP `tool_choice` names onto generated Chat function names when uniquely resolvable, maps auto-approved returned Chat tool calls to remote MCP `tools/call`, maps approval-required returned Chat tool calls to `mcp_approval_request`, consumes later `mcp_approval_response` items to execute approved remote calls, emits `mcp_call`, preserves caller-supplied MCP input context items including `mcp_list_tools` replayed from `previous_response_id`, redacts `authorization` from responses and background snapshots, and records `metadata.compatibility.local_mcp`. Hosted connector calls and restart-resumable per-request connector credentials remain future work |
@@ -1449,6 +1449,14 @@ local container workspace. The adapter:
   unsupported Chat tools;
 - extracts explicit `Execute:`, `Run:`, `Command:`, shell code block, or Python
   code block commands;
+- validates `shell.environment` before provider calls as `container_auto`,
+  `container_reference`, or `local`, including `file_ids` capped at 50,
+  `memory_limit` as `1g`/`4g`/`16g`/`64g`, `network_policy` as `disabled` or
+  `allowlist`, and `skills` capped at 200 entries;
+- validates `code_interpreter.container` before provider calls and requires it
+  to be present; official `{type:"auto"}` containers and non-empty string
+  container IDs are accepted, while `{type:"container_reference",container_id}`
+  remains a local bridge extension for existing local container reuse;
 - creates or reuses local container workspaces through `container_auto` and
   `container_reference`-style tool configuration;
 - treats missing explicit `container_reference` IDs as
@@ -1461,6 +1469,10 @@ local container workspace. The adapter:
   `POST /v1/containers` `skills` and `tools[].environment.skills` under
   `/mnt/data/.skills/<skill-name>/v<version>/` and records mounted skill
   metadata in `metadata.compatibility.local_shell.mounted_skills`;
+- mounts `file_ids` supplied directly on the tool, under
+  `tool_resources.code_interpreter.file_ids`, or inside
+  `tools[].environment.file_ids` / `tools[].container.file_ids` into
+  `/mnt/data`;
 - maps `/mnt/data` in commands to the local container workspace;
 - emits paired `shell_call` and `shell_call_output` output items for `shell`;
 - emits `code_interpreter_call` output items for `code_interpreter`, with

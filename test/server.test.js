@@ -2882,6 +2882,95 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.server_label must be a string",
       },
       {
+        body: { tools: [{ type: "shell", environment: "local" }] },
+        param: "tools.0.environment",
+        message: "tools.0.environment must be an object or null",
+      },
+      {
+        body: { tools: [{ type: "shell", environment: { type: "remote" } }] },
+        param: "tools.0.environment.type",
+        message: "tools.0.environment.type must be one of: container_auto, local, container_reference",
+      },
+      {
+        body: { tools: [{ type: "shell", environment: { type: "container_reference" } }] },
+        param: "tools.0.environment.container_id",
+        message: "tools.0.environment.container_id must be a non-empty string",
+      },
+      {
+        body: { tools: [{ type: "shell", environment: { type: "container_auto", file_ids: Array(51).fill("file-x") } }] },
+        param: "tools.0.environment.file_ids",
+        message: "tools.0.environment.file_ids must contain at most 50 items",
+      },
+      {
+        body: { tools: [{ type: "shell", environment: { type: "container_auto", file_ids: [7] } }] },
+        param: "tools.0.environment.file_ids.0",
+        message: "tools.0.environment.file_ids.0 must be a string",
+      },
+      {
+        body: { tools: [{ type: "shell", environment: { type: "container_auto", memory_limit: "2g" } }] },
+        param: "tools.0.environment.memory_limit",
+        message: "tools.0.environment.memory_limit must be one of: 1g, 4g, 16g, 64g",
+      },
+      {
+        body: {
+          tools: [{
+            type: "shell",
+            environment: {
+              type: "container_auto",
+              network_policy: { type: "allowlist", allowed_domains: [] },
+            },
+          }],
+        },
+        param: "tools.0.environment.network_policy.allowed_domains",
+        message: "tools.0.environment.network_policy.allowed_domains must be a non-empty array",
+      },
+      {
+        body: {
+          tools: [{
+            type: "shell",
+            environment: {
+              type: "container_auto",
+              skills: Array(201).fill({ type: "skill_reference", skill_id: "skill-x" }),
+            },
+          }],
+        },
+        param: "tools.0.environment.skills",
+        message: "tools.0.environment.skills must contain at most 200 items",
+      },
+      {
+        body: {
+          tools: [{
+            type: "shell",
+            environment: {
+              type: "container_auto",
+              skills: [{ type: "skill_reference", skill_id: "" }],
+            },
+          }],
+        },
+        param: "tools.0.environment.skills.0.skill_id",
+        message: "tools.0.environment.skills.0.skill_id must be a non-empty string",
+      },
+      {
+        body: { tools: [{ type: "code_interpreter" }] },
+        param: "tools.0.container",
+        message: "tools.0.container is required",
+      },
+      {
+        body: { tools: [{ type: "code_interpreter", container: [] }] },
+        param: "tools.0.container",
+        message: "tools.0.container must be a non-empty string or an object",
+      },
+      {
+        body: { tools: [{ type: "code_interpreter", container: { type: "auto", file_ids: [{}] } }] },
+        param: "tools.0.container.file_ids.0",
+        message: "tools.0.container.file_ids.0 must be a string",
+      },
+      {
+        body: { tools: [{ type: "code_interpreter", container: { type: "container_reference" } }] },
+        param: "tools.0.container.container_id",
+        message: "tools.0.container.container_id must be a non-empty string",
+      },
+      {
         body: {
           tools: [{
             type: "namespace",
@@ -15512,9 +15601,11 @@ test("local Containers back Responses shell compatibility and artifacts", async 
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);
     assert.deepEqual(call.body.thinking, { type: "disabled" });
-    assert.ok(call.body.messages.some((message) => /Local Responses shell compatibility executed command output/.test(message.content || "")));
-    assert.ok(call.body.messages.some((message) => /artifact-ok/.test(message.content || "")));
-    assert.ok(!call.body.messages.some((message) => /cannot be invoked upstream/.test(message.content || "")));
+    const prompt = call.body.messages.map((message) => message.content || "").join("\n\n");
+    const expected = /auto-file-ok/.test(prompt) ? "auto-file-ok" : "artifact-ok";
+    assert.match(prompt, /Local Responses shell compatibility executed command output/);
+    assert.match(prompt, new RegExp(expected));
+    assert.doesNotMatch(prompt, /cannot be invoked upstream/);
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
       id: "chatcmpl_shell",
@@ -15523,7 +15614,7 @@ test("local Containers back Responses shell compatibility and artifacts", async 
       model: "mock-model",
       choices: [{
         index: 0,
-        message: { role: "assistant", content: "artifact-ok" },
+        message: { role: "assistant", content: expected },
         finish_reason: "stop",
       }],
       usage: { prompt_tokens: 9, completion_tokens: 3, total_tokens: 12 },
@@ -15583,6 +15674,49 @@ test("local Containers back Responses shell compatibility and artifacts", async 
     const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${filesJson.data[0].id}/content`);
     assert.equal(content.status, 200);
     assert.equal(await content.text(), "artifact-ok");
+
+    const sourceFileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "shell-auto-file.txt",
+        purpose: "user_data",
+        content: "auto-file-ok",
+      }),
+    });
+    assert.equal(sourceFileResponse.status, 200);
+    const sourceFile = await sourceFileResponse.json();
+
+    const autoResponse = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: cat /mnt/data/shell-auto-file.txt",
+        tools: [{
+          type: "shell",
+          environment: {
+            type: "container_auto",
+            memory_limit: "1g",
+            network_policy: { type: "disabled" },
+            file_ids: [sourceFile.id],
+          },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(autoResponse.status, 200);
+    const autoJson = await autoResponse.json();
+    assert.equal(autoJson.output[0].type, "shell_call");
+    assert.match(autoJson.output[1].output[0].stdout, /auto-file-ok/);
+    assert.equal(autoJson.metadata.compatibility.local_shell.mounted_file_count, 1);
+    assert.equal(autoJson.metadata.compatibility.local_shell.mounted_files[0].file_id, sourceFile.id);
+
+    const autoFiles = await fetch(`${baseUrl}/v1/containers/${autoJson.output[0].container_id}/files`);
+    assert.equal(autoFiles.status, 200);
+    assert.ok((await autoFiles.json()).data.some((file) => file.path === "/shell-auto-file.txt"));
+    const deletedAuto = await fetch(`${baseUrl}/v1/containers/${autoJson.output[0].container_id}`, { method: "DELETE" });
+    assert.equal(deletedAuto.status, 200);
 
     const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
@@ -15919,6 +16053,30 @@ test("local code_interpreter emits Responses code_interpreter_call outputs", asy
     const content = await fetch(`${baseUrl}/v1/containers/${container.id}/files/${artifact.id}/content`);
     assert.equal(content.status, 200);
     assert.equal(await content.text(), "ci-ok");
+
+    const autoResponse = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "```python\nprint('ci-ok')\n```",
+        tools: [{
+          type: "code_interpreter",
+          container: {
+            type: "auto",
+            memory_limit: "1g",
+            network_policy: { type: "disabled" },
+            file_ids: [],
+          },
+        }],
+        include: ["code_interpreter_call.outputs"],
+        store: false,
+      }),
+    });
+    assert.equal(autoResponse.status, 200);
+    const autoJson = await autoResponse.json();
+    assert.equal(autoJson.output[0].type, "code_interpreter_call");
+    assert.match(autoJson.output[0].outputs[0].logs, /ci-ok/);
 
     const responseWithoutInclude = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",
@@ -19597,7 +19755,7 @@ test("Organization usage and costs aggregate local bridge usage ledger", async (
         tools: [
           { type: "file_search", vector_store_ids: [vectorStore.id], max_num_results: 1 },
           { type: "web_search_preview", search_context_size: "high" },
-          { type: "code_interpreter" },
+          { type: "code_interpreter", container: { type: "auto" } },
         ],
         include: [
           "file_search_call.results",

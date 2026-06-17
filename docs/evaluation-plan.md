@@ -89,6 +89,13 @@ validation as `low`/`high`. Malformed values must fail locally before any Chat
 provider call while valid strings, prompt references, and multimodal detail
 values continue to map into model-visible system guidance.
 
+Responses hosted-tool schema coverage must also include `shell.environment` and
+`code_interpreter.container` validation before provider calls. The unit track
+checks rejected malformed container references, `container_auto.file_ids`
+limits, memory-limit enums, network-policy allowlists, skill-reference limits,
+required code-interpreter containers, official `{type:"auto"}` containers, and
+local Files API mounting through shell/code-interpreter auto containers.
+
 Responses input-items coverage verifies that
 `GET /v1/responses/{response_id}/input_items` defaults to descending order,
 honors explicit ascending order, rejects unsupported `order` values, and

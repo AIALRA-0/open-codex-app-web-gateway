@@ -593,9 +593,13 @@ function mountToolFiles(tool, container, containerStore, fileSearchStore) {
 }
 
 function extractToolFileIds(tool = {}) {
+  const environment = isPlainObject(tool.environment) ? tool.environment : {};
+  const container = isPlainObject(tool.container) ? tool.container : {};
   const resources = tool.tool_resources?.code_interpreter || tool.resources?.code_interpreter || {};
   const candidates = [
     ...(Array.isArray(tool.file_ids) ? tool.file_ids : []),
+    ...(Array.isArray(environment.file_ids) ? environment.file_ids : []),
+    ...(Array.isArray(container.file_ids) ? container.file_ids : []),
     ...(Array.isArray(tool.files) ? tool.files.map((file) => file?.file_id || file?.id || file) : []),
     ...(Array.isArray(resources.file_ids) ? resources.file_ids : []),
   ];

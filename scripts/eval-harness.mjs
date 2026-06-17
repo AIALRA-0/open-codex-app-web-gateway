@@ -5065,7 +5065,7 @@ async function runOrganizationUsageCostsCase(testCase, context, started) {
     tools: [
       { type: "file_search", vector_store_ids: [vectorStoreId], max_num_results: 1 },
       { type: "web_search_preview", search_context_size: "high" },
-      { type: "code_interpreter" },
+      { type: "code_interpreter", container: { type: "auto" } },
     ],
     include: [
       "file_search_call.results",

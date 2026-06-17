@@ -1,5 +1,76 @@
 # Audit Log
 
+## 2026-06-17 Responses Shell and Code Interpreter Container Schema Validation
+
+- Rechecked the official OpenAI Responses/OpenAPI tool schemas through the
+  OpenAI developer docs/OpenAPI source:
+  - Responses `shell` tools accept an optional `environment` object shaped as
+    `container_auto`, `container_reference`, or `local`;
+  - Responses `code_interpreter` tools require a `container` value, with
+    official auto-container object support;
+  - container auto configuration constrains `file_ids`, `memory_limit`,
+    `network_policy`, and skill entries.
+- Tightened local Responses request validation before provider calls:
+  - malformed `shell.environment` objects now return
+    `400 invalid_request_parameter` locally;
+  - malformed or missing `code_interpreter.container` values now return
+    `400 invalid_request_parameter` locally;
+  - `file_ids` length and item types, memory-limit enums, allowlist network
+    policies, domain-secret shapes, skill-reference boundaries, inline-skill
+    source shapes, and local-environment skill shapes are checked consistently;
+  - existing `{type:"container_reference",container_id}` objects remain
+    accepted for local `code_interpreter` as a documented bridge extension.
+- Closed the execution follow-through gap for local auto containers:
+  - `tools[].environment.file_ids` and `tools[].container.file_ids` are now
+    mounted from the local Files API into the local `/mnt/data` workspace,
+    matching the validated auto-container entry points;
+  - non-background and background Responses shell preparation now receive the
+    local Files store, so auto-container file mounts work in both paths.
+- Regression coverage updated:
+  - invalid Responses tool tests cover malformed shell environments and missing
+    or malformed code-interpreter containers across create and `/input_tokens`;
+  - local shell tests cover `container_auto.file_ids` mounting from the Files
+    API;
+  - local code-interpreter tests cover official `{type:"auto"}` containers;
+  - organization usage/costs coverage now sends Responses `code_interpreter`
+    with an explicit official auto container.
+- Documentation updated:
+  - compatibility matrix now describes shell/code-interpreter container schema
+    validation, local bridge extensions, and Files API mounting behavior;
+  - evaluation plan now requires these schema and execution regressions in the
+    bridge track.
+- Validation:
+  - `node --check src/bridge/server.js src/bridge/local_shell.js
+    scripts/eval-harness.mjs test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|local Containers back Responses shell|local
+    code_interpreter emits Responses code_interpreter_call outputs"
+    test/server.test.js` passes: 3 tests;
+  - targeted `node --test --test-name-pattern "Organization usage and costs
+    aggregate local bridge usage ledger" test/server.test.js` passes: 1 test.
+  - `git diff --check` passes;
+  - an explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions;
+  - `npm test` passes: 354 tests;
+  - `npm run secret-scan` exits successfully.
+- Runtime/storage check:
+  - `/` has 13 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200;
+  - public `POST /v1/responses` with a Responses `code_interpreter` tool that
+    omits `container` returns `400 invalid_request_parameter` with
+    `param:"tools.0.container"` before any upstream provider work.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or deployment env files
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Responses Function Tool Name Boundary and Alias Mapping
 
 - Rechecked the official OpenAI OpenAPI schema for Responses tools through the
