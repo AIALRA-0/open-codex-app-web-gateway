@@ -15464,6 +15464,92 @@ test("POST /v1/images/generations validates model-specific prompt and n boundari
   });
 });
 
+test("POST /v1/images/generations validates model-specific option boundaries", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image generation model option boundaries");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const testCase of [
+      {
+        body: { model: "dall-e-2", prompt: "Draw a compact badge.", background: "auto" },
+        message: "background is only supported for GPT image models",
+        param: "background",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "Draw a compact badge.", output_format: "png" },
+        message: "output_format is only supported for GPT image models",
+        param: "output_format",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "Draw a compact badge.", stream: true },
+        message: "stream is only supported for GPT image models",
+        param: "stream",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "Draw a compact badge.", partial_images: 1 },
+        message: "partial_images is only supported for GPT image models",
+        param: "partial_images",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Draw a compact badge.", response_format: "url" },
+        message: "response_format is not supported for GPT image models",
+        param: "response_format",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Draw a compact badge.", style: "natural" },
+        message: "style is only supported for dall-e-3",
+        param: "style",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "Draw a compact badge.", quality: "hd" },
+        message: "quality must be one of: standard for dall-e-2",
+        param: "quality",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "Draw a compact badge.", quality: "low" },
+        message: "quality must be one of: standard, hd for dall-e-3",
+        param: "quality",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Draw a compact badge.", quality: "standard" },
+        message: "quality must be one of: auto, high, medium, low for GPT image models",
+        param: "quality",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "Draw a compact badge.", size: "1792x1024" },
+        message: "size must be one of: 256x256, 512x512, 1024x1024 for dall-e-2",
+        param: "size",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "Draw a compact badge.", size: "512x512" },
+        message: "size must be one of: 1024x1024, 1792x1024, 1024x1792 for dall-e-3",
+        param: "size",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Draw a compact badge.", background: "transparent", output_format: "jpeg" },
+        message: "background transparent requires output_format png or webp",
+        param: "background",
+      },
+    ]) {
+      const response = await fetch(`${baseUrl}/v1/images/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.param);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

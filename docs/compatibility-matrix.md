@@ -1923,7 +1923,18 @@ instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
 `natural`, `model` as a string, model-specific prompt limits (`dall-e-2` 1000
 characters, `dall-e-3` 4000 characters, and GPT image models 32000
 characters), `dall-e-3` `n=1`, and streaming `partial_images` from 0 through 3
-before placeholder generation, provider forwarding, or usage recording.
+before placeholder generation, provider forwarding, or usage recording. Known
+OpenAI generation models also enforce documented model-specific option
+boundaries before any provider call: DALL-E models reject GPT-only
+`background`, `moderation`, `output_format`, `output_compression`, `stream`,
+and `partial_images`; GPT image models reject DALL-E-only `response_format` and
+`style`; `quality` is constrained to `standard` for `dall-e-2`, `standard` or
+`hd` for `dall-e-3`, and `auto`, `high`, `medium`, or `low` for GPT image
+models; DALL-E sizes are constrained to their documented sets; and
+`background:"transparent"` requires `output_format` `png` or `webp`.
+Custom/unknown OpenAI-compatible image provider model ids keep broad option
+pass-through so private providers can still be exercised through the same
+gateway.
 Non-streaming responses use the OpenAI `ImagesResponse` shape with
 `created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
 `usage` when present. `stream:true` returns Image API SSE events

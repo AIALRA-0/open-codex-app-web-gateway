@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Generation Model Option Bounds
+
+- Rechecked official OpenAI Images API references:
+  - direct image generation documents GPT-only fields such as `background`,
+    `moderation`, `output_format`, `output_compression`, streaming, and
+    `partial_images`;
+  - it documents `response_format` for `dall-e-2` / `dall-e-3` rather than GPT
+    image models, `style` for `dall-e-3`, model-specific `quality` values, and
+    model-specific DALL-E output sizes;
+  - transparent backgrounds require an output format that supports
+    transparency (`png` or `webp`).
+- Tightened local bridge behavior:
+  - direct `POST /v1/images/generations` now rejects known OpenAI model/option
+    mismatches before placeholder generation, provider forwarding, streaming
+    event synthesis, or usage recording;
+  - DALL-E generation rejects GPT-only fields, GPT image generation rejects
+    DALL-E-only `response_format` and `style`, quality is validated per model
+    family, and DALL-E sizes are validated against their documented sets;
+  - custom/unknown OpenAI-compatible image provider model ids remain broadly
+    pass-through so provider-specific model names can still be tested behind
+    the gateway.
+- Regression coverage updated:
+  - added direct generation negative tests for DALL-E/GPT-only option
+    mismatches, per-model `quality`, per-model DALL-E `size`, and transparent
+    background format requirements;
+  - verified invalid requests return `invalid_request_parameter` and do not call
+    the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records direct generation model-specific option
+    boundaries and the custom-provider pass-through policy.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/images" test/server.test.js`
+    passed 13/13 matched tests.
+  - Full `node --test test/*.test.js` passed 385/385 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Disk guard before deployment: `/` 193G size, 181G used, 12G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Generation Model Bounds
 
 - Rechecked official OpenAI Images API references:

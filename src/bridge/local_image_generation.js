@@ -29,6 +29,11 @@ const IMAGE_API_QUALITY_VALUES = ["auto", "high", "medium", "low", "hd", "standa
 const IMAGE_API_RESPONSE_FORMAT_VALUES = ["url", "b64_json"];
 const IMAGE_API_STYLE_VALUES = ["vivid", "natural"];
 const IMAGE_API_VARIATION_SIZE_VALUES = ["256x256", "512x512", "1024x1024"];
+const IMAGE_API_DALL_E_2_QUALITY_VALUES = ["standard"];
+const IMAGE_API_DALL_E_3_QUALITY_VALUES = ["standard", "hd"];
+const IMAGE_API_GPT_QUALITY_VALUES = ["auto", "high", "medium", "low"];
+const IMAGE_API_DALL_E_2_SIZE_VALUES = ["256x256", "512x512", "1024x1024"];
+const IMAGE_API_DALL_E_3_SIZE_VALUES = ["1024x1024", "1792x1024", "1024x1792"];
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -622,7 +627,7 @@ function normalizeImagesEditOptions(request = {}) {
   return options;
 }
 
-function validateImagesGenerationModelConstraints({ model, n, prompt }) {
+function validateImagesGenerationModelConstraints({ model, n, options = {}, partialImagesRequested = false, prompt, stream = false }) {
   const maxPrompt = imageGenerationPromptLimit(model);
   if (prompt.length > maxPrompt) {
     throw imageApiError(`prompt must be at most ${maxPrompt} characters for ${imageGenerationPromptLimitLabel(model)}`, {
@@ -636,6 +641,7 @@ function validateImagesGenerationModelConstraints({ model, n, prompt }) {
       param: "n",
     });
   }
+  validateImagesGenerationModelOptionConstraints({ model, options, partialImagesRequested, stream });
 }
 
 function imageGenerationPromptLimit(model) {
@@ -655,8 +661,83 @@ function isDallE3ImageModel(model) {
   return normalizeImageModelName(model) === "dall-e-3";
 }
 
+function isDallE2ImageModel(model) {
+  return normalizeImageModelName(model) === "dall-e-2";
+}
+
+function isDallEImageModel(model) {
+  const normalized = normalizeImageModelName(model);
+  return normalized === "dall-e-2" || normalized === "dall-e-3";
+}
+
+function isKnownGptImageModel(model) {
+  const normalized = normalizeImageModelName(model);
+  return normalized.startsWith("gpt-image-")
+    || normalized === "chatgpt-image-latest";
+}
+
 function normalizeImageModelName(model) {
   return String(model || "").trim().toLowerCase();
+}
+
+function validateImagesGenerationModelOptionConstraints({ model, options = {}, partialImagesRequested = false, stream = false }) {
+  if (isDallEImageModel(model)) {
+    for (const key of ["background", "moderation", "output_compression", "output_format"]) {
+      if (options[key] !== undefined) {
+        throw unsupportedImageModelOption(key, "GPT image models");
+      }
+    }
+    if (stream) throw unsupportedImageModelOption("stream", "GPT image models");
+    if (partialImagesRequested) throw unsupportedImageModelOption("partial_images", "GPT image models");
+  }
+
+  if (isKnownGptImageModel(model)) {
+    if (options.response_format !== undefined) {
+      throw imageApiError("response_format is not supported for GPT image models", {
+        code: "invalid_request_parameter",
+        param: "response_format",
+      });
+    }
+    validateImageOptionValue("quality", options.quality, IMAGE_API_GPT_QUALITY_VALUES, "GPT image models");
+    if (options.style !== undefined) throw unsupportedImageModelOption("style", "dall-e-3");
+  }
+
+  if (isDallE2ImageModel(model)) {
+    validateImageOptionValue("quality", options.quality, IMAGE_API_DALL_E_2_QUALITY_VALUES, "dall-e-2");
+    validateImageOptionValue("size", options.size, IMAGE_API_DALL_E_2_SIZE_VALUES, "dall-e-2");
+    if (options.style !== undefined) throw unsupportedImageModelOption("style", "dall-e-3");
+  }
+
+  if (isDallE3ImageModel(model)) {
+    validateImageOptionValue("quality", options.quality, IMAGE_API_DALL_E_3_QUALITY_VALUES, "dall-e-3");
+    validateImageOptionValue("size", options.size, IMAGE_API_DALL_E_3_SIZE_VALUES, "dall-e-3");
+  }
+
+  if (options.background === "transparent"
+    && options.output_format !== undefined
+    && !["png", "webp"].includes(options.output_format)) {
+    throw imageApiError("background transparent requires output_format png or webp", {
+      code: "invalid_request_parameter",
+      param: "background",
+    });
+  }
+}
+
+function unsupportedImageModelOption(param, modelLabel) {
+  return imageApiError(`${param} is only supported for ${modelLabel}`, {
+    code: "invalid_request_parameter",
+    param,
+  });
+}
+
+function validateImageOptionValue(param, value, allowedValues, modelLabel) {
+  if (value === undefined) return;
+  if (!allowedValues.includes(value)) {
+    throw imageApiError(`${param} must be one of: ${allowedValues.join(", ")} for ${modelLabel}`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
 }
 
 function normalizeImagesVariationOptions(request = {}) {
@@ -1383,7 +1464,14 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
   const model = normalizeImageApiModel(request.model, config.imageGenerationModel || "gpt-image-2");
   const options = normalizeImagesGenerationOptions(request);
   const stream = normalizeImageApiJsonBoolean(request.stream);
-  validateImagesGenerationModelConstraints({ model, n, prompt });
+  validateImagesGenerationModelConstraints({
+    model,
+    n,
+    options,
+    partialImagesRequested: request.partial_images !== undefined,
+    prompt,
+    stream,
+  });
 
   return {
     model,
