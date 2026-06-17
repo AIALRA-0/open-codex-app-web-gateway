@@ -13045,6 +13045,13 @@ function requestError(message, details = {}) {
 async function handleImagesGenerations(req, res, config) {
   let request;
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     request = await readJson(req);
     if (request.stream === true) {
       const events = await createImagesGenerationEventStream(request, config);
@@ -13081,6 +13088,13 @@ async function handleImagesGenerations(req, res, config) {
 async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerationStore) {
   let request;
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     request = await readImagesEditRequest(req, config);
     if (request.stream === true || String(request.stream || "").toLowerCase() === "true") {
       const events = await createImagesEditEventStream(request, config, {
@@ -13125,6 +13139,13 @@ async function handleImagesEdits(req, res, config, fileSearchStore, imageGenerat
 async function handleImagesVariations(req, res, config, fileSearchStore, imageGenerationStore) {
   let request;
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     request = await readImagesVariationRequest(req, config);
     const response = await createImagesVariationResponse(request, config, {
       fileSearchStore,

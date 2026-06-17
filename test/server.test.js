@@ -14931,6 +14931,35 @@ test("POST /v1/images/generations returns placeholder Images API responses", asy
   });
 });
 
+test("POST /v1/images direct endpoints reject unsupported query parameters before body parsing", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image query parameters");
+  }, async ({ bridgeAddress, requests }) => {
+    const endpoints = [
+      "/v1/images/generations",
+      "/v1/images/edits",
+      "/v1/images/variations",
+    ];
+    for (const endpoint of endpoints) {
+      const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}${endpoint}?metadata=debug`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not-json",
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "Unsupported query parameter: metadata",
+          type: "invalid_request_error",
+          param: "metadata",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

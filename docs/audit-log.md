@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-17 Images Direct Endpoint Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/images/generations`;
+  - `POST /v1/images/edits`;
+  - `POST /v1/images/variations`.
+- Official schema notes:
+  - image generation defines a JSON request body and no query parameters;
+  - image edits define JSON and multipart request bodies and no query
+    parameters;
+  - image variations define a multipart request body and no query parameters.
+- Tightened local Images behavior:
+  - `/v1/images/generations` now rejects unsupported query parameters before
+    JSON parsing, placeholder generation, provider forwarding, or usage
+    recording;
+  - `/v1/images/edits` now rejects unsupported query parameters before
+    multipart/JSON parsing, local edit generation, provider forwarding, or
+    usage recording;
+  - `/v1/images/variations` now rejects unsupported query parameters before
+    multipart/JSON parsing, local variation generation, provider forwarding,
+    or usage recording;
+  - valid direct Images compatibility behavior is unchanged, including
+    placeholder PNG responses, OpenAI-compatible upstream Images providers,
+    direct image SSE relay/synthesis for generation/edit requests, and Batch
+    JSONL coverage.
+- Regression coverage updated:
+  - direct Images tests now verify generation, edit, and variation endpoints
+    return OpenAI-style `invalid_request_parameter` errors for unsupported
+    query strings before body parsing and confirm the upstream mock remains
+    unused.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for direct Images
+    create/edit/variation calls.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "unsupported query parameters before body parsing" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test --test-name-pattern "images/generations|images/edits|images/variations|direct image query" test/server.test.js`
+    passed 7/7 existing direct Images tests.
+  - Full `node --test test/*.test.js` passed 373/373 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned HTTP 200 with `ok:true`.
+  - Public Images query smoke verified invalid `metadata` queries for
+    generations, edits, and variations return OpenAI-style 400 errors, then
+    verified normal generation JSON plus edit/variation multipart requests
+    still return `ImagesResponse` payloads with base64 PNG data.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5381 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, image payloads, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Audio Direct Endpoint Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

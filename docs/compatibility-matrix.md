@@ -1936,7 +1936,10 @@ the configured `/images/variations` path. Placeholder mode returns deterministic
 PNG variations for protocol/UI testing. For local Batch compatibility, the
 bridge also accepts JSON variation bodies with `image`, `images`, or
 `image_url` entries that use data URLs, HTTP(S) URLs, or local `file_id`
-references, because Batch JSONL cannot carry multipart file parts.
+references, because Batch JSONL cannot carry multipart file parts. Direct
+Images create/edit/variation calls reject unsupported URL query parameters with
+OpenAI-style `invalid_request_parameter` errors before body parsing,
+generation, provider forwarding, or usage recording.
 Local Batch JSONL can execute `/v1/images/generations`, JSON-form
 `/v1/images/edits`, and JSON-form `/v1/images/variations` requests
 synchronously and write the direct Images response into the Batch output file.
