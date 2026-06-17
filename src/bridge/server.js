@@ -5776,13 +5776,15 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "code_interpreter_call") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
-    const containerError = validateOpenAIOptionalStringItemField(item, param, "container_id");
+    const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
+    if (requiredStatusError) return requiredStatusError;
+    const containerError = validateOpenAIRequiredStringItemField(item, param, "container_id");
     if (containerError) return containerError;
-    const codeError = validateOpenAIOptionalStringItemField(item, param, "code", { nullable: true });
+    const codeError = validateOpenAIRequiredNullableStringItemField(item, param, "code");
     if (codeError) return codeError;
-    const outputsError = validateOpenAIOptionalArrayItemField(item, param, "outputs", { nullable: true });
+    const outputsError = validateOpenAIRequiredNullableArrayItemField(item, param, "outputs");
     if (outputsError) return outputsError;
     return validateOpenAIResponsesCodeInterpreterOutputs(item.outputs, `${param}.outputs`);
   }
@@ -5980,6 +5982,13 @@ function validateOpenAIOptionalStringItemField(item, param, field, options = {})
   return null;
 }
 
+function validateOpenAIRequiredNullableStringItemField(item, param, field) {
+  if (!Object.prototype.hasOwnProperty.call(item, field) || (item[field] !== null && typeof item[field] !== "string")) {
+    return requestValidationError(`${param}.${field} must be a string or null`, `${param}.${field}`);
+  }
+  return null;
+}
+
 function validateOpenAIRequiredObjectItemField(item, param, field) {
   if (!isPlainObject(item[field])) {
     return requestValidationError(`${param}.${field} must be an object`, `${param}.${field}`);
@@ -6010,6 +6019,13 @@ function validateOpenAIOptionalArrayItemField(item, param, field, options = {}) 
   if (!Array.isArray(item[field])) {
     const nullableSuffix = options.nullable ? " or null" : "";
     return requestValidationError(`${param}.${field} must be an array${nullableSuffix}`, `${param}.${field}`);
+  }
+  return null;
+}
+
+function validateOpenAIRequiredNullableArrayItemField(item, param, field) {
+  if (!Object.prototype.hasOwnProperty.call(item, field) || (item[field] !== null && !Array.isArray(item[field]))) {
+    return requestValidationError(`${param}.${field} must be an array or null`, `${param}.${field}`);
   }
   return null;
 }
