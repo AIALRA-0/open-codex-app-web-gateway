@@ -46,6 +46,21 @@
   - `npm run secret-scan` exits successfully.
   - explicit diff token scan found no API-key, bearer-token, or
     provider-key-looking additions.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed MCP `connector_id` request returns
+    `400 invalid_request_parameter` with `param:"tools.0.connector_id"`.
 - Secret handling:
   - no API keys, provider credentials, bearer tokens, MCP authorization
     values, or deployment env files were added to source, tests, docs, logs,
