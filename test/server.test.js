@@ -1687,6 +1687,114 @@ test("Responses multimodal input string limits are validated before provider cal
   });
 });
 
+test("Responses call_id length limits are validated before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for oversized Responses call_id");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const oversizedCallId = "c".repeat(65);
+    const invalidCases = [
+      {
+        endpoint: "/v1/responses",
+        input: [{ type: "function_call_output", call_id: oversizedCallId, output: "ok" }],
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{ type: "custom_tool_call_output", call_id: oversizedCallId, output: "ok" }],
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{ type: "function_call", call_id: oversizedCallId, name: "lookup_order", arguments: "{}" }],
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{ type: "custom_tool_call", call_id: oversizedCallId, name: "emit_text", input: "ok" }],
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "computer_call_output",
+          call_id: oversizedCallId,
+          output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
+        }],
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "shell_call",
+          call_id: oversizedCallId,
+          action: { commands: ["printf ok"] },
+        }],
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "shell_call_output",
+          call_id: oversizedCallId,
+          output: [{ stdout: "", stderr: "", outcome: { type: "exit", exit_code: 0 } }],
+        }],
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "apply_patch_call",
+          id: "apc_oversized_call",
+          call_id: oversizedCallId,
+          status: "completed",
+          operation: { type: "update", path: "README.md" },
+        }],
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "apply_patch_call_output",
+          id: "apco_oversized_call",
+          call_id: oversizedCallId,
+          status: "completed",
+          output: "ok",
+        }],
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "tool_search_call",
+          call_id: oversizedCallId,
+          arguments: {},
+        }],
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "tool_search_output",
+          call_id: oversizedCallId,
+          tools: [],
+        }],
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}${invalidCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          model: "mock-model",
+          input: invalidCase.input,
+        }),
+      });
+      assert.equal(response.status, 400, invalidCase.endpoint);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "input.0.call_id must be at most 64 characters",
+          type: "invalid_request_error",
+          param: "input.0.call_id",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/responses forwards service_tier and preserves provider tier", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.service_tier, "priority");

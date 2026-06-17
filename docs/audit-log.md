@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-18 - Responses call_id length validation
+
+- Used the current official OpenAI OpenAPI schema to confirm the next Responses
+  input-item compatibility target:
+  - `FunctionCallOutputItemParam.call_id`,
+    `ComputerCallOutputItemParam.call_id`, `FunctionShellCallItemParam.call_id`,
+    `FunctionShellCallOutputItemParam.call_id`,
+    `ApplyPatchToolCallItemParam.call_id`, and
+    `ApplyPatchToolCallOutputItemParam.call_id` require non-empty strings up to
+    64 characters;
+  - `ToolSearchCallItemParam.call_id` and
+    `ToolSearchOutputItemParam.call_id` are nullable/optional, but when present
+    use the same 1-to-64-character boundary.
+- Closed the validation gap without adding dependencies:
+  - added a shared Responses `call_id` validator with the official
+    64-character max;
+  - applied it to function/custom tool calls and outputs, computer outputs,
+    shell calls and outputs, apply-patch calls and outputs, local shell output
+    replay, and tool-search input items before provider calls;
+  - extended string-field helpers to support `maxLength` and reused the
+    streaming max-length counter instead of array materialization.
+- Updated docs:
+  - compatibility matrix now records the 64-character `call_id` boundary across
+    function/custom/computer/shell/apply-patch/tool-search input items.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "Responses call_id length limits" test/server.test.js`:
+    passed 1/1 and verified oversized `call_id` values fail before any mock
+    provider call.
+  - Full `node --test test/*.test.js`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    artifacts and selected 0 for deletion.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 8.9 GiB
+    available at 96% used; repository size remained 286 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz`: returned `ok:true`.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with a
+    65-character `function_call_output.call_id`: returned HTTP 400 with
+    `param:"input.0.call_id"` and the official 64-character boundary message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses multimodal input length validation
 
 - Used the current official OpenAI OpenAPI schema to confirm the next

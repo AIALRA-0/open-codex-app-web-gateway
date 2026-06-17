@@ -458,6 +458,7 @@ const OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS = 10485760;
 const OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS = 20971520;
 const OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS = 73400320;
 const OPENAI_RESPONSES_JSON_BODY_MAX_BYTES = OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS + OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS;
+const OPENAI_RESPONSES_CALL_ID_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 const OPENAI_RESPONSES_INPUT_IMAGE_SOURCE_MAX_LENGTHS = Object.freeze({
@@ -5412,8 +5413,9 @@ function validateOpenAIStringParameter(body = {}, field, options = {}) {
   if (typeof body[field] !== "string") {
     return requestValidationError(`${field} must be a string`, field);
   }
-  if (options.maxLength != null && Array.from(body[field]).length > options.maxLength) {
-    return requestValidationError(`${field} must be at most ${options.maxLength} characters`, field);
+  if (options.maxLength != null) {
+    const lengthError = validateOpenAIStringMaxLength(body[field], field, options.maxLength);
+    if (lengthError) return lengthError;
   }
   return null;
 }
@@ -5634,9 +5636,8 @@ function validateOpenAIResponsesMessageAudioContentPart(part, param) {
 }
 
 function validateOpenAIResponsesToolCallOutputInputItem(item, param) {
-  if (typeof item.call_id !== "string" || item.call_id.length === 0) {
-    return requestValidationError(`${param}.call_id must be a non-empty string`, `${param}.call_id`);
-  }
+  const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
+  if (callIdError) return callIdError;
   if (!Object.prototype.hasOwnProperty.call(item, "output")) {
     return requestValidationError(`${param}.output is required`, `${param}.output`);
   }
@@ -5679,7 +5680,7 @@ function validateOpenAIResponsesFunctionCallInputItem(item, param) {
   const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
   if (idError) return idError;
 
-  const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+  const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
   if (callIdError) return callIdError;
 
   if (
@@ -5704,9 +5705,8 @@ function validateOpenAIResponsesItemReferenceInputItem(item, param) {
 }
 
 function validateOpenAIResponsesCustomToolCallInputItem(item, param) {
-  if (typeof item.call_id !== "string" || item.call_id.length === 0) {
-    return requestValidationError(`${param}.call_id must be a non-empty string`, `${param}.call_id`);
-  }
+  const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
+  if (callIdError) return callIdError;
   if (typeof item.name !== "string") {
     return requestValidationError(`${param}.name must be a string`, `${param}.name`);
   }
@@ -5727,7 +5727,7 @@ function validateOpenAIResponsesComputerCallOutputInputItem(item, param) {
   const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
   if (idError) return idError;
 
-  const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+  const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
   if (callIdError) return callIdError;
 
   const statusError = validateOpenAIResponsesComputerCallOutputStatus(item, param);
@@ -5936,7 +5936,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "computer_call") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id");
     if (idError) return idError;
-    const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     const actionError = validateOpenAIOptionalObjectItemField(item, param, "action");
     if (actionError) return actionError;
@@ -5948,7 +5948,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "shell_call" || item.type === "local_shell_call") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
-    const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     const actionError = validateOpenAIRequiredObjectItemField(item, param, "action");
     if (actionError) return actionError;
@@ -5960,7 +5960,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "shell_call_output") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
-    const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     const outputError = validateOpenAIRequiredArrayItemField(item, param, "output");
     if (outputError) return outputError;
@@ -5972,7 +5972,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "local_shell_call_output") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id");
     if (idError) return idError;
-    const callIdError = validateOpenAIOptionalStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIOptionalResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     return validateOpenAIOptionalStringItemField(item, param, "output");
   }
@@ -5982,7 +5982,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (idError) return idError;
     const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
     if (requiredStatusError) return requiredStatusError;
-    const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     return validateOpenAIRequiredObjectItemField(item, param, "operation");
   }
@@ -5992,7 +5992,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (idError) return idError;
     const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
     if (requiredStatusError) return requiredStatusError;
-    const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+    const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
     return validateOpenAIOptionalStringItemField(item, param, "output", { nullable: true });
   }
@@ -6000,7 +6000,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "tool_search_call") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
-    const callIdError = validateOpenAIOptionalStringItemField(item, param, "call_id", {
+    const callIdError = validateOpenAIOptionalResponsesCallIdItemField(item, param, {
       nullable: true,
       nonEmpty: true,
     });
@@ -6013,7 +6013,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   if (item.type === "tool_search_output") {
     const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
-    const callIdError = validateOpenAIOptionalStringItemField(item, param, "call_id", {
+    const callIdError = validateOpenAIOptionalResponsesCallIdItemField(item, param, {
       nullable: true,
       nonEmpty: true,
     });
@@ -6222,9 +6222,13 @@ function validateOpenAIOptionalIntegerObjectField(object, param, field, options 
   return null;
 }
 
-function validateOpenAIRequiredStringItemField(item, param, field) {
+function validateOpenAIRequiredStringItemField(item, param, field, options = {}) {
   if (typeof item[field] !== "string" || item[field].length === 0) {
     return requestValidationError(`${param}.${field} must be a non-empty string`, `${param}.${field}`);
+  }
+  if (options.maxLength != null) {
+    const lengthError = validateOpenAIStringMaxLength(item[field], `${param}.${field}`, options.maxLength);
+    if (lengthError) return lengthError;
   }
   return null;
 }
@@ -6237,7 +6241,24 @@ function validateOpenAIOptionalStringItemField(item, param, field, options = {})
     const nonEmptyPrefix = options.nonEmpty ? "non-empty " : "";
     return requestValidationError(`${param}.${field} must be a ${nonEmptyPrefix}string${nullableSuffix}`, `${param}.${field}`);
   }
+  if (options.maxLength != null) {
+    const lengthError = validateOpenAIStringMaxLength(item[field], `${param}.${field}`, options.maxLength);
+    if (lengthError) return lengthError;
+  }
   return null;
+}
+
+function validateOpenAIRequiredResponsesCallIdItemField(item, param) {
+  return validateOpenAIRequiredStringItemField(item, param, "call_id", {
+    maxLength: OPENAI_RESPONSES_CALL_ID_MAX_CHARS,
+  });
+}
+
+function validateOpenAIOptionalResponsesCallIdItemField(item, param, options = {}) {
+  return validateOpenAIOptionalStringItemField(item, param, "call_id", {
+    ...options,
+    maxLength: OPENAI_RESPONSES_CALL_ID_MAX_CHARS,
+  });
 }
 
 function validateOpenAIRequiredNullableStringItemField(item, param, field) {
