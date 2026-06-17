@@ -205,6 +205,8 @@ const OPENAI_STRING_METADATA_MAX_PAIRS = 16;
 const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
 const OPENAI_FILE_PURPOSE_VALUES = Object.freeze(["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]);
+const OPENAI_FILE_EXPIRES_AFTER_MIN_SECONDS = 3600;
+const OPENAI_FILE_EXPIRES_AFTER_MAX_SECONDS = 2592000;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS = 3600;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS = 2592000;
 const OPENAI_CONVERSATION_CREATE_MAX_ITEMS = 20;
@@ -7124,6 +7126,39 @@ function validateOpenAIFileCreateRequest(upload) {
   if (!OPENAI_FILE_PURPOSE_VALUES.includes(purpose)) {
     return requestValidationError(`purpose must be one of: ${OPENAI_FILE_PURPOSE_VALUES.join(", ")}`, "purpose");
   }
+  const expiresAfterError = validateOpenAIFileExpiresAfter(upload);
+  if (expiresAfterError) return expiresAfterError;
+  return null;
+}
+
+function validateOpenAIFileExpiresAfter(upload = {}) {
+  if (!Object.prototype.hasOwnProperty.call(upload, "expires_after") || upload.expires_after == null) return null;
+  const policy = upload.expires_after;
+  if (!isPlainObject(policy)) {
+    return requestValidationError("expires_after must be an object", "expires_after");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "anchor") || policy.anchor == null || policy.anchor === "") {
+    return requestValidationError("expires_after.anchor is required", "expires_after.anchor");
+  }
+  if (typeof policy.anchor !== "string") {
+    return requestValidationError("expires_after.anchor must be a string", "expires_after.anchor");
+  }
+  if (policy.anchor !== "created_at") {
+    return requestValidationError("expires_after.anchor must be created_at", "expires_after.anchor");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "seconds") || policy.seconds == null) {
+    return requestValidationError("expires_after.seconds is required", "expires_after.seconds");
+  }
+  if (
+    !Number.isInteger(policy.seconds)
+    || policy.seconds < OPENAI_FILE_EXPIRES_AFTER_MIN_SECONDS
+    || policy.seconds > OPENAI_FILE_EXPIRES_AFTER_MAX_SECONDS
+  ) {
+    return requestValidationError(
+      `expires_after.seconds must be an integer between ${OPENAI_FILE_EXPIRES_AFTER_MIN_SECONDS} and ${OPENAI_FILE_EXPIRES_AFTER_MAX_SECONDS}`,
+      "expires_after.seconds",
+    );
+  }
   return null;
 }
 
@@ -7792,6 +7827,7 @@ async function readFileCreateRequest(req, config) {
       content,
       metadata: body.metadata || {},
       mime_type: body.mime_type || body.mimeType,
+      expires_after: body.expires_after,
     };
   }
 
@@ -7804,6 +7840,7 @@ async function readFileCreateRequest(req, config) {
       content: file?.content || form.fields.content || "",
       metadata: parseJsonOrNull(form.fields.metadata) || {},
       mime_type: form.fields.mime_type || file?.content_type,
+      expires_after: parseMultipartFileExpiresAfter(form.fields),
     };
   }
 
@@ -7814,6 +7851,37 @@ async function readFileCreateRequest(req, config) {
     content: body,
     mime_type: req.headers["content-type"],
   };
+}
+
+function parseMultipartFileExpiresAfter(fields = {}) {
+  if (Object.prototype.hasOwnProperty.call(fields, "expires_after")) {
+    const parsed = parseJsonOrNull(fields.expires_after);
+    if (isPlainObject(parsed)) return normalizeMultipartFileExpiresAfter(parsed);
+    return fields.expires_after;
+  }
+  const anchor = fields["expires_after[anchor]"] ?? fields["expires_after.anchor"];
+  const seconds = fields["expires_after[seconds]"] ?? fields["expires_after.seconds"];
+  if (anchor == null && seconds == null) return undefined;
+  return normalizeMultipartFileExpiresAfter({
+    ...(anchor != null ? { anchor } : {}),
+    ...(seconds != null ? { seconds } : {}),
+  });
+}
+
+function normalizeMultipartFileExpiresAfter(policy) {
+  if (!isPlainObject(policy)) return policy;
+  return {
+    ...policy,
+    ...(Object.prototype.hasOwnProperty.call(policy, "seconds")
+      ? { seconds: parseMultipartInteger(policy.seconds) }
+      : {}),
+  };
+}
+
+function parseMultipartInteger(value) {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && /^-?\d+$/.test(value.trim())) return Number(value.trim());
+  return value;
 }
 
 async function readUploadPartRequest(req, config) {

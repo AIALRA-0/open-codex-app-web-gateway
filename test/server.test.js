@@ -15869,12 +15869,33 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
         filename: "fixture.txt",
         purpose: "assistants",
         content: "File Search Fixture says the exact marker is file-search-ok. A second marker is secondary-ok. A car maintenance note says technicians service sedans.",
+        expires_after: { anchor: "created_at", seconds: 3600 },
       }),
     });
     assert.equal(createdFile.status, 200);
     const file = await createdFile.json();
     assert.equal(file.object, "file");
     assert.equal(file.filename, "fixture.txt");
+    assert.equal(file.expires_at, file.created_at + 3600);
+    assert.equal(Object.prototype.hasOwnProperty.call(file, "expires_after"), false);
+
+    const retrievedFile = await fetch(`${baseUrl}/v1/files/${file.id}`);
+    assert.equal(retrievedFile.status, 200);
+    assert.equal((await retrievedFile.json()).expires_at, file.expires_at);
+
+    const multipart = new FormData();
+    multipart.append("purpose", "user_data");
+    multipart.append("expires_after[anchor]", "created_at");
+    multipart.append("expires_after[seconds]", "3600");
+    multipart.append("file", new Blob(["multipart expiry fixture"], { type: "text/plain" }), "multipart-expiry.txt");
+    const multipartFileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      body: multipart,
+    });
+    assert.equal(multipartFileResponse.status, 200);
+    const multipartFile = await multipartFileResponse.json();
+    assert.equal(multipartFile.filename, "multipart-expiry.txt");
+    assert.equal(multipartFile.expires_at, multipartFile.created_at + 3600);
 
     for (const testCase of [
       {
@@ -15911,6 +15932,55 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
           code: "invalid_request_parameter",
         },
       }, testCase.label);
+    }
+
+    const invalidFileExpirationCases = [
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: "soon" },
+        message: "expires_after must be an object",
+        param: "expires_after",
+      },
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: { seconds: 3600 } },
+        message: "expires_after.anchor is required",
+        param: "expires_after.anchor",
+      },
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: { anchor: "completed_at", seconds: 3600 } },
+        message: "expires_after.anchor must be created_at",
+        param: "expires_after.anchor",
+      },
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: { anchor: "created_at" } },
+        message: "expires_after.seconds is required",
+        param: "expires_after.seconds",
+      },
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: { anchor: "created_at", seconds: "3600" } },
+        message: "expires_after.seconds must be an integer between 3600 and 2592000",
+        param: "expires_after.seconds",
+      },
+      {
+        body: { filename: "invalid-expiry.txt", purpose: "assistants", content: "x", expires_after: { anchor: "created_at", seconds: 3599 } },
+        message: "expires_after.seconds must be an integer between 3600 and 2592000",
+        param: "expires_after.seconds",
+      },
+    ];
+    for (const testCase of invalidFileExpirationCases) {
+      const invalid = await fetch(`${baseUrl}/v1/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(invalid.status, 400, testCase.param);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.param);
     }
 
     const content = await fetch(`${baseUrl}/v1/files/${file.id}/content`);

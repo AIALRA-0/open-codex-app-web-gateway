@@ -118,7 +118,7 @@ class LocalFileSearchStore {
     this.config = config;
   }
 
-  createFile({ filename, purpose = "assistants", content = "", metadata = {}, mime_type, mimeType }) {
+  createFile({ filename, purpose = "assistants", content = "", metadata = {}, mime_type, mimeType, expires_after }) {
     const safeFilename = sanitizeFilename(filename || "upload.txt");
     const mediaType = mime_type || mimeType || metadata?.mime_type || metadata?.mimeType || "";
     const fileMetadata = isPlainObject(metadata) ? {
@@ -133,20 +133,25 @@ class LocalFileSearchStore {
       throw error;
     }
 
+    const createdAt = nowSeconds();
+    const filePurpose = purpose || "assistants";
+    const expiration = fileExpirationFromPolicy(expires_after, createdAt, filePurpose);
     const file = {
       id: prefixedId("file"),
       object: "file",
       bytes,
-      created_at: nowSeconds(),
+      created_at: createdAt,
       filename: safeFilename,
-      purpose: purpose || "assistants",
+      purpose: filePurpose,
       metadata: fileMetadata,
       status: "processed",
+      ...(expiration.expires_at ? { expires_at: expiration.expires_at } : {}),
     };
     const record = {
       file,
       content_base64: buffer.toString("base64"),
       content_encoding: "base64",
+      ...(expiration.expires_after ? { expires_after: expiration.expires_after } : {}),
     };
     const text = textContentForStorage(buffer, safeFilename, mediaType);
     if (text != null) record.content = text;
@@ -1602,6 +1607,23 @@ function isTextStorageCandidate(filename, mediaType) {
     ".cs", ".php", ".sh", ".bash", ".zsh", ".fish", ".ps1", ".sql", ".yaml",
     ".yml", ".toml", ".ini", ".env", ".log",
   ]).has(extension);
+}
+
+function fileExpirationFromPolicy(policy, createdAt, purpose) {
+  const explicit = isPlainObject(policy)
+    && policy.anchor === "created_at"
+    && Number.isInteger(policy.seconds)
+    && policy.seconds > 0
+    ? { anchor: "created_at", seconds: policy.seconds }
+    : null;
+  const normalized = explicit || (purpose === "batch"
+    ? { anchor: "created_at", seconds: 30 * 24 * 60 * 60 }
+    : null);
+  if (!normalized) return {};
+  return {
+    expires_after: normalized,
+    expires_at: createdAt + normalized.seconds,
+  };
 }
 
 function nowSeconds() {

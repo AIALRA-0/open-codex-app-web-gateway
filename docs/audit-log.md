@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Files Create Expiration Validation
+
+- Rechecked the current official OpenAI Files create OpenAPI path and examples.
+  Confirmed `POST /v1/files` accepts an optional `expires_after` policy with
+  `anchor:"created_at"` and `seconds`, and returns File objects with
+  `expires_at`.
+- Tightened local Files behavior:
+  - JSON `POST /v1/files` now accepts and validates
+    `expires_after:{anchor:"created_at",seconds:*}`;
+  - multipart `POST /v1/files` now accepts official bracketed fields
+    `expires_after[anchor]` and `expires_after[seconds]`;
+  - invalid expiration policies are rejected before writing File state;
+  - successful explicit policies return a computed File `expires_at`;
+  - omitted expiration on `purpose:"batch"` Files defaults to the official
+    30-day expiration window.
+- Regression coverage updated:
+  - File/vector-store lifecycle tests now cover JSON `expires_after`,
+    multipart bracketed `expires_after`, persisted `expires_at`, and invalid
+    expiration policy shapes/ranges.
+- Documentation updated:
+  - compatibility matrix now records Files create expiration support,
+    validation bounds, multipart field support, and the `purpose:"batch"`
+    30-day default.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/local_file_search.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search compatibility" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Files smoke marker `file-expiry-smoke-mqi4t8uz` confirmed invalid
+    `expires_after` shape and too-small `expires_after.seconds` returned
+    HTTP 400, JSON and multipart uploads returned computed `expires_at`, and
+    `purpose:"batch"` defaulted to a 30-day `expires_at`.
+  - Public smoke cleanup deleted the temporary Files successfully.
+  - Disk guard after deployment: `/` 193G size, 177G used, 17G available,
+    92% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Files Create Purpose Validation
 
 - Rechecked the current official OpenAI Files create reference and confirmed
