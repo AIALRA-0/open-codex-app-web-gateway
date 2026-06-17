@@ -26825,7 +26825,55 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(deletePermissionJson.deleted, true);
     assert.equal(deletePermissionJson.id, createdPermissions.data[0].id);
 
-    const paused = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/pause`, { method: "POST" });
+    for (const testCase of [
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/pause?metadata=debug`,
+        options: { method: "POST" },
+        param: "metadata",
+        message: "Unsupported query parameter: metadata",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/resume`,
+        options: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ metadata: { reason: "debug" } }),
+        },
+        param: "metadata",
+        message: "Unsupported parameter: metadata",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/cancel`,
+        options: {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify([]),
+        },
+        param: null,
+        message: "Fine-tuning job action request body must be an empty JSON object",
+      },
+    ]) {
+      const invalidAction = await fetch(`${baseUrl}${testCase.path}`, testCase.options);
+      assert.equal(invalidAction.status, 400, testCase.path);
+      assert.deepEqual(await invalidAction.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
+    const afterInvalidActions = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}`);
+    assert.equal(afterInvalidActions.status, 200);
+    assert.equal((await afterInvalidActions.json()).status, "succeeded");
+
+    const paused = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/pause`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({}),
+    });
     assert.equal(paused.status, 200);
     assert.equal((await paused.json()).status, "paused");
 

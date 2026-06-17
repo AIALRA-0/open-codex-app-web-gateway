@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Job Lifecycle Action Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel`;
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/pause`;
+  - `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/resume`.
+- Official schema notes:
+  - each endpoint has only the path parameter `fine_tuning_job_id`;
+  - none of the three endpoints defines query parameters;
+  - none of the three endpoints defines a request body.
+- Tightened local Fine-tuning lifecycle action behavior:
+  - unsupported query parameters now return OpenAI-style HTTP 400
+    `invalid_request_parameter` errors before local state mutation;
+  - non-empty JSON object fields now return HTTP 400 before local state
+    mutation;
+  - non-object JSON bodies now return HTTP 400 before local state mutation;
+  - omitted body and explicit `{}` remain accepted for SDK compatibility;
+  - valid actions still update local status and append local lifecycle events
+    without calling the upstream Chat Completions provider.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now verifies unsupported query parameters,
+    non-empty JSON action bodies, non-object JSON action bodies, no mutation
+    after rejected actions, and the existing valid pause/resume/cancel flow.
+- Documentation updated:
+  - compatibility matrix now records the no-query/no-body lifecycle action
+    boundary for cancel, pause, and resume.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Fine-tuning lifecycle action smoke marker
+    `ft-job-action-smoke-1781718103` created one local Fine-tuning job, verified
+    unsupported query parameters, non-empty body fields, and non-object bodies
+    return 400 without mutating the job, then verified valid pause/resume/cancel
+    status transitions. No upstream provider training or model call was
+    performed.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5370 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Job Nested Schema Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for nested

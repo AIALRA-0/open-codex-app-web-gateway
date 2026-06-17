@@ -17264,7 +17264,18 @@ function handleFineTuningJobGet(res, fineTuningStore, jobId) {
   sendJson(res, 200, job);
 }
 
-function handleFineTuningJobAction(res, fineTuningStore, jobId, action) {
+async function handleFineTuningJobAction(req, res, fineTuningStore, jobId, action, url) {
+  const queryError = validateOpenAIFineTuningJobActionQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  const body = await readJson(req);
+  const bodyError = validateOpenAIFineTuningJobActionBody(body);
+  if (bodyError) {
+    sendError(res, 400, bodyError.message, bodyError);
+    return;
+  }
   const job = fineTuningStore.transitionJob(jobId, action);
   if (!job) {
     sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
@@ -17274,6 +17285,23 @@ function handleFineTuningJobAction(res, fineTuningStore, jobId, action) {
     return;
   }
   sendJson(res, 200, job);
+}
+
+function validateOpenAIFineTuningJobActionQuery(url) {
+  for (const key of url.searchParams.keys()) {
+    return requestValidationError(`Unsupported query parameter: ${key}`, key);
+  }
+  return null;
+}
+
+function validateOpenAIFineTuningJobActionBody(body) {
+  if (!isPlainObject(body)) {
+    return requestValidationError("Fine-tuning job action request body must be an empty JSON object", null);
+  }
+  for (const key of Object.keys(body)) {
+    return requestValidationError(`Unsupported parameter: ${key}`, key);
+  }
+  return null;
 }
 
 function handleFineTuningJobEventsList(res, fineTuningStore, jobId, url) {
@@ -22544,7 +22572,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (["cancel", "pause", "resume"].includes(action) && req.method === "POST") {
-          handleFineTuningJobAction(res, fineTuningStore, jobId, action);
+          await handleFineTuningJobAction(req, res, fineTuningStore, jobId, action, url);
           return;
         }
         if (action === "events" && req.method === "GET") {
