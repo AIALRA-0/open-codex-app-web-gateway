@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Responses Input File Field Validation
+
+- Rechecked the current official OpenAI schema through the developer docs MCP
+  workflow and the official `openai-openapi` YAML for Responses
+  `InputFileContent` and Chat
+  `ChatCompletionRequestMessageContentPartFile`:
+  - Responses `type:"input_file"` requires the `type` field and defines
+    optional `file_id`, `filename`, `file_data`, `file_url`, and `detail`;
+  - `file_id` may be string/null in the Responses schema, while the other
+    source fields are string fields when present;
+  - Chat native `type:"file"` content uses a nested `file` object.
+- Tightened Responses input validation before provider calls:
+  - ordinary Responses `input_file` content parts and top-level input items now
+    validate known source fields before upstream Chat requests;
+  - nested bridge-compatible `file` objects also validate `filename`,
+    `file_data`, `file_id`, `file_url`, `data`, `content_base64`, `mime_type`,
+    and `media_type` field shapes;
+  - the official source-optional behavior is preserved, so marker-only
+    `input_file` items remain accepted.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `input_file.file_id`, `file_url`, `filename`, and nested `file.file_data`
+    cases across `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`;
+  - existing local input-file extraction coverage remains green.
+- Documentation updated:
+  - compatibility matrix now records source-field type validation for
+    Responses `input_file` / compatible Chat `file` parts.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate input image and file
+    detail|input_file file_id and file_data" test/server.test.js` passes:
+    2 tests;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `input_file.file_id` input-token request returns
+    `400 invalid_request_parameter` with
+    `param:"input.0.content.0.file_id"`;
+  - public marker-only `input_file` input-token request returns 200 with
+    `input_tokens:93`.
+- Runtime/storage check:
+  - `/` has 10 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Input Audio Content Validation
 
 - Rechecked the current official OpenAI schema through the developer docs MCP

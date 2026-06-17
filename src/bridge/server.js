@@ -6109,10 +6109,30 @@ function validateOpenAIResponsesInputFileDetails(part, param) {
   const detailError = validateOpenAIResponsesInputFileDetail(part.detail, `${param}.detail`);
   if (detailError) return detailError;
   if (isPlainObject(part.file)) {
+    const fileSourceError = validateOpenAIChatFileSourceFields(part.file, `${param}.file`, [
+      "filename",
+      "file_data",
+      "file_id",
+      "file_url",
+      "data",
+      "content_base64",
+      "mime_type",
+      "media_type",
+    ]);
+    if (fileSourceError) return fileSourceError;
     const fileDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
     if (fileDetailError) return fileDetailError;
   }
-  return null;
+  return validateOpenAIChatFileSourceFields(part, param, [
+    "filename",
+    "file_data",
+    "file_id",
+    "file_url",
+    "data",
+    "content_base64",
+    "mime_type",
+    "media_type",
+  ]);
 }
 
 function validateOpenAIResponsesPromptVariableContentPart(part, param) {

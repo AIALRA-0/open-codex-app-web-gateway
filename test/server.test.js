@@ -694,6 +694,43 @@ test("Responses endpoints validate input image and file detail before provider c
         message: "input.0.content.0.detail must be one of: low, high",
       },
       {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "user",
+          content: [{ type: "input_file", file_id: 123 }],
+        }],
+        param: "input.0.content.0.file_id",
+        message: "input.0.content.0.file_id must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "input_file",
+          file_url: { url: "https://example.test/doc.pdf" },
+        }],
+        param: "input.0.file_url",
+        message: "input.0.file_url must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "function_call_output",
+          call_id: "call_file",
+          output: [{ type: "input_file", filename: 7, file_data: "SGVsbG8=" }],
+        }],
+        param: "input.0.output.0.filename",
+        message: "input.0.output.0.filename must be a string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "user",
+          content: [{ type: "input_file", file: { file_data: [] } }],
+        }],
+        param: "input.0.content.0.file.file_data",
+        message: "input.0.content.0.file.file_data must be a string",
+      },
+      {
         endpoint: "/v1/responses/compact",
         input: [{
           role: "user",
