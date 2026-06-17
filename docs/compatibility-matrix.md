@@ -1920,8 +1920,10 @@ instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
 `low`, `output_compression` from 0 through 100, `output_format` as `png`,
 `jpeg`, or `webp`, `quality` as `auto`, `high`, `medium`, `low`, `hd`, or
 `standard`, `response_format` as `url` or `b64_json`, `style` as `vivid` or
-`natural`, and streaming `partial_images` from 0 through 3 before placeholder
-generation, provider forwarding, or usage recording.
+`natural`, `model` as a string, model-specific prompt limits (`dall-e-2` 1000
+characters, `dall-e-3` 4000 characters, and GPT image models 32000
+characters), `dall-e-3` `n=1`, and streaming `partial_images` from 0 through 3
+before placeholder generation, provider forwarding, or usage recording.
 Non-streaming responses use the OpenAI `ImagesResponse` shape with
 `created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
 `usage` when present. `stream:true` returns Image API SSE events

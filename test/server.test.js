@@ -15413,6 +15413,57 @@ test("POST /v1/images direct endpoints validate official option fields", async (
   });
 });
 
+test("POST /v1/images/generations validates model-specific prompt and n boundaries", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image generation model boundaries");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const testCase of [
+      {
+        body: { model: { id: "dall-e-2" }, prompt: "Draw a compact badge." },
+        message: "model must be a string",
+        param: "model",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "x".repeat(1001) },
+        message: "prompt must be at most 1000 characters for dall-e-2",
+        param: "prompt",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "x".repeat(4001) },
+        message: "prompt must be at most 4000 characters for dall-e-3",
+        param: "prompt",
+      },
+      {
+        body: { model: "gpt-image-test", prompt: "x".repeat(32001) },
+        message: "prompt must be at most 32000 characters for GPT image models",
+        param: "prompt",
+      },
+      {
+        body: { model: "dall-e-3", prompt: "Draw two compact badges.", n: 2 },
+        message: "n must be 1 for dall-e-3",
+        param: "n",
+      },
+    ]) {
+      const response = await fetch(`${baseUrl}/v1/images/generations`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.param);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

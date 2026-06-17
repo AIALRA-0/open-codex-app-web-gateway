@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Generation Model Bounds
+
+- Rechecked official OpenAI Images API references:
+  - direct image generation prompt length is documented as 32000 characters for
+    GPT image models, 1000 characters for `dall-e-2`, and 4000 characters for
+    `dall-e-3`;
+  - `dall-e-3` direct image generation only supports `n=1`;
+  - `model` is a string field for direct image generation.
+- Tightened local bridge behavior:
+  - direct `POST /v1/images/generations` now rejects non-string `model` values
+    before placeholder generation, provider forwarding, streaming event
+    synthesis, or usage recording;
+  - direct generation no longer silently truncates client prompts to 32000
+    characters; it validates the effective model-specific prompt limit and
+    returns an OpenAI-style 400 when the prompt is too long;
+  - `dall-e-3` generation requests with `n` other than 1 now fail closed before
+    any upstream provider call.
+- Regression coverage updated:
+  - added direct generation negative tests for non-string `model`,
+    over-limit `dall-e-2`, over-limit `dall-e-3`, over-limit GPT image prompts,
+    and `dall-e-3` `n=2`;
+  - verified invalid requests return `invalid_request_parameter` and do not call
+    the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records direct generation `model`, prompt-length,
+    and `dall-e-3` `n=1` validation boundaries.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/images" test/server.test.js`
+    passed 12/12 matched tests.
+  - Full `node --test test/*.test.js` passed 384/384 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images generation smokes verified `dall-e-3` `n=2` and over-limit
+    `dall-e-2` prompts both return HTTP 400 with `invalid_request_parameter`.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Variation Validation
 
 - Rechecked official OpenAI Images API references:

@@ -18,6 +18,9 @@ const DEFAULT_MAX_STORED_IMAGE_BYTES = 50 * 1024 * 1024;
 const DEFAULT_REMOTE_IMAGE_TIMEOUT_MS = 10000;
 const MAX_IMAGES_GENERATION_N = 10;
 const MAX_IMAGE_VARIATION_BYTES = 4 * 1024 * 1024;
+const MAX_GPT_IMAGE_PROMPT_CHARS = 32000;
+const MAX_DALL_E_2_PROMPT_CHARS = 1000;
+const MAX_DALL_E_3_PROMPT_CHARS = 4000;
 const IMAGE_API_BACKGROUND_VALUES = ["transparent", "opaque", "auto"];
 const IMAGE_API_INPUT_FIDELITY_VALUES = ["high", "low"];
 const IMAGE_API_MODERATION_VALUES = ["auto", "low"];
@@ -501,6 +504,17 @@ function normalizeImageApiOptionalString(value, param) {
   return value.trim();
 }
 
+function normalizeImageApiModel(value, fallback) {
+  if (value === undefined || value === null || value === "") return stringifyContent(fallback);
+  if (typeof value !== "string" || !value.trim()) {
+    throw imageApiError("model must be a string", {
+      code: "invalid_request_parameter",
+      param: "model",
+    });
+  }
+  return value.trim();
+}
+
 function normalizeImageApiJsonBoolean(value, param = "stream") {
   if (value === undefined || value === null) return false;
   if (value === true || value === false) return value;
@@ -606,6 +620,43 @@ function normalizeImagesEditOptions(request = {}) {
   appendNormalizedOption(options, "size", normalizeImageApiOptionalString(request.size, "size"));
   appendNormalizedOption(options, "user", normalizeImageApiOptionalString(request.user, "user"));
   return options;
+}
+
+function validateImagesGenerationModelConstraints({ model, n, prompt }) {
+  const maxPrompt = imageGenerationPromptLimit(model);
+  if (prompt.length > maxPrompt) {
+    throw imageApiError(`prompt must be at most ${maxPrompt} characters for ${imageGenerationPromptLimitLabel(model)}`, {
+      code: "invalid_request_parameter",
+      param: "prompt",
+    });
+  }
+  if (isDallE3ImageModel(model) && n !== 1) {
+    throw imageApiError("n must be 1 for dall-e-3", {
+      code: "invalid_request_parameter",
+      param: "n",
+    });
+  }
+}
+
+function imageGenerationPromptLimit(model) {
+  const normalized = normalizeImageModelName(model);
+  if (normalized === "dall-e-2") return MAX_DALL_E_2_PROMPT_CHARS;
+  if (normalized === "dall-e-3") return MAX_DALL_E_3_PROMPT_CHARS;
+  return MAX_GPT_IMAGE_PROMPT_CHARS;
+}
+
+function imageGenerationPromptLimitLabel(model) {
+  const normalized = normalizeImageModelName(model);
+  if (normalized === "dall-e-2" || normalized === "dall-e-3") return normalized;
+  return "GPT image models";
+}
+
+function isDallE3ImageModel(model) {
+  return normalizeImageModelName(model) === "dall-e-3";
+}
+
+function normalizeImageModelName(model) {
+  return String(model || "").trim().toLowerCase();
 }
 
 function normalizeImagesVariationOptions(request = {}) {
@@ -1328,10 +1379,11 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
 
   const n = normalizeImagesGenerationN(request.n);
   const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
-  const prompt = truncateForPrompt(request.prompt.trim(), 32000);
-  const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
+  const prompt = request.prompt.trim();
+  const model = normalizeImageApiModel(request.model, config.imageGenerationModel || "gpt-image-2");
   const options = normalizeImagesGenerationOptions(request);
   const stream = normalizeImageApiJsonBoolean(request.stream);
+  validateImagesGenerationModelConstraints({ model, n, prompt });
 
   return {
     model,
