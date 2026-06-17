@@ -703,6 +703,24 @@ test("Responses endpoints validate input image and file detail before provider c
         message: "input.0.image_url.url must be a string",
       },
       {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "input_image",
+          image_url: "not a uri",
+        }],
+        param: "input.0.image_url",
+        message: "input.0.image_url must be a valid URI",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "input_image",
+          image_url: { url: "not a uri", detail: "low" },
+        }],
+        param: "input.0.image_url.url",
+        message: "input.0.image_url.url must be a valid URI",
+      },
+      {
         endpoint: "/v1/responses/compact",
         input: [{
           type: "function_call_output",
@@ -747,6 +765,15 @@ test("Responses endpoints validate input image and file detail before provider c
         }],
         param: "input.0.file_url",
         message: "input.0.file_url must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "input_file",
+          file_url: "not a uri",
+        }],
+        param: "input.0.file_url",
+        message: "input.0.file_url must be a valid URI",
       },
       {
         endpoint: "/v1/responses/compact",

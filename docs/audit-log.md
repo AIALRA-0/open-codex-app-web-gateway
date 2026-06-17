@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Responses Input URI Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `InputImageContentParamAutoParam`, `InputFileContentParam`, prompt variable
+  `input_image`, and prompt variable `input_file` schemas through the developer
+  docs MCP workflow and the official `openai-openapi` YAML:
+  - `input_image.image_url` string values and nested `image_url.url` values are
+    URI strings;
+  - `input_file.file_url` values are URI strings;
+  - `file_id`, inline file/image data, and local bridge aliases remain separate
+    source paths.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject malformed official image/file URI
+    fields while keeping `file_id`, `file_data`, `data`, and completed local
+    Uploads/Files flows unchanged.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with malformed
+    `input_image.image_url`, nested `image_url.url`, and `input_file.file_url`
+    cases.
+- Documentation updated:
+  - compatibility matrix now records URI validation for official Responses
+    image/file URL fields.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "input image and file detail|input_file file_url|prompt variable image" test/server.test.js`
+    passes 3/3;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `input_file.file_url` smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.file_url"` with message
+    `input.0.file_url must be a valid URI`.
+- Disk guard:
+  - root filesystem has 15 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Shell Replay Action/Outcome Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

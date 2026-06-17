@@ -3345,7 +3345,8 @@ function validateOpenAIChatInputFileAliasPart(part, param) {
   return null;
 }
 
-function validateOpenAIChatFileSourceFields(source, param, fields) {
+function validateOpenAIChatFileSourceFields(source, param, fields, options = {}) {
+  const uriFields = new Set(options.uriFields || []);
   for (const field of fields) {
     if (
       Object.prototype.hasOwnProperty.call(source, field)
@@ -3353,6 +3354,14 @@ function validateOpenAIChatFileSourceFields(source, param, fields) {
       && typeof source[field] !== "string"
     ) {
       return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+    }
+    if (
+      Object.prototype.hasOwnProperty.call(source, field)
+      && typeof source[field] === "string"
+      && uriFields.has(field)
+    ) {
+      const uriError = validateOpenAIUriString(source[field], `${param}.${field}`);
+      if (uriError) return uriError;
     }
   }
   return null;
@@ -4584,6 +4593,13 @@ function isValidOpenAIUri(value) {
   } catch (_error) {
     return false;
   }
+}
+
+function validateOpenAIUriString(value, param) {
+  if (!isValidOpenAIUri(value)) {
+    return requestValidationError(`${param} must be a valid URI`, param);
+  }
+  return null;
 }
 
 function validateOpenAIResponsesMcpHeaders(headers, param) {
@@ -6281,10 +6297,16 @@ function validateOpenAIResponsesInputImageDetails(part, param) {
   ) {
     return requestValidationError(`${param}.image_url must be a string, object, or null`, `${param}.image_url`);
   }
+  if (typeof part.image_url === "string") {
+    const imageUriError = validateOpenAIUriString(part.image_url, `${param}.image_url`);
+    if (imageUriError) return imageUriError;
+  }
   if (isPlainObject(part.image_url)) {
     if (typeof part.image_url.url !== "string") {
       return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
     }
+    const imageUrlUriError = validateOpenAIUriString(part.image_url.url, `${param}.image_url.url`);
+    if (imageUrlUriError) return imageUrlUriError;
     const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(part.image_url.detail, `${param}.image_url.detail`);
     if (imageUrlDetailError) return imageUrlDetailError;
   }
@@ -6339,7 +6361,7 @@ function validateOpenAIResponsesInputFileDetails(part, param) {
       "content_base64",
       "mime_type",
       "media_type",
-    ]);
+    ], { uriFields: ["file_url"] });
     if (fileSourceError) return fileSourceError;
     const fileDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
     if (fileDetailError) return fileDetailError;
@@ -6353,7 +6375,7 @@ function validateOpenAIResponsesInputFileDetails(part, param) {
     "content_base64",
     "mime_type",
     "media_type",
-  ]);
+  ], { uriFields: ["file_url"] });
 }
 
 function validateOpenAIResponsesPromptVariableContentPart(part, param) {
@@ -6383,6 +6405,8 @@ function validateOpenAIResponsesPromptInputImagePart(part, param) {
   if (Object.prototype.hasOwnProperty.call(part, "image_url")) {
     const imageUrl = part.image_url;
     if (typeof imageUrl === "string") {
+      const imageUriError = validateOpenAIUriString(imageUrl, `${param}.image_url`);
+      if (imageUriError) return imageUriError;
       return validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
     }
     if (!isPlainObject(imageUrl)) {
@@ -6391,6 +6415,8 @@ function validateOpenAIResponsesPromptInputImagePart(part, param) {
     if (typeof imageUrl.url !== "string") {
       return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
     }
+    const imageUrlUriError = validateOpenAIUriString(imageUrl.url, `${param}.image_url.url`);
+    if (imageUrlUriError) return imageUrlUriError;
     const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(imageUrl.detail, `${param}.image_url.detail`);
     if (imageUrlDetailError) return imageUrlDetailError;
   } else {
@@ -6423,13 +6449,13 @@ function validateOpenAIResponsesPromptInputFilePart(part, param) {
       "file_id",
       "mime_type",
       "media_type",
-    ]);
+    ], { uriFields: ["file_url"] });
     if (nestedError) return nestedError;
     const nestedDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
     if (nestedDetailError) return nestedDetailError;
   }
   const sourceFields = ["filename", "file_data", "file_id", "file_url", "data", "content_base64", "mime_type", "media_type"];
-  const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields);
+  const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields, { uriFields: ["file_url"] });
   if (sourceError) return sourceError;
   if (!isPlainObject(part.file)) {
     const hasSource = ["file_data", "file_id", "file_url", "data", "content_base64"].some((field) => (
