@@ -725,7 +725,7 @@ state.
 | `GET /v1/organization/groups/{group_id}` | Implemented locally | Retrieves a local group or returns `404 organization_group_not_found` |
 | `POST /v1/organization/groups/{group_id}` | Implemented locally | Updates the local group `name`; SCIM-managed groups are reserved and reject updates |
 | `DELETE /v1/organization/groups/{group_id}` | Implemented locally | Deletes a local group, its local memberships, and its local role assignments with `group.deleted` |
-| `GET /v1/organization/groups/{group_id}/users` | Implemented locally | Lists local users assigned to a local group with OpenAI SDK `NextCursorPage` semantics; validates `limit` from 0 through 1000 with local default 20, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and rejects unsupported query parameters such as `before` before listing |
+| `GET /v1/organization/groups/{group_id}/users` | Implemented locally | Lists local users assigned to a local group with OpenAI SDK `NextCursorPage` semantics; validates official `limit` from 0 through 1000 with default 100, `after`, and `order:"asc"|"desc"` with default `desc`, rejects repeated scalar values, and rejects unsupported query parameters such as `before` before listing |
 | `POST /v1/organization/groups/{group_id}/users` | Implemented locally | Adds an existing local organization user to a local group and returns `group.user` |
 | `GET /v1/organization/groups/{group_id}/users/{user_id}` | Implemented locally | Retrieves a local group user detail projection or returns `404 organization_group_user_not_found` |
 | `DELETE /v1/organization/groups/{group_id}/users/{user_id}` | Implemented locally | Removes a local user from a local group and returns `group.user.deleted` |

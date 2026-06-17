@@ -16561,8 +16561,8 @@ function handleOrganizationGroupUsersList(res, organizationAdminStore, groupId, 
   sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationGroupUsers(groupId),
     officialAdminNextCursorListPaginationUrl(url),
-    "asc",
-    20,
+    "desc",
+    100,
     1000,
   ));
 }

@@ -23691,7 +23691,8 @@ test("Organization roles and groups manage local memberships and assignments", a
       }, path);
     };
     const assertNextCursorListQuery = async (path, expectedIds) => {
-      const listed = await fetch(`${baseUrl}${path}?limit=20`);
+      const listLimit = Math.max(20, expectedIds.length);
+      const listed = await fetch(`${baseUrl}${path}?order=asc&limit=${listLimit}`);
       assert.equal(listed.status, 200, path);
       const listedJson = await listed.json();
       assert.equal(listedJson.object, "list");
@@ -23719,9 +23720,10 @@ test("Organization roles and groups manage local memberships and assignments", a
       assert.equal(next.status, 200, path);
       const nextJson = await next.json();
       assert.equal(nextJson.data.length, 1);
-      assert.equal(nextJson.data[0].id, idsAscending[0]);
-      assert.equal(nextJson.has_more, false);
-      assert.equal(nextJson.next, null);
+      const nextDescendingId = idsAscending.at(-2);
+      assert.equal(nextJson.data[0].id, nextDescendingId);
+      assert.equal(nextJson.has_more, idsAscending.length > 2);
+      assert.equal(nextJson.next, idsAscending.length > 2 ? nextDescendingId : null);
 
       await assertInvalidListQuery(
         `${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`,
@@ -24056,9 +24058,42 @@ test("Organization roles and groups manage local memberships and assignments", a
       user_id: secondProjectUser.id,
     });
 
+    const groupUserIds = [projectUser.id, secondProjectUser.id];
+    for (let index = 3; index <= 21; index += 1) {
+      const extraProjectUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          user_id: `user_bridge_role_member_${index}`,
+          email: `bridge-role-member-${index}@example.com`,
+          name: `Bridge Role Member ${index}`,
+          role: "member",
+        }),
+      });
+      assert.equal(extraProjectUserResponse.status, 200);
+      const extraProjectUser = await extraProjectUserResponse.json();
+      groupUserIds.push(extraProjectUser.id);
+
+      const extraGroupUserResponse = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ user_id: extraProjectUser.id }),
+      });
+      assert.equal(extraGroupUserResponse.status, 200);
+    }
+
     const groupUsersJson = await assertNextCursorListQuery(
       `/v1/organization/groups/${group.id}/users`,
-      [projectUser.id, secondProjectUser.id],
+      groupUserIds,
+    );
+    const defaultGroupUsers = await fetch(`${baseUrl}/v1/organization/groups/${group.id}/users`);
+    assert.equal(defaultGroupUsers.status, 200);
+    const defaultGroupUsersJson = await defaultGroupUsers.json();
+    assert.equal(defaultGroupUsersJson.data.length, groupUserIds.length);
+    assert.equal(defaultGroupUsersJson.has_more, false);
+    assert.deepEqual(
+      defaultGroupUsersJson.data.map((entry) => entry.id),
+      [...groupUsersJson.data.map((entry) => entry.id)].reverse(),
     );
     const listedGroupUser = groupUsersJson.data.find((entry) => entry.id === projectUser.id);
     assert.equal(listedGroupUser.email, "bridge-role-member@example.com");

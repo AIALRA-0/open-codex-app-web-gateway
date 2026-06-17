@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Group Users List Default Pagination Validation
+
+- Rechecked official OpenAI API references:
+  - official OpenAPI 2.3.0 for
+    `GET /v1/organization/groups/{group_id}/users` documents
+    `limit` with minimum 0, maximum 1000, and default 100;
+  - the same operation documents `order:"asc"|"desc"` with default `desc`,
+    plus `after` pagination.
+- Tightened local bridge behavior:
+  - group user listing now defaults to `limit=100` instead of the previous
+    local default 20;
+  - group user listing now defaults to descending order instead of ascending
+    order when `order` is omitted;
+  - explicit `order=asc`, `order=desc`, `limit`, and `after` behavior remains
+    handled by the shared Admin next-cursor pagination helpers.
+- Regression coverage updated:
+  - the organization roles/groups lifecycle test now creates 21 local group
+    users, so an omitted `limit` must return all 21 users and would fail under
+    the old default 20;
+  - the same test verifies omitted `order` returns the reverse of explicit
+    `order=asc`, proving the official default `desc` behavior.
+- Documentation updated:
+  - compatibility matrix now records the official group users list default
+    `limit=100` and default `order=desc`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization roles and groups manage local memberships and assignments" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public group users smoke verified health, `limit=1001` rejection, and
+    unsupported `before` query rejection without creating live organization
+    group/user state.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available,
+    93% used.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated group ids, generated user
+    ids, generated project ids, or smoke payload secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Groups List Limit Range Validation
 
 - Rechecked official OpenAI API references:
