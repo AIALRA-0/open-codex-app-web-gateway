@@ -961,10 +961,10 @@ transition tooling, not a dependency on the hosted Evals dashboard.
 | `POST /v1/evals/{eval_id}` | Implemented locally | Updates local `name`, `data_source_config`, `testing_criteria`, and `metadata` |
 | `DELETE /v1/evals/{eval_id}` | Implemented locally | Deletes the eval definition, local runs, and output items |
 | `POST /v1/evals/{eval_id}/runs` | Implemented locally | Loads inline rows or `source:{type:"file_id",id}` from a `purpose:"evals"` File, runs synchronously, and stores `eval.run` results |
-| `GET /v1/evals/{eval_id}/runs` | Implemented locally | Lists local runs with pagination |
+| `GET /v1/evals/{eval_id}/runs` | Implemented locally | Lists local runs with official `limit`, `after`, `order`, and `status=queued|in_progress|completed|canceled|failed` pagination and filtering; repeated scalar query values return 400, invalid `status` values return 400, and unsupported generic paginator parameters such as `before` do not affect the official list result |
 | `GET /v1/evals/{eval_id}/runs/{run_id}` | Implemented locally | Returns a stored run with `result_counts`, `per_model_usage`, `per_testing_criteria_results`, `data_source`, `error`, and metadata |
 | `POST /v1/evals/{eval_id}/runs/{run_id}/cancel` | Local extension/no-op for terminal runs | Local runs complete synchronously; terminal runs are returned unchanged with compatibility metadata |
-| `GET /v1/evals/{eval_id}/runs/{run_id}/output_items` | Implemented locally | Lists stored `eval.run.output_item` records with pagination |
+| `GET /v1/evals/{eval_id}/runs/{run_id}/output_items` | Implemented locally | Lists stored `eval.run.output_item` records with official `limit`, `after`, `order`, and `status=pass|fail` pagination and filtering; repeated scalar query values return 400, invalid `status` values return 400, and unsupported generic paginator parameters such as `before` do not affect the official list result |
 | `GET /v1/evals/{eval_id}/runs/{run_id}/output_items/{output_item_id}` | Implemented locally | Returns one stored output item with datasource row, sample, criterion results, and error details when present |
 
 Local run execution supports deterministic `string_check`,

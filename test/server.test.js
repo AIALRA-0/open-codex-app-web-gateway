@@ -30783,6 +30783,44 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(outputItems.data[0].sample.output_text, "Hardware");
     assert.equal(outputItems.data[1].results[0].reference, "Software");
 
+    const passedOutputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=pass`);
+    assert.equal(passedOutputItemsResponse.status, 200);
+    const passedOutputItems = await passedOutputItemsResponse.json();
+    assert.equal(passedOutputItems.data.length, 1);
+    assert.equal(passedOutputItems.data[0].status, "passed");
+
+    const failedOutputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=fail`);
+    assert.equal(failedOutputItemsResponse.status, 200);
+    const failedOutputItems = await failedOutputItemsResponse.json();
+    assert.equal(failedOutputItems.data.length, 1);
+    assert.equal(failedOutputItems.data[0].status, "failed");
+
+    const outputItemsBeforeIgnored = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?before=${outputItems.data[0].id}&limit=1`);
+    assert.equal(outputItemsBeforeIgnored.status, 200);
+    assert.equal((await outputItemsBeforeIgnored.json()).data[0].id, outputItems.data[0].id);
+
+    const invalidOutputItemsStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=passed`);
+    assert.equal(invalidOutputItemsStatus.status, 400);
+    assert.deepEqual(await invalidOutputItemsStatus.json(), {
+      error: {
+        message: "status must be one of: pass, fail",
+        type: "invalid_request_error",
+        param: "status",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedOutputItemsStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=pass&status=fail`);
+    assert.equal(repeatedOutputItemsStatus.status, 400);
+    assert.deepEqual(await repeatedOutputItemsStatus.json(), {
+      error: {
+        message: "status must be a single string query value",
+        type: "invalid_request_error",
+        param: "status",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const outputItemResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items/${outputItems.data[0].id}`);
     assert.equal(outputItemResponse.status, 200);
     const outputItem = await outputItemResponse.json();
@@ -30796,6 +30834,36 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     const runList = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?limit=1`);
     assert.equal(runList.status, 200);
     assert.equal((await runList.json()).data[0].id, run.id);
+
+    const completedRunList = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?status=completed`);
+    assert.equal(completedRunList.status, 200);
+    assert.equal((await completedRunList.json()).data[0].id, run.id);
+
+    const runListBeforeIgnored = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?before=${run.id}&limit=1`);
+    assert.equal(runListBeforeIgnored.status, 200);
+    assert.equal((await runListBeforeIgnored.json()).data[0].id, run.id);
+
+    const invalidRunStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?status=done`);
+    assert.equal(invalidRunStatus.status, 400);
+    assert.deepEqual(await invalidRunStatus.json(), {
+      error: {
+        message: "status must be one of: queued, in_progress, completed, canceled, failed",
+        type: "invalid_request_error",
+        param: "status",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedRunStatus = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs?status=completed&status=failed`);
+    assert.equal(repeatedRunStatus.status, 400);
+    assert.deepEqual(await repeatedRunStatus.json(), {
+      error: {
+        message: "status must be a single string query value",
+        type: "invalid_request_error",
+        param: "status",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const updatedEvalResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}`, {
       method: "POST",

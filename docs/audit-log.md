@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-17 Evals Sublist Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 Evals sublist query
+  schemas:
+  - `GET /evals/{eval_id}/runs` supports scalar `after`, `limit`, `order`,
+    and `status=queued|in_progress|completed|canceled|failed`;
+  - `GET /evals/{eval_id}/runs/{run_id}/output_items` supports scalar
+    `after`, `limit`, `order`, and `status=pass|fail`;
+  - neither endpoint defines `before`.
+- Tightened local Evals sublist behavior:
+  - both sublist handlers now validate repeated scalar `after`, `limit`,
+    `order`, and `status` query parameters before store lookup;
+  - runs list now implements official `status` filtering, including a local
+    compatibility match from official `canceled` to older local `cancelled`
+    records;
+  - output-items list now implements official `status=pass|fail` filtering
+    against local `passed` / `failed` records;
+  - both paginators receive sanitized URLs containing only official
+    `after`, `limit`, and `order`, so generic `before` no longer affects the
+    official list results.
+- Regression coverage updated:
+  - extended the local Evals lifecycle test with runs `status` filtering,
+    output-items `status` filtering, invalid and repeated status validation,
+    and `before` sanitize checks for both sublists.
+- Documentation updated:
+  - compatibility matrix now records official Evals runs and output-items
+    list query parameters and filters.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Evals API creates local runs" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Evals runs invalid-`status` smoke returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"status"`.
+  - Public Evals runs repeated-`status` smoke returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"status"`.
+  - Public Evals output-items invalid-`status` smoke returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"status"`.
+  - Public Evals output-items repeated-`status` smoke returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"status"`.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Evals List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /evals`

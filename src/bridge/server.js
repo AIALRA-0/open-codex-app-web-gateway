@@ -14522,6 +14522,11 @@ async function handleEvalRunCreate(req, res, config, responseStore, fileSearchSt
 }
 
 function handleEvalRunsList(res, evalStore, evalId, url) {
+  const queryError = validateOpenAIEvalRunsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const runs = evalStore.listRuns(evalId);
   if (!runs) {
     sendError(res, 404, `eval not found: ${evalId}`, {
@@ -14531,7 +14536,27 @@ function handleEvalRunsList(res, evalStore, evalId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateList(runs, url));
+  const status = url.searchParams.get("status");
+  const filtered = status
+    ? runs.filter((run) => evalRunStatusMatches(run.status, status))
+    : runs;
+  sendJson(res, 200, paginateList(filtered, officialEvalSubListPaginationUrl(url)));
+}
+
+function validateOpenAIEvalRunsListQuery(url) {
+  const queryError = validateOpenAIEvalSubListQuery(url);
+  if (queryError) return queryError;
+
+  const status = url.searchParams.get("status");
+  if (status != null && !["queued", "in_progress", "completed", "canceled", "failed"].includes(status)) {
+    return requestValidationError("status must be one of: queued, in_progress, completed, canceled, failed", "status");
+  }
+  return null;
+}
+
+function evalRunStatusMatches(actual, expected) {
+  const normalized = String(actual || "");
+  return normalized === expected || (expected === "canceled" && normalized === "cancelled");
 }
 
 function handleEvalRunGet(res, evalStore, evalId, runId) {
@@ -14561,6 +14586,11 @@ function handleEvalRunCancel(res, evalStore, evalId, runId) {
 }
 
 function handleEvalRunOutputItemsList(res, evalStore, evalId, runId, url) {
+  const queryError = validateOpenAIEvalRunOutputItemsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const items = evalStore.listOutputItems(evalId, runId);
   if (!items) {
     sendError(res, 404, `eval run not found: ${runId}`, {
@@ -14570,7 +14600,49 @@ function handleEvalRunOutputItemsList(res, evalStore, evalId, runId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateList(items, url));
+  const status = url.searchParams.get("status");
+  const filtered = status
+    ? items.filter((item) => evalOutputItemStatusMatches(item.status, status))
+    : items;
+  sendJson(res, 200, paginateList(filtered, officialEvalSubListPaginationUrl(url)));
+}
+
+function validateOpenAIEvalRunOutputItemsListQuery(url) {
+  const queryError = validateOpenAIEvalSubListQuery(url);
+  if (queryError) return queryError;
+
+  const status = url.searchParams.get("status");
+  if (status != null && !["pass", "fail"].includes(status)) {
+    return requestValidationError("status must be one of: pass, fail", "status");
+  }
+  return null;
+}
+
+function validateOpenAIEvalSubListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "status");
+}
+
+function officialEvalSubListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit", "order"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function evalOutputItemStatusMatches(actual, expected) {
+  const normalized = String(actual || "");
+  if (expected === "pass") return normalized === "pass" || normalized === "passed";
+  return normalized === "fail" || normalized === "failed";
 }
 
 function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId) {
