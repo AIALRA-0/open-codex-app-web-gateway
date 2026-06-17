@@ -6394,6 +6394,41 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
     assert.equal(listedAssistantsJson.object, "list");
     assert.equal(listedAssistantsJson.data[0].id, assistant.id);
 
+    const invalidAssistantListCases = [
+      {
+        path: "/v1/assistants?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/assistants?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: "/v1/assistants?order=ascending",
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: `/v1/assistants?before=${assistant.id}&before=asst_other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+    ];
+    for (const testCase of invalidAssistantListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const updatedAssistant = await fetch(`${baseUrl}/v1/assistants/${assistant.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -6452,15 +6487,119 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
     assert.equal(assistantMessage.run_id, run.id);
     assert.equal(assistantMessage.content[0].text.value, "assistants-run-ok");
 
+    const runMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?run_id=${run.id}&order=asc&limit=10`);
+    assert.equal(runMessages.status, 200);
+    const runMessagesJson = await runMessages.json();
+    assert.deepEqual(runMessagesJson.data.map((message) => message.id), [assistantMessage.id]);
+
+    const emptyRunMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?run_id=run_missing`);
+    assert.equal(emptyRunMessages.status, 200);
+    assert.deepEqual((await emptyRunMessages.json()).data, []);
+
+    const invalidMessageListCases = [
+      {
+        path: `/v1/threads/${thread.id}/messages?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/threads/${thread.id}/messages?run_id=${run.id}&run_id=run_other`,
+        message: "run_id must be a single string query value",
+        param: "run_id",
+      },
+      {
+        path: `/v1/threads/${thread.id}/messages?after=${assistantMessage.id}&after=msg_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidMessageListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const listedRuns = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`);
     assert.equal(listedRuns.status, 200);
     assert.equal((await listedRuns.json()).data[0].id, run.id);
+
+    const invalidRunListCases = [
+      {
+        path: `/v1/threads/${thread.id}/runs?limit=0`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/threads/${thread.id}/runs?order=asc&order=desc`,
+        message: "order must be a single string query value",
+        param: "order",
+      },
+      {
+        path: `/v1/threads/${thread.id}/runs?before=${run.id}&before=run_other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+    ];
+    for (const testCase of invalidRunListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const listedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps`);
     assert.equal(listedSteps.status, 200);
     const listedStepsJson = await listedSteps.json();
     assert.equal(listedStepsJson.data.length, 1);
     assert.equal(listedStepsJson.data[0].step_details.message_creation.message_id, assistantMessage.id);
+
+    const stepInclude = encodeURIComponent("step_details.tool_calls[*].file_search.results[*].content");
+    const includedSteps = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps?include[]=${stepInclude}&limit=1`);
+    assert.equal(includedSteps.status, 200);
+    assert.equal((await includedSteps.json()).data[0].id, listedStepsJson.data[0].id);
+
+    const invalidStepListCases = [
+      {
+        path: `/v1/threads/${thread.id}/runs/${run.id}/steps?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/threads/${thread.id}/runs/${run.id}/steps?include[]=bad.include`,
+        message: "include.0 must be one of: step_details.tool_calls[*].file_search.results[*].content",
+        param: "include.0",
+      },
+      {
+        path: `/v1/threads/${thread.id}/runs/${run.id}/steps?after=${listedStepsJson.data[0].id}&after=step_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidStepListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const fetchedStep = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${listedStepsJson.data[0].id}`);
     assert.equal(fetchedStep.status, 200);

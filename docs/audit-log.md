@@ -1,5 +1,71 @@
 # Audit Log
 
+## 2026-06-17 Assistants List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:
+  - `GET /assistants`;
+  - `GET /threads/{thread_id}/messages`;
+  - `GET /threads/{thread_id}/runs`;
+  - `GET /threads/{thread_id}/runs/{run_id}/steps`.
+- Confirmed Assistants, Thread Messages, Thread Runs, and Run Steps list routes
+  use official cursor pagination with:
+  - `limit` as an integer scalar with documented range 1 through 100;
+  - `order` as an `asc` / `desc` string scalar;
+  - `after` and `before` as string cursor scalars.
+- Confirmed additional official filters/projections:
+  - Thread Messages list accepts scalar `run_id` to filter messages generated
+    by a specific run;
+  - Run Steps list accepts `include[]` with the single official value
+    `step_details.tool_calls[*].file_search.results[*].content`.
+- Tightened local Assistants list behavior:
+  - `GET /v1/assistants`,
+    `GET /v1/threads/{thread_id}/messages`,
+    `GET /v1/threads/{thread_id}/runs`, and
+    `GET /v1/threads/{thread_id}/runs/{run_id}/steps` now validate repeated
+    scalar `limit`, `order`, `after`, and `before` query parameters before
+    listing;
+  - `limit` is validated with the official 1 through 100 range;
+  - Thread Messages list now applies the official `run_id` filter before
+    pagination;
+  - Run Steps list now rejects unsupported `include[]` values with structured
+    OpenAI-style HTTP 400 JSON.
+- Regression coverage updated:
+  - Assistants lifecycle tests now cover invalid assistant list queries,
+    Thread Messages `run_id` filtering, empty `run_id` results, repeated
+    `run_id`, invalid message/run/step list limits, repeated cursor/order
+    query values, and invalid Run Step `include[]` values.
+- Documentation updated:
+  - compatibility matrix now records official Assistants, Thread Messages,
+    Thread Runs, and Run Steps list query behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Assistants API local lifecycle runs threads through upstream Chat" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`.
+  - Public Assistants smoke created one temporary assistant, one temporary
+    thread, and one temporary run; the run completed successfully.
+  - Public `GET /v1/threads/{thread_id}/messages?run_id=...` smoke returned
+    one message and every returned message matched the requested run id.
+  - Public invalid query smokes returned HTTP 400 with
+    `code:"invalid_request_parameter"` for assistant `limit`, repeated message
+    `run_id`, run `limit=0`, and invalid Run Step `include[]`.
+  - Public smoke cleanup deleted the temporary thread and assistant
+    successfully.
+  - Disk guard after deployment: `/` 193G size, 183G used, 11G available,
+    95% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Skills List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:

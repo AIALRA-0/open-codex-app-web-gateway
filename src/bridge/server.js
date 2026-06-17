@@ -18210,7 +18210,25 @@ function parseLimit(value, fallback, max) {
 }
 
 function handleAssistantsList(res, assistantStore, url) {
-  sendJson(res, 200, paginateList(assistantStore.listAssistants(), url));
+  const queryError = validateOpenAIAssistantCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateList(assistantStore.listAssistants(), officialCursorListPaginationUrl(url)));
+}
+
+function validateOpenAIAssistantCursorListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "before");
 }
 
 async function handleAssistantCreate(req, res, assistantStore) {
@@ -18611,7 +18629,12 @@ function handleAssistantThreadDelete(res, assistantStore, threadId) {
 }
 
 function handleAssistantMessagesList(res, assistantStore, threadId, url) {
-  const messages = assistantStore.listMessages(threadId);
+  const queryError = validateOpenAIAssistantMessagesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  let messages = assistantStore.listMessages(threadId);
   if (!messages) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
       type: "invalid_request_error",
@@ -18620,7 +18643,19 @@ function handleAssistantMessagesList(res, assistantStore, threadId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateList(messages, url));
+  const runId = url.searchParams.get("run_id");
+  if (runId) messages = messages.filter((message) => message.run_id === runId);
+  sendJson(res, 200, paginateList(messages, officialAssistantMessagesListPaginationUrl(url)));
+}
+
+function validateOpenAIAssistantMessagesListQuery(url) {
+  const listError = validateOpenAIAssistantCursorListQuery(url);
+  if (listError) return listError;
+  return validateOpenAISingleQueryValue(url, "run_id");
+}
+
+function officialAssistantMessagesListPaginationUrl(url) {
+  return officialCursorListPaginationUrl(url);
 }
 
 async function handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId) {
@@ -18701,6 +18736,11 @@ function handleAssistantMessageDelete(res, assistantStore, threadId, messageId) 
 }
 
 function handleAssistantRunsList(res, assistantStore, threadId, url) {
+  const queryError = validateOpenAIAssistantCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const runs = refreshAssistantThreadRuns(assistantStore, threadId);
   if (!runs) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -18710,7 +18750,7 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateList(runs, url));
+  sendJson(res, 200, paginateList(runs, officialCursorListPaginationUrl(url)));
 }
 
 async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore, url) {
@@ -18894,6 +18934,11 @@ async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantSt
 }
 
 function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) {
+  const queryError = validateOpenAIAssistantRunStepsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const run = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -18912,7 +18957,29 @@ function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) 
     });
     return;
   }
-  sendJson(res, 200, paginateList(projectAssistantRunStepsForIncludes(steps, url), url));
+  sendJson(res, 200, paginateList(
+    projectAssistantRunStepsForIncludes(steps, url),
+    officialCursorListPaginationUrl(url),
+  ));
+}
+
+function validateOpenAIAssistantRunStepsListQuery(url) {
+  const listError = validateOpenAIAssistantCursorListQuery(url);
+  if (listError) return listError;
+  return validateAssistantRunStepIncludeQuery(url);
+}
+
+function validateAssistantRunStepIncludeQuery(url) {
+  const values = includeListFromUrl(url);
+  for (const [index, value] of values.entries()) {
+    if (value !== ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE) {
+      return requestValidationError(
+        `include.${index} must be one of: ${ASSISTANT_RUN_STEP_FILE_SEARCH_CONTENT_INCLUDE}`,
+        `include.${index}`,
+      );
+    }
+  }
+  return null;
 }
 
 function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId, url) {
