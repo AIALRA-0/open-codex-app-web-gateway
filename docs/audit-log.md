@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-17 Project Groups List Limit Range Validation
+
+- Rechecked official OpenAI API references:
+  - official OpenAPI 2.3.0 for
+    `GET /v1/organization/projects/{project_id}/groups` documents
+    `limit` with minimum 0, maximum 100, and default 20, plus `after` and
+    `order` query parameters.
+- Tightened local bridge behavior:
+  - project group listing now passes endpoint-specific `max:100` into the
+    shared Admin next-cursor query validator;
+  - project group pagination now caps list output at 100 instead of the
+    shared Admin default of 1000;
+  - other Admin next-cursor endpoints continue using their existing 1000
+    upper bound.
+- Regression coverage updated:
+  - changed the Organization project groups lifecycle test to expect
+    `limit=-1` and `limit=101` to return `400 invalid_request_parameter`
+    with the official 0 through 100 range.
+- Documentation updated:
+  - compatibility matrix now records the official project groups list
+    `limit` range and default.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local group access" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public project group list smoke verified health and `limit=101`
+    rejection before project lookup.
+  - Disk guard after deployment: `/` 193G size, 179G used, 14G available,
+    93% used.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated project ids, generated
+    group ids, or smoke payload secrets were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Admin Next-Cursor List Query Allowlist Validation
 
 - Rechecked official OpenAI API references:

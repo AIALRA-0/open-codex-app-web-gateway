@@ -16945,7 +16945,7 @@ async function handleOrganizationProjectGroupCreate(req, res, organizationAdminS
 }
 
 function handleOrganizationProjectGroupsList(res, organizationAdminStore, projectId, url) {
-  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  const queryError = validateOpenAIAdminNextCursorListQuery(url, { max: 100 });
   if (queryError) {
     sendError(res, 400, queryError.message, queryError);
     return;
@@ -16957,7 +16957,7 @@ function handleOrganizationProjectGroupsList(res, organizationAdminStore, projec
     "group_id",
     "asc",
     20,
-    1000,
+    100,
   ));
 }
 
@@ -17311,11 +17311,11 @@ function officialSpendAlertsListPaginationUrl(url) {
   return localUrl;
 }
 
-function validateOpenAIAdminNextCursorListQuery(url) {
+function validateOpenAIAdminNextCursorListQuery(url, { max = 1000 } = {}) {
   const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "order", "limit"]);
   if (allowedError) return allowedError;
 
-  const limitError = validateOpenAIListZeroLimitQuery(url, { max: 1000 });
+  const limitError = validateOpenAIListZeroLimitQuery(url, { max });
   if (limitError) return limitError;
 
   const afterError = validateOpenAISingleQueryValue(url, "after");

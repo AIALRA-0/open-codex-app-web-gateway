@@ -26221,12 +26221,12 @@ test("Organization projects manage local group access", async () => {
     await assertInvalidListQuery(
       `/v1/organization/projects/${project.id}/groups?limit=-1`,
       "limit",
-      "limit must be an integer between 0 and 1000",
+      "limit must be an integer between 0 and 100",
     );
     await assertInvalidListQuery(
-      `/v1/organization/projects/${project.id}/groups?limit=1001`,
+      `/v1/organization/projects/${project.id}/groups?limit=101`,
       "limit",
-      "limit must be an integer between 0 and 1000",
+      "limit must be an integer between 0 and 100",
     );
     await assertInvalidListQuery(
       `/v1/organization/projects/${project.id}/groups?limit=1&limit=2`,
