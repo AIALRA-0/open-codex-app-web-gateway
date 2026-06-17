@@ -24328,12 +24328,16 @@ test("Organization admin API keys are local, redacted, and audited", async () =>
     assert.equal(nextPageJson.data.length, 1);
     assert.equal(nextPageJson.data[0].id, listedJson.data[0].id);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=2&before=${encodeURIComponent(listedJson.data[0].id)}`);
-    assert.equal(beforeIgnored.status, 200);
-    assert.deepEqual(
-      (await beforeIgnored.json()).data.map((entry) => entry.id),
-      descListJson.data.concat(nextPageJson.data).map((entry) => entry.id),
-    );
+    const listWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/admin_api_keys?order=desc&limit=2&before=${encodeURIComponent(listedJson.data[0].id)}`);
+    assert.equal(listWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await listWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidAdminApiKeyListCases = [
       {

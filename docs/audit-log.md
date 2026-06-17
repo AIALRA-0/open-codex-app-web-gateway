@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Organization Admin API Keys List Query Allowlist Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Organization admin API keys:
+  - `GET /v1/organization/admin_api_keys` declares only `after`, `order`,
+    and `limit` query parameters;
+  - `POST /v1/organization/admin_api_keys` declares a JSON request body and
+    no query parameters.
+- Tightened local bridge behavior:
+  - organization admin API-key listing now rejects unsupported query
+    parameters before reading local admin-key state, so ignored `before`
+    pagination can no longer shape or appear to shape list output;
+  - existing official `limit`, `after`, and `order` scalar/range validation
+    remains unchanged, including the local 1 through 100 limit guard and
+    `order:"asc"|"desc"` support.
+- Regression coverage updated:
+  - changed the Organization admin API keys lifecycle test from ignored
+    `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the official organization admin API keys
+    list query allowlist and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization admin API keys are local, redacted, and audited" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization admin API keys smoke verified health, allowed
+    `limit=1&order=asc` list access, and unsupported `before` query rejection
+    without creating local admin-key state.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated admin record ids, or smoke
+    payload secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Users And Invites List Query Allowlist Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Organization administration:

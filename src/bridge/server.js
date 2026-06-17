@@ -17220,6 +17220,9 @@ function officialOrganizationInvitesListPaginationUrl(url) {
 }
 
 function validateOpenAIOrganizationAdminApiKeysListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "order", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
