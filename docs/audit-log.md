@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Messages Cursor Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 stored Chat message-list
+  shape through the developer docs MCP workflow:
+  - `GET /v1/chat/completions/{completion_id}/messages` exposes scalar
+    `after`, `limit`, and `order` pagination parameters.
+- Tightened local stored Chat message-list validation:
+  - repeated `after` query values now return an OpenAI-style 400 error instead
+    of silently using the first value;
+  - existing valid `after`, `limit`, and `order` pagination behavior is
+    unchanged.
+- Regression coverage updated:
+  - extended the stored Chat lifecycle test with
+    `after=chatmsg_000000&after=chatmsg_000001` rejection.
+- Documentation updated:
+  - compatibility matrix now records the `/messages` `after` single-value
+    query boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "Stored Chat retrieval, list, update" test/server.test.js`
+    passes 1/1;
+  - `node --test test/*.test.js` passes 368/368;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public stored Chat messages smoke against
+    `/v1/chat/completions/{completion_id}/messages?after=chatmsg_000000&after=chatmsg_000001`
+    returns 400 `invalid_request_parameter` for `param:"after"`.
+- Disk guard:
+  - root filesystem has 14 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Stored Chat List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `GET

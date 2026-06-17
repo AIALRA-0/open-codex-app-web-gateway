@@ -17053,19 +17053,24 @@ function handleChatCompletionMessages(res, store, completionId, url) {
     sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
     return;
   }
-  const orderError = validateOpenAIListOrderQuery(url);
-  if (orderError) {
-    sendError(res, 400, orderError.message, orderError);
-    return;
-  }
-  const limitError = validateOpenAIListLimitQuery(url);
-  if (limitError) {
-    sendError(res, 400, limitError.message, limitError);
+  const queryError = validateOpenAIChatCompletionMessagesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
     return;
   }
 
   const messages = projectStoredChatMessages(record);
   sendJson(res, 200, paginateList(messages, url));
+}
+
+function validateOpenAIChatCompletionMessagesListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
 }
 
 function projectStoredChatMessages(record) {

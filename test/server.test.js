@@ -27266,6 +27266,17 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
       },
     });
 
+    const invalidMessagesAfter = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?after=chatmsg_000000&after=chatmsg_000001`);
+    assert.equal(invalidMessagesAfter.status, 400);
+    assert.deepEqual(await invalidMessagesAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const messagesDesc = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=desc&limit=1`);
     assert.equal(messagesDesc.status, 200);
     const messagesDescJson = await messagesDesc.json();
