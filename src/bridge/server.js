@@ -454,6 +454,7 @@ const OPENAI_INLINE_SKILL_SOURCE_DATA_MAX_CHARS = 70254592;
 const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
 const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
 const OPENAI_CHAT_TOOLS_MAX = 128;
+const OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS = 10485760;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
 
@@ -5396,12 +5397,21 @@ function validateOpenAIResponsesInstructions(body = {}) {
   return validateOpenAIStringParameter(body, "instructions");
 }
 
-function validateOpenAIResponsesInputDetails(body = {}) {
+function validateOpenAIResponsesInputDetails(body = {}, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "input") || body.input == null) return null;
+  if (typeof body.input === "string") {
+    if (options.topLevelInputMaxLength != null) {
+      return validateOpenAIStringMaxLength(body.input, "input", options.topLevelInputMaxLength);
+    }
+    return null;
+  }
   return validateOpenAIResponsesInputDetailsValue(body.input, "input");
 }
 
 function validateOpenAIResponsesInputDetailsValue(value, param) {
+  if (typeof value === "string") {
+    return validateOpenAIStringMaxLength(value, param, OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS);
+  }
   if (Array.isArray(value)) {
     for (const [index, item] of value.entries()) {
       const error = validateOpenAIResponsesInputDetailsValue(item, `${param}.${index}`);
@@ -5464,6 +5474,13 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
   return null;
 }
 
+function validateOpenAIStringMaxLength(value, param, maxLength) {
+  if (Array.from(value).length > maxLength) {
+    return requestValidationError(`${param} must be at most ${maxLength} characters`, param);
+  }
+  return null;
+}
+
 function validateOpenAIResponsesMessageInputItem(item, param) {
   if (Object.prototype.hasOwnProperty.call(item, "type") && item.type !== "message") {
     return requestValidationError(`${param}.type must be message`, `${param}.type`);
@@ -5493,7 +5510,9 @@ function validateOpenAIResponsesMessageInputItem(item, param) {
   if (!Object.prototype.hasOwnProperty.call(item, "content")) {
     return requestValidationError(`${param}.content is required`, `${param}.content`);
   }
-  if (typeof item.content === "string") return null;
+  if (typeof item.content === "string") {
+    return validateOpenAIStringMaxLength(item.content, `${param}.content`, OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS);
+  }
   if (!Array.isArray(item.content)) {
     return requestValidationError(`${param}.content must be a string or an array`, `${param}.content`);
   }
@@ -5518,6 +5537,9 @@ function validateOpenAIResponsesMessageContentPart(part, param) {
   if (part.type === "input_text" || part.type === "text" || part.type === "summary_text" || part.type === "reasoning_text") {
     if (typeof part.text !== "string") {
       return requestValidationError(`${param}.text must be a string`, `${param}.text`);
+    }
+    if (part.type === "input_text" || part.type === "text") {
+      return validateOpenAIStringMaxLength(part.text, `${param}.text`, OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS);
     }
     return null;
   }
@@ -5602,9 +5624,12 @@ function validateOpenAIResponsesToolCallOutputInputItem(item, param) {
       );
     }
     if (type === "input_text" || type === "text") {
-      if (typeof (part.text ?? part.content) !== "string") {
+      const text = part.text ?? part.content;
+      if (typeof text !== "string") {
         return requestValidationError(`${partParam}.text must be a string`, `${partParam}.text`);
       }
+      const textLengthError = validateOpenAIStringMaxLength(text, `${partParam}.text`, OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS);
+      if (textLengthError) return textLengthError;
       continue;
     }
     const detailError = type === "input_image" || type === "image_url"
@@ -6459,7 +6484,7 @@ function validateOpenAIResponsesPromptVariableContentPart(part, param) {
     if (typeof part.text !== "string") {
       return requestValidationError(`${param}.text must be a string`, `${param}.text`);
     }
-    return null;
+    return validateOpenAIStringMaxLength(part.text, `${param}.text`, OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS);
   }
   if (part.type === "input_image") {
     return validateOpenAIResponsesPromptInputImagePart(part, param);
@@ -6909,7 +6934,9 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, instructionsError.message, instructionsError);
     return;
   }
-  const inputDetailsError = validateOpenAIResponsesInputDetails(request);
+  const inputDetailsError = validateOpenAIResponsesInputDetails(request, {
+    topLevelInputMaxLength: OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS,
+  });
   if (inputDetailsError) {
     sendError(res, 400, inputDetailsError.message, inputDetailsError);
     return;
@@ -7051,7 +7078,9 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     sendError(res, 400, instructionsError.message, instructionsError);
     return;
   }
-  const inputDetailsError = validateOpenAIResponsesInputDetails(request);
+  const inputDetailsError = validateOpenAIResponsesInputDetails(request, {
+    topLevelInputMaxLength: OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS,
+  });
   if (inputDetailsError) {
     sendError(res, 400, inputDetailsError.message, inputDetailsError);
     return;

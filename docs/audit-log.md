@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-18 - Responses input text length validation
+
+- Used the current official OpenAI OpenAPI schema to confirm the next
+  Responses compatibility target:
+  - `/v1/responses/input_tokens` `TokenCountsBody.input` string has a
+    10,485,760-character `maxLength`;
+  - `/v1/responses/compact` body `input` string has the same 10,485,760
+    character limit;
+  - Responses `input_text.text` content parts also carry the same documented
+    limit, while the public `/v1/responses` top-level `InputParam` string does
+    not currently publish a top-level `maxLength`.
+- Closed the validation gap without adding new dependencies:
+  - added shared string max-length validation for Responses input text;
+  - enforced the official top-level string `input` limit only on
+    `/v1/responses/input_tokens` and `/v1/responses/compact`;
+  - enforced the same input text limit for message string content,
+    `input_text` / `text` content parts, prompt variable `input_text`, and
+    `function_call_output` / `custom_tool_call_output` text content arrays;
+  - left ordinary `/v1/responses` top-level string `input` unconstrained
+    locally to match the current public `InputParam` schema.
+- Updated docs:
+  - compatibility matrix now records the 10,485,760-character limit boundary
+    for token-count, compact, message-content, and input-text content-part
+    paths.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "Responses input text length" test/server.test.js`:
+    passed 1/1.
+  - Focused `node --test --test-name-pattern "Responses input text length|Responses instructions validate|POST /v1/responses/input_tokens validates text" test/server.test.js`:
+    passed 3/3.
+  - Full `node --test test/*.test.js`: passed 389/389.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    candidates, selected 0 files, and reported 0 errors.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all were active afterward.
+  - Public `https://opencodexapp.aialra.online/healthz` returned `ok:true`,
+    provider base `https://api.deepseek.com`, default model `deepseek-v4-pro`,
+    and `has_provider_key:true`.
+  - Local bridge smoke on `127.0.0.1:12912` returned 400 for an oversized
+    `/v1/responses/input_tokens` top-level `input` with `param:"input"`, and
+    400 for an oversized `/v1/responses` nested `input.0.content.0.text`.
+  - Public 10MB+ POST smoke was blocked by the front proxy before JSON bridge
+    handling, so the large-body compatibility smoke was validated on the local
+    bridge port instead of through the domain.
+  - Disk guard: filesystem remained at 11 GB available; repo size was 285 MB.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 Responses Text Verbosity Mapping
 
 - Rechecked the official OpenAI OpenAPI schema for Responses text output:

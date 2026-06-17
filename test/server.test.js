@@ -22130,6 +22130,75 @@ test("Responses instructions validate before provider calls", async () => {
   });
 });
 
+test("Responses input text length validates before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for oversized Responses input text");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const maxInputTextChars = 10485760;
+    const oversizedText = "x".repeat(maxInputTextChars + 1);
+    const invalidCases = [
+      {
+        endpoint: "/v1/responses/input_tokens",
+        body: {
+          model: "mock-model",
+          input: oversizedText,
+        },
+        param: "input",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        body: {
+          model: "mock-model",
+          input: oversizedText,
+        },
+        param: "input",
+      },
+      {
+        endpoint: "/v1/responses",
+        body: {
+          model: "mock-model",
+          input: [{
+            role: "user",
+            content: [{ type: "input_text", text: oversizedText }],
+          }],
+        },
+        param: "input.0.content.0.text",
+      },
+      {
+        endpoint: "/v1/responses",
+        body: {
+          model: "mock-model",
+          input: [{
+            type: "function_call_output",
+            call_id: "call_oversized",
+            output: [{ type: "input_text", text: oversizedText }],
+          }],
+        },
+        param: "input.0.output.0.text",
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}${invalidCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body),
+      });
+      assert.equal(response.status, 400, invalidCase.endpoint);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: `${invalidCase.param} must be at most ${maxInputTextChars} characters`,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses conversation references return 404 when the local conversation is missing", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });
