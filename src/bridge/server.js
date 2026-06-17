@@ -455,8 +455,23 @@ const OPENAI_LEGACY_FUNCTION_CALL_VALUES = Object.freeze(["none", "auto"]);
 const OPENAI_LEGACY_FUNCTIONS_MAX = 128;
 const OPENAI_CHAT_TOOLS_MAX = 128;
 const OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS = 10485760;
+const OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS = 20971520;
+const OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS = 73400320;
+const OPENAI_RESPONSES_JSON_BODY_MAX_BYTES = OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS + OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_STYLE_MAX_CHARS = 64;
+const OPENAI_RESPONSES_INPUT_IMAGE_SOURCE_MAX_LENGTHS = Object.freeze({
+  image_url: OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+  file_data: OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+  data: OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+  image_data: OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+  url: OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+});
+const OPENAI_RESPONSES_INPUT_FILE_SOURCE_MAX_LENGTHS = Object.freeze({
+  file_data: OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS,
+  data: OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS,
+  content_base64: OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS,
+});
 
 const MODERATION_CATEGORIES = Object.freeze([
   "harassment",
@@ -841,14 +856,20 @@ async function readRawBody(req, maxBytes = 16 * 1024 * 1024) {
   let size = 0;
   for await (const chunk of req) {
     size += chunk.length;
-    if (size > maxBytes) throw new Error("request body too large");
+    if (size > maxBytes) {
+      const error = new Error("request body too large");
+      error.status = 413;
+      error.type = "invalid_request_error";
+      error.code = "request_body_too_large";
+      throw error;
+    }
     chunks.push(chunk);
   }
   return Buffer.concat(chunks);
 }
 
-async function readJson(req) {
-  const body = await readBody(req);
+async function readJson(req, maxBytes) {
+  const body = await readBody(req, maxBytes);
   if (!body.trim()) return {};
   return JSON.parse(body);
 }
@@ -1064,7 +1085,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, queryError.message, queryError);
     return;
   }
-  const request = await readJson(req);
+  const request = await readJson(req, OPENAI_RESPONSES_JSON_BODY_MAX_BYTES);
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
     sendError(res, 400, modelError.message, modelError);
@@ -3409,18 +3430,22 @@ function validateOpenAIChatInputFileAliasPart(part, param) {
 
 function validateOpenAIChatFileSourceFields(source, param, fields, options = {}) {
   const uriFields = new Set(options.uriFields || []);
+  const maxLengthByField = isPlainObject(options.maxLengthByField) ? options.maxLengthByField : {};
   for (const field of fields) {
+    if (!Object.prototype.hasOwnProperty.call(source, field) || source[field] == null) {
+      continue;
+    }
     if (
-      Object.prototype.hasOwnProperty.call(source, field)
-      && source[field] != null
-      && typeof source[field] !== "string"
+      typeof source[field] !== "string"
     ) {
       return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
     }
+    if (Number.isInteger(maxLengthByField[field])) {
+      const lengthError = validateOpenAIStringMaxLength(source[field], `${param}.${field}`, maxLengthByField[field]);
+      if (lengthError) return lengthError;
+    }
     if (
-      Object.prototype.hasOwnProperty.call(source, field)
-      && typeof source[field] === "string"
-      && uriFields.has(field)
+      uriFields.has(field)
     ) {
       const uriError = validateOpenAIUriString(source[field], `${param}.${field}`);
       if (uriError) return uriError;
@@ -5475,10 +5500,20 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
 }
 
 function validateOpenAIStringMaxLength(value, param, maxLength) {
-  if (Array.from(value).length > maxLength) {
+  if (openAIStringLengthExceeds(value, maxLength)) {
     return requestValidationError(`${param} must be at most ${maxLength} characters`, param);
   }
   return null;
+}
+
+function openAIStringLengthExceeds(value, maxLength) {
+  if (value.length <= maxLength) return false;
+  let count = 0;
+  for (const _char of value) {
+    count += 1;
+    if (count > maxLength) return true;
+  }
+  return false;
 }
 
 function validateOpenAIResponsesMessageInputItem(item, param) {
@@ -6389,6 +6424,12 @@ function validateOpenAIResponsesInputImageDetails(part, param) {
     return requestValidationError(`${param}.image_url must be a string, object, or null`, `${param}.image_url`);
   }
   if (typeof part.image_url === "string") {
+    const imageUrlLengthError = validateOpenAIStringMaxLength(
+      part.image_url,
+      `${param}.image_url`,
+      OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+    );
+    if (imageUrlLengthError) return imageUrlLengthError;
     const imageUriError = validateOpenAIUriString(part.image_url, `${param}.image_url`);
     if (imageUriError) return imageUriError;
   }
@@ -6396,6 +6437,12 @@ function validateOpenAIResponsesInputImageDetails(part, param) {
     if (typeof part.image_url.url !== "string") {
       return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
     }
+    const imageUrlLengthError = validateOpenAIStringMaxLength(
+      part.image_url.url,
+      `${param}.image_url.url`,
+      OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+    );
+    if (imageUrlLengthError) return imageUrlLengthError;
     const imageUrlUriError = validateOpenAIUriString(part.image_url.url, `${param}.image_url.url`);
     if (imageUrlUriError) return imageUrlUriError;
     const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(part.image_url.detail, `${param}.image_url.detail`);
@@ -6416,7 +6463,7 @@ function validateOpenAIResponsesInputImageDetails(part, param) {
     "filename",
     "mime_type",
     "media_type",
-  ]);
+  ], { maxLengthByField: OPENAI_RESPONSES_INPUT_IMAGE_SOURCE_MAX_LENGTHS });
   if (sourceError) return sourceError;
   if (Object.prototype.hasOwnProperty.call(part, "image_file") && !isPlainObject(part.image_file)) {
     return requestValidationError(`${param}.image_file must be an object`, `${param}.image_file`);
@@ -6431,7 +6478,7 @@ function validateOpenAIResponsesInputImageDetails(part, param) {
       "filename",
       "mime_type",
       "media_type",
-    ]);
+    ], { maxLengthByField: OPENAI_RESPONSES_INPUT_IMAGE_SOURCE_MAX_LENGTHS });
     if (imageFileSourceError) return imageFileSourceError;
     const imageFileDetailError = validateOpenAIResponsesInputImageDetail(part.image_file.detail, `${param}.image_file.detail`);
     if (imageFileDetailError) return imageFileDetailError;
@@ -6452,7 +6499,10 @@ function validateOpenAIResponsesInputFileDetails(part, param) {
       "content_base64",
       "mime_type",
       "media_type",
-    ], { uriFields: ["file_url"] });
+    ], {
+      uriFields: ["file_url"],
+      maxLengthByField: OPENAI_RESPONSES_INPUT_FILE_SOURCE_MAX_LENGTHS,
+    });
     if (fileSourceError) return fileSourceError;
     const fileDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
     if (fileDetailError) return fileDetailError;
@@ -6466,7 +6516,10 @@ function validateOpenAIResponsesInputFileDetails(part, param) {
     "content_base64",
     "mime_type",
     "media_type",
-  ], { uriFields: ["file_url"] });
+  ], {
+    uriFields: ["file_url"],
+    maxLengthByField: OPENAI_RESPONSES_INPUT_FILE_SOURCE_MAX_LENGTHS,
+  });
 }
 
 function validateOpenAIResponsesPromptVariableContentPart(part, param) {
@@ -6496,6 +6549,12 @@ function validateOpenAIResponsesPromptInputImagePart(part, param) {
   if (Object.prototype.hasOwnProperty.call(part, "image_url")) {
     const imageUrl = part.image_url;
     if (typeof imageUrl === "string") {
+      const imageUrlLengthError = validateOpenAIStringMaxLength(
+        imageUrl,
+        `${param}.image_url`,
+        OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+      );
+      if (imageUrlLengthError) return imageUrlLengthError;
       const imageUriError = validateOpenAIUriString(imageUrl, `${param}.image_url`);
       if (imageUriError) return imageUriError;
       return validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
@@ -6506,6 +6565,12 @@ function validateOpenAIResponsesPromptInputImagePart(part, param) {
     if (typeof imageUrl.url !== "string") {
       return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
     }
+    const imageUrlLengthError = validateOpenAIStringMaxLength(
+      imageUrl.url,
+      `${param}.image_url.url`,
+      OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS,
+    );
+    if (imageUrlLengthError) return imageUrlLengthError;
     const imageUrlUriError = validateOpenAIUriString(imageUrl.url, `${param}.image_url.url`);
     if (imageUrlUriError) return imageUrlUriError;
     const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(imageUrl.detail, `${param}.image_url.detail`);
@@ -6519,15 +6584,10 @@ function validateOpenAIResponsesPromptInputImagePart(part, param) {
         param,
       );
     }
-    for (const field of sourceFields) {
-      if (
-        Object.prototype.hasOwnProperty.call(part, field)
-        && part[field] != null
-        && typeof part[field] !== "string"
-      ) {
-        return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
-      }
-    }
+    const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields, {
+      maxLengthByField: OPENAI_RESPONSES_INPUT_IMAGE_SOURCE_MAX_LENGTHS,
+    });
+    if (sourceError) return sourceError;
   }
   return validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
 }
@@ -6540,13 +6600,19 @@ function validateOpenAIResponsesPromptInputFilePart(part, param) {
       "file_id",
       "mime_type",
       "media_type",
-    ], { uriFields: ["file_url"] });
+    ], {
+      uriFields: ["file_url"],
+      maxLengthByField: OPENAI_RESPONSES_INPUT_FILE_SOURCE_MAX_LENGTHS,
+    });
     if (nestedError) return nestedError;
     const nestedDetailError = validateOpenAIResponsesInputFileDetail(part.file.detail, `${param}.file.detail`);
     if (nestedDetailError) return nestedDetailError;
   }
   const sourceFields = ["filename", "file_data", "file_id", "file_url", "data", "content_base64", "mime_type", "media_type"];
-  const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields, { uriFields: ["file_url"] });
+  const sourceError = validateOpenAIChatFileSourceFields(part, param, sourceFields, {
+    uriFields: ["file_url"],
+    maxLengthByField: OPENAI_RESPONSES_INPUT_FILE_SOURCE_MAX_LENGTHS,
+  });
   if (sourceError) return sourceError;
   if (!isPlainObject(part.file)) {
     const hasSource = ["file_data", "file_id", "file_url", "data", "content_base64"].some((field) => (
@@ -6923,7 +6989,7 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, queryError.message, queryError);
     return;
   }
-  const request = await readJson(req);
+  const request = await readJson(req, OPENAI_RESPONSES_JSON_BODY_MAX_BYTES);
   const styleError = validateResponsesInputTokensStyle(request);
   if (styleError) {
     sendError(res, 400, styleError.message, styleError);
@@ -7067,7 +7133,7 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     sendError(res, 400, queryError.message, queryError);
     return;
   }
-  const request = await readJson(req);
+  const request = await readJson(req, OPENAI_RESPONSES_JSON_BODY_MAX_BYTES);
   const modelError = validateOpenAIRequiredStringParameter(request, "model");
   if (modelError) {
     sendError(res, 400, modelError.message, modelError);

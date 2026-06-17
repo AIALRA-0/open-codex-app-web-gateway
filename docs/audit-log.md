@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-18 - Responses multimodal input length validation
+
+- Used the current official OpenAI OpenAPI schema to confirm the next
+  multimodal Responses compatibility target:
+  - `InputImageContentParamAutoParam.image_url` allows URI/data-URL strings up
+    to 20,971,520 characters;
+  - `InputFileContentParam.file_data` allows base64 file data strings up to
+    73,400,320 characters;
+  - `InputFileContentParam.filename` does not publish a local `maxLength` in
+    this schema position, so no artificial filename cap was added.
+- Closed the bridge gap without adding dependencies:
+  - added field-level max-length validation for Responses `input_image` /
+    `input_file` content in ordinary create, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`;
+  - applied the same image/file source limits to prompt-variable
+    `input_image` / `input_file` parts so prompt templates and direct request
+    inputs fail consistently before provider calls;
+  - raised the JSON body reader only for Responses POST create, compact, and
+    input-token endpoints to 83,886,080 bytes, allowing official maximum-size
+    `file_data` payloads to reach schema validation instead of the older
+    16 MiB default reader cap;
+  - changed shared max-length validation from array materialization to a
+    streaming code-point counter, so 70 MiB-class strings fail fast without
+    allocating a second array-sized copy;
+  - updated oversized body handling to return HTTP 413 with
+    `code:"request_body_too_large"` when an endpoint-specific reader cap is
+    exceeded.
+- Updated docs:
+  - compatibility matrix now records the 20,971,520-character image URL/data
+    URL limit, the 73,400,320-character file-data limit, and the Responses-only
+    83,886,080-byte JSON body cap.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "Responses multimodal input string limits" test/server.test.js`:
+    passed 1/1, including a 70 MiB-class `file_data` JSON request that returned
+    schema-level HTTP 400 before any mock provider call.
+  - Focused `node --test --test-name-pattern "Responses multimodal input string limits|Responses endpoints validate input image and file detail|prompt variable image" test/server.test.js`:
+    passed 3/3.
+  - Full `node --test test/*.test.js`: passed 390/390 after the schema change,
+    and passed 390/390 again after switching max-length checks to streaming
+    counting.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    candidates, selected 0 files, and reported 0 errors.
+  - Disk guard: filesystem had 9.5 GB available; repo size was 286 MB after the
+    70 MiB-class request test because the large payload was not written to the
+    repository or runtime state.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all were active afterward.
+  - Public `https://opencodexapp.aialra.online/healthz` returned `ok:true`,
+    provider base `https://api.deepseek.com`, default model `deepseek-v4-pro`,
+    and `has_provider_key:true`.
+  - Local bridge smoke on `127.0.0.1:12912` returned HTTP 400 for an oversized
+    `input.0.content.0.image_url` with the official 20,971,520-character limit
+    in the error message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses input text length validation
 
 - Used the current official OpenAI OpenAPI schema to confirm the next

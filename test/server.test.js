@@ -15,6 +15,9 @@ const { sanitizeMcpAssistantOutput } = require("../src/bridge/local_mcp");
 const { promoteToolSearchTextToolCalls } = require("../src/bridge/local_tool_search");
 const { prepareWebSearchContext } = require("../src/bridge/web_search");
 
+const OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS = 20971520;
+const OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS = 73400320;
+
 function listen(server) {
   return new Promise((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve(server.address()));
@@ -1600,6 +1603,75 @@ test("Responses endpoints validate input image and file detail before provider c
           model: "mock-model",
           input: invalidCase.input,
         }),
+      });
+      assert.equal(response.status, 400, invalidCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: invalidCase.message,
+          type: "invalid_request_error",
+          param: invalidCase.param,
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("Responses multimodal input string limits are validated before provider calls", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for oversized Responses multimodal input");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const oversizedImageUrl = () => `https://example.test/${"a".repeat(OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS)}`;
+    const oversizedFileData = () => "A".repeat(OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS + 1);
+    const invalidCases = [
+      {
+        endpoint: "/v1/responses",
+        body: () => ({
+          model: "mock-model",
+          input: [{
+            role: "user",
+            content: [{ type: "input_image", image_url: oversizedImageUrl() }],
+          }],
+        }),
+        param: "input.0.content.0.image_url",
+        message: `input.0.content.0.image_url must be at most ${OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS} characters`,
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        body: () => ({
+          model: "mock-model",
+          input: [{
+            type: "input_file",
+            file_data: oversizedFileData(),
+          }],
+        }),
+        param: "input.0.file_data",
+        message: `input.0.file_data must be at most ${OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS} characters`,
+      },
+      {
+        endpoint: "/v1/responses",
+        body: () => ({
+          model: "mock-model",
+          prompt: {
+            id: "pmpt_multimodal_limits",
+            variables: {
+              image: { type: "input_image", image_url: oversizedImageUrl() },
+            },
+          },
+          input: "Use the prompt image.",
+        }),
+        param: "prompt.variables.image.image_url",
+        message: `prompt.variables.image.image_url must be at most ${OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS} characters`,
+      },
+    ];
+
+    for (const invalidCase of invalidCases) {
+      const response = await fetch(`${baseUrl}${invalidCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(invalidCase.body()),
       });
       assert.equal(response.status, 400, invalidCase.param);
       assert.deepEqual(await response.json(), {
