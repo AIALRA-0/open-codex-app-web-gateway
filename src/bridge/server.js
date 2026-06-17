@@ -14465,7 +14465,13 @@ function embeddingVectorToBase64(vector) {
   return buffer.toString("base64");
 }
 
-async function handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore) {
+async function handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   const validation = validateBatchCreateRequest(body);
   if (!validation.ok) {
@@ -18178,6 +18184,9 @@ function handleBatchesList(res, store, fileSearchStore, url) {
 }
 
 function validateOpenAIBatchesListQuery(url) {
+  const allowedQueryError = validateOpenAIAllowedQueryKeys(url, ["after", "limit"]);
+  if (allowedQueryError) return allowedQueryError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
@@ -18192,7 +18201,13 @@ function officialBatchListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleBatchGet(res, store, fileSearchStore, batchId) {
+function handleBatchGet(res, store, fileSearchStore, batchId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const record = store.get(batchId);
   if (!record?.batch) {
     sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
@@ -18201,7 +18216,13 @@ function handleBatchGet(res, store, fileSearchStore, batchId) {
   sendJson(res, 200, applyBatchOutputExpiration(record, store, fileSearchStore));
 }
 
-function handleBatchCancel(res, store, fileSearchStore, batchId) {
+function handleBatchCancel(res, store, fileSearchStore, batchId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const record = store.get(batchId);
   if (!record?.batch) {
     sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
@@ -23308,7 +23329,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore);
+          await handleBatchCreate(req, res, config, store, fileSearchStore, imageGenerationStore, backgroundJobs, containerStore, conversationStore, skillStore, url);
           return;
         }
       }
@@ -23318,11 +23339,11 @@ function createServer(config = loadConfig()) {
         const batchId = decodeURIComponent(batchRoute[1]);
         const action = batchRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleBatchGet(res, store, fileSearchStore, batchId);
+          handleBatchGet(res, store, fileSearchStore, batchId, url);
           return;
         }
         if (action === "cancel" && req.method === "POST") {
-          handleBatchCancel(res, store, fileSearchStore, batchId);
+          handleBatchCancel(res, store, fileSearchStore, batchId, url);
           return;
         }
       }

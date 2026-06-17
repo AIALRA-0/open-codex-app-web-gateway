@@ -33786,6 +33786,22 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCreateQuery = await fetch(`${baseUrl}/v1/batches?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(invalidCreateQuery.status, 400);
+    assert.deepEqual(await invalidCreateQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const jsonl = [
       JSON.stringify({
         custom_id: "response-ok",
@@ -33844,6 +33860,17 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     assert.ok(batch.error_file_id);
     assert.equal(requests.length, 1);
 
+    const invalidGetQuery = await fetch(`${baseUrl}/v1/batches/${batch.id}?metadata=debug`);
+    assert.equal(invalidGetQuery.status, 400);
+    assert.deepEqual(await invalidGetQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
     assert.equal(outputResponse.status, 200);
     const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
@@ -33870,9 +33897,16 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     const listedJson = await listed.json();
     assert.equal(listedJson.data[0].id, batch.id);
 
-    const beforeIgnored = await fetch(`${baseUrl}/v1/batches?before=${batch.id}`);
-    assert.equal(beforeIgnored.status, 200);
-    assert.equal((await beforeIgnored.json()).data[0].id, batch.id);
+    const beforeRejected = await fetch(`${baseUrl}/v1/batches?before=${batch.id}`);
+    assert.equal(beforeRejected.status, 400);
+    assert.deepEqual(await beforeRejected.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const repeatedLimit = await fetch(`${baseUrl}/v1/batches?limit=1&limit=2`);
     assert.equal(repeatedLimit.status, 400);
@@ -33895,6 +33929,21 @@ test("local Batch API executes Responses JSONL and exposes output and error file
         code: "invalid_request_parameter",
       },
     });
+
+    const invalidCancelQuery = await fetch(`${baseUrl}/v1/batches/${batch.id}/cancel?metadata=debug`, { method: "POST" });
+    assert.equal(invalidCancelQuery.status, 400);
+    assert.deepEqual(await invalidCancelQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const batchAfterInvalidCancel = await fetch(`${baseUrl}/v1/batches/${batch.id}`);
+    assert.equal(batchAfterInvalidCancel.status, 200);
+    assert.equal((await batchAfterInvalidCancel.json()).metadata.compatibility_cancel, undefined);
+    assert.equal(requests.length, 1);
 
     const cancelled = await fetch(`${baseUrl}/v1/batches/${batch.id}/cancel`, { method: "POST" });
     assert.equal(cancelled.status, 200);

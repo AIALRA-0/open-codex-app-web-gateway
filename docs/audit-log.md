@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Batches Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
+  Batches:
+  - `POST /v1/batches` is a JSON body operation and declares no query
+    parameters;
+  - `GET /v1/batches` declares only `after` and `limit` query parameters;
+  - the official endpoint list includes `GET /v1/batches/{batch_id}` and
+    `POST /v1/batches/{batch_id}/cancel` as path-id operations.
+- Tightened local bridge behavior:
+  - `POST /v1/batches` now rejects unsupported query parameters before JSON
+    parsing, file lookup, provider calls, or local Batch record creation;
+  - `GET /v1/batches` now allows only official `after` and `limit`, so
+    unsupported parameters such as `before`, `order`, or `metadata` return
+    OpenAI-style 400 errors before listing records;
+  - `GET /v1/batches/{batch_id}` rejects unsupported query parameters before
+    reading local state;
+  - `POST /v1/batches/{batch_id}/cancel` rejects unsupported query parameters
+    before lifecycle mutation or terminal no-op metadata is applied.
+- Regression coverage updated:
+  - extended the local Batch API execution test to verify invalid create
+    queries do not parse an invalid body or call the provider;
+  - verified invalid retrieve and cancel queries return
+    `invalid_request_parameter`;
+  - verified invalid cancel does not add `metadata.compatibility_cancel`;
+  - changed the previous `before` list behavior from ignored-success to
+    official 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records Batch create/retrieve/cancel no-query
+    boundaries and the official Batch list query allowlist.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Batch API" test/server.test.js`
+    passed 11/11 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Batches query smoke marker `batches-query-smoke-1781723593137`
+    verified invalid query rejection on create/list/retrieve/cancel, verified
+    normal `limit` list and synchronous cancel behavior, and cleaned up the
+    temporary Batch input/output Files after validation.
+  - Disk guard after deployment: `/` 193G size, 183G used, 10G available, 95%
+    used.
+  - Runtime prune dry-run scanned 5391 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Batch or File ids, prompt payload secrets,
+    or smoke-test request secrets were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Conversations Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
