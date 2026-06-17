@@ -1,5 +1,72 @@
 # Audit Log
 
+## 2026-06-17 Responses Custom Tool Grammar Format Validation
+
+- Rechecked the current official OpenAI custom-tool schemas through the
+  developer docs MCP and the official `openai-openapi` YAML:
+  - Responses `CustomGrammarFormatParam` is flat:
+    `{type:"grammar",definition,syntax}`;
+  - Chat Completions `CustomToolChatCompletions` grammar format is nested:
+    `{type:"grammar",grammar:{definition,syntax}}`;
+  - both schemas support `text` and `grammar`, with grammar syntax restricted
+    to `lark` or `regex`.
+- Fixed a Responses compatibility gap:
+  - `tools:[{type:"custom",format:{type:"grammar",definition,syntax}}]` now
+    validates as an official Responses request shape;
+  - Chat-style nested `format.grammar` is rejected on Responses custom tools
+    before provider calls;
+  - direct Chat custom tools keep their nested grammar shape and now reject
+    unexpected top-level grammar-format fields.
+- Regression coverage updated:
+  - the shared Responses tools validation table covers invalid custom
+    `format` object/type/text/grammar cases across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - the long-function-alias Responses regression now includes a valid flat
+    custom grammar tool to prove the official Responses grammar shape can pass
+    validation while still being treated as an unsupported upstream custom tool
+    for DeepSeek-style function-only providers;
+  - direct Chat tools validation now rejects a flat grammar field mixed into
+    Chat's nested grammar format.
+- Documentation updated:
+  - the compatibility matrix now distinguishes Responses flat custom grammar
+    from direct Chat nested custom grammar.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|128-character function tool|validates tools and
+    tool_choice before provider calls|custom tools" test/server.test.js`
+    passes: 4 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit token scan found only pre-existing environment-variable names,
+    documentation health-check placeholders, and test fake bearer values; no
+    real API-key or bearer-token values were introduced.
+- Runtime/storage check:
+  - `/` has 16 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed Responses custom grammar request with nested
+    `format.grammar` returns `400 invalid_request_parameter` with
+    `param:"tools.0.format.grammar"`;
+  - public valid Responses custom grammar request with flat
+    `{type:"grammar",definition,syntax}` returns 200 and preserves that
+    Responses tool shape in the response.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses Hosted Tool Choice Type-Only Validation
 
 - Rechecked the current official OpenAI `/v1/responses` OpenAPI schema through

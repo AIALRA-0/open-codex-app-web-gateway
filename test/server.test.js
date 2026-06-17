@@ -2867,6 +2867,47 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.name must be a string",
       },
       {
+        body: { tools: [{ type: "custom", name: "run_code", format: [] }] },
+        param: "tools.0.format",
+        message: "tools.0.format must be an object",
+      },
+      {
+        body: { tools: [{ type: "custom", name: "run_code", format: { type: "json" } }] },
+        param: "tools.0.format.type",
+        message: "tools.0.format.type must be one of: text, grammar",
+      },
+      {
+        body: { tools: [{ type: "custom", name: "run_code", format: { type: "text", definition: "start: WORD" } }] },
+        param: "tools.0.format",
+        message: "tools.0.format text format must only include type",
+      },
+      {
+        body: { tools: [{ type: "custom", name: "run_code", format: { type: "grammar", definition: 7, syntax: "lark" } }] },
+        param: "tools.0.format.definition",
+        message: "tools.0.format.definition must be a string",
+      },
+      {
+        body: { tools: [{ type: "custom", name: "run_code", format: { type: "grammar", definition: "start: WORD", syntax: "peg" } }] },
+        param: "tools.0.format.syntax",
+        message: "tools.0.format.syntax must be one of: lark, regex",
+      },
+      {
+        body: {
+          tools: [{
+            type: "custom",
+            name: "run_code",
+            format: {
+              type: "grammar",
+              definition: "start: WORD",
+              syntax: "lark",
+              grammar: { definition: "start: WORD", syntax: "lark" },
+            },
+          }],
+        },
+        param: "tools.0.format.grammar",
+        message: "tools.0.format.grammar is not supported",
+      },
+      {
         body: { tools: [{ type: "function", name: "lookup", parameters: [] }] },
         param: "tools.0.parameters",
         message: "tools.0.parameters must be an object or null",
@@ -3615,6 +3656,7 @@ test("POST /v1/responses aliases 128-character function tool names for Chat prov
             type: "custom",
             name: "free form tool name",
             description: "A string-only custom tool name.",
+            format: { type: "grammar", definition: "start: /[a-z]+/", syntax: "lark" },
           },
         ],
         tool_choice: { type: "function", name: responseFunctionName128 },
@@ -25416,6 +25458,23 @@ test("POST /v1/chat/completions validates tools and tool_choice before provider 
         },
         param: "tools.0.custom.format.grammar.syntax",
         message: "tools.0.custom.format.grammar.syntax must be one of: lark, regex",
+      },
+      {
+        body: {
+          tools: [{
+            type: "custom",
+            custom: {
+              name: "run_code",
+              format: {
+                type: "grammar",
+                grammar: { definition: "start: WORD", syntax: "lark" },
+                definition: "start: WORD",
+              },
+            },
+          }],
+        },
+        param: "tools.0.custom.format.definition",
+        message: "tools.0.custom.format.definition is not supported",
       },
       {
         body: { tool_choice: "force" },

@@ -3993,7 +3993,7 @@ function validateOpenAIResponsesCustomTool(tool, param) {
     return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
   }
   if (Object.prototype.hasOwnProperty.call(tool, "format")) {
-    const formatError = validateOpenAICustomToolFormat(tool.format, `${param}.format`);
+    const formatError = validateOpenAIResponsesCustomToolFormat(tool.format, `${param}.format`);
     if (formatError) return formatError;
   }
   if (
@@ -4001,6 +4001,44 @@ function validateOpenAIResponsesCustomTool(tool, param) {
     && typeof tool.defer_loading !== "boolean"
   ) {
     return requestValidationError(`${param}.defer_loading must be a boolean`, `${param}.defer_loading`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesCustomToolFormat(format, param) {
+  if (!isPlainObject(format)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof format.type !== "string" || !OPENAI_CUSTOM_TOOL_FORMAT_TYPES.includes(format.type)) {
+    return requestValidationError(
+      `${param}.type must be one of: ${OPENAI_CUSTOM_TOOL_FORMAT_TYPES.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (format.type === "text") {
+    const extraKeys = Object.keys(format).filter((key) => key !== "type");
+    if (extraKeys.length) {
+      return requestValidationError(`${param} text format must only include type`, param);
+    }
+    return null;
+  }
+
+  for (const field of Object.keys(format)) {
+    if (!["type", "definition", "syntax"].includes(field)) {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
+    }
+  }
+  if (typeof format.definition !== "string") {
+    return requestValidationError(`${param}.definition must be a string`, `${param}.definition`);
+  }
+  if (
+    typeof format.syntax !== "string"
+    || !OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES.includes(format.syntax)
+  ) {
+    return requestValidationError(
+      `${param}.syntax must be one of: ${OPENAI_CUSTOM_TOOL_GRAMMAR_SYNTAX_VALUES.join(", ")}`,
+      `${param}.syntax`,
+    );
   }
   return null;
 }
@@ -5076,6 +5114,11 @@ function validateOpenAICustomToolFormat(format, param) {
   }
   if (!isPlainObject(format.grammar)) {
     return requestValidationError(`${param}.grammar must be an object`, `${param}.grammar`);
+  }
+  for (const field of Object.keys(format)) {
+    if (!["type", "grammar"].includes(field)) {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
+    }
   }
   if (typeof format.grammar.definition !== "string") {
     return requestValidationError(`${param}.grammar.definition must be a string`, `${param}.grammar.definition`);
