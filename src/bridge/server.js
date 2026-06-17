@@ -15806,9 +15806,14 @@ async function handleOrganizationCertificateCreate(req, res, organizationAdminSt
 }
 
 function handleOrganizationCertificatesList(res, organizationAdminStore, url) {
+  const queryError = validateOpenAIOrganizationCertificatesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, paginateListWithDefaultOrder(
     organizationAdminStore.listOrganizationCertificates(),
-    url,
+    officialOrganizationCertificatesListPaginationUrl(url),
     "desc",
     20,
     100,
@@ -16656,6 +16661,24 @@ function validateOpenAIOrganizationAdminApiKeysListQuery(url) {
 }
 
 function officialOrganizationAdminApiKeysListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIOrganizationCertificatesListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAIListOrderQuery(url);
+}
+
+function officialOrganizationCertificatesListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "order", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));

@@ -23317,6 +23317,104 @@ test("Organization certificates manage local organization and project activation
     assert.equal(listedJson.data[0].active, false);
     assert.equal(listedJson.data[0].certificate_details.content, undefined);
 
+    const secondCreatedResponse = await fetch(`${baseUrl}/v1/organization/certificates`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Certificate Second", certificate: certificatePem }),
+    });
+    assert.equal(secondCreatedResponse.status, 200);
+    const secondCreated = await secondCreatedResponse.json();
+
+    const ascCertificates = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=10`);
+    assert.equal(ascCertificates.status, 200);
+    const ascCertificatesJson = await ascCertificates.json();
+    assert.equal(ascCertificatesJson.object, "list");
+    const ascCertificateIds = ascCertificatesJson.data.map((entry) => entry.id);
+    assert.deepEqual(new Set(ascCertificateIds), new Set([created.id, secondCreated.id]));
+    const firstListedCertificateId = ascCertificateIds[0];
+    const nextListedCertificateId = ascCertificateIds[1];
+
+    const firstCertificatePage = await fetch(`${baseUrl}/v1/organization/certificates?limit=1`);
+    assert.equal(firstCertificatePage.status, 200);
+    const firstCertificatePageJson = await firstCertificatePage.json();
+    assert.equal(firstCertificatePageJson.object, "list");
+    assert.equal(firstCertificatePageJson.data.length, 1);
+    assert.equal(firstCertificatePageJson.has_more, true);
+    assert.equal(firstCertificatePageJson.data[0].id, ascCertificateIds.at(-1));
+
+    const ascCertificatePage = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=1`);
+    assert.equal(ascCertificatePage.status, 200);
+    const ascCertificatePageJson = await ascCertificatePage.json();
+    assert.equal(ascCertificatePageJson.data.length, 1);
+    assert.equal(ascCertificatePageJson.data[0].id, firstListedCertificateId);
+
+    const certificateNextPage = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=1&after=${encodeURIComponent(firstListedCertificateId)}`);
+    assert.equal(certificateNextPage.status, 200);
+    const certificateNextPageJson = await certificateNextPage.json();
+    assert.equal(certificateNextPageJson.data.length, 1);
+    assert.equal(certificateNextPageJson.data[0].id, nextListedCertificateId);
+
+    const beforeIgnoredCertificates = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=2&before=${encodeURIComponent(nextListedCertificateId)}`);
+    assert.equal(beforeIgnoredCertificates.status, 200);
+    assert.deepEqual(
+      (await beforeIgnoredCertificates.json()).data.map((entry) => entry.id),
+      ascCertificateIds,
+    );
+
+    const invalidCertificateListCases = [
+      {
+        path: "/v1/organization/certificates?limit=0",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/certificates?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/organization/certificates?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/certificates?after=${encodeURIComponent(firstListedCertificateId)}&after=${encodeURIComponent(nextListedCertificateId)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: "/v1/organization/certificates?order=newest",
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: "/v1/organization/certificates?order=asc&order=desc",
+        message: "order must be a single string query value",
+        param: "order",
+      },
+    ];
+    for (const testCase of invalidCertificateListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
+    const deletedSecondCertificate = await fetch(`${baseUrl}/v1/organization/certificates/${secondCreated.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondCertificate.status, 200);
+    assert.deepEqual(await deletedSecondCertificate.json(), {
+      object: "certificate.deleted",
+      id: secondCreated.id,
+    });
+
     const invalidActivate = await fetch(`${baseUrl}/v1/organization/certificates/activate`, {
       method: "POST",
       headers: { "content-type": "application/json" },

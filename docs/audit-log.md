@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-17 Organization Certificates List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
+  `GET /organization/certificates` through the OpenAI developer-docs MCP.
+- Confirmed the official list query parameters are `limit`, `after`, and
+  `order`; no `before` query parameter is documented for this endpoint.
+  Official `order` values are `asc` and `desc`, defaulting to `desc`.
+- Tightened local Organization Certificates list behavior:
+  - `GET /v1/organization/certificates` now validates `limit` from 1 through
+    100 and rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - official `order:"asc"|"desc"` is validated and preserved, with default
+    `desc`;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official Organization Certificates list results;
+  - list responses continue to omit uploaded PEM content.
+- Regression coverage updated:
+  - organization certificate lifecycle tests now cover `limit`, `after`,
+    official `order`, ignored `before`, invalid `limit`, invalid `order`,
+    repeated scalar cursor values, repeated `order`, and PEM-content omission.
+  - The test derives expected cursor order from an actual `order=asc` list
+    because two records created within the same second are ordered by
+    `created_at` and ID, not by create-call sequence alone.
+- Documentation updated:
+  - compatibility matrix now records the official Organization Certificates
+    list pagination contract, official `order` support, unsupported `before`
+    handling, and PEM-content boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization certificates manage local organization and project activation" test/server.test.js`
+    passed 1/1 tests.
+  - An initial full `node --test test/*.test.js` run reported one failure but
+    the tail output did not include the failure details. A follow-up full run
+    captured to `/tmp/opencodex-full-test.log` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - First public Organization Certificates smoke used create-call order as the
+    expected `order=asc` order and failed when two same-second certificate IDs
+    sorted differently. The smoke and unit test were corrected to derive
+    expected order from the actual `order=asc` cursor order.
+  - Public Organization Certificates smoke marker `cert-query-smoke-mqi6ztnq`
+    created two temporary local certificates, verified full `order=asc` and
+    `order=desc` pagination, confirmed list responses omitted PEM content,
+    verified `after` advanced the actual asc cursor, confirmed unsupported
+    `before` did not change the official list result, confirmed invalid
+    `limit=0`, invalid `order=newest`, and repeated `order` returned HTTP 400
+    with expected params, and deleted the temporary certificates.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    certificate PEM content, or deployment env files were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Admin API Keys List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema for
