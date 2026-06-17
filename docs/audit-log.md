@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Direct Chat Message Name Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 Chat message schemas
+  through the developer docs MCP workflow and the local official
+  `openai-openapi` YAML:
+  - developer, system, user, and assistant message `name` fields are strings
+    when present;
+  - deprecated function messages already require a string `name`.
+- Tightened direct `/v1/chat/completions` validation before provider calls:
+  - direct Chat messages now reject `name:null` locally instead of forwarding a
+    non-OpenAI-compatible request to Chat-only providers such as DeepSeek;
+  - non-string `name` values continue to fail locally with zero upstream
+    provider calls.
+- Regression coverage updated:
+  - extended the direct Chat message-boundary test with `name:null`.
+- Documentation updated:
+  - compatibility matrix now records string-only direct Chat message names.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validates messages before
+    provider calls" test/server.test.js` passes: 1 test;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public direct Chat `messages[0].name:null` request returns
+    `400 invalid_request_parameter` with `param:"messages.0.name"`.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Structured Output Description Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema through the

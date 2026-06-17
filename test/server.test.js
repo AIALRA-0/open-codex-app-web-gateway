@@ -25051,6 +25051,11 @@ test("POST /v1/chat/completions validates messages before provider calls", async
         message: "messages.0.role must be one of: developer, system, user, assistant, tool, function",
       },
       {
+        body: { messages: [{ role: "user", name: null, content: "hello" }] },
+        param: "messages.0.name",
+        message: "messages.0.name must be a string",
+      },
+      {
         body: { messages: [{ role: "user" }] },
         param: "messages.0.content",
         message: "messages.0.content is required",

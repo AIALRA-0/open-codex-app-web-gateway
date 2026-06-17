@@ -3026,7 +3026,6 @@ function validateOpenAIChatMessage(message, param) {
   }
   if (
     Object.prototype.hasOwnProperty.call(message, "name")
-    && message.name != null
     && typeof message.name !== "string"
   ) {
     return requestValidationError(`${param}.name must be a string`, `${param}.name`);
