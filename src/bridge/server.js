@@ -222,6 +222,20 @@ const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
 const OPENAI_COMPACT_PROMPT_CACHE_KEY_MAX_CHARS = 64;
 const OPENAI_PROMPT_CACHE_RETENTION_VALUES = Object.freeze(["in_memory", "24h"]);
 const OPENAI_STREAM_OPTION_FIELDS = Object.freeze(["include_usage", "include_obfuscation"]);
+const STORED_CHAT_COMPLETION_NULL_FIELDS = Object.freeze([
+  "request_id",
+  "input_user",
+  "tool_choice",
+  "tools",
+  "response_format",
+  "service_tier",
+  "system_fingerprint",
+  "seed",
+  "top_p",
+  "temperature",
+  "presence_penalty",
+  "frequency_penalty",
+]);
 const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
   "file_search_call.results",
   "web_search_call.results",
@@ -8769,6 +8783,13 @@ function attachStoredChatRequestFields(completion, request = {}, options = {}) {
     }
   }
   if (!completion.metadata) completion.metadata = {};
+  normalizeStoredChatCompletionNullFields(completion);
+}
+
+function normalizeStoredChatCompletionNullFields(completion) {
+  for (const field of STORED_CHAT_COMPLETION_NULL_FIELDS) {
+    if (completion[field] === undefined) completion[field] = null;
+  }
 }
 
 function normalizeStoredChatCompletionChoices(completion) {
@@ -8790,6 +8811,9 @@ function normalizeStoredChatCompletionChoice(choice, index) {
     stored.message.content = stored.message.tool_calls || stored.message.function_call ? null : "";
   }
   if (!Object.prototype.hasOwnProperty.call(stored.message, "refusal")) stored.message.refusal = null;
+  if (!Object.prototype.hasOwnProperty.call(stored.message, "annotations")) stored.message.annotations = [];
+  if (!Object.prototype.hasOwnProperty.call(stored.message, "tool_calls")) stored.message.tool_calls = null;
+  if (!Object.prototype.hasOwnProperty.call(stored.message, "function_call")) stored.message.function_call = null;
   return stored;
 }
 

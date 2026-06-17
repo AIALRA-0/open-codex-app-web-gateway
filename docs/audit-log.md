@@ -1,5 +1,54 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat List Envelope Shape
+
+- Rechecked the official Chat Completions OpenAPI endpoint metadata and stored
+  list example:
+  - `GET /v1/chat/completions` returns stored `chat.completion` records;
+  - stored list records expose request/envelope fields such as `tool_choice`,
+    sampling fields, `tools`, `response_format`, `system_fingerprint`,
+    `service_tier`, `request_id`, and `input_user`;
+  - assistant messages in stored records expose stable empty fields such as
+    `annotations:[]`, `tool_calls:null`, and `function_call:null` when no such
+    content exists.
+- Tightened local stored Chat completion records:
+  - non-streaming and streaming `store:true` records now normalize missing
+    stored-list envelope fields to `null` when the upstream provider and request
+    do not supply them;
+  - request-known fields such as `temperature`, `top_p`, penalties, `seed`,
+    `tools`, and `response_format` are still preserved when the provider omits
+    them;
+  - assistant messages now expose missing `annotations` as `[]` and missing
+    `tool_calls` / `function_call` as `null`, while provider-supplied values
+    remain authoritative;
+  - unknown sampling/provider fields are not filled with invented defaults.
+- Regression coverage added:
+  - non-streaming stored Chat create, retrieve, and list responses preserve
+    request sampling/tool/format fields and expose unknown stored-list fields as
+    `null`;
+  - streaming stored Chat retrieve and list responses expose the same null
+    envelope shape on reconstructed records and the same assistant message
+    empty-field shape on text and tool-call choices.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe stored-list envelope
+    normalization and the no-invented-defaults rule.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle and streaming stored Chat tests pass;
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes;
+  - local and public smoke created temporary `store:true` Chat completions,
+    confirmed create, retrieve, list, and messages endpoints, verified stored
+    envelope fields are present with `null` unknowns, verified assistant
+    messages expose `annotations`, `tool_calls`, and `function_call`, and
+    deleted the temporary records.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Choice Shape
 
 - Rechecked the official OpenAI OpenAPI schema for Chat Completions:

@@ -116,9 +116,12 @@ coverage also verifies top-level `request_id` preservation from upstream
 `x-request-id` and `input_user` projection from request `user` for
 non-streaming and streaming stored completions, plus official required
 nullable choice/message fields such as `logprobs:null` and `refusal:null` when
-the upstream Chat provider omits them. Stored Chat message-list coverage
-verifies official `name` and `content_parts` fields for string and pure
-text/image content-part inputs, verifies audio/file extension parts keep
+the upstream Chat provider omits them. It also verifies stored-list envelope
+shape for request sampling/tool/format fields, `system_fingerprint`, and
+unknown official fields normalized to `null`, without inventing provider
+defaults. Stored Chat message-list coverage verifies official `name` and
+`content_parts` fields for string and pure text/image content-part inputs,
+verifies audio/file extension parts keep
 official `content_parts:null`, and preserves local `direction` metadata for
 replay assertions.
 
@@ -523,7 +526,9 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   nullable `metadata:null` clears, create-time null normalization, and the
   official stored Chat completion and message-list object shapes, including
   stored `request_id`, `input_user`, choice `logprobs`, and message `refusal`
-  fields when known or officially nullable.
+  fields when known or officially nullable, plus stored-list request envelope
+  fields such as `tools`, `response_format`, sampling parameters, and null
+  `system_fingerprint` / `tool_choice` values when unknown.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,
