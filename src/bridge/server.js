@@ -18042,7 +18042,7 @@ function handleChatCompletionsList(res, store, url) {
     .map((record) => normalizeListedChatCompletion(record))
     .filter((completion) => !model || completion.model === model)
     .filter((completion) => matchesMetadataFilters(completion.metadata || {}, metadataFilters));
-  sendJson(res, 200, paginateList(completions, url));
+  sendJson(res, 200, paginateList(completions, officialChatCompletionsListPaginationUrl(url)));
 }
 
 function normalizeListedChatCompletion(record) {
@@ -18086,6 +18086,14 @@ function validateOpenAIChatCompletionsListQuery(url) {
   if (afterError) return afterError;
 
   return validateOpenAIStringMetadataQueryFilters(url);
+}
+
+function officialChatCompletionsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function validateOpenAISingleQueryValue(url, name) {

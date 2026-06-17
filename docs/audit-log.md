@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Chat Completions List Official Pagination
+
+- Rechecked official OpenAI OpenAPI through the OpenAI developer-docs MCP for
+  `GET /v1/chat/completions`:
+  - operation `listChatCompletions` lists stored Chat Completions created with
+    `store:true`;
+  - official query parameters are `model`, `metadata`, `after`, `limit`, and
+    `order`;
+  - `order` supports only `asc` and `desc`, with default `asc`;
+  - the documented list page returns `object:"list"`, `data`, `first_id`,
+    `last_id`, and `has_more`;
+  - `before` is not an official query parameter for this endpoint.
+- Tightened local stored Chat completion list behavior:
+  - `GET /v1/chat/completions` still validates official `model`, `metadata`,
+    `after`, `limit`, and `order` inputs before listing local `store:true`
+    records;
+  - pagination now passes only official `after`, `order`, and `limit` through
+    to the shared list paginator, so unsupported generic paginator fields such
+    as `before` cannot silently affect official Chat completion list results;
+  - existing default ascending order, model filtering, metadata filtering, and
+    stored-record normalization behavior are unchanged.
+- Regression coverage updated:
+  - the stored Chat completion lifecycle test now creates two local stored Chat
+    completion records, requests a list with
+    `before=<second_completion_id>`, and verifies both records are still
+    returned in official ascending order.
+- Documentation updated:
+  - compatibility matrix now records that Chat completion listing supports only
+    official `model`, `metadata[key]`, `limit`, `after`, and `order` list
+    controls, and that unsupported generic paginator parameters such as
+    `before` do not affect the result.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/chat/completions proxies and stores chat responses when requested" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Chat Completions list smoke marker
+    `chat-list-before-smoke-mqibhnq7` created two temporary stored Chat
+    completions, verified official ascending list order, verified
+    `after=<first_completion_id>` returns only the second record, verified
+    unsupported `before=<second_completion_id>` is ignored and still returns
+    both records, then deleted both temporary records.
+  - Disk guard after deployment: `/` 193G size, 178G used, 16G available, 92%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5360 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or smoke-test request secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Certificate Retrieve Include Validation
 
 - Rechecked official/generated OpenAI SDK source for organization certificate

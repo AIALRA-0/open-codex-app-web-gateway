@@ -30155,6 +30155,14 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(listedAfterJson.first_id, secondJson.id);
     assert.equal(listedAfterJson.last_id, secondJson.id);
 
+    const listedBeforeIgnored = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated&order=asc&limit=10&before=${encodeURIComponent(secondJson.id)}`);
+    assert.equal(listedBeforeIgnored.status, 200);
+    const listedBeforeIgnoredJson = await listedBeforeIgnored.json();
+    assert.deepEqual(
+      listedBeforeIgnoredJson.data.map((completion) => completion.id),
+      [json.id, secondJson.id],
+    );
+
     const invalidListOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?order=sideways`);
     assert.equal(invalidListOrder.status, 400);
     assert.deepEqual(await invalidListOrder.json(), {
