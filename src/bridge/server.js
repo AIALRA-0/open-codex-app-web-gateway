@@ -11883,7 +11883,13 @@ function normalizeModelListResponse(body) {
   };
 }
 
-async function handleModelGet(req, res, config, modelId) {
+async function handleModelGet(req, res, config, modelId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   if (config.providerApiKey) {
     const direct = await tryFetchModel(config, req.headers, modelId);
     if (direct) {
@@ -11910,7 +11916,13 @@ async function handleModelGet(req, res, config, modelId) {
   });
 }
 
-async function handleModelDelete(req, res, config, modelId) {
+async function handleModelDelete(req, res, config, modelId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   if (config.providerApiKey) {
     const deleted = await tryDeleteModel(config, req.headers, modelId);
     if (deleted) {
@@ -23986,11 +23998,11 @@ function createServer(config = loadConfig()) {
       if (modelRoute) {
         const modelId = decodeURIComponent(modelRoute[1]);
         if (req.method === "GET") {
-          await handleModelGet(req, res, config, modelId);
+          await handleModelGet(req, res, config, modelId, url);
           return;
         }
         if (req.method === "DELETE") {
-          await handleModelDelete(req, res, config, modelId);
+          await handleModelDelete(req, res, config, modelId, url);
           return;
         }
       }

@@ -35960,6 +35960,32 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
     });
     assert.equal(requests.length, 0);
 
+    const invalidModelRetrieve = await fetch(`${baseUrl}/v1/models/direct-model?metadata=debug`);
+    assert.equal(invalidModelRetrieve.status, 400);
+    assert.deepEqual(await invalidModelRetrieve.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
+    const invalidModelDelete = await fetch(`${baseUrl}/v1/models/${encodeURIComponent(fineTunedModelId)}?metadata=debug`, {
+      method: "DELETE",
+    });
+    assert.equal(invalidModelDelete.status, 400);
+    assert.deepEqual(await invalidModelDelete.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const modelList = await fetch(`${baseUrl}/v1/models`);
     assert.equal(modelList.status, 200);
     assert.deepEqual(await modelList.json(), {

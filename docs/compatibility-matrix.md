@@ -842,8 +842,8 @@ OpenAI's current endpoint list includes `GET /v1/models`,
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `GET /v1/models` | Implemented | Accepts the official no-query list shape; unsupported query parameters return 400 before upstream proxying; proxies and normalizes upstream JSON model lists when available; invalid or non-JSON upstream list responses fall back to local bridge models for the configured default Chat provider model, local embeddings model, local moderations model, and local audio models |
-| `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to local bridge model objects for the configured default, embeddings, or moderations model IDs |
-| `DELETE /v1/models/{model}` | Implemented for upstream-compatible fine-tuned models | Proxies upstream model deletion and normalizes successful `{deleted:true}` responses to OpenAI-style `{id,object:"model",deleted:true}`; when no upstream deletion is available, returns local `404 model_not_found` instead of deleting local bridge catalog models |
+| `GET /v1/models/{model}` | Implemented | Accepts the official no-query retrieve shape; unsupported query parameters return 400 before upstream proxying or local catalog fallback. Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to local bridge model objects for the configured default, embeddings, or moderations model IDs |
+| `DELETE /v1/models/{model}` | Implemented for upstream-compatible fine-tuned models | Accepts the official no-query delete shape; unsupported query parameters return 400 before any upstream delete attempt. Proxies upstream model deletion and normalizes successful `{deleted:true}` responses to OpenAI-style `{id,object:"model",deleted:true}`; when no upstream deletion is available, returns local `404 model_not_found` instead of deleting local bridge catalog models |
 
 ## Embeddings Endpoint Coverage
 

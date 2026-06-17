@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Models Retrieve/Delete Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / endpoint metadata for Models:
+  - `GET /v1/models` declares no query parameters;
+  - the current official endpoint list includes `GET /v1/models/{model}` and
+    `DELETE /v1/models/{model}` for model retrieval and fine-tuned model
+    deletion.
+- Tightened local bridge behavior:
+  - `GET /v1/models/{model}` now rejects unsupported query parameters before
+    upstream direct retrieval, upstream list fallback, or local catalog
+    fallback;
+  - `DELETE /v1/models/{model}` now rejects unsupported query parameters
+    before any upstream model delete attempt.
+- Regression coverage updated:
+  - extended the Models proxy/fallback test to verify invalid retrieve/delete
+    query parameters return OpenAI-style 400 errors and do not call the
+    provider mock.
+- Documentation updated:
+  - compatibility matrix now records no-query boundaries for model retrieve
+    and model delete, not only model listing.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "GET /v1/models/\\{model\\} proxies direct retrieval and falls back to model list|DELETE /v1/models/\\{model\\} returns local model_not_found when no upstream delete is available" test/server.test.js`
+    passed 2/2 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Models smoke verified
+    `https://opencodexapp.aialra.online/healthz`,
+    invalid model retrieve/delete queries returning 400, normal model listing,
+    and normal `GET /v1/models/deepseek-v4-pro` retrieval.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.0G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated smoke payloads, upstream response payloads,
+    or provider request headers were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Chat Completions Stored Lifecycle Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / endpoint metadata for Chat
