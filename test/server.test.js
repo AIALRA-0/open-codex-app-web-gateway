@@ -797,6 +797,65 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "reasoning",
+          id: "rs_bad",
+          status: "failed",
+          summary: [],
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, completed, incomplete",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "reasoning",
+          id: "rs_bad",
+          summary: { type: "summary_text", text: "bad" },
+        }],
+        param: "input.0.summary",
+        message: "input.0.summary must be an array",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "reasoning",
+          id: "rs_bad",
+          summary: [{ type: "text", text: "bad" }],
+        }],
+        param: "input.0.summary.0.type",
+        message: "input.0.summary.0.type must be summary_text",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "reasoning",
+          id: "rs_bad",
+          summary: [],
+          content: [{ type: "reasoning_text" }],
+        }],
+        param: "input.0.content.0.text",
+        message: "input.0.content.0.text must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "compaction",
+          encrypted_content: { value: "bad" },
+        }],
+        param: "input.0.encrypted_content",
+        message: "input.0.encrypted_content must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "compaction",
+        }],
+        param: "input.0.encrypted_content",
+        message: "input.0.encrypted_content must be a string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "web_search_call",
           id: "ws_bad",
           status: "done",

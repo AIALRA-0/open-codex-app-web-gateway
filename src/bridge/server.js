@@ -300,6 +300,7 @@ const OPENAI_RESPONSES_INPUT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low",
 const OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES = Object.freeze(["low", "high"]);
 const OPENAI_RESPONSES_COMPUTER_CALL_OUTPUT_STATUS_VALUES = Object.freeze(["in_progress", "completed", "incomplete"]);
 const OPENAI_RESPONSES_COMPUTER_OUTPUT_TYPES = Object.freeze(["computer_screenshot", "input_image", "image_url"]);
+const OPENAI_RESPONSES_COMPACTION_ENCRYPTED_CONTENT_MAX_CHARS = 10485760;
 const OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES = Object.freeze({
   file_search_call: Object.freeze(["in_progress", "searching", "completed", "incomplete", "failed"]),
   web_search_call: Object.freeze(["in_progress", "searching", "completed", "failed"]),
@@ -5311,6 +5312,14 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     const error = validateOpenAIResponsesComputerCallOutputInputItem(value, param);
     if (error) return error;
   }
+  if (value.type === "reasoning") {
+    const error = validateOpenAIResponsesReasoningInputItem(value, param);
+    if (error) return error;
+  }
+  if (value.type === "compaction") {
+    const error = validateOpenAIResponsesCompactionInputItem(value, param);
+    if (error) return error;
+  }
   if (OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES.has(value.type)) {
     const error = validateOpenAIResponsesToolContextInputItem(value, param);
     if (error) return error;
@@ -5477,6 +5486,63 @@ function validateOpenAIResponsesComputerSafetyChecks(value, param, options = {})
         return requestValidationError(`${checkParam}.${field} must be a string or null`, `${checkParam}.${field}`);
       }
     }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesReasoningInputItem(item, param) {
+  const idError = validateOpenAIOptionalStringItemField(item, param, "id");
+  if (idError) return idError;
+
+  const encryptedError = validateOpenAIOptionalStringItemField(item, param, "encrypted_content", { nullable: true });
+  if (encryptedError) return encryptedError;
+
+  const statusError = validateOpenAIResponsesInputItemStatus(item, param);
+  if (statusError) return statusError;
+
+  const summaryError = validateOpenAIOptionalArrayItemField(item, param, "summary");
+  if (summaryError) return summaryError;
+  const summaryPartsError = validateOpenAIResponsesReasoningTextParts(
+    item.summary,
+    `${param}.summary`,
+    "summary_text",
+  );
+  if (summaryPartsError) return summaryPartsError;
+
+  const contentError = validateOpenAIOptionalArrayItemField(item, param, "content");
+  if (contentError) return contentError;
+  return validateOpenAIResponsesReasoningTextParts(item.content, `${param}.content`, "reasoning_text");
+}
+
+function validateOpenAIResponsesReasoningTextParts(parts, param, expectedType) {
+  if (parts == null) return null;
+  for (const [index, part] of parts.entries()) {
+    const partParam = `${param}.${index}`;
+    if (!isPlainObject(part)) {
+      return requestValidationError(`${partParam} must be an object`, partParam);
+    }
+    if (typeof part.type !== "string" || part.type !== expectedType) {
+      return requestValidationError(`${partParam}.type must be ${expectedType}`, `${partParam}.type`);
+    }
+    if (typeof part.text !== "string") {
+      return requestValidationError(`${partParam}.text must be a string`, `${partParam}.text`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesCompactionInputItem(item, param) {
+  const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+  if (idError) return idError;
+
+  if (typeof item.encrypted_content !== "string") {
+    return requestValidationError(`${param}.encrypted_content must be a string`, `${param}.encrypted_content`);
+  }
+  if (Array.from(item.encrypted_content).length > OPENAI_RESPONSES_COMPACTION_ENCRYPTED_CONTENT_MAX_CHARS) {
+    return requestValidationError(
+      `${param}.encrypted_content must be at most ${OPENAI_RESPONSES_COMPACTION_ENCRYPTED_CONTENT_MAX_CHARS} characters`,
+      `${param}.encrypted_content`,
+    );
   }
   return null;
 }

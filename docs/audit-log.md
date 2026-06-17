@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-17 Responses Reasoning And Compaction Input Validation
+
+- Rechecked the current official OpenAI Responses schema through the developer
+  docs MCP workflow and the official `openai-openapi` YAML for `ReasoningItem`,
+  `SummaryTextContent`, `ReasoningTextContent`, and
+  `CompactionSummaryItemParam`:
+  - `reasoning` items are the manually managed context items for reasoning
+    models and carry `encrypted_content`, `summary`, `content`, and status
+    fields;
+  - `summary` parts are `summary_text` objects with string `text`;
+  - `content` parts are `reasoning_text` objects with string `text`;
+  - `compaction` input items require string `encrypted_content` with the
+    official 10 MB maximum.
+- Tightened Responses input validation before provider calls:
+  - `reasoning` now rejects malformed `id`, `encrypted_content`, status,
+    `summary`, and `content` fields before upstream Chat requests;
+  - `compaction` now rejects missing/non-string or oversized
+    `encrypted_content` before local replay or upstream compaction calls;
+  - the existing local replay behavior remains intact: `ocrsn1.` reasoning
+    content and `occomp1.` compaction content are decoded in memory, while
+    undecodable foreign compaction content becomes an explicit compatibility
+    context notice.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `reasoning` and `compaction` cases across `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`;
+  - targeted translator tests confirm legal encrypted reasoning and compaction
+    replay still map to Chat context.
+- Documentation updated:
+  - compatibility matrix now records pre-provider validation and replay
+    behavior for `reasoning` and `compaction` input items, plus the compact
+    endpoint's replay-item validation boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate input image and file
+    detail|maps compaction items|encrypted reasoning items|reasoning.encrypted_content|compact"
+    test/server.test.js test/translator.test.js` passes: 6 tests;
+  - full `node --test test/*.test.js` passes: 365 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `reasoning.status:"failed"` input-token request returns
+    `400 invalid_request_parameter` with `param:"input.0.status"`;
+  - public valid `compaction.encrypted_content` input-token request returns 200
+    with `input_tokens:37`.
+- Runtime/storage check:
+  - `/` has 12 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Tool Search Input Validation
 
 - Rechecked the current official OpenAI Responses schema through the developer
