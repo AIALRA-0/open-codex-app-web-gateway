@@ -15836,6 +15836,11 @@ function certificateIncludeValues(url) {
 }
 
 function handleOrganizationCertificateGet(res, organizationAdminStore, certificateId, url) {
+  const queryError = validateOpenAIOrganizationCertificateRetrieveQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, organizationAdminStore.getOrganizationCertificate(certificateId, {
     include: certificateIncludeValues(url),
   }));
@@ -16761,6 +16766,15 @@ function officialOrganizationCertificatesListPaginationUrl(url) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
   }
   return localUrl;
+}
+
+function validateOpenAIOrganizationCertificateRetrieveQuery(url) {
+  const includeValues = certificateIncludeValues(url);
+  const invalid = includeValues.find((value) => value !== "content");
+  if (invalid) {
+    return requestValidationError("include must contain only: content", "include");
+  }
+  return null;
 }
 
 function validateOpenAIProjectCertificatesListQuery(url) {

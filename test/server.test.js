@@ -23624,6 +23624,21 @@ test("Organization certificates manage local organization and project activation
     assert.equal(fetchedWithContent.status, 200);
     assert.equal((await fetchedWithContent.json()).certificate_details.content, certificatePem);
 
+    const fetchedWithRepeatedContent = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}?include=content&include%5B%5D=content`);
+    assert.equal(fetchedWithRepeatedContent.status, 200);
+    assert.equal((await fetchedWithRepeatedContent.json()).certificate_details.content, certificatePem);
+
+    const invalidInclude = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}?include=content,private_key`);
+    assert.equal(invalidInclude.status, 400);
+    assert.deepEqual(await invalidInclude.json(), {
+      error: {
+        message: "include must contain only: content",
+        type: "invalid_request_error",
+        param: "include",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const updated = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },

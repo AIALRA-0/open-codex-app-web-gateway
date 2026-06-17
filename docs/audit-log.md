@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Organization Certificate Retrieve Include Validation
+
+- Rechecked official/generated OpenAI SDK source for organization certificate
+  retrieval:
+  - `openai-node` generated
+    `src/resources/admin/organization/certificates.ts` documents
+    `client.admin.organization.certificates.retrieve()` with
+    `CertificateRetrieveParams`;
+  - `CertificateRetrieveParams.include` is an array whose currently supported
+    value is only `content`, used to fetch the PEM content of the certificate.
+- Tightened local organization certificate retrieve behavior:
+  - `GET /v1/organization/certificates/{certificate_id}` now validates
+    `include` query values before reading local certificate content;
+  - `include=content`, `include[]=content`, repeated `content`, and local
+    comma splitting for `include=content` remain accepted;
+  - unsupported include values, such as `private_key`, return an OpenAI-style
+    HTTP 400 `invalid_request_parameter` error with `param:"include"`.
+- Regression coverage updated:
+  - the Organization certificate lifecycle test now verifies that repeated
+    official `content` include values still return the uploaded PEM content and
+    that mixed `content,private_key` include requests are rejected before the
+    certificate is projected.
+- Documentation updated:
+  - compatibility matrix now records that certificate detail retrieval supports
+    official `include[]=content` / `include=content` and rejects unsupported
+    include values.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization certificates manage local organization and project activation" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public certificate include smoke marker `certificate-include-smoke-mqib9mtp`
+    created one temporary organization certificate, verified default retrieve
+    hides PEM content, `include=content` plus repeated `include[]=content`
+    returns PEM content, unsupported `include=content,private_key` returns
+    HTTP 400, then deleted the temporary certificate.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available, 95%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5358 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, PEM private keys, or certificate smoke-test secrets
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Audit Logs List Query Validation
 
 - Rechecked official OpenAPI through the OpenAI developer-docs MCP for
