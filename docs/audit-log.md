@@ -1,5 +1,55 @@
 # Audit Log
 
+## 2026-06-17 Responses Retrieve Query Scalar Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `GET /responses/{response_id}` query schema:
+  - `include` is an array query parameter;
+  - `stream` is a boolean scalar;
+  - `starting_after` is an integer scalar;
+  - `include_obfuscation` is a boolean scalar.
+- Tightened local response retrieval validation:
+  - repeated scalar `stream`, `starting_after`, or `include_obfuscation` query
+    parameters now return `400 invalid_request_parameter` before store lookup,
+    stream replay, or provider work;
+  - existing boolean and integer value validation remains unchanged after the
+    single-value guard.
+- Regression coverage updated:
+  - extended the existing Responses lifecycle retrieve test with repeated
+    `stream` and repeated `starting_after` validation.
+- Documentation updated:
+  - compatibility matrix now records that `stream`, `starting_after`, and
+    `include_obfuscation` may appear only once on
+    `GET /v1/responses/{response_id}`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Responses lifecycle endpoints" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public repeated-`stream` smoke against `/v1/responses/resp_public_smoke`
+    returned HTTP 400 with `code:"invalid_request_parameter"` and
+    `param:"stream"`.
+  - Public repeated-`starting_after` smoke against
+    `/v1/responses/resp_public_smoke` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"starting_after"`.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Input Items Cursor Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

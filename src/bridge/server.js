@@ -16479,6 +16479,12 @@ async function handleResponseGet(res, store, responseId, url, backgroundJobs = n
 function validateResponseRetrieveQuery(url) {
   const includeError = validateOpenAIIncludeQuery(url);
   if (includeError) return includeError;
+
+  for (const name of ["stream", "starting_after", "include_obfuscation"]) {
+    const singleValueError = validateOpenAISingleQueryValue(url, name);
+    if (singleValueError) return singleValueError;
+  }
+
   const streamError = validateOpenAIQueryBoolean(url, "stream");
   if (streamError) return streamError;
   const includeObfuscationError = validateOpenAIQueryBoolean(url, "include_obfuscation");

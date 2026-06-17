@@ -18087,6 +18087,28 @@ test("Responses lifecycle endpoints retrieve input items, cancel completed recor
     assert.equal(invalidStartingAfter.status, 400);
     assert.equal((await invalidStartingAfter.json()).error.param, "starting_after");
 
+    const repeatedStream = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&stream=false`);
+    assert.equal(repeatedStream.status, 400);
+    assert.deepEqual(await repeatedStream.json(), {
+      error: {
+        message: "stream must be a single string query value",
+        type: "invalid_request_error",
+        param: "stream",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedStartingAfter = await fetch(`${baseUrl}/v1/responses/${createdJson.id}?stream=true&starting_after=1&starting_after=2`);
+    assert.equal(repeatedStartingAfter.status, 400);
+    assert.deepEqual(await repeatedStartingAfter.json(), {
+      error: {
+        message: "starting_after must be a single string query value",
+        type: "invalid_request_error",
+        param: "starting_after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const updated = await fetch(`${baseUrl}/v1/responses/${createdJson.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
