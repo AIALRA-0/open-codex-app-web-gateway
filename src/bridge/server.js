@@ -18861,7 +18861,12 @@ function validateOpenAIResponseInputItemsQuery(url) {
   return validateOpenAISingleQueryValue(url, "after");
 }
 
-function handleChatCompletionGet(res, store, completionId) {
+function handleChatCompletionGet(res, store, completionId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(completionId);
   if (!record?.chat_completion) {
     sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
@@ -18871,7 +18876,12 @@ function handleChatCompletionGet(res, store, completionId) {
   sendJson(res, 200, projectStoredChatCompletion(record));
 }
 
-async function handleChatCompletionUpdate(req, res, store, completionId) {
+async function handleChatCompletionUpdate(req, res, store, completionId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const record = store.get(completionId);
   if (!record?.chat_completion) {
@@ -18916,7 +18926,12 @@ async function handleChatCompletionUpdate(req, res, store, completionId) {
   sendJson(res, 200, projectStoredChatCompletion(updatedRecord));
 }
 
-function handleChatCompletionDelete(res, store, completionId) {
+function handleChatCompletionDelete(res, store, completionId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(completionId);
   if (!record?.chat_completion) {
     sendError(res, 404, `chat completion not found: ${completionId}`, { code: "chat_completion_not_found" });
@@ -18980,6 +18995,9 @@ function metadataFiltersFromUrl(url) {
 }
 
 function validateOpenAIChatCompletionsListQuery(url) {
+  const allowedError = validateOpenAIChatCompletionsListAllowedQueryKeys(url);
+  if (allowedError) return allowedError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -18993,6 +19011,16 @@ function validateOpenAIChatCompletionsListQuery(url) {
   if (afterError) return afterError;
 
   return validateOpenAIStringMetadataQueryFilters(url);
+}
+
+function validateOpenAIChatCompletionsListAllowedQueryKeys(url) {
+  for (const key of url.searchParams.keys()) {
+    if (["model", "metadata", "after", "limit", "order"].includes(key) || /^metadata\[[^\]]+\]$/.test(key)) {
+      continue;
+    }
+    return requestValidationError(`Unsupported query parameter: ${key}`, key);
+  }
+  return null;
 }
 
 function officialChatCompletionsListPaginationUrl(url) {
@@ -19063,6 +19091,9 @@ function handleChatCompletionMessages(res, store, completionId, url) {
 }
 
 function validateOpenAIChatCompletionMessagesListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "limit", "order"]);
+  if (allowedError) return allowedError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -24072,15 +24103,15 @@ function createServer(config = loadConfig()) {
         const completionId = decodeURIComponent(chatRoute[1]);
         const action = chatRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleChatCompletionGet(res, store, completionId);
+          handleChatCompletionGet(res, store, completionId, url);
           return;
         }
         if (!action && req.method === "POST") {
-          await handleChatCompletionUpdate(req, res, store, completionId);
+          await handleChatCompletionUpdate(req, res, store, completionId, url);
           return;
         }
         if (!action && req.method === "DELETE") {
-          handleChatCompletionDelete(res, store, completionId);
+          handleChatCompletionDelete(res, store, completionId, url);
           return;
         }
         if (action === "messages" && req.method === "GET") {

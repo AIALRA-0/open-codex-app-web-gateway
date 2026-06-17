@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Chat Completions Stored Lifecycle Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / endpoint metadata for Chat
+  Completions:
+  - `GET /v1/chat/completions` declares only `model`, `metadata`, `after`,
+    `limit`, and `order` query parameters;
+  - `POST /v1/chat/completions` declares a JSON body and no query parameters;
+  - the official endpoint list includes
+    `/v1/chat/completions/{completion_id}` and
+    `/v1/chat/completions/{completion_id}/messages` as stored Chat
+    Completions lifecycle paths.
+- Tightened local bridge behavior:
+  - `GET`, `POST`, and `DELETE /v1/chat/completions/{completion_id}` now
+    reject unsupported query parameters before local retrieve/update/delete
+    behavior; update rejects unsupported query parameters before JSON body
+    parsing, so bad-query requests cannot mutate metadata;
+  - `GET /v1/chat/completions` now allows only the official `model`,
+    `metadata[key]`, `after`, `limit`, and `order` query surface, while still
+    returning the more specific metadata filter error for scalar `metadata=`;
+  - `GET /v1/chat/completions/{completion_id}/messages` now allows only
+    `after`, `limit`, and `order`, so unsupported paginator fields such as
+    `before` return 400 instead of being silently ignored.
+- Regression coverage updated:
+  - extended the stored Chat Completion lifecycle test to verify invalid
+    retrieve/update/delete queries return 400 and leave the stored completion
+    intact;
+  - changed prior Chat Completion list/messages `before` behavior from
+    ignored-success to official 400 rejection;
+  - preserved existing validation for list `model`, `metadata[key]`, `after`,
+    `limit`, and `order` filters.
+- Documentation updated:
+  - compatibility matrix now records the stored Chat Completion no-query
+    boundaries and official list/message query allowlists.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/chat/completions proxies and stores chat responses when requested|GET /v1/chat/completions validates stored Chat list query filters" test/server.test.js`
+    passed 2/2 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Chat Completions query smoke created one temporary stored Chat
+    completion, verified invalid list/retrieve/update/messages/delete queries
+    return 400 without mutating/deleting the stored record, then deleted the
+    temporary record.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.0G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated completion ids, temporary smoke response
+    payloads, or prompt payload secrets were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Skills Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for

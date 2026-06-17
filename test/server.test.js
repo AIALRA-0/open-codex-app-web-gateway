@@ -31492,6 +31492,17 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(fetchedJson.choices[0].message.function_call, null);
     assert.deepEqual(fetchedJson.metadata, { suite: "chat-list" });
 
+    const invalidFetchQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}?metadata=debug`);
+    assert.equal(invalidFetchQuery.status, 400);
+    assert.deepEqual(await invalidFetchQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -31514,6 +31525,24 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
         code: "invalid_request_parameter",
       },
     });
+
+    const invalidUpdateQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(invalidUpdateQuery.status, 400);
+    assert.deepEqual(await invalidUpdateQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const refetchedAfterInvalidUpdateQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(refetchedAfterInvalidUpdateQuery.status, 200);
+    assert.deepEqual((await refetchedAfterInvalidUpdateQuery.json()).metadata, { suite: "chat-list" });
 
     const updated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
       method: "POST",
@@ -31542,13 +31571,16 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
-    const messagesBeforeIgnored = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=asc&limit=10&before=chatmsg_000001`);
-    assert.equal(messagesBeforeIgnored.status, 200);
-    const messagesBeforeIgnoredJson = await messagesBeforeIgnored.json();
-    assert.deepEqual(
-      messagesBeforeIgnoredJson.data.map((message) => message.id),
-      ["chatmsg_000000", "chatmsg_000001"],
-    );
+    const invalidMessagesBefore = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=asc&limit=10&before=chatmsg_000001`);
+    assert.equal(invalidMessagesBefore.status, 400);
+    assert.deepEqual(await invalidMessagesBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidMessagesOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=sideways`);
     assert.equal(invalidMessagesOrder.status, 400);
@@ -31682,13 +31714,16 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(listedAfterJson.first_id, secondJson.id);
     assert.equal(listedAfterJson.last_id, secondJson.id);
 
-    const listedBeforeIgnored = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated&order=asc&limit=10&before=${encodeURIComponent(secondJson.id)}`);
-    assert.equal(listedBeforeIgnored.status, 200);
-    const listedBeforeIgnoredJson = await listedBeforeIgnored.json();
-    assert.deepEqual(
-      listedBeforeIgnoredJson.data.map((completion) => completion.id),
-      [json.id, secondJson.id],
-    );
+    const invalidListBefore = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-updated&order=asc&limit=10&before=${encodeURIComponent(secondJson.id)}`);
+    assert.equal(invalidListBefore.status, 400);
+    assert.deepEqual(await invalidListBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidListOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?order=sideways`);
     assert.equal(invalidListOrder.status, 400);
@@ -31741,6 +31776,21 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     const filtered = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=other`);
     assert.equal(filtered.status, 200);
     assert.equal((await filtered.json()).data.length, 0);
+
+    const invalidDeleteQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}?metadata=debug`, {
+      method: "DELETE",
+    });
+    assert.equal(invalidDeleteQuery.status, 400);
+    assert.deepEqual(await invalidDeleteQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const refetchedAfterInvalidDeleteQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
+    assert.equal(refetchedAfterInvalidDeleteQuery.status, 200);
 
     const deleted = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
       method: "DELETE",
