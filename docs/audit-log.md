@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Responses Item Reference Input Validation
+
+- Rechecked the current official Responses input union through the OpenAI docs
+  MCP workflow and the official `openai-openapi` YAML for
+  `ItemReferenceParam`:
+  - `item_reference` is part of the Responses `InputItem` union;
+  - the required field is `id`, described as the item ID to reference;
+  - Chat Completions has no native item-reference field.
+- Tightened Responses input validation before provider calls:
+  - explicit `type:"item_reference"` input items now require a non-empty string
+    `id` across Responses create, `/input_tokens`, and `/compact`;
+  - malformed references are rejected before any upstream Chat request.
+- Improved Chat compatibility mapping:
+  - valid `item_reference` inputs now replay as a stable Chat-visible system
+    context marker instead of falling through to the generic unknown-item JSON
+    marker;
+  - the marker preserves the referenced id and explicitly relies on any
+    separately replayed local `previous_response_id` / `conversation` context
+    for full content.
+- Regression coverage updated:
+  - shared Responses input validation now covers missing, non-string, and empty
+    `item_reference.id` cases;
+  - translator coverage asserts valid `item_reference` inputs map to the stable
+    system context marker.
+- Documentation updated:
+  - compatibility matrix now records `item_reference` as local emulation with
+    pre-provider validation and a current dereference boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check src/bridge/translator.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --check test/translator.test.js` passes;
+  - targeted `node --test --test-name-pattern "item references|validate input
+    image and file detail" test/server.test.js test/translator.test.js`
+    passes: 2 tests;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `item_reference.id` input-token request returns
+    `400 invalid_request_parameter` with `param:"input.0.id"`;
+  - public valid `item_reference` input-token request returns 200 with
+    `input_tokens:47`.
+- Runtime/storage check:
+  - `/` has 11 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Function Call Input Validation
 
 - Rechecked the current official Responses item schema through the OpenAI docs

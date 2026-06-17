@@ -357,6 +357,21 @@ test("maps Responses custom tool call input items to native or text replay", () 
   assert.match(textReplay[1].content, /raw output/);
 });
 
+test("maps Responses item references to Chat-visible context", () => {
+  const messages = responseInputToChatMessages([
+    { type: "item_reference", id: "msg_previous" },
+  ]);
+
+  assert.deepEqual(messages, [{
+    role: "system",
+    content: [
+      "Prior Responses item reference:",
+      "id: msg_previous",
+      "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
+    ].join("\n"),
+  }]);
+});
+
 test("maps Responses allowed_tools tool_choice to Chat allowed_tools shape", () => {
   const longName = "a".repeat(96);
   const { chat, compatibility } = responsesToChatRequest({

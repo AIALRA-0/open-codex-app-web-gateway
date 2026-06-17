@@ -5333,6 +5333,10 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     const error = validateOpenAIResponsesFunctionCallInputItem(value, param);
     if (error) return error;
   }
+  if (value.type === "item_reference") {
+    const error = validateOpenAIResponsesItemReferenceInputItem(value, param);
+    if (error) return error;
+  }
   if (value.type === "custom_tool_call") {
     const error = validateOpenAIResponsesCustomToolCallInputItem(value, param);
     if (error) return error;
@@ -5525,6 +5529,10 @@ function validateOpenAIResponsesFunctionCallInputItem(item, param) {
     return requestValidationError(`${param}.arguments must be a string`, `${param}.arguments`);
   }
   return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function validateOpenAIResponsesItemReferenceInputItem(item, param) {
+  return validateOpenAIRequiredStringItemField(item, param, "id");
 }
 
 function validateOpenAIResponsesCustomToolCallInputItem(item, param) {

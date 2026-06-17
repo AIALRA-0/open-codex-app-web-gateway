@@ -298,6 +298,13 @@ function inputItemToChatMessages(item, options = {}) {
     }];
   }
 
+  if (item.type === "item_reference") {
+    return [{
+      role: options.itemReferenceRole || "system",
+      content: itemReferenceToText(item),
+    }];
+  }
+
   if (item.type === "custom_tool_call") {
     if (shouldReplayCustomToolsNatively(options)) {
       return [{
@@ -372,6 +379,14 @@ function inputItemToChatMessages(item, options = {}) {
   }
 
   return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+function itemReferenceToText(item) {
+  return [
+    "Prior Responses item reference:",
+    `id: ${stringifyContent(item.id)}`,
+    "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
+  ].join("\n");
 }
 
 const RESPONSES_TOOL_CONTEXT_TYPES = new Set([

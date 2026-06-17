@@ -850,6 +850,32 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "item_reference",
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "item_reference",
+          id: 7,
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "item_reference",
+          id: "",
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "computer_call_output",
           output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
         }],
