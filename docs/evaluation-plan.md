@@ -90,11 +90,19 @@ provider call while valid strings, prompt references, and multimodal detail
 values continue to map into model-visible system guidance.
 
 Responses hosted-tool schema coverage must also include `shell.environment` and
-`code_interpreter.container` validation before provider calls. The unit track
+`code_interpreter.container` validation before provider calls. It must also
+cover `file_search` and `web_search*` hosted-tool request schemas before the
+local adapters run: `file_search.vector_store_ids` or the local
+`tool_resources.file_search.vector_store_ids` fallback, `max_num_results`,
+`ranking_options`, recursive filters, web-search context size, web-search
+location, domain filters, and preview search content types. The unit track
 checks rejected malformed container references, `container_auto.file_ids`
 limits, memory-limit enums, network-policy allowlists, skill-reference limits,
-required code-interpreter containers, official `{type:"auto"}` containers, and
-local Files API mounting through shell/code-interpreter auto containers.
+required code-interpreter containers, official `{type:"auto"}` containers,
+local Files API mounting through shell/code-interpreter auto containers,
+malformed hosted search schemas across Responses create and `/input_tokens`,
+positive `tool_resources` file-search fallback, and the current
+`web_search_2025_08_26` hosted-tool alias entering local web-search execution.
 
 Responses and Chat tool-choice coverage must distinguish Responses
 `allowed_tools` from Chat's nested `allowed_tools` envelope. The unit track

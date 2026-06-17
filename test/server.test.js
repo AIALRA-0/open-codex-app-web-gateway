@@ -2882,6 +2882,124 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.server_label must be a string",
       },
       {
+        body: { tools: [{ type: "file_search" }] },
+        param: "tools.0.vector_store_ids",
+        message: "tools.0.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: "vs_123" }] },
+        param: "tools.0.vector_store_ids",
+        message: "tools.0.vector_store_ids must be an array",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: [] }] },
+        param: "tools.0.vector_store_ids",
+        message: "tools.0.vector_store_ids must be a non-empty array",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: ["vs_123", 7] }] },
+        param: "tools.0.vector_store_ids.1",
+        message: "tools.0.vector_store_ids.1 must be a string",
+      },
+      {
+        body: { tools: [{ type: "file_search" }], tool_resources: { file_search: { vector_store_ids: [7] } } },
+        param: "tool_resources.file_search.vector_store_ids.0",
+        message: "tool_resources.file_search.vector_store_ids.0 must be a string",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: ["vs_123"], max_num_results: 51 }] },
+        param: "tools.0.max_num_results",
+        message: "tools.0.max_num_results must be an integer between 1 and 50",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: ["vs_123"], ranking_options: [] }] },
+        param: "tools.0.ranking_options",
+        message: "tools.0.ranking_options must be an object",
+      },
+      {
+        body: {
+          tools: [{
+            type: "file_search",
+            vector_store_ids: ["vs_123"],
+            ranking_options: { ranker: "default_2023" },
+          }],
+        },
+        param: "tools.0.ranking_options.ranker",
+        message: "tools.0.ranking_options.ranker must be one of: auto, default-2024-11-15, default_2024_08_21",
+      },
+      {
+        body: {
+          tools: [{
+            type: "file_search",
+            vector_store_ids: ["vs_123"],
+            ranking_options: { score_threshold: "0.5" },
+          }],
+        },
+        param: "tools.0.ranking_options.score_threshold",
+        message: "tools.0.ranking_options.score_threshold must be a number between 0 and 1",
+      },
+      {
+        body: {
+          tools: [{
+            type: "file_search",
+            vector_store_ids: ["vs_123"],
+            ranking_options: { hybrid_search: { embedding_weight: 0, text_weight: 0 } },
+          }],
+        },
+        param: "tools.0.ranking_options.hybrid_search",
+        message: "tools.0.ranking_options.hybrid_search requires embedding_weight or text_weight to be greater than zero",
+      },
+      {
+        body: { tools: [{ type: "file_search", vector_store_ids: ["vs_123"], filters: { type: "and", filters: [] } }] },
+        param: "tools.0.filters.filters",
+        message: "tools.0.filters.filters must be a non-empty array for and",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", search_context_size: "tiny" }] },
+        param: "tools.0.search_context_size",
+        message: "tools.0.search_context_size must be one of: low, medium, high",
+      },
+      {
+        body: { tools: [{ type: "web_search_2025_08_26", filters: "news" }] },
+        param: "tools.0.filters",
+        message: "tools.0.filters must be an object or null",
+      },
+      {
+        body: { tools: [{ type: "web_search", filters: { allowed_domains: "example.com" } }] },
+        param: "tools.0.filters.allowed_domains",
+        message: "tools.0.filters.allowed_domains must be an array or null",
+      },
+      {
+        body: { tools: [{ type: "web_search", filters: { allowed_domains: ["example.com", 7] } }] },
+        param: "tools.0.filters.allowed_domains.1",
+        message: "tools.0.filters.allowed_domains.1 must be a string",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", user_location: "US" }] },
+        param: "tools.0.user_location",
+        message: "tools.0.user_location must be an object or null",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", user_location: { type: "exact" } }] },
+        param: "tools.0.user_location.type",
+        message: "tools.0.user_location.type must be approximate",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", user_location: { type: "approximate", country: 840 } }] },
+        param: "tools.0.user_location.country",
+        message: "tools.0.user_location.country must be a string or null",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", search_content_types: "text" }] },
+        param: "tools.0.search_content_types",
+        message: "tools.0.search_content_types must be an array",
+      },
+      {
+        body: { tools: [{ type: "web_search_preview", search_content_types: ["text", "video"] }] },
+        param: "tools.0.search_content_types.1",
+        message: "tools.0.search_content_types.1 must be one of: text, image",
+      },
+      {
         body: { tools: [{ type: "shell", environment: "local" }] },
         param: "tools.0.environment",
         message: "tools.0.environment must be an object or null",
@@ -3078,6 +3196,103 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
       }
     }
     assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/responses accepts local file_search tool_resources vector_store fallback", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.ok(call.body.messages.some((message) => /Local Responses file_search compatibility/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_file_search_tool_resources_fallback",
+      object: "chat.completion",
+      created: 1700000416,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "file search fallback ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 4, completion_tokens: 4, total_tokens: 8 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Search the local vector store fallback.",
+        tools: [{
+          type: "file_search",
+          max_num_results: 1,
+          ranking_options: {
+            ranker: "default-2024-11-15",
+            score_threshold: 0,
+            hybrid_search: { embedding_weight: 0, text_weight: 1 },
+          },
+        }],
+        tool_resources: { file_search: { vector_store_ids: ["vs_missing_fallback"] } },
+        include: ["file_search_call.results"],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "file_search_call");
+    assert.equal(json.output[0].status, "failed");
+    assert.deepEqual(json.output[0].vector_store_ids, ["vs_missing_fallback"]);
+    assert.equal(json.output[1].content[0].text, "file search fallback ok");
+    assert.equal(json.metadata.compatibility.local_file_search.provider, "local");
+    assert.equal(requests.length, 1);
+  });
+});
+
+test("POST /v1/responses handles current web_search tool alias locally", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.tools, undefined);
+    assert.ok(call.body.messages.some((message) => /Local Responses web_search compatibility results/.test(message.content || "")));
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_current_web_search_alias",
+      object: "chat.completion",
+      created: 1700000417,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "current web search ok [1]" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 6, completion_tokens: 5, total_tokens: 11 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Find the current alias fixture.",
+        tools: [{
+          type: "web_search_2025_08_26",
+          search_context_size: "high",
+          filters: { allowed_domains: ["example.com"] },
+          user_location: { type: "approximate", country: "US", timezone: "America/New_York" },
+        }],
+        include: ["web_search_call.results"],
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "web_search_call");
+    assert.deepEqual(json.metadata.compatibility.local_web_search.tool_types, ["web_search_2025_08_26"]);
+    assert.equal(requests.length, 1);
+  }, {
+    webSearchProvider: "static",
+    webSearchStaticResults: [{
+      title: "Current alias fixture",
+      url: "https://example.com/current-alias",
+      snippet: "The current alias fixture says current web search ok.",
+    }],
+    webSearchOpenPages: 0,
   });
 });
 

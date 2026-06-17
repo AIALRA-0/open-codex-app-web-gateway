@@ -5,6 +5,7 @@ const { prefixedId, stringifyContent } = require("./translator");
 
 const WEB_SEARCH_TOOL_TYPES = new Set([
   "web_search",
+  "web_search_2025_08_26",
   "web_search_preview",
   "web_search_preview_2025_03_11",
 ]);

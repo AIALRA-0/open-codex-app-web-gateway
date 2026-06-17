@@ -271,6 +271,16 @@ const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "sc
 const OPENAI_COMPACT_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
+const OPENAI_WEB_SEARCH_CONTENT_TYPE_VALUES = Object.freeze(["text", "image"]);
+const OPENAI_FILE_SEARCH_MAX_RESULTS = 50;
+const OPENAI_FILE_SEARCH_RANKER_VALUES = Object.freeze([
+  "auto",
+  "default-2024-11-15",
+  "default_2024_08_21",
+]);
+const OPENAI_FILE_SEARCH_COMPARISON_FILTER_TYPES = Object.freeze(["eq", "ne", "gt", "gte", "lt", "lte"]);
+const OPENAI_FILE_SEARCH_ARRAY_FILTER_TYPES = Object.freeze(["in", "nin"]);
+const OPENAI_FILE_SEARCH_COMPOUND_FILTER_TYPES = Object.freeze(["and", "or"]);
 const OPENAI_CHAT_MESSAGE_ROLES = Object.freeze(["developer", "system", "user", "assistant", "tool", "function"]);
 const OPENAI_CHAT_TEXT_ONLY_CONTENT_PART_TYPES = Object.freeze(["text", "input_text"]);
 const OPENAI_CHAT_USER_CONTENT_PART_TYPES = Object.freeze([
@@ -3712,6 +3722,12 @@ function validateOpenAIResponsesTools(body = {}) {
     } else if (tool.type === "namespace") {
       const namespaceError = validateOpenAIResponsesNamespaceTool(tool, param);
       if (namespaceError) return namespaceError;
+    } else if (tool.type === "file_search") {
+      const fileSearchError = validateOpenAIResponsesFileSearchTool(tool, param, body);
+      if (fileSearchError) return fileSearchError;
+    } else if (isOpenAIResponsesWebSearchToolType(tool.type)) {
+      const webSearchError = validateOpenAIResponsesWebSearchTool(tool, param);
+      if (webSearchError) return webSearchError;
     } else if (tool.type === "mcp") {
       if (typeof tool.server_label !== "string") {
         return requestValidationError(`${param}.server_label must be a string`, `${param}.server_label`);
@@ -3809,6 +3825,359 @@ function validateOpenAIResponsesNamespaceTool(tool, param) {
       return requestValidationError(
         `${nestedParam}.type must be one of: function, custom`,
         `${nestedParam}.type`,
+      );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesFileSearchTool(tool, param, body = {}) {
+  const resourceIds = responsesFileSearchToolResourceVectorStoreIds(body);
+  if (resourceIds.error) return resourceIds.error;
+
+  if (Object.prototype.hasOwnProperty.call(tool, "vector_store_ids")) {
+    const idsError = validateOpenAIStringArray(tool.vector_store_ids, `${param}.vector_store_ids`, {
+      nonEmpty: true,
+      nonEmptyString: true,
+    });
+    if (idsError) return idsError;
+  } else if (!resourceIds.ids?.length) {
+    return requestValidationError(
+      `${param}.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided`,
+      `${param}.vector_store_ids`,
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(tool, "max_num_results")) {
+    if (
+      !Number.isInteger(tool.max_num_results)
+      || tool.max_num_results < 1
+      || tool.max_num_results > OPENAI_FILE_SEARCH_MAX_RESULTS
+    ) {
+      return requestValidationError(
+        `${param}.max_num_results must be an integer between 1 and ${OPENAI_FILE_SEARCH_MAX_RESULTS}`,
+        `${param}.max_num_results`,
+      );
+    }
+  }
+
+  if (Object.prototype.hasOwnProperty.call(tool, "ranking_options")) {
+    const rankingError = validateOpenAIFileSearchRankingOptions(tool.ranking_options, `${param}.ranking_options`);
+    if (rankingError) return rankingError;
+  }
+
+  for (const field of ["filters", "filter", "attribute_filter", "attributeFilter"]) {
+    if (!Object.prototype.hasOwnProperty.call(tool, field)) continue;
+    const filterError = validateOpenAIFileSearchFilter(tool[field], `${param}.${field}`);
+    if (filterError) return filterError;
+  }
+  return null;
+}
+
+function responsesFileSearchToolResourceVectorStoreIds(body = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, "tool_resources") || body.tool_resources == null) {
+    return { ids: null };
+  }
+  if (!isPlainObject(body.tool_resources)) {
+    return { error: requestValidationError("tool_resources must be an object or null", "tool_resources") };
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(body.tool_resources, "file_search")
+    || body.tool_resources.file_search == null
+  ) {
+    return { ids: null };
+  }
+  if (!isPlainObject(body.tool_resources.file_search)) {
+    return {
+      error: requestValidationError(
+        "tool_resources.file_search must be an object or null",
+        "tool_resources.file_search",
+      ),
+    };
+  }
+  if (!Object.prototype.hasOwnProperty.call(body.tool_resources.file_search, "vector_store_ids")) {
+    return { ids: null };
+  }
+  const ids = body.tool_resources.file_search.vector_store_ids;
+  const error = validateOpenAIStringArray(ids, "tool_resources.file_search.vector_store_ids", {
+    nonEmpty: true,
+    nonEmptyString: true,
+  });
+  return error ? { error } : { ids };
+}
+
+function validateOpenAIFileSearchRankingOptions(rankingOptions, param) {
+  if (!isPlainObject(rankingOptions)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(rankingOptions, "ranker")
+    && rankingOptions.ranker != null
+    && (
+      typeof rankingOptions.ranker !== "string"
+      || !OPENAI_FILE_SEARCH_RANKER_VALUES.includes(rankingOptions.ranker)
+    )
+  ) {
+    return requestValidationError(
+      `${param}.ranker must be one of: ${OPENAI_FILE_SEARCH_RANKER_VALUES.join(", ")}`,
+      `${param}.ranker`,
+    );
+  }
+  if (Object.prototype.hasOwnProperty.call(rankingOptions, "score_threshold")) {
+    const threshold = rankingOptions.score_threshold;
+    if (typeof threshold !== "number" || !Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      return requestValidationError(`${param}.score_threshold must be a number between 0 and 1`, `${param}.score_threshold`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(rankingOptions, "hybrid_search")) {
+    const hybridError = validateOpenAIFileSearchHybridSearch(rankingOptions.hybrid_search, `${param}.hybrid_search`);
+    if (hybridError) return hybridError;
+  }
+  return null;
+}
+
+function validateOpenAIFileSearchHybridSearch(hybridSearch, param) {
+  if (!isPlainObject(hybridSearch)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  const embeddingWeight = Object.prototype.hasOwnProperty.call(hybridSearch, "embedding_weight")
+    ? hybridSearch.embedding_weight
+    : hybridSearch.rrf_embedding_weight;
+  const textWeight = Object.prototype.hasOwnProperty.call(hybridSearch, "text_weight")
+    ? hybridSearch.text_weight
+    : hybridSearch.rrf_text_weight;
+  if (typeof embeddingWeight !== "number" || !Number.isFinite(embeddingWeight)) {
+    return requestValidationError(`${param}.embedding_weight must be a number`, `${param}.embedding_weight`);
+  }
+  if (typeof textWeight !== "number" || !Number.isFinite(textWeight)) {
+    return requestValidationError(`${param}.text_weight must be a number`, `${param}.text_weight`);
+  }
+  if (embeddingWeight < 0) {
+    return requestValidationError(`${param}.embedding_weight must be non-negative`, `${param}.embedding_weight`);
+  }
+  if (textWeight < 0) {
+    return requestValidationError(`${param}.text_weight must be non-negative`, `${param}.text_weight`);
+  }
+  if (embeddingWeight === 0 && textWeight === 0) {
+    return requestValidationError(
+      `${param} requires embedding_weight or text_weight to be greater than zero`,
+      param,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIFileSearchFilter(filter, param) {
+  if (filter == null) return null;
+  if (Array.isArray(filter)) {
+    if (!filter.length) {
+      return requestValidationError(`${param} must be a non-empty array or object`, param);
+    }
+    for (const [index, item] of filter.entries()) {
+      const itemError = validateOpenAIFileSearchFilter(item, `${param}.${index}`);
+      if (itemError) return itemError;
+    }
+    return null;
+  }
+  if (!isPlainObject(filter)) {
+    return requestValidationError(`${param} must be an object, array, or null`, param);
+  }
+
+  const rawType = filter.type ?? filter.operator;
+  const type = normalizeOpenAIFileSearchFilterType(rawType);
+  const typeIsKnown = OPENAI_FILE_SEARCH_COMPOUND_FILTER_TYPES.includes(type)
+    || OPENAI_FILE_SEARCH_COMPARISON_FILTER_TYPES.includes(type)
+    || OPENAI_FILE_SEARCH_ARRAY_FILTER_TYPES.includes(type);
+  const hasStructuredIntent = typeIsKnown
+    || Object.prototype.hasOwnProperty.call(filter, "filters")
+    || Object.prototype.hasOwnProperty.call(filter, "key")
+    || Object.prototype.hasOwnProperty.call(filter, "field")
+    || Object.prototype.hasOwnProperty.call(filter, "attribute")
+    || Object.prototype.hasOwnProperty.call(filter, "value");
+
+  if (rawType != null && !typeIsKnown && hasStructuredIntent) {
+    return requestValidationError(`${param}.type is unsupported: ${String(rawType)}`, `${param}.type`);
+  }
+
+  if (OPENAI_FILE_SEARCH_COMPOUND_FILTER_TYPES.includes(type)) {
+    if (!Array.isArray(filter.filters) || !filter.filters.length) {
+      return requestValidationError(`${param}.filters must be a non-empty array for ${type}`, `${param}.filters`);
+    }
+    for (const [index, item] of filter.filters.entries()) {
+      const nestedError = validateOpenAIFileSearchFilter(item, `${param}.filters.${index}`);
+      if (nestedError) return nestedError;
+    }
+    return null;
+  }
+
+  const key = filter.key ?? filter.field ?? filter.attribute;
+  if (key != null || hasStructuredIntent) {
+    const operator = type || "eq";
+    if (
+      !OPENAI_FILE_SEARCH_COMPARISON_FILTER_TYPES.includes(operator)
+      && !OPENAI_FILE_SEARCH_ARRAY_FILTER_TYPES.includes(operator)
+    ) {
+      return requestValidationError(`${param}.type must be a comparison operator`, `${param}.type`);
+    }
+    if (typeof key !== "string" || !key.trim()) {
+      return requestValidationError(`${param}.key must be a non-empty string`, `${param}.key`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(filter, "value")) {
+      return requestValidationError(`${param}.value is required`, `${param}.value`);
+    }
+    return validateOpenAIFileSearchFilterValue(operator, filter.value, `${param}.value`);
+  }
+
+  for (const [plainKey, plainValue] of Object.entries(filter)) {
+    if (typeof plainKey !== "string" || !plainKey.trim()) {
+      return requestValidationError(`${param} keys must be non-empty strings`, param);
+    }
+    const plainValueError = validateOpenAIFileSearchFilterValue("eq", plainValue, `${param}.${plainKey}`);
+    if (plainValueError) return plainValueError;
+  }
+  return null;
+}
+
+function normalizeOpenAIFileSearchFilterType(value) {
+  if (value == null || value === "") return "";
+  const normalized = String(value).trim().toLowerCase();
+  const aliases = {
+    "=": "eq",
+    "==": "eq",
+    equals: "eq",
+    equal: "eq",
+    "!=": "ne",
+    "<>": "ne",
+    neq: "ne",
+    not_equal: "ne",
+    not_equals: "ne",
+    greater_than: "gt",
+    ">": "gt",
+    greater_than_or_equal: "gte",
+    ">=": "gte",
+    less_than: "lt",
+    "<": "lt",
+    less_than_or_equal: "lte",
+    "<=": "lte",
+    not_in: "nin",
+  };
+  return aliases[normalized] || normalized;
+}
+
+function validateOpenAIFileSearchFilterValue(operator, value, param) {
+  if (OPENAI_FILE_SEARCH_ARRAY_FILTER_TYPES.includes(operator)) {
+    if (!Array.isArray(value) || !value.length) {
+      return requestValidationError(`${param} must be a non-empty array for ${operator}`, param);
+    }
+    for (const [index, item] of value.entries()) {
+      if (!isOpenAIFileSearchScalarFilterValue(item)) {
+        return requestValidationError(`${param}.${index} must be a string, number, or boolean`, `${param}.${index}`);
+      }
+    }
+    return null;
+  }
+  if (!isOpenAIFileSearchScalarFilterValue(value)) {
+    return requestValidationError(`${param} must be a string, number, or boolean`, param);
+  }
+  return null;
+}
+
+function isOpenAIFileSearchScalarFilterValue(value) {
+  return typeof value === "string" || typeof value === "number" || typeof value === "boolean";
+}
+
+function isOpenAIResponsesWebSearchToolType(type) {
+  return type === "web_search"
+    || type === "web_search_2025_08_26"
+    || type === "web_search_preview"
+    || type === "web_search_preview_2025_03_11";
+}
+
+function validateOpenAIResponsesWebSearchTool(tool, param) {
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "search_context_size")
+    && (
+      typeof tool.search_context_size !== "string"
+      || !OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES.includes(tool.search_context_size)
+    )
+  ) {
+    return requestValidationError(
+      `${param}.search_context_size must be one of: ${OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES.join(", ")}`,
+      `${param}.search_context_size`,
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(tool, "user_location")) {
+    const locationError = validateOpenAIResponsesWebSearchUserLocation(tool.user_location, `${param}.user_location`);
+    if (locationError) return locationError;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(tool, "filters")) {
+    const filtersError = validateOpenAIResponsesWebSearchFilters(tool.filters, `${param}.filters`);
+    if (filtersError) return filtersError;
+  }
+
+  if (Object.prototype.hasOwnProperty.call(tool, "search_content_types")) {
+    const contentTypesError = validateOpenAIStringArray(tool.search_content_types, `${param}.search_content_types`, {
+      allowedValues: OPENAI_WEB_SEARCH_CONTENT_TYPE_VALUES,
+    });
+    if (contentTypesError) return contentTypesError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesWebSearchUserLocation(location, param) {
+  if (location == null) return null;
+  if (!isPlainObject(location)) {
+    return requestValidationError(`${param} must be an object or null`, param);
+  }
+  if (location.type !== "approximate") {
+    return requestValidationError(`${param}.type must be approximate`, `${param}.type`);
+  }
+  for (const field of ["country", "region", "city", "timezone"]) {
+    if (
+      Object.prototype.hasOwnProperty.call(location, field)
+      && location[field] !== null
+      && typeof location[field] !== "string"
+    ) {
+      return requestValidationError(`${param}.${field} must be a string or null`, `${param}.${field}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesWebSearchFilters(filters, param) {
+  if (filters == null) return null;
+  if (!isPlainObject(filters)) {
+    return requestValidationError(`${param} must be an object or null`, param);
+  }
+  if (!Object.prototype.hasOwnProperty.call(filters, "allowed_domains")) return null;
+  return validateOpenAIStringArray(filters.allowed_domains, `${param}.allowed_domains`, {
+    nullable: true,
+    nonEmptyString: true,
+  });
+}
+
+function validateOpenAIStringArray(value, param, options = {}) {
+  if (value == null && options.nullable) return null;
+  if (!Array.isArray(value)) {
+    return requestValidationError(`${param} must be an array${options.nullable ? " or null" : ""}`, param);
+  }
+  if (options.nonEmpty && !value.length) {
+    return requestValidationError(`${param} must be a non-empty array`, param);
+  }
+  for (const [index, item] of value.entries()) {
+    const itemParam = `${param}.${index}`;
+    if (typeof item !== "string") {
+      return requestValidationError(`${itemParam} must be a string`, itemParam);
+    }
+    if (options.nonEmptyString && !item) {
+      return requestValidationError(`${itemParam} must be a non-empty string`, itemParam);
+    }
+    if (options.allowedValues && !options.allowedValues.includes(item)) {
+      return requestValidationError(
+        `${itemParam} must be one of: ${options.allowedValues.join(", ")}`,
+        itemParam,
       );
     }
   }

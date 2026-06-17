@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Responses Hosted Search Tool Schema Validation
+
+- Rechecked the current official OpenAI OpenAPI schemas through the developer
+  docs/OpenAPI source:
+  - `FileSearchTool` requires `vector_store_ids` and exposes
+    `max_num_results`, `ranking_options`, and `filters`;
+  - current web-search tool variants include `web_search`,
+    `web_search_2025_08_26`, `web_search_preview`, and
+    `web_search_preview_2025_03_11`;
+  - web search exposes `search_context_size`, approximate `user_location`,
+    allowed-domain filters, and preview `search_content_types`.
+- Tightened local Responses request validation before provider or adapter work:
+  - `file_search` tools now validate `vector_store_ids`,
+    `max_num_results`, ranker names, score thresholds, hybrid-search weights,
+    and recursive comparison/compound filters;
+  - the existing local `tool_resources.file_search.vector_store_ids` fallback
+    remains supported and is validated as a non-empty string array;
+  - `web_search*` tools now validate search context size, direct approximate
+    location fields, allowed domains, and preview content-type values.
+- Extended local hosted-tool execution:
+  - `web_search_2025_08_26` is now recognized by the local web-search adapter
+    instead of falling through as an unsupported hosted tool.
+- Regression coverage updated:
+  - the existing Responses tools validation table now rejects malformed
+    `file_search` and `web_search*` schemas across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - mock-provider integration covers the local `tool_resources.file_search`
+    fallback and the current `web_search_2025_08_26` alias entering local
+    web-search execution.
+- Documentation updated:
+  - compatibility matrix documents hosted search tool validation boundaries
+    and the local `tool_resources.file_search.vector_store_ids` extension;
+  - evaluation plan now requires hosted search schema regression coverage.
+- Validation:
+  - `node --check src/bridge/server.js src/bridge/web_search.js
+    test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "web_search|file_search|Responses tools" test/server.test.js` passes:
+    24 tests;
+  - `npm test` passes: 358 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully;
+  - explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions.
+- Runtime/storage check:
+  - `/` has 20 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `file_search.max_num_results` and
+    `web_search_2025_08_26.search_context_size` requests return
+    `400 invalid_request_parameter` before upstream provider work.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or deployment env files
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Responses and Chat `allowed_tools` Tool Choice Mapping
 
 - Rechecked the official OpenAI OpenAPI schemas for tool choice through the
