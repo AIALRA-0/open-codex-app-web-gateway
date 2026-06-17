@@ -793,6 +793,63 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "function_call",
+          call_id: "",
+          name: "lookup_order",
+          arguments: "{}",
+        }],
+        param: "input.0.call_id",
+        message: "input.0.call_id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "function_call",
+          call_id: "call_lookup",
+          name: 7,
+          arguments: "{}",
+        }],
+        param: "input.0.name",
+        message: "input.0.name must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "function_call",
+          call_id: "call_lookup",
+          namespace: 7,
+          name: "lookup_order",
+          arguments: "{}",
+        }],
+        param: "input.0.namespace",
+        message: "input.0.namespace must be a string or null",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "function_call",
+          call_id: "call_lookup",
+          name: "lookup_order",
+          arguments: { order_id: "ORDER-8831" },
+        }],
+        param: "input.0.arguments",
+        message: "input.0.arguments must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "function_call",
+          call_id: "call_lookup",
+          name: "lookup_order",
+          arguments: "{}",
+          status: "failed",
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, completed, incomplete",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "computer_call_output",
           output: { type: "computer_screenshot", image_url: "https://example.test/screen.png" },
         }],

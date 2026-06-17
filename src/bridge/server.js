@@ -5329,6 +5329,10 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     const error = validateOpenAIResponsesToolCallOutputInputItem(value, param);
     if (error) return error;
   }
+  if (value.type === "function_call") {
+    const error = validateOpenAIResponsesFunctionCallInputItem(value, param);
+    if (error) return error;
+  }
   if (value.type === "custom_tool_call") {
     const error = validateOpenAIResponsesCustomToolCallInputItem(value, param);
     if (error) return error;
@@ -5495,6 +5499,30 @@ function validateOpenAIResponsesToolCallOutputInputItem(item, param) {
       ? validateOpenAIResponsesInputImageDetails(part, partParam)
       : validateOpenAIResponsesInputFileDetails(part, partParam);
     if (detailError) return detailError;
+  }
+  return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function validateOpenAIResponsesFunctionCallInputItem(item, param) {
+  const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+  if (idError) return idError;
+
+  const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
+  if (callIdError) return callIdError;
+
+  if (
+    Object.prototype.hasOwnProperty.call(item, "namespace")
+    && item.namespace !== null
+    && typeof item.namespace !== "string"
+  ) {
+    return requestValidationError(`${param}.namespace must be a string or null`, `${param}.namespace`);
+  }
+
+  if (typeof item.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (typeof item.arguments !== "string") {
+    return requestValidationError(`${param}.arguments must be a string`, `${param}.arguments`);
   }
   return validateOpenAIResponsesInputItemStatus(item, param);
 }

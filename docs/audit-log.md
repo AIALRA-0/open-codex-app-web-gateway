@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-17 Responses Function Call Input Validation
+
+- Rechecked the current official Responses item schema through the OpenAI docs
+  MCP workflow and the official `openai-openapi` YAML for
+  `FunctionToolCall`:
+  - `type:"function_call"` carries required `call_id`, `name`, and
+    `arguments`;
+  - `arguments` is a JSON string, not an object;
+  - returned `status` values are `in_progress`, `completed`, or `incomplete`;
+  - `namespace` is a string field when present.
+- Tightened Responses input validation before provider calls:
+  - `function_call` input items now require a non-empty `call_id`;
+  - `name` and `arguments` must be strings before the translator can replay
+    the item as Chat `tool_calls[]`;
+  - optional `id` and `namespace` are checked for string/null shape;
+  - malformed `status` values are rejected consistently with other Responses
+    replay items.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `function_call` items across `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`;
+  - existing function/tool-call mapping regressions remain green.
+- Documentation updated:
+  - compatibility matrix now records pre-provider validation and direct
+    assistant `tool_calls[]` replay for `function_call` input items.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "Responses endpoints validate
+    input image and file detail" test/server.test.js` passes: 1 test;
+  - targeted `node --test --test-name-pattern "function_call|function call|tool
+    call" test/translator.test.js test/server.test.js` passes: 10 tests;
+  - full `node --test test/*.test.js` passes: 366 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `function_call.arguments` object input-token request
+    returns `400 invalid_request_parameter` with
+    `param:"input.0.arguments"`;
+  - public valid `function_call` plus `function_call_output` input-token
+    request returns 200 with `input_tokens:77`.
+- Runtime/storage check:
+  - `/` has 11 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Message Input Validation
 
 - Rechecked the current official OpenAI Responses schema through the developer
