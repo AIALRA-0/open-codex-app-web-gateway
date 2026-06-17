@@ -364,6 +364,41 @@ class LocalOrganizationAdminStore {
     return path.join(dir, `${clean}.json`);
   }
 
+  projectRolePath(projectId, roleId) {
+    const clean = safeId(roleId);
+    const dir = this.projectResourceDir(projectId, "roles");
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  projectUserRoleDir(projectId, userId) {
+    const clean = safeId(userId);
+    const dir = this.projectResourceDir(projectId, "user_roles");
+    if (!clean || !dir) return null;
+    return path.join(dir, clean);
+  }
+
+  projectUserRolePath(projectId, userId, roleId) {
+    const clean = safeId(roleId);
+    const dir = this.projectUserRoleDir(projectId, userId);
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
+  projectGroupRoleDir(projectId, groupId) {
+    const clean = safeId(groupId);
+    const dir = this.projectResourceDir(projectId, "group_roles");
+    if (!clean || !dir) return null;
+    return path.join(dir, clean);
+  }
+
+  projectGroupRolePath(projectId, groupId, roleId) {
+    const clean = safeId(roleId);
+    const dir = this.projectGroupRoleDir(projectId, groupId);
+    if (!clean || !dir) return null;
+    return path.join(dir, `${clean}.json`);
+  }
+
   projectSpendAlertPath(projectId, alertId) {
     const clean = safeId(alertId);
     const dir = this.projectResourceDir(projectId, "spend_alerts");
@@ -1066,6 +1101,7 @@ class LocalOrganizationAdminStore {
     this.removeDir(path.join(this.organizationGroupResourcesDir(), group.id));
     for (const project of this.listProjects({ includeArchived: true })) {
       try { fs.unlinkSync(this.projectGroupPath(project.id, group.id)); } catch {}
+      this.removeDir(this.projectGroupRoleDir(project.id, group.id));
     }
     this.recordAuditLog("group.deleted", {
       id: group.id,
@@ -1493,6 +1529,7 @@ class LocalOrganizationAdminStore {
     }
     for (const project of this.listProjects({ includeArchived: true })) {
       try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
+      this.removeDir(this.projectUserRoleDir(project.id, user.id));
     }
     this.recordAuditLog("user.deleted", {
       id: user.id,
@@ -2001,6 +2038,7 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.projectUserPath(project.id, user.id)); } catch {}
+    this.removeDir(this.projectUserRoleDir(project.id, user.id));
     this.recordAuditLog("user.deleted", {
       id: user.id,
       project_id: project.id,
@@ -2109,6 +2147,7 @@ class LocalOrganizationAdminStore {
       });
     }
     try { fs.unlinkSync(this.projectGroupPath(project.id, groupId)); } catch {}
+    this.removeDir(this.projectGroupRoleDir(project.id, groupId));
     this.recordAuditLog("project.group.deleted", {
       id: `project_group_${stableToken(`${project.id}:${groupId}`, 20)}`,
       project_id: project.id,
@@ -2122,6 +2161,291 @@ class LocalOrganizationAdminStore {
     });
     return {
       object: "project.group.deleted",
+      deleted: true,
+    };
+  }
+
+  createProjectRole(projectId, body = {}) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.role_name);
+    if (!name) {
+      throw organizationAdminError("role_name is required", {
+        code: "missing_required_parameter",
+        param: "role_name",
+      });
+    }
+    const permissions = this.normalizeRolePermissions(request.permissions);
+    const now = nowSeconds();
+    const role = {
+      id: `role_${randomToken(14)}`,
+      object: "role",
+      name,
+      description: optionalNullableString(request.description) ?? null,
+      permissions,
+      predefined_role: false,
+      resource_type: "api.project",
+      project_id: project.id,
+      created_at: now,
+      updated_at: now,
+      compatibility: localCompatibility("project_role_protocol_compatibility", {
+        locally_persisted: true,
+        project_id: project.id,
+      }),
+    };
+    this.writeJson(this.projectRolePath(project.id, role.id), role);
+    this.recordAuditLog("project.role.created", {
+      id: role.id,
+      project_id: project.id,
+      role_name: role.name,
+      permissions: role.permissions,
+      resource_type: role.resource_type,
+    }, {
+      projectId: project.id,
+      resourceId: role.id,
+    });
+    this.cleanup();
+    return this.projectRoleProjection(role);
+  }
+
+  listProjectRoles(projectId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    return this.listJsonFiles(this.projectResourceDir(project.id, "roles"))
+      .sort(compareCreatedThenIdAsc)
+      .map((role) => this.projectRoleProjection(role));
+  }
+
+  getProjectRole(projectId, roleId) {
+    return this.projectRoleProjection(this.getRequiredProjectRole(projectId, roleId));
+  }
+
+  updateProjectRole(projectId, roleId, body = {}) {
+    const role = this.getRequiredProjectRole(projectId, roleId);
+    if (role.predefined_role) {
+      throw organizationAdminError("predefined project roles cannot be updated", {
+        code: "predefined_project_role_update_not_supported",
+        param: "role_id",
+      });
+    }
+    const request = isPlainObject(body) ? body : {};
+    const name = optionalString(request.role_name);
+    if (name) role.name = name;
+    if (request.description !== undefined) role.description = optionalNullableString(request.description);
+    if (request.permissions !== undefined && request.permissions !== null) {
+      role.permissions = this.normalizeRolePermissions(request.permissions);
+    }
+    role.updated_at = nowSeconds();
+    role.compatibility = {
+      ...(isPlainObject(role.compatibility) ? role.compatibility : {}),
+      last_lifecycle_action: "update",
+    };
+    this.writeJson(this.projectRolePath(role.project_id, role.id), role);
+    this.recordAuditLog("project.role.updated", {
+      id: role.id,
+      project_id: role.project_id,
+      changes_requested: {
+        ...(name ? { role_name: name } : {}),
+        ...(request.description !== undefined ? { description: role.description } : {}),
+        ...(request.permissions !== undefined ? { permissions: role.permissions } : {}),
+      },
+    }, {
+      projectId: role.project_id,
+      resourceId: role.id,
+    });
+    return this.projectRoleProjection(role);
+  }
+
+  deleteProjectRole(projectId, roleId) {
+    const role = this.getRequiredProjectRole(projectId, roleId);
+    if (role.predefined_role) {
+      throw organizationAdminError("predefined project roles cannot be deleted", {
+        code: "predefined_project_role_delete_not_supported",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectRolePath(role.project_id, role.id)); } catch {}
+    for (const userRoleDir of this.listProjectUserRoleDirs(role.project_id)) {
+      try { fs.unlinkSync(path.join(userRoleDir, `${role.id}.json`)); } catch {}
+    }
+    for (const groupRoleDir of this.listProjectGroupRoleDirs(role.project_id)) {
+      try { fs.unlinkSync(path.join(groupRoleDir, `${role.id}.json`)); } catch {}
+    }
+    this.recordAuditLog("project.role.deleted", {
+      id: role.id,
+      project_id: role.project_id,
+    }, {
+      projectId: role.project_id,
+      resourceId: role.id,
+    });
+    return {
+      object: "project.role.deleted",
+      id: role.id,
+      deleted: true,
+    };
+  }
+
+  assignProjectUserRole(projectId, userId, body = {}) {
+    const user = this.getProjectUser(projectId, userId);
+    const role = this.getRequiredProjectRole(projectId, this.requiredRoleId(body));
+    const assignment = {
+      id: role.id,
+      role_id: role.id,
+      project_id: role.project_id,
+      principal_id: user.id,
+      principal_type: "user",
+      created_at: nowSeconds(),
+      compatibility: localCompatibility("project_user_role_assignment_protocol_compatibility", {
+        locally_persisted: true,
+        project_id: role.project_id,
+      }),
+    };
+    this.writeJson(this.projectUserRolePath(role.project_id, user.id, role.id), assignment);
+    this.recordAuditLog("project.role.assignment.created", {
+      id: `assignment_${stableToken(`${role.project_id}:${user.id}:${role.id}`, 20)}`,
+      project_id: role.project_id,
+      user_id: user.id,
+      resource_id: role.id,
+      resource_type: role.resource_type,
+    }, {
+      projectId: role.project_id,
+      resourceIds: [role.id, user.id],
+      actorEmails: [user.email],
+    });
+    this.cleanup();
+    return {
+      object: "project.user.role",
+      role: this.projectRoleProjection(role),
+      user: this.projectUserRoleSummary(user),
+      compatibility: clone(assignment.compatibility),
+    };
+  }
+
+  listProjectUserRoles(projectId, userId) {
+    const user = this.getProjectUser(projectId, userId);
+    return this.listJsonFiles(this.projectUserRoleDir(projectId, user.id))
+      .sort(compareCreatedThenIdAsc)
+      .map((assignment) => this.projectRoleAssignmentProjection(assignment));
+  }
+
+  getProjectUserRole(projectId, userId, roleId) {
+    const user = this.getProjectUser(projectId, userId);
+    const assignment = this.readJson(this.projectUserRolePath(projectId, user.id, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`project user role not found: ${roleId}`, {
+        status: 404,
+        code: "project_user_role_not_found",
+        param: "role_id",
+      });
+    }
+    return this.projectRoleAssignmentProjection(assignment);
+  }
+
+  deleteProjectUserRole(projectId, userId, roleId) {
+    const user = this.getProjectUser(projectId, userId);
+    const assignment = this.readJson(this.projectUserRolePath(projectId, user.id, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`project user role not found: ${roleId}`, {
+        status: 404,
+        code: "project_user_role_not_found",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectUserRolePath(projectId, user.id, roleId)); } catch {}
+    this.recordAuditLog("project.role.assignment.deleted", {
+      id: `assignment_${stableToken(`${projectId}:${user.id}:${roleId}`, 20)}`,
+      project_id: projectId,
+      user_id: user.id,
+      resource_id: roleId,
+    }, {
+      projectId,
+      resourceIds: [roleId, user.id],
+      actorEmails: [user.email],
+    });
+    return {
+      object: "project.user.role.deleted",
+      deleted: true,
+    };
+  }
+
+  assignProjectGroupRole(projectId, groupId, body = {}) {
+    const group = this.getProjectGroup(projectId, groupId);
+    const role = this.getRequiredProjectRole(projectId, this.requiredRoleId(body));
+    const assignment = {
+      id: role.id,
+      role_id: role.id,
+      project_id: role.project_id,
+      principal_id: group.group_id,
+      principal_type: "group",
+      created_at: nowSeconds(),
+      compatibility: localCompatibility("project_group_role_assignment_protocol_compatibility", {
+        locally_persisted: true,
+        project_id: role.project_id,
+      }),
+    };
+    this.writeJson(this.projectGroupRolePath(role.project_id, group.group_id, role.id), assignment);
+    this.recordAuditLog("project.role.assignment.created", {
+      id: `assignment_${stableToken(`${role.project_id}:${group.group_id}:${role.id}`, 20)}`,
+      project_id: role.project_id,
+      group_id: group.group_id,
+      resource_id: role.id,
+      resource_type: role.resource_type,
+    }, {
+      projectId: role.project_id,
+      resourceIds: [role.id, group.group_id],
+    });
+    this.cleanup();
+    return {
+      object: "project.group.role",
+      role: this.projectRoleProjection(role),
+      group: this.projectGroupRoleSummary(group),
+      compatibility: clone(assignment.compatibility),
+    };
+  }
+
+  listProjectGroupRoles(projectId, groupId) {
+    const group = this.getProjectGroup(projectId, groupId);
+    return this.listJsonFiles(this.projectGroupRoleDir(projectId, group.group_id))
+      .sort(compareCreatedThenIdAsc)
+      .map((assignment) => this.projectRoleAssignmentProjection(assignment));
+  }
+
+  getProjectGroupRole(projectId, groupId, roleId) {
+    const group = this.getProjectGroup(projectId, groupId);
+    const assignment = this.readJson(this.projectGroupRolePath(projectId, group.group_id, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`project group role not found: ${roleId}`, {
+        status: 404,
+        code: "project_group_role_not_found",
+        param: "role_id",
+      });
+    }
+    return this.projectRoleAssignmentProjection(assignment);
+  }
+
+  deleteProjectGroupRole(projectId, groupId, roleId) {
+    const group = this.getProjectGroup(projectId, groupId);
+    const assignment = this.readJson(this.projectGroupRolePath(projectId, group.group_id, roleId));
+    if (!assignment) {
+      throw organizationAdminError(`project group role not found: ${roleId}`, {
+        status: 404,
+        code: "project_group_role_not_found",
+        param: "role_id",
+      });
+    }
+    try { fs.unlinkSync(this.projectGroupRolePath(projectId, group.group_id, roleId)); } catch {}
+    this.recordAuditLog("project.role.assignment.deleted", {
+      id: `assignment_${stableToken(`${projectId}:${group.group_id}:${roleId}`, 20)}`,
+      project_id: projectId,
+      group_id: group.group_id,
+      resource_id: roleId,
+    }, {
+      projectId,
+      resourceIds: [roleId, group.group_id],
+    });
+    return {
+      object: "project.group.role.deleted",
       deleted: true,
     };
   }
@@ -2713,6 +3037,20 @@ class LocalOrganizationAdminStore {
     return role;
   }
 
+  getRequiredProjectRole(projectId, roleId) {
+    const project = this.getRequiredProject(projectId);
+    this.assertProjectActive(project);
+    const role = this.readJson(this.projectRolePath(project.id, roleId));
+    if (!role) {
+      throw organizationAdminError(`project role not found: ${roleId}`, {
+        status: 404,
+        code: "project_role_not_found",
+        param: "role_id",
+      });
+    }
+    return role;
+  }
+
   getRequiredOrganizationGroup(groupId) {
     const group = this.readJson(this.organizationGroupPath(groupId));
     if (!group) {
@@ -2779,6 +3117,20 @@ class LocalOrganizationAdminStore {
     };
   }
 
+  projectRoleProjection(role) {
+    return {
+      id: role.id,
+      object: "role",
+      name: role.name,
+      description: role.description ?? null,
+      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
+      predefined_role: role.predefined_role === true,
+      resource_type: role.resource_type || "api.project",
+      project_id: role.project_id ?? null,
+      compatibility: isPlainObject(role.compatibility) ? clone(role.compatibility) : undefined,
+    };
+  }
+
   organizationRoleAssignmentProjection(assignment) {
     const role = this.getRequiredOrganizationRole(assignment.role_id || assignment.id);
     return {
@@ -2797,6 +3149,50 @@ class LocalOrganizationAdminStore {
       predefined_role: role.predefined_role === true,
       resource_type: role.resource_type || "api.organization",
       updated_at: role.updated_at ?? null,
+    };
+  }
+
+  projectRoleAssignmentProjection(assignment) {
+    const role = this.getRequiredProjectRole(assignment.project_id, assignment.role_id || assignment.id);
+    return {
+      id: role.id,
+      assignment_sources: [{
+        principal_id: assignment.principal_id,
+        principal_type: assignment.principal_type,
+        project_id: assignment.project_id,
+      }],
+      created_at: assignment.created_at ?? role.created_at ?? null,
+      created_by: null,
+      created_by_user_obj: null,
+      description: role.description ?? null,
+      metadata: null,
+      name: role.name,
+      permissions: Array.isArray(role.permissions) ? [...role.permissions] : [],
+      predefined_role: role.predefined_role === true,
+      project_id: role.project_id ?? null,
+      resource_type: role.resource_type || "api.project",
+      updated_at: role.updated_at ?? null,
+    };
+  }
+
+  projectUserRoleSummary(user) {
+    return {
+      id: user.id,
+      object: "organization.project.user",
+      email: user.email ?? null,
+      name: user.name ?? null,
+      role: user.role ?? null,
+    };
+  }
+
+  projectGroupRoleSummary(group) {
+    return {
+      id: group.group_id,
+      object: "project.group",
+      project_id: group.project_id,
+      group_id: group.group_id,
+      group_name: group.group_name ?? group.group_id,
+      group_type: group.group_type || "group",
     };
   }
 
@@ -3274,11 +3670,15 @@ class LocalOrganizationAdminStore {
       }
     }
     for (const projectDir of this.listProjectResourceDirs()) {
+      const projectId = path.basename(projectDir);
       for (const resource of [
         "api_keys",
         "service_accounts",
         "users",
         "groups",
+        "roles",
+        "user_roles",
+        "group_roles",
         "certificates",
         "spend_alerts",
         "data_retention",
@@ -3291,6 +3691,42 @@ class LocalOrganizationAdminStore {
           try { fs.unlinkSync(entry.filePath); } catch {}
         }
       }
+      for (const userRoleDir of this.listProjectUserRoleDirs(projectId)) {
+        const files = this.listCleanupEntries(userRoleDir);
+        for (const entry of files.slice(this.maxRecords)) {
+          try { fs.unlinkSync(entry.filePath); } catch {}
+        }
+      }
+      for (const groupRoleDir of this.listProjectGroupRoleDirs(projectId)) {
+        const files = this.listCleanupEntries(groupRoleDir);
+        for (const entry of files.slice(this.maxRecords)) {
+          try { fs.unlinkSync(entry.filePath); } catch {}
+        }
+      }
+    }
+  }
+
+  listProjectUserRoleDirs(projectId) {
+    this.ensureDir();
+    const dir = this.projectResourceDir(projectId, "user_roles");
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(dir, entry.name));
+    } catch {
+      return [];
+    }
+  }
+
+  listProjectGroupRoleDirs(projectId) {
+    this.ensureDir();
+    const dir = this.projectResourceDir(projectId, "group_roles");
+    try {
+      return fs.readdirSync(dir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => path.join(dir, entry.name));
+    } catch {
+      return [];
     }
   }
 

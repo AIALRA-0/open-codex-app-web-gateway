@@ -12964,6 +12964,44 @@ function handleOrganizationRoleDelete(res, organizationAdminStore, roleId) {
   sendJson(res, 200, organizationAdminStore.deleteOrganizationRole(roleId));
 }
 
+async function handleProjectRoleCreate(req, res, organizationAdminStore, projectId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project role request body must be a JSON object", {
+      code: "invalid_project_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.createProjectRole(projectId, body));
+}
+
+function handleProjectRolesList(res, organizationAdminStore, projectId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listProjectRoles(projectId),
+    url,
+    "asc",
+    1000,
+    1000,
+  ));
+}
+
+function handleProjectRoleGet(res, organizationAdminStore, projectId, roleId) {
+  sendJson(res, 200, organizationAdminStore.getProjectRole(projectId, roleId));
+}
+
+async function handleProjectRoleUpdate(req, res, organizationAdminStore, projectId, roleId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project role update body must be a JSON object", {
+      code: "invalid_project_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.updateProjectRole(projectId, roleId, body));
+}
+
+function handleProjectRoleDelete(res, organizationAdminStore, projectId, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectRole(projectId, roleId));
+}
+
 async function handleOrganizationGroupCreate(req, res, organizationAdminStore) {
   const body = await readJson(req);
   if (!isPlainObject(body)) {
@@ -13084,6 +13122,62 @@ function handleOrganizationGroupRoleGet(res, organizationAdminStore, groupId, ro
 
 function handleOrganizationGroupRoleDelete(res, organizationAdminStore, groupId, roleId) {
   sendJson(res, 200, organizationAdminStore.deleteOrganizationGroupRole(groupId, roleId));
+}
+
+async function handleProjectUserRoleCreate(req, res, organizationAdminStore, projectId, userId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project user role request body must be a JSON object", {
+      code: "invalid_project_user_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.assignProjectUserRole(projectId, userId, body));
+}
+
+function handleProjectUserRolesList(res, organizationAdminStore, projectId, userId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listProjectUserRoles(projectId, userId),
+    url,
+    "asc",
+    20,
+    1000,
+  ));
+}
+
+function handleProjectUserRoleGet(res, organizationAdminStore, projectId, userId, roleId) {
+  sendJson(res, 200, organizationAdminStore.getProjectUserRole(projectId, userId, roleId));
+}
+
+function handleProjectUserRoleDelete(res, organizationAdminStore, projectId, userId, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectUserRole(projectId, userId, roleId));
+}
+
+async function handleProjectGroupRoleCreate(req, res, organizationAdminStore, projectId, groupId) {
+  const body = await readJson(req);
+  if (!isPlainObject(body)) {
+    throw requestError("project group role request body must be a JSON object", {
+      code: "invalid_project_group_role_request",
+    });
+  }
+  sendJson(res, 200, organizationAdminStore.assignProjectGroupRole(projectId, groupId, body));
+}
+
+function handleProjectGroupRolesList(res, organizationAdminStore, projectId, groupId, url) {
+  sendJson(res, 200, paginateNextListWithDefaultOrder(
+    organizationAdminStore.listProjectGroupRoles(projectId, groupId),
+    url,
+    "asc",
+    20,
+    1000,
+  ));
+}
+
+function handleProjectGroupRoleGet(res, organizationAdminStore, projectId, groupId, roleId) {
+  sendJson(res, 200, organizationAdminStore.getProjectGroupRole(projectId, groupId, roleId));
+}
+
+function handleProjectGroupRoleDelete(res, organizationAdminStore, projectId, groupId, roleId) {
+  sendJson(res, 200, organizationAdminStore.deleteProjectGroupRole(projectId, groupId, roleId));
 }
 
 async function handleOrganizationInviteCreate(req, res, organizationAdminStore) {
@@ -18122,6 +18216,78 @@ function createServer(config = loadConfig()) {
         }
         if (action === "archive" && req.method === "POST") {
           handleOrganizationProjectArchive(res, organizationAdminStore, projectId);
+          return;
+        }
+      }
+
+      const projectUserRoleRoute = url.pathname.match(/^\/v1\/projects\/([^/]+)\/users\/([^/]+)\/roles(?:\/([^/]+))?$/);
+      if (projectUserRoleRoute) {
+        const projectId = decodeURIComponent(projectUserRoleRoute[1]);
+        const userId = decodeURIComponent(projectUserRoleRoute[2]);
+        const roleId = projectUserRoleRoute[3] ? decodeURIComponent(projectUserRoleRoute[3]) : "";
+        if (!roleId && req.method === "GET") {
+          handleProjectUserRolesList(res, organizationAdminStore, projectId, userId, url);
+          return;
+        }
+        if (!roleId && req.method === "POST") {
+          await handleProjectUserRoleCreate(req, res, organizationAdminStore, projectId, userId);
+          return;
+        }
+        if (roleId && req.method === "GET") {
+          handleProjectUserRoleGet(res, organizationAdminStore, projectId, userId, roleId);
+          return;
+        }
+        if (roleId && req.method === "DELETE") {
+          handleProjectUserRoleDelete(res, organizationAdminStore, projectId, userId, roleId);
+          return;
+        }
+      }
+
+      const projectGroupRoleRoute = url.pathname.match(/^\/v1\/projects\/([^/]+)\/groups\/([^/]+)\/roles(?:\/([^/]+))?$/);
+      if (projectGroupRoleRoute) {
+        const projectId = decodeURIComponent(projectGroupRoleRoute[1]);
+        const groupId = decodeURIComponent(projectGroupRoleRoute[2]);
+        const roleId = projectGroupRoleRoute[3] ? decodeURIComponent(projectGroupRoleRoute[3]) : "";
+        if (!roleId && req.method === "GET") {
+          handleProjectGroupRolesList(res, organizationAdminStore, projectId, groupId, url);
+          return;
+        }
+        if (!roleId && req.method === "POST") {
+          await handleProjectGroupRoleCreate(req, res, organizationAdminStore, projectId, groupId);
+          return;
+        }
+        if (roleId && req.method === "GET") {
+          handleProjectGroupRoleGet(res, organizationAdminStore, projectId, groupId, roleId);
+          return;
+        }
+        if (roleId && req.method === "DELETE") {
+          handleProjectGroupRoleDelete(res, organizationAdminStore, projectId, groupId, roleId);
+          return;
+        }
+      }
+
+      const projectRoleRoute = url.pathname.match(/^\/v1\/projects\/([^/]+)\/roles(?:\/([^/]+))?$/);
+      if (projectRoleRoute) {
+        const projectId = decodeURIComponent(projectRoleRoute[1]);
+        const roleId = projectRoleRoute[2] ? decodeURIComponent(projectRoleRoute[2]) : "";
+        if (!roleId && req.method === "GET") {
+          handleProjectRolesList(res, organizationAdminStore, projectId, url);
+          return;
+        }
+        if (!roleId && req.method === "POST") {
+          await handleProjectRoleCreate(req, res, organizationAdminStore, projectId);
+          return;
+        }
+        if (roleId && req.method === "GET") {
+          handleProjectRoleGet(res, organizationAdminStore, projectId, roleId);
+          return;
+        }
+        if (roleId && req.method === "POST") {
+          await handleProjectRoleUpdate(req, res, organizationAdminStore, projectId, roleId);
+          return;
+        }
+        if (roleId && req.method === "DELETE") {
+          handleProjectRoleDelete(res, organizationAdminStore, projectId, roleId);
           return;
         }
       }

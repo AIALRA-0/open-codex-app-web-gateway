@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-17 Project Role Short Paths
+
+- Rechecked the official OpenAI endpoint inventory through the OpenAI
+  developer docs MCP:
+  - `/v1/projects/{project_id}/roles`;
+  - `/v1/projects/{project_id}/roles/{role_id}`;
+  - `/v1/projects/{project_id}/users/{user_id}/roles`;
+  - `/v1/projects/{project_id}/users/{user_id}/roles/{role_id}`;
+  - `/v1/projects/{project_id}/groups/{group_id}/roles`;
+  - `/v1/projects/{project_id}/groups/{group_id}/roles/{role_id}`.
+- Closed the local 404 gap for those short paths:
+  - added project-scoped role storage under the existing local Organization
+    admin state tree with `resource_type:"api.project"` and explicit
+    `project_id`;
+  - added local project user/group role assignment storage, list/get/delete
+    projections, audit-log events, and cleanup when a project role, project
+    user, or project group access record is deleted;
+  - preserved archived-project rejection with `project_archived` and kept all
+    behavior local, with no upstream Chat provider calls.
+- Regression coverage added:
+  - creates, lists, retrieves, updates, and deletes a project-scoped role via
+    `/v1/projects/{project_id}/roles`;
+  - assigns the role to an existing project user and existing project group via
+    the official short-path role assignment families;
+  - verifies assignment-source projections, missing user/role errors,
+    invalid permission validation, role-delete assignment cleanup,
+    archived-project rejection, and zero provider calls.
+- Documentation updated:
+  - compatibility matrix now lists the project role and project user/group
+    assignment endpoint families;
+  - evaluation plan now tracks project-role short-path coverage separately from
+    organization-level role/group coverage.
+- Validation:
+  - `node --check src/bridge/local_organization_admin.js` passes;
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `Project role short paths manage local project role assignments`
+    regression passes;
+  - targeted project-role plus adjacent Organization roles/groups and project
+    groups regressions pass: 3 tests;
+  - `npm test` passes: 347 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level key/token pattern scan over source, tests, docs, and package
+    manifests returns no matches;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` created a local
+    project, project user, group, and project-scoped role, assigned and listed
+    user/group project roles through the official short paths, deleted the
+    temporary role assignments/role/user/group, archived the temporary project,
+    and confirmed archived project-role requests return `project_archived`.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Message Projection
 
 - Rechecked the official Chat Completions stored-message surface alongside the

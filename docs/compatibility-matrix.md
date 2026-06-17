@@ -74,6 +74,9 @@ Primary sources:
 - OpenAI Organization project model permissions endpoint family: https://api.openai.com/v1/organization/projects/{project_id}/model_permissions
 - OpenAI Organization project hosted tool permissions endpoint family: https://api.openai.com/v1/organization/projects/{project_id}/hosted_tool_permissions
 - OpenAI Organization roles OpenAPI operation `list-roles`: https://api.openai.com/v1/organization/roles
+- OpenAI project roles endpoint family: https://api.openai.com/v1/projects/{project_id}/roles
+- OpenAI project user/group role assignment endpoint family: https://api.openai.com/v1/projects/{project_id}/users/{user_id}/roles
+- OpenAI project group role assignment endpoint family: https://api.openai.com/v1/projects/{project_id}/groups/{group_id}/roles
 - OpenAI Organization groups OpenAPI operation `list-groups`: https://api.openai.com/v1/organization/groups
 - OpenAI Organization audit logs OpenAPI operation `list-audit-logs`: https://api.openai.com/v1/organization/audit_logs
 - OpenAI RBAC permissions guide: https://developers.openai.com/api/docs/guides/rbac#permissions
@@ -716,6 +719,19 @@ state.
 | `POST /v1/organization/groups/{group_id}/roles` | Implemented locally | Assigns an existing local role to an existing local group and returns `group.role` |
 | `GET /v1/organization/groups/{group_id}/roles/{role_id}` | Implemented locally | Retrieves a local group role assignment or returns `404 organization_group_role_not_found` |
 | `DELETE /v1/organization/groups/{group_id}/roles/{role_id}` | Implemented locally | Removes a local group role assignment and returns `group.role.deleted` |
+| `GET /v1/projects/{project_id}/roles` | Implemented locally | Lists local project-scoped custom `role` records with OpenAI-style cursor pagination; archived projects return `400 project_archived` |
+| `POST /v1/projects/{project_id}/roles` | Implemented locally | Creates a local project-scoped custom role from `role_name`, `description`, and non-empty de-duplicated `permissions`; returns `resource_type:"api.project"` and local compatibility metadata |
+| `GET /v1/projects/{project_id}/roles/{role_id}` | Implemented locally | Retrieves a local project role or returns `404 project_role_not_found` |
+| `POST /v1/projects/{project_id}/roles/{role_id}` | Implemented locally | Updates local project role `name`, `description`, and `permissions`; invalid permission arrays return `400 invalid_role_permissions` |
+| `DELETE /v1/projects/{project_id}/roles/{role_id}` | Implemented locally | Deletes a local project role, removes local project user/group assignments that reference it, records an audit event, and returns `project.role.deleted` |
+| `GET /v1/projects/{project_id}/users/{user_id}/roles` | Implemented locally | Lists local project roles directly assigned to an existing project user, including assignment-source metadata and `project_id` |
+| `POST /v1/projects/{project_id}/users/{user_id}/roles` | Implemented locally | Assigns an existing local project role to an existing project user and returns `project.user.role` |
+| `GET /v1/projects/{project_id}/users/{user_id}/roles/{role_id}` | Implemented locally | Retrieves a local project user role assignment or returns `404 project_user_role_not_found` |
+| `DELETE /v1/projects/{project_id}/users/{user_id}/roles/{role_id}` | Implemented locally | Removes a local project user role assignment and returns `project.user.role.deleted` |
+| `GET /v1/projects/{project_id}/groups/{group_id}/roles` | Implemented locally | Lists local project roles directly assigned to an existing project group access record, including assignment-source metadata and `project_id` |
+| `POST /v1/projects/{project_id}/groups/{group_id}/roles` | Implemented locally | Assigns an existing local project role to an existing project group access record and returns `project.group.role` |
+| `GET /v1/projects/{project_id}/groups/{group_id}/roles/{role_id}` | Implemented locally | Retrieves a local project group role assignment or returns `404 project_group_role_not_found` |
+| `DELETE /v1/projects/{project_id}/groups/{group_id}/roles/{role_id}` | Implemented locally | Removes a local project group role assignment and returns `project.group.role.deleted` |
 | `GET /v1/organization/projects` | Implemented locally | Lists local `organization.project` records with OpenAI-style `object:"list"`, `first_id`, `last_id`, and `has_more`; excludes archived projects unless `include_archived=true` |
 | `POST /v1/organization/projects` | Implemented locally | Creates a local `organization.project` with `status:"active"`, `archived_at:null`, and compatibility metadata; requires `name` |
 | `GET /v1/organization/projects/{project_id}` | Implemented locally | Retrieves a local project or returns `404 project_not_found` |
