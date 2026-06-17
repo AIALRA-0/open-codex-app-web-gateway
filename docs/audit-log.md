@@ -1,5 +1,81 @@
 # Audit Log
 
+## 2026-06-17 Project RBAC List Query Validation
+
+- Rechecked current official/generated OpenAI SDK sources for the project
+  RBAC list slice:
+  - `openai-node` generated
+    `src/resources/admin/organization/projects/roles.ts` documents
+    `client.admin.organization.projects.roles.list()` as a `NextCursorPage`
+    and `RoleListParams extends NextCursorPageParams` with
+    `order:"asc"|"desc"`;
+  - `openai-node` generated
+    `src/resources/admin/organization/projects/users/roles.ts` documents
+    `client.admin.organization.projects.users.roles.list()` as a
+    `NextCursorPage` and `RoleListParams extends NextCursorPageParams` with
+    `project_id` path metadata and `order:"asc"|"desc"`;
+  - `openai-node` generated
+    `src/resources/admin/organization/projects/groups/roles.ts` documents
+    `client.admin.organization.projects.groups.roles.list()` as a
+    `NextCursorPage` and `RoleListParams extends NextCursorPageParams` with
+    `project_id` path metadata and `order:"asc"|"desc"`.
+- Tightened local project RBAC list behavior:
+  - `GET /v1/projects/{project_id}/roles`,
+    `GET /v1/projects/{project_id}/users/{user_id}/roles`, and
+    `GET /v1/projects/{project_id}/groups/{group_id}/roles` now validate SDK
+    list parameters before listing local records;
+  - each endpoint validates `limit` from 0 through 1000, single `after`, and
+    `order:"asc"|"desc"`;
+  - repeated scalar values for `limit`, `after`, and `order` return
+    OpenAI-style HTTP 400 errors;
+  - `limit=0` is now preserved for these next-cursor lists and returns an
+    empty page with `has_more:true` when data exists and `next:null`;
+  - unsupported `before` query values are stripped before pagination;
+  - existing defaults are preserved: 1000 for project role definitions and 20
+    for project user/group role assignment lists.
+- Regression coverage updated:
+  - the project role short-path lifecycle test now creates two local project
+    roles, two direct project-user role assignments, and two direct
+    project-group role assignments to verify `limit=0`, `order=desc`, `after`,
+    ignored `before`, invalid limits, invalid order, repeated scalar errors,
+    cleanup of all temporary records, archived-project rejection, and zero
+    upstream provider calls for all three project RBAC list endpoints.
+- Documentation updated:
+  - compatibility matrix now records the SDK `NextCursorPage` contract,
+    endpoint-specific local defaults, repeated scalar rejection, unsupported
+    `before` handling, and archived-project boundary for project RBAC lists.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Project role short paths manage local project role assignments" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public project RBAC smoke marker `project-rbac-query-smoke-mqiadakv`
+    created one temporary project, one temporary user, one temporary group, two
+    temporary project roles, two direct project-user role assignments, and two
+    direct project-group role assignments; verified `limit=0`, `order=desc`,
+    `after`, ignored `before`, invalid limits, invalid order, repeated scalar
+    errors, then deleted temporary assignments, roles, group, and archived the
+    temporary project.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.1G available,
+    96% used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5317 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or project RBAC smoke-test secrets were added to
+    source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization RBAC Sublist Query Validation
 
 - Rechecked current official/generated OpenAI SDK sources for the next

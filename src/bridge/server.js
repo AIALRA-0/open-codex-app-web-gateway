@@ -15976,9 +15976,14 @@ async function handleProjectRoleCreate(req, res, organizationAdminStore, project
 }
 
 function handleProjectRolesList(res, organizationAdminStore, projectId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listProjectRoles(projectId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     1000,
     1000,
@@ -16156,9 +16161,14 @@ async function handleProjectUserRoleCreate(req, res, organizationAdminStore, pro
 }
 
 function handleProjectUserRolesList(res, organizationAdminStore, projectId, userId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listProjectUserRoles(projectId, userId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     20,
     1000,
@@ -16184,9 +16194,14 @@ async function handleProjectGroupRoleCreate(req, res, organizationAdminStore, pr
 }
 
 function handleProjectGroupRolesList(res, organizationAdminStore, projectId, groupId, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listProjectGroupRoles(projectId, groupId),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     20,
     1000,

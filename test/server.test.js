@@ -25411,6 +25411,91 @@ test("Project role short paths manage local project role assignments", async () 
     assert.fail("Project role compatibility should not call upstream provider");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertInvalidListQuery = async (path, param, message) => {
+      const invalid = await fetch(`${baseUrl}${path}`);
+      assert.equal(invalid.status, 400, path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, path);
+    };
+    const assertNextCursorListQuery = async (path, expectedIds) => {
+      const listed = await fetch(`${baseUrl}${path}?limit=20`);
+      assert.equal(listed.status, 200, path);
+      const listedJson = await listed.json();
+      assert.equal(listedJson.object, "list");
+      assert.deepEqual(new Set(listedJson.data.map((entry) => entry.id)), new Set(expectedIds));
+      const idsAscending = listedJson.data.map((entry) => entry.id);
+
+      const zeroLimit = await fetch(`${baseUrl}${path}?limit=0`);
+      assert.equal(zeroLimit.status, 200, path);
+      assert.deepEqual(await zeroLimit.json(), {
+        object: "list",
+        data: [],
+        has_more: true,
+        next: null,
+      });
+
+      const desc = await fetch(`${baseUrl}${path}?order=desc&limit=1`);
+      assert.equal(desc.status, 200, path);
+      const descJson = await desc.json();
+      assert.equal(descJson.data.length, 1);
+      assert.equal(descJson.data[0].id, idsAscending.at(-1));
+      assert.equal(descJson.has_more, true);
+      assert.equal(descJson.next, idsAscending.at(-1));
+
+      const next = await fetch(`${baseUrl}${path}?order=desc&limit=1&after=${encodeURIComponent(descJson.next)}`);
+      assert.equal(next.status, 200, path);
+      const nextJson = await next.json();
+      assert.equal(nextJson.data.length, 1);
+      assert.equal(nextJson.data[0].id, idsAscending[0]);
+      assert.equal(nextJson.has_more, false);
+      assert.equal(nextJson.next, null);
+
+      const beforeIgnored = await fetch(`${baseUrl}${path}?order=desc&limit=2&before=${encodeURIComponent(idsAscending[0])}`);
+      assert.equal(beforeIgnored.status, 200, path);
+      assert.deepEqual(
+        (await beforeIgnored.json()).data.map((entry) => entry.id),
+        [idsAscending.at(-1), idsAscending[0]],
+      );
+
+      await assertInvalidListQuery(
+        `${path}?limit=-1`,
+        "limit",
+        "limit must be an integer between 0 and 1000",
+      );
+      await assertInvalidListQuery(
+        `${path}?limit=1001`,
+        "limit",
+        "limit must be an integer between 0 and 1000",
+      );
+      await assertInvalidListQuery(
+        `${path}?limit=1&limit=2`,
+        "limit",
+        "limit must be a single string query value",
+      );
+      await assertInvalidListQuery(
+        `${path}?after=${encodeURIComponent(idsAscending[0])}&after=${encodeURIComponent(idsAscending.at(-1))}`,
+        "after",
+        "after must be a single string query value",
+      );
+      await assertInvalidListQuery(
+        `${path}?order=newest`,
+        "order",
+        "order must be one of: asc, desc",
+      );
+      await assertInvalidListQuery(
+        `${path}?order=asc&order=desc`,
+        "order",
+        "order must be a single string query value",
+      );
+
+      return listedJson;
+    };
 
     const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
       method: "POST",
@@ -25471,11 +25556,22 @@ test("Project role short paths manage local project role assignments", async () 
     assert.equal(role.project_id, project.id);
     assert.equal(role.compatibility.actual_openai_admin_data, false);
 
-    const listedRoles = await fetch(`${baseUrl}/v1/projects/${project.id}/roles?limit=20`);
-    assert.equal(listedRoles.status, 200);
-    const listedRolesJson = await listedRoles.json();
-    assert.equal(listedRolesJson.object, "list");
-    assert.equal(listedRolesJson.data[0].id, role.id);
+    const secondRoleResponse = await fetch(`${baseUrl}/v1/projects/${project.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role_name: "Project Usage Auditor",
+        permissions: ["api.usage.read"],
+      }),
+    });
+    assert.equal(secondRoleResponse.status, 200);
+    const secondRole = await secondRoleResponse.json();
+
+    const listedRolesJson = await assertNextCursorListQuery(
+      `/v1/projects/${project.id}/roles`,
+      [role.id, secondRole.id],
+    );
+    assert.equal(listedRolesJson.data.find((entry) => entry.id === role.id).project_id, project.id);
 
     const fetchedRole = await fetch(`${baseUrl}/v1/projects/${project.id}/roles/${role.id}`);
     assert.equal(fetchedRole.status, 200);
@@ -25515,13 +25611,24 @@ test("Project role short paths manage local project role assignments", async () 
     assert.equal(userRoleJson.role.id, role.id);
     assert.equal(userRoleJson.user.id, user.id);
 
-    const userRoles = await fetch(`${baseUrl}/v1/projects/${project.id}/users/${user.id}/roles?limit=20`);
-    assert.equal(userRoles.status, 200);
-    const userRolesJson = await userRoles.json();
-    assert.equal(userRolesJson.object, "list");
-    assert.equal(userRolesJson.data[0].id, role.id);
-    assert.equal(userRolesJson.data[0].project_id, project.id);
-    assert.equal(userRolesJson.data[0].assignment_sources[0].principal_type, "user");
+    const secondUserRole = await fetch(`${baseUrl}/v1/projects/${project.id}/users/${user.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: secondRole.id }),
+    });
+    assert.equal(secondUserRole.status, 200);
+    const secondUserRoleJson = await secondUserRole.json();
+    assert.equal(secondUserRoleJson.object, "project.user.role");
+    assert.equal(secondUserRoleJson.role.id, secondRole.id);
+    assert.equal(secondUserRoleJson.user.id, user.id);
+
+    const userRolesJson = await assertNextCursorListQuery(
+      `/v1/projects/${project.id}/users/${user.id}/roles`,
+      [role.id, secondRole.id],
+    );
+    const listedUserRole = userRolesJson.data.find((entry) => entry.id === role.id);
+    assert.equal(listedUserRole.project_id, project.id);
+    assert.equal(listedUserRole.assignment_sources[0].principal_type, "user");
 
     const fetchedUserRole = await fetch(`${baseUrl}/v1/projects/${project.id}/users/${user.id}/roles/${role.id}`);
     assert.equal(fetchedUserRole.status, 200);
@@ -25538,11 +25645,25 @@ test("Project role short paths manage local project role assignments", async () 
     assert.equal(groupRoleJson.role.id, role.id);
     assert.equal(groupRoleJson.group.group_id, group.id);
 
-    const groupRoles = await fetch(`${baseUrl}/v1/projects/${project.id}/groups/${group.id}/roles?limit=20`);
-    assert.equal(groupRoles.status, 200);
-    const groupRolesJson = await groupRoles.json();
-    assert.equal(groupRolesJson.object, "list");
-    assert.equal(groupRolesJson.data[0].assignment_sources[0].principal_type, "group");
+    const secondGroupRole = await fetch(`${baseUrl}/v1/projects/${project.id}/groups/${group.id}/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ role_id: secondRole.id }),
+    });
+    assert.equal(secondGroupRole.status, 200);
+    const secondGroupRoleJson = await secondGroupRole.json();
+    assert.equal(secondGroupRoleJson.object, "project.group.role");
+    assert.equal(secondGroupRoleJson.role.id, secondRole.id);
+    assert.equal(secondGroupRoleJson.group.group_id, group.id);
+
+    const groupRolesJson = await assertNextCursorListQuery(
+      `/v1/projects/${project.id}/groups/${group.id}/roles`,
+      [role.id, secondRole.id],
+    );
+    assert.equal(
+      groupRolesJson.data.find((entry) => entry.id === role.id).assignment_sources[0].principal_type,
+      "group",
+    );
 
     const fetchedGroupRole = await fetch(`${baseUrl}/v1/projects/${project.id}/groups/${group.id}/roles/${role.id}`);
     assert.equal(fetchedGroupRole.status, 200);
@@ -25565,11 +25686,29 @@ test("Project role short paths manage local project role assignments", async () 
       deleted: true,
     });
 
+    const deletedSecondUserRole = await fetch(`${baseUrl}/v1/projects/${project.id}/users/${user.id}/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondUserRole.status, 200);
+    assert.deepEqual(await deletedSecondUserRole.json(), {
+      object: "project.user.role.deleted",
+      deleted: true,
+    });
+
     const deletedGroupRole = await fetch(`${baseUrl}/v1/projects/${project.id}/groups/${group.id}/roles/${role.id}`, {
       method: "DELETE",
     });
     assert.equal(deletedGroupRole.status, 200);
     assert.deepEqual(await deletedGroupRole.json(), {
+      object: "project.group.role.deleted",
+      deleted: true,
+    });
+
+    const deletedSecondGroupRole = await fetch(`${baseUrl}/v1/projects/${project.id}/groups/${group.id}/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondGroupRole.status, 200);
+    assert.deepEqual(await deletedSecondGroupRole.json(), {
       object: "project.group.role.deleted",
       deleted: true,
     });
@@ -25580,6 +25719,12 @@ test("Project role short paths manage local project role assignments", async () 
       body: JSON.stringify({ role_id: role.id }),
     });
     assert.equal(reassignedUserRole.status, 200);
+
+    const deletedSecondRole = await fetch(`${baseUrl}/v1/projects/${project.id}/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondRole.status, 200);
+    assert.equal((await deletedSecondRole.json()).id, secondRole.id);
 
     const deletedRole = await fetch(`${baseUrl}/v1/projects/${project.id}/roles/${role.id}`, {
       method: "DELETE",
