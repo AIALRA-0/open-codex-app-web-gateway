@@ -23730,15 +23730,6 @@ test("Organization certificates manage local organization and project activation
       }, testCase.path);
     }
 
-    const deletedSecondCertificate = await fetch(`${baseUrl}/v1/organization/certificates/${secondCreated.id}`, {
-      method: "DELETE",
-    });
-    assert.equal(deletedSecondCertificate.status, 200);
-    assert.deepEqual(await deletedSecondCertificate.json(), {
-      object: "certificate.deleted",
-      id: secondCreated.id,
-    });
-
     const invalidActivate = await fetch(`${baseUrl}/v1/organization/certificates/activate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -23782,25 +23773,110 @@ test("Organization certificates manage local organization and project activation
 
     const emptyProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
     assert.equal(emptyProjectCertificates.status, 200);
-    assert.equal((await emptyProjectCertificates.json()).data.length, 0);
+    assert.deepEqual(await emptyProjectCertificates.json(), {
+      object: "list",
+      data: [],
+      has_more: false,
+      last_id: null,
+    });
 
     const projectActivated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/activate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ certificate_ids: [created.id] }),
+      body: JSON.stringify({ certificate_ids: [created.id, secondCreated.id] }),
     });
     assert.equal(projectActivated.status, 200);
     const projectActivatedJson = await projectActivated.json();
     assert.equal(projectActivatedJson.object, "organization.project.certificate.activation");
     assert.equal(projectActivatedJson.data[0].object, "organization.project.certificate");
-    assert.equal(projectActivatedJson.data[0].active, true);
+    assert.deepEqual(new Set(projectActivatedJson.data.map((entry) => entry.id)), new Set([
+      created.id,
+      secondCreated.id,
+    ]));
+    assert.ok(projectActivatedJson.data.every((entry) => entry.active === true));
 
-    const listedProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
+    const listedProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=10`);
     assert.equal(listedProjectCertificates.status, 200);
     const listedProjectCertificatesJson = await listedProjectCertificates.json();
-    assert.equal(listedProjectCertificatesJson.data.length, 1);
-    assert.equal(listedProjectCertificatesJson.data[0].id, created.id);
-    assert.equal(listedProjectCertificatesJson.data[0].active, true);
+    assert.equal(listedProjectCertificatesJson.object, "list");
+    assert.equal(listedProjectCertificatesJson.data.length, 2);
+    assert.deepEqual(new Set(listedProjectCertificatesJson.data.map((entry) => entry.id)), new Set([
+      created.id,
+      secondCreated.id,
+    ]));
+    assert.ok(listedProjectCertificatesJson.data.every((entry) => entry.active === true));
+    assert.equal(listedProjectCertificatesJson.has_more, false);
+    assert.equal(listedProjectCertificatesJson.last_id, listedProjectCertificatesJson.data.at(-1).id);
+    assert.equal(Object.prototype.hasOwnProperty.call(listedProjectCertificatesJson, "first_id"), false);
+    const projectCertificateIdsAscending = listedProjectCertificatesJson.data.map((entry) => entry.id);
+
+    const defaultProjectCertificatePage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?limit=1`);
+    assert.equal(defaultProjectCertificatePage.status, 200);
+    const defaultProjectCertificatePageJson = await defaultProjectCertificatePage.json();
+    assert.equal(defaultProjectCertificatePageJson.data.length, 1);
+    assert.equal(defaultProjectCertificatePageJson.data[0].id, projectCertificateIdsAscending.at(-1));
+    assert.equal(defaultProjectCertificatePageJson.has_more, true);
+    assert.equal(defaultProjectCertificatePageJson.last_id, projectCertificateIdsAscending.at(-1));
+
+    const nextProjectCertificatePage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=1&after=${encodeURIComponent(projectCertificateIdsAscending[0])}`);
+    assert.equal(nextProjectCertificatePage.status, 200);
+    const nextProjectCertificatePageJson = await nextProjectCertificatePage.json();
+    assert.equal(nextProjectCertificatePageJson.data.length, 1);
+    assert.equal(nextProjectCertificatePageJson.data[0].id, projectCertificateIdsAscending[1]);
+    assert.equal(nextProjectCertificatePageJson.has_more, false);
+    assert.equal(nextProjectCertificatePageJson.last_id, projectCertificateIdsAscending[1]);
+
+    const beforeIgnoredProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=2&before=${encodeURIComponent(projectCertificateIdsAscending[1])}`);
+    assert.equal(beforeIgnoredProjectCertificates.status, 200);
+    assert.deepEqual(
+      (await beforeIgnoredProjectCertificates.json()).data.map((entry) => entry.id),
+      projectCertificateIdsAscending,
+    );
+
+    const invalidProjectCertificateListCases = [
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?limit=0`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?limit=1&limit=2`,
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?after=${encodeURIComponent(projectCertificateIdsAscending[0])}&after=${encodeURIComponent(projectCertificateIdsAscending[1])}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?order=newest`,
+        message: "order must be one of: asc, desc",
+        param: "order",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/certificates?order=asc&order=desc`,
+        message: "order must be a single string query value",
+        param: "order",
+      },
+    ];
+    for (const testCase of invalidProjectCertificateListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const deleteWhileProjectActive = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`, {
       method: "DELETE",
@@ -23811,14 +23887,19 @@ test("Organization certificates manage local organization and project activation
     const projectDeactivated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates/deactivate`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ certificate_ids: [created.id] }),
+      body: JSON.stringify({ certificate_ids: [created.id, secondCreated.id] }),
     });
     assert.equal(projectDeactivated.status, 200);
-    assert.equal((await projectDeactivated.json()).data[0].active, false);
+    const projectDeactivatedJson = await projectDeactivated.json();
+    assert.deepEqual(new Set(projectDeactivatedJson.data.map((entry) => entry.id)), new Set([
+      created.id,
+      secondCreated.id,
+    ]));
+    assert.ok(projectDeactivatedJson.data.every((entry) => entry.active === false));
 
     const listedInactiveProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates`);
     assert.equal(listedInactiveProjectCertificates.status, 200);
-    assert.equal((await listedInactiveProjectCertificates.json()).data[0].active, false);
+    assert.ok((await listedInactiveProjectCertificates.json()).data.every((entry) => entry.active === false));
 
     const createdLogs = await fetch(`${baseUrl}/v1/organization/audit_logs?event_types%5B%5D=certificate.created&resource_ids%5B%5D=${created.id}`);
     assert.equal(createdLogs.status, 200);
@@ -23836,6 +23917,15 @@ test("Organization certificates manage local organization and project activation
     assert.deepEqual(await deleted.json(), {
       object: "certificate.deleted",
       id: created.id,
+    });
+
+    const deletedSecondCertificate = await fetch(`${baseUrl}/v1/organization/certificates/${secondCreated.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondCertificate.status, 200);
+    assert.deepEqual(await deletedSecondCertificate.json(), {
+      object: "certificate.deleted",
+      id: secondCreated.id,
     });
 
     const missing = await fetch(`${baseUrl}/v1/organization/certificates/${created.id}`);

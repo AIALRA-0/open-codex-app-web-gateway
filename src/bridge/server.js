@@ -16481,9 +16481,14 @@ function handleOrganizationProjectGroupDelete(res, organizationAdminStore, proje
 }
 
 function handleOrganizationProjectCertificatesList(res, organizationAdminStore, projectId, url) {
-  sendJson(res, 200, paginateListWithDefaultOrder(
+  const queryError = validateOpenAIProjectCertificatesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateConversationCursorListWithDefaultOrder(
     organizationAdminStore.listProjectCertificates(projectId),
-    url,
+    officialProjectCertificatesListPaginationUrl(url),
     "desc",
     20,
     100,
@@ -16751,6 +16756,14 @@ function officialOrganizationCertificatesListPaginationUrl(url) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
   }
   return localUrl;
+}
+
+function validateOpenAIProjectCertificatesListQuery(url) {
+  return validateOpenAIOrganizationCertificatesListQuery(url);
+}
+
+function officialProjectCertificatesListPaginationUrl(url) {
+  return officialOrganizationCertificatesListPaginationUrl(url);
 }
 
 function validateOpenAISpendAlertsListQuery(url) {
@@ -18707,6 +18720,33 @@ function paginateListByCursorFieldWithDefaultOrder(items, url, cursorField, orde
     first_id: page[0]?.[cursorField] || null,
     last_id: page.at(-1)?.[cursorField] || null,
     has_more: data.length > page.length,
+  };
+}
+
+function paginateConversationCursorListWithDefaultOrder(items, url, order, fallbackLimit = 20, maxLimit = 100) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  return paginateConversationCursorList(items, localUrl, fallbackLimit, maxLimit);
+}
+
+function paginateConversationCursorList(items, url, fallbackLimit = 20, maxLimit = 100) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const limit = parseLimit(url.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    has_more: data.length > page.length,
+    last_id: page.at(-1)?.id || null,
   };
 }
 

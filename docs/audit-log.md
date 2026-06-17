@@ -1,5 +1,74 @@
 # Audit Log
 
+## 2026-06-17 Project Certificates List Query Validation
+
+- Rechecked current official/generated OpenAI SDK sources for the project
+  certificate list slice:
+  - `openai-node` generated
+    `src/resources/admin/organization/projects/certificates.ts` documents
+    `client.admin.organization.projects.certificates.list()` as a
+    `ConversationCursorPage`, `CertificateListParams extends
+    ConversationCursorPageParams`, and `order:"asc"|"desc"`;
+  - `openai-node` generated `src/core/pagination.ts` documents
+    `ConversationCursorPageParams` as `after` and `limit`, and the page
+    response as `data`, `has_more`, and `last_id`.
+- Tightened local project certificate list behavior:
+  - `GET /v1/organization/projects/{project_id}/certificates` now validates
+    SDK list parameters before listing local project certificate records;
+  - the endpoint validates `limit` from 1 through 100, single `after`, and
+    `order:"asc"|"desc"`;
+  - repeated scalar values for `limit`, `after`, and `order` return
+    OpenAI-style HTTP 400 errors;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official SDK list results;
+  - the response now uses `ConversationCursorPage` fields `data`, `has_more`,
+    and `last_id`, and no longer emits legacy `first_id`;
+  - the existing local default `limit=20` and default `order=desc` are
+    preserved.
+- Regression coverage updated:
+  - the Organization certificate lifecycle test now keeps two local
+    certificates through the project-scope phase, activates both on one local
+    project, and verifies empty project list output, `ConversationCursorPage`
+    output, `last_id` cursoring, default descending order, explicit ascending
+    order, `after`, ignored `before`, invalid limits, invalid order, repeated
+    scalar errors, inactive project-scope listing, deletion cleanup of both
+    certificates, archived-project rejection, and zero upstream provider
+    calls.
+- Documentation updated:
+  - compatibility matrix now records the SDK `ConversationCursorPage`
+    contract, `last_id` cursor field, local default limit/order, repeated
+    scalar rejection, unsupported `before` handling, and archived-project
+    boundary for project certificate lists.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization certificates manage local organization and project activation" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public project certificates smoke marker
+    `project-certificates-query-smoke-mqiaufuc` created one temporary project,
+    two temporary organization certificates, and two temporary project
+    certificate activations; verified empty list output, normal list output,
+    default descending order, `after`, ignored `before`, invalid limits,
+    invalid order, repeated scalar errors, then deactivated project
+    certificates, archived the project, and deleted both certificates.
+  - Disk guard after deployment: `/` 193G size, 185G used, 8.4G available,
+    96% used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5350 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, PEM private keys, or public smoke-test secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Groups List Query Validation
 
 - Rechecked current official/generated OpenAI SDK source for the project group
