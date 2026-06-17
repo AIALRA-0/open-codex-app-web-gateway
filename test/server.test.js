@@ -19647,6 +19647,17 @@ test("local Conversations API validates metadata and request contracts", async (
       });
     }
 
+    const repeatedAfter = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?after=${officialItemsJson.data[0].id}&after=${officialItemsJson.data[1].id}`);
+    assert.equal(repeatedAfter.status, 400);
+    assert.deepEqual(await repeatedAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const updateCases = [
       {
         name: "update-body-shape",

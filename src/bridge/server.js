@@ -17289,6 +17289,11 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
     sendError(res, 400, limitError.message, limitError);
     return;
   }
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) {
+    sendError(res, 400, afterError.message, afterError);
+    return;
+  }
   const items = conversationStore.listItems(conversationId);
   if (!items) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
