@@ -24366,12 +24366,19 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(response.headers.has("content-length"), false);
     const json = await response.json();
     assert.equal(json.choices[0].message.content, "chat-ok");
+    assert.equal(json.object, "chat.completion");
+    assert.equal(json.model, "mock-model");
+    assert.equal(Number.isInteger(json.created), true);
+    assert.equal(json.created > 0, true);
     assert.deepEqual(json.metadata, { suite: "chat-list" });
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
     assert.equal(fetched.status, 200);
     const fetchedJson = await fetched.json();
     assert.equal(fetchedJson.id, json.id);
+    assert.equal(fetchedJson.object, "chat.completion");
+    assert.equal(fetchedJson.model, "mock-model");
+    assert.equal(fetchedJson.created, json.created);
     assert.deepEqual(fetchedJson.metadata, { suite: "chat-list" });
 
     const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
@@ -24471,6 +24478,12 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(listedJson.data.length, 2);
     assert.equal(listedJson.data[0].id, json.id);
     assert.equal(listedJson.data[1].id, secondJson.id);
+    assert.equal(listedJson.data[0].object, "chat.completion");
+    assert.equal(listedJson.data[0].model, "mock-model");
+    assert.equal(listedJson.data[0].created, json.created);
+    assert.equal(listedJson.data[1].object, "chat.completion");
+    assert.equal(listedJson.data[1].model, "mock-model");
+    assert.equal(Number.isInteger(listedJson.data[1].created), true);
     assert.equal(listedJson.data[0].metadata.suite, "chat-updated");
     assert.equal(listedJson.data[0].metadata.owner, "bridge-test");
     assert.equal(listedJson.first_id, json.id);

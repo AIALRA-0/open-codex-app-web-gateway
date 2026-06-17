@@ -8729,6 +8729,11 @@ function normalizeStreamToolCall(toolCall) {
 }
 
 function attachStoredChatRequestFields(completion, request = {}) {
+  completion.object = "chat.completion";
+  if (!Number.isInteger(completion.created)) completion.created = nowSeconds();
+  if (typeof completion.model !== "string" || completion.model.length === 0) {
+    completion.model = typeof request.model === "string" && request.model.length ? request.model : "unknown";
+  }
   const fields = [
     "metadata",
     "tool_choice",

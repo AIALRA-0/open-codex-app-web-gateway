@@ -1,5 +1,45 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Object Shape Normalization
+
+- Rechecked the official OpenAI OpenAPI schema for Chat Completions:
+  - `POST /v1/chat/completions` returns a `CreateChatCompletionResponse`;
+  - the Chat completion response object requires `id`, `choices`, `created`,
+    `model`, and `object`;
+  - the stored Chat completion list uses the same Chat completion response
+    object for each listed item.
+- Tightened local stored Chat object shape:
+  - non-streaming `store:true` Chat completions now normalize local stored
+    objects before returning and persisting them;
+  - missing or invalid `object` is normalized to `chat.completion`;
+  - missing or invalid `created` is filled with the local Unix timestamp;
+  - missing or empty `model` is filled from the request model, with `unknown`
+    as a final fallback;
+  - provider-supplied valid fields and compatibility metadata remain preserved.
+- Regression coverage added:
+  - a mock provider response that omits `created` and `model` still produces a
+    stored Chat create response with `object:"chat.completion"`, integer
+    `created`, and request `model`;
+  - retrieve and list responses preserve the same normalized fields.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe stored Chat object
+    shape normalization.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle test passes.
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes.
+  - local and public smoke created temporary `store:true` Chat completions,
+    confirmed create, retrieve, and metadata-filtered list responses expose
+    `object:"chat.completion"`, integer `created`, and string `model`, then
+    deleted the temporary records.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Create Nullable Metadata
 
 - Rechecked the official OpenAI OpenAPI schema for `POST /v1/chat/completions`:
