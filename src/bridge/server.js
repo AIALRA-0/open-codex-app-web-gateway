@@ -17578,6 +17578,13 @@ async function handleFineTuningCheckpointPermissionDelete(req, res, fineTuningSt
 }
 
 async function handleRealtimeSessionCreate(req, res, realtimeStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("Realtime session request body must be a JSON object", {
@@ -17588,6 +17595,13 @@ async function handleRealtimeSessionCreate(req, res, realtimeStore) {
 }
 
 async function handleRealtimeClientSecretCreate(req, res, realtimeStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("Realtime client secret request body must be a JSON object", {
@@ -17598,6 +17612,13 @@ async function handleRealtimeClientSecretCreate(req, res, realtimeStore) {
 }
 
 async function handleRealtimeTranscriptionSessionCreate(req, res, realtimeStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("Realtime transcription session request body must be a JSON object", {
@@ -17608,6 +17629,13 @@ async function handleRealtimeTranscriptionSessionCreate(req, res, realtimeStore)
 }
 
 async function handleRealtimeTranslationClientSecretCreate(req, res, realtimeStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("Realtime translation client secret request body must be a JSON object", {
@@ -17618,6 +17646,13 @@ async function handleRealtimeTranslationClientSecretCreate(req, res, realtimeSto
 }
 
 async function handleRealtimeCallCreate(req, res, realtimeStore) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const request = await readRealtimeCallRequest(req);
   const call = realtimeStore.createCall(request);
   res.writeHead(201, {
@@ -17630,6 +17665,13 @@ async function handleRealtimeCallCreate(req, res, realtimeStore) {
 }
 
 async function handleRealtimeCallAction(req, res, realtimeStore, callId, action) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readOptionalJsonObject(req, `Realtime call ${action} request body must be a JSON object`);
   const call = realtimeStore.updateCall(callId, action, body);
   if (!call) {

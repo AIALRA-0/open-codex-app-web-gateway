@@ -26339,6 +26339,21 @@ test("Realtime API creates local sessions, client secrets, and call lifecycle st
     assert.match(sdpAnswer, /m=audio/);
     assert.match(sdpAnswer, /webrtc-datachannel/);
 
+    const invalidAcceptQuery = await fetch(`${baseUrl}/v1/realtime/calls/${callId}/accept?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(invalidAcceptQuery.status, 400);
+    assert.deepEqual(await invalidAcceptQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const accepted = await fetch(`${baseUrl}/v1/realtime/calls/${callId}/accept`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -26378,6 +26393,56 @@ test("Realtime API creates local sessions, client secrets, and call lifecycle st
     const missing = await fetch(`${baseUrl}/v1/realtime/calls/call_missing/reject`, { method: "POST" });
     assert.equal(missing.status, 404);
     assert.equal((await missing.json()).error.code, "realtime_call_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("Realtime direct endpoints reject unsupported query parameters before body parsing", async () => {
+  await withMockProvider(async () => {
+    assert.fail("Realtime compatibility should not call upstream provider for invalid query parameters");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonEndpoints = [
+      "/v1/realtime/sessions",
+      "/v1/realtime/client_secrets",
+      "/v1/realtime/transcription_sessions",
+      "/v1/realtime/translations/client_secrets",
+      "/v1/realtime/calls/call_missing/accept",
+      "/v1/realtime/calls/call_missing/reject",
+      "/v1/realtime/calls/call_missing/refer",
+      "/v1/realtime/calls/call_missing/hangup",
+    ];
+    for (const endpoint of jsonEndpoints) {
+      const response = await fetch(`${baseUrl}${endpoint}?metadata=debug`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not-json",
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "Unsupported query parameter: metadata",
+          type: "invalid_request_error",
+          param: "metadata",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+
+    const sdpResponse = await fetch(`${baseUrl}/v1/realtime/calls?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/sdp" },
+      body: "v=0\r\ns=query-rejected\r\n",
+    });
+    assert.equal(sdpResponse.status, 400);
+    assert.deepEqual(await sdpResponse.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
     assert.equal(requests.length, 0);
   });
 });

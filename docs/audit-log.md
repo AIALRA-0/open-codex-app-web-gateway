@@ -1,5 +1,70 @@
 # Audit Log
 
+## 2026-06-17 Realtime Direct Endpoint Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/realtime/sessions`;
+  - `POST /v1/realtime/client_secrets`;
+  - `POST /v1/realtime/transcription_sessions`;
+  - `POST /v1/realtime/translations/client_secrets`;
+  - `POST /v1/realtime/calls`;
+  - the official endpoint list entries for
+    `/v1/realtime/calls/{call_id}/accept`,
+    `/v1/realtime/calls/{call_id}/reject`,
+    `/v1/realtime/calls/{call_id}/refer`, and
+    `/v1/realtime/calls/{call_id}/hangup`.
+- Official schema notes:
+  - Realtime session, client-secret, transcription-session, and translation
+    client-secret creation use JSON request bodies and no query parameters;
+  - Realtime call creation uses `application/sdp` or multipart request bodies
+    and no query parameters;
+  - call action routes are POST lifecycle controls with optional JSON bodies in
+    the local compatibility layer.
+- Tightened local Realtime behavior:
+  - session/client-secret/transcription/translation endpoints now reject
+    unsupported query parameters before JSON parsing or local state creation;
+  - `/v1/realtime/calls` now rejects unsupported query parameters before SDP,
+    JSON, or multipart body parsing and before local call creation;
+  - call actions now reject unsupported query parameters before JSON parsing,
+    call lookup, or lifecycle mutation;
+  - valid local Realtime compatibility remains unchanged, including ephemeral
+    local `ek_...` token generation, SDP answer creation, accept/refer/hangup
+    lifecycle updates, and zero upstream provider calls.
+- Regression coverage updated:
+  - Realtime lifecycle tests now verify an invalid query on an existing call
+    action fails without preventing the subsequent normal lifecycle;
+  - a new direct Realtime query test covers session, client-secret,
+    transcription, translation, call-create, and call-action endpoints,
+    confirming unsupported query parameters fail before invalid body parsing.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for the Realtime
+    REST create and call-control endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Realtime API|Realtime direct endpoints" test/server.test.js`
+    passed 2/2 tests.
+  - Full `node --test test/*.test.js` passed 375/375 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Realtime query smoke verified invalid `metadata` queries for
+    session/client-secret/transcription/translation, call-create, and
+    accept/reject/refer/hangup action routes return OpenAI-style 400 errors;
+    then verified a normal session and SDP call still succeed, invalid accept
+    query returns 400, and normal hangup completes the call.
+  - Disk guard after deployment: `/` 193G size, 181G used, 12G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5384 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Realtime token values, full resource ids,
+    SDP payloads, or smoke-test request secrets were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Videos Direct Endpoint Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

@@ -578,15 +578,15 @@ local compatibility placeholder.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/realtime/sessions` | Implemented locally | Creates `object:"realtime.session"` with `type`, model, modalities, instructions, audio config, tools, tracing/truncation fields, metadata, local compatibility metadata, and a short-lived `client_secret:{value,expires_at}` |
-| `POST /v1/realtime/client_secrets` | Implemented locally | Accepts optional `expires_after` and `session`; returns `value:"ek_..."`, `expires_at`, and the effective local session without exposing the deployment provider key |
-| `POST /v1/realtime/transcription_sessions` | Implemented locally | Creates `object:"realtime.transcription_session"` with transcription defaults, audio format, VAD config, and an ephemeral `client_secret` |
-| `POST /v1/realtime/translations/client_secrets` | Implemented locally | Creates `value:"ek_..."` plus a local `type:"translation"` session, preserving translation model and output language fields |
-| `POST /v1/realtime/calls` | Implemented locally for REST/WebRTC setup | Accepts official `application/sdp`, JSON, or multipart `sdp` + `session` request shapes; returns `201 application/sdp` with a local placeholder SDP answer and `Location:/v1/realtime/calls/{call_id}` |
-| `POST /v1/realtime/calls/{call_id}/accept` | Implemented locally | Marks a local call `accepted` and can replace the effective session with the supplied accept-time session config |
-| `POST /v1/realtime/calls/{call_id}/reject` | Implemented locally | Marks a local call `rejected` and preserves an optional rejection reason |
-| `POST /v1/realtime/calls/{call_id}/refer` | Implemented locally | Marks a local call `referred` and preserves `target_uri` / `refer_to` plus metadata |
-| `POST /v1/realtime/calls/{call_id}/hangup` | Implemented locally | Marks a local call `completed` |
+| `POST /v1/realtime/sessions` | Implemented locally | Creates `object:"realtime.session"` with `type`, model, modalities, instructions, audio config, tools, tracing/truncation fields, metadata, local compatibility metadata, and a short-lived `client_secret:{value,expires_at}`; rejects unsupported query parameters before JSON parsing |
+| `POST /v1/realtime/client_secrets` | Implemented locally | Accepts optional `expires_after` and `session`; returns `value:"ek_..."`, `expires_at`, and the effective local session without exposing the deployment provider key; rejects unsupported query parameters before JSON parsing |
+| `POST /v1/realtime/transcription_sessions` | Implemented locally | Creates `object:"realtime.transcription_session"` with transcription defaults, audio format, VAD config, and an ephemeral `client_secret`; rejects unsupported query parameters before JSON parsing |
+| `POST /v1/realtime/translations/client_secrets` | Implemented locally | Creates `value:"ek_..."` plus a local `type:"translation"` session, preserving translation model and output language fields; rejects unsupported query parameters before JSON parsing |
+| `POST /v1/realtime/calls` | Implemented locally for REST/WebRTC setup | Accepts official `application/sdp`, JSON, or multipart `sdp` + `session` request shapes; rejects unsupported query parameters before SDP/body parsing; returns `201 application/sdp` with a local placeholder SDP answer and `Location:/v1/realtime/calls/{call_id}` |
+| `POST /v1/realtime/calls/{call_id}/accept` | Implemented locally | Marks a local call `accepted` and can replace the effective session with the supplied accept-time session config; rejects unsupported query parameters before JSON parsing or call lookup |
+| `POST /v1/realtime/calls/{call_id}/reject` | Implemented locally | Marks a local call `rejected` and preserves an optional rejection reason; rejects unsupported query parameters before JSON parsing or call lookup |
+| `POST /v1/realtime/calls/{call_id}/refer` | Implemented locally | Marks a local call `referred` and preserves `target_uri` / `refer_to` plus metadata; rejects unsupported query parameters before JSON parsing or call lookup |
+| `POST /v1/realtime/calls/{call_id}/hangup` | Implemented locally | Marks a local call `completed`; rejects unsupported query parameters before JSON parsing or call lookup |
 
 Local Realtime state lives under
 `CODEXCOMPAT_REALTIME_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-realtime` by
