@@ -6478,6 +6478,23 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
     assert.deepEqual(requests[0].body.messages.map((message) => message.role), ["system", "user", "user"]);
     assert.match(requests[0].body.messages[0].content, /compatibility marker/);
 
+    const requestsBeforeInvalidRunInclude = requests.length;
+    const invalidRunInclude = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs?include[]=bad.include`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ assistant_id: assistant.id }),
+    });
+    assert.equal(invalidRunInclude.status, 400);
+    assert.deepEqual(await invalidRunInclude.json(), {
+      error: {
+        message: "include.0 must be one of: step_details.tool_calls[*].file_search.results[*].content",
+        type: "invalid_request_error",
+        param: "include.0",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, requestsBeforeInvalidRunInclude);
+
     const listedMessages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?order=asc&limit=10`);
     assert.equal(listedMessages.status, 200);
     const listedMessagesJson = await listedMessages.json();
@@ -6600,6 +6617,17 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
         },
       }, testCase.path);
     }
+
+    const invalidStepGetInclude = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${listedStepsJson.data[0].id}?include[]=bad.include`);
+    assert.equal(invalidStepGetInclude.status, 400);
+    assert.deepEqual(await invalidStepGetInclude.json(), {
+      error: {
+        message: "include.0 must be one of: step_details.tool_calls[*].file_search.results[*].content",
+        type: "invalid_request_error",
+        param: "include.0",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const fetchedStep = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}/steps/${listedStepsJson.data[0].id}`);
     assert.equal(fetchedStep.status, 200);

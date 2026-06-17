@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Assistants Include Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
+  - `POST /threads/{thread_id}/runs`;
+  - `GET /threads/{thread_id}/runs/{run_id}/steps/{step_id}`;
+  - `POST /threads/runs`.
+- Confirmed `POST /threads/{thread_id}/runs` and single Run Step retrieve
+  support query `include[]` with the single official value
+  `step_details.tool_calls[*].file_search.results[*].content`.
+- Confirmed `POST /threads/runs` create-and-run does not define query
+  parameters in the official schema, so this pass intentionally leaves its
+  existing local create-and-run streaming projection behavior unchanged.
+- Tightened local Assistants behavior:
+  - `POST /v1/threads/{thread_id}/runs` now rejects unsupported Run Step
+    `include[]` query values before reading the request body or calling the
+    configured Chat provider;
+  - `GET /v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}` now rejects
+    unsupported Run Step `include[]` query values before retrieving/projecting
+    local Run Step state;
+  - both routes return OpenAI-style HTTP 400 JSON with
+    `param:"include.0"` and `code:"invalid_request_parameter"`.
+- Regression coverage updated:
+  - Assistants lifecycle tests now assert invalid run-create `include[]`
+    returns 400 without increasing mock-provider request count;
+  - Assistants lifecycle tests now assert invalid single Run Step retrieve
+    `include[]` returns 400.
+- Documentation updated:
+  - compatibility matrix now records invalid Run Step `include[]` rejection
+    for run creation and single Run Step retrieve.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Assistants API local lifecycle runs threads through upstream Chat" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Assistants smoke marker `include-smoke-mqi3hyjb` created one
+    temporary assistant, one temporary thread, and one temporary run; the run
+    completed successfully.
+  - Public invalid `POST /v1/threads/{thread_id}/runs?include[]=bad.include`
+    returned HTTP 400 with `param:"include.0"`.
+  - Public invalid
+    `GET /v1/threads/{thread_id}/runs/{run_id}/steps/{step_id}?include[]=bad.include`
+    returned HTTP 400 with `param:"include.0"`.
+  - Public valid Run Step retrieve returned HTTP 200 with the expected
+    temporary step id.
+  - Public smoke cleanup deleted the temporary thread and assistant
+    successfully.
+  - Disk guard after deployment: `/` 193G size, 183G used, 11G available,
+    95% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Assistants List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:

@@ -18754,6 +18754,11 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
 }
 
 async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore, url) {
+  const queryError = validateAssistantRunStepIncludeQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   if (body.stream === true) {
     await streamNewAssistantRun({
@@ -18983,6 +18988,11 @@ function validateAssistantRunStepIncludeQuery(url) {
 }
 
 function handleAssistantRunStepGet(res, assistantStore, threadId, runId, stepId, url) {
+  const queryError = validateAssistantRunStepIncludeQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const run = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
