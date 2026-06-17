@@ -1,5 +1,51 @@
 # Audit Log
 
+## 2026-06-18 - Responses tool replay output length validation
+
+- Used the current official OpenAI OpenAPI schema to confirm the next Responses
+  input-item compatibility target:
+  - `FunctionCallOutputItemParam.output` string values have maxLength
+    `10485760`;
+  - `FunctionShellCallOutputContentParam.stdout` and `.stderr` have maxLength
+    `10485760`;
+  - `ApplyPatchToolCallOutputItemParam.output` string values have maxLength
+    `10485760`.
+- Closed the validation gap without adding dependencies:
+  - added a shared `OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS` constant;
+  - applied the official string limit to `function_call_output.output` before
+    provider calls while preserving `custom_tool_call_output` string behavior
+    because the current official custom-output schema does not publish a
+    string maxLength;
+  - applied the same limit to `shell_call_output` stdout/stderr chunks and
+    nullable `apply_patch_call_output.output` text.
+- Updated docs:
+  - compatibility matrix now records the tool-output string caps and keeps the
+    custom-tool-output distinction explicit.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "Responses endpoints validate input image and file detail" test/server.test.js`:
+    passed 1/1, including oversized function output, shell stdout/stderr, and
+    apply-patch output rejection before provider calls.
+  - Full `node --test test/*.test.js`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    artifacts and selected 3 expired code-benchmark workdirs totaling 26,027
+    bytes for potential cleanup, with zero deletion in dry-run mode.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 7.9 GiB
+    available at 96% used; repository size was 288 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz`: returned `ok:true`.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with
+    oversized `function_call_output.output`: returned HTTP 400 with
+    `param:"input.0.output"` and the official maxLength message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses context management compact threshold validation
 
 - Used the current official OpenAI OpenAPI schema to confirm

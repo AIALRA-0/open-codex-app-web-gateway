@@ -711,6 +711,8 @@ test("Responses endpoints validate input image and file detail before provider c
     assert.fail("provider should not be called for invalid Responses input detail");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const maxToolOutputChars = 10485760;
+    const oversizedToolOutput = "x".repeat(maxToolOutputChars + 1);
     const invalidCases = [
       {
         endpoint: "/v1/responses",
@@ -963,6 +965,16 @@ test("Responses endpoints validate input image and file detail before provider c
         }],
         param: "input.0.call_id",
         message: "input.0.call_id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "function_call_output",
+          call_id: "call_oversized",
+          output: oversizedToolOutput,
+        }],
+        param: "input.0.output",
+        message: `input.0.output must be at most ${maxToolOutputChars} characters`,
       },
       {
         endpoint: "/v1/responses",
@@ -1401,6 +1413,34 @@ test("Responses endpoints validate input image and file detail before provider c
         message: "input.0.output.0.outcome.exit_code must be an integer",
       },
       {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: [{
+            stdout: oversizedToolOutput,
+            stderr: "",
+            outcome: { type: "exit", exit_code: 0 },
+          }],
+        }],
+        param: "input.0.output.0.stdout",
+        message: `input.0.output.0.stdout must be at most ${maxToolOutputChars} characters`,
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: [{
+            stdout: "",
+            stderr: oversizedToolOutput,
+            outcome: { type: "exit", exit_code: 0 },
+          }],
+        }],
+        param: "input.0.output.0.stderr",
+        message: `input.0.output.0.stderr must be at most ${maxToolOutputChars} characters`,
+      },
+      {
         endpoint: "/v1/responses",
         input: [{
           type: "mcp_list_tools",
@@ -1534,6 +1574,18 @@ test("Responses endpoints validate input image and file detail before provider c
         }],
         param: "input.0.status",
         message: "input.0.status must be one of: completed, failed",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "apply_patch_call_output",
+          id: "apco_oversized",
+          call_id: "call_patch",
+          status: "completed",
+          output: oversizedToolOutput,
+        }],
+        param: "input.0.output",
+        message: `input.0.output must be at most ${maxToolOutputChars} characters`,
       },
       {
         endpoint: "/v1/responses",

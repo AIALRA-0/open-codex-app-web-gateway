@@ -458,6 +458,7 @@ const OPENAI_CHAT_TOOLS_MAX = 128;
 const OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS = 10485760;
 const OPENAI_RESPONSES_INPUT_IMAGE_URL_MAX_CHARS = 20971520;
 const OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS = 73400320;
+const OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS = 10485760;
 const OPENAI_RESPONSES_JSON_BODY_MAX_BYTES = OPENAI_RESPONSES_INPUT_FILE_DATA_MAX_CHARS + OPENAI_RESPONSES_INPUT_TEXT_MAX_CHARS;
 const OPENAI_RESPONSES_CALL_ID_MAX_CHARS = 64;
 const RESPONSES_INPUT_TOKENS_PERSONALITY_MAX_CHARS = 64;
@@ -5649,6 +5650,14 @@ function validateOpenAIResponsesToolCallOutputInputItem(item, param) {
     return requestValidationError(`${param}.output is required`, `${param}.output`);
   }
   if (typeof item.output === "string") {
+    if (item.type === "function_call_output") {
+      const outputLengthError = validateOpenAIStringMaxLength(
+        item.output,
+        `${param}.output`,
+        OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      );
+      if (outputLengthError) return outputLengthError;
+    }
     return validateOpenAIResponsesInputItemStatus(item, param);
   }
   if (!Array.isArray(item.output)) {
@@ -6001,7 +6010,10 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (requiredStatusError) return requiredStatusError;
     const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
-    return validateOpenAIOptionalStringItemField(item, param, "output", { nullable: true });
+    return validateOpenAIOptionalStringItemField(item, param, "output", {
+      nullable: true,
+      maxLength: OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+    });
   }
 
   if (item.type === "tool_search_call") {
@@ -6385,6 +6397,12 @@ function validateOpenAIResponsesShellOutputChunks(output, param, fallbackOutcome
       if (typeof chunk[field] !== "string") {
         return requestValidationError(`${chunkParam}.${field} must be a string`, `${chunkParam}.${field}`);
       }
+      const lengthError = validateOpenAIStringMaxLength(
+        chunk[field],
+        `${chunkParam}.${field}`,
+        OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+      );
+      if (lengthError) return lengthError;
     }
     const outcome = Object.prototype.hasOwnProperty.call(chunk, "outcome") ? chunk.outcome : fallbackOutcome;
     const outcomeError = validateOpenAIResponsesShellOutcome(outcome, `${chunkParam}.outcome`);
