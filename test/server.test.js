@@ -32545,6 +32545,7 @@ test("loadConfig reads local prompt templates from file and env JSON", () => {
 });
 
 test("GET /v1/models/{model} proxies direct retrieval and falls back to model list", async () => {
+  const fineTunedModelId = "ft:gpt-4o-mini:acemeco:suffix:abc123";
   await withMockProvider(async (req, res) => {
     if (req.method === "GET" && req.url === "/models/direct-model") {
       res.writeHead(200, { "content-type": "application/json" });
@@ -32570,6 +32571,15 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
           created: "not-a-number",
           owned_by_organization: "provider-org",
         }],
+      }));
+      return;
+    }
+
+    if (req.method === "DELETE" && req.url === `/models/${encodeURIComponent(fineTunedModelId)}`) {
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify({
+        id: fineTunedModelId,
+        deleted: true,
       }));
       return;
     }
@@ -32626,12 +32636,22 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
       owned_by: "compatibility-bridge",
     });
 
+    const deleted = await fetch(`${baseUrl}/v1/models/${encodeURIComponent(fineTunedModelId)}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+    assert.deepEqual(await deleted.json(), {
+      id: fineTunedModelId,
+      object: "model",
+      deleted: true,
+    });
+
     assert.equal(requests[0].req.url, "/models");
     assert.equal(requests[1].req.url, "/models/direct-model");
     assert.equal(requests[2].req.url, "/models/listed-model");
     assert.equal(requests[3].req.url, "/models");
     assert.equal(requests[4].req.url, "/models/omni-moderation-latest");
     assert.equal(requests[5].req.url, "/models");
+    assert.equal(requests[6].req.url, `/models/${encodeURIComponent(fineTunedModelId)}`);
+    assert.equal(requests[6].req.method, "DELETE");
   });
 });
 
@@ -32650,5 +32670,24 @@ test("GET /v1/models falls back to local bridge catalog when upstream list is un
     assert.ok(ids.includes("hashed-semantic-256"));
     assert.ok(ids.includes("omni-moderation-latest"));
     assert.ok(json.data.every((model) => model.object === "model"));
+  });
+});
+
+test("DELETE /v1/models/{model} returns local model_not_found when no upstream delete is available", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(404, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { message: "not found" } }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/models/mock-model`, { method: "DELETE" });
+    assert.equal(response.status, 404);
+    assert.deepEqual(await response.json(), {
+      error: {
+        message: "model not found: mock-model",
+        type: "invalid_request_error",
+        param: "model",
+        code: "model_not_found",
+      },
+    });
   });
 });

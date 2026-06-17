@@ -1,5 +1,44 @@
 # Audit Log
 
+## 2026-06-17 Models Delete Route Compatibility
+
+- Rechecked the current official OpenAI Models OpenAPI path
+  `DELETE /models/{model}`, documented for fine-tuned model deletion.
+- Added local bridge routing for `DELETE /v1/models/{model}`:
+  - successful upstream JSON responses with `deleted:true` are normalized to
+    OpenAI-style `{id,object:"model",deleted:true}`;
+  - non-JSON, unsuccessful, or malformed upstream delete responses fall back to
+    local `404 model_not_found`;
+  - local bridge catalog entries are not deleted locally, which avoids
+    pretending that configured provider, embedding, moderation, or audio model
+    IDs are mutable fine-tuned models.
+- Regression coverage updated:
+  - Models tests now cover successful upstream fine-tuned model delete proxying
+    and local `model_not_found` when no upstream delete is available.
+- Documentation updated:
+  - compatibility matrix now records the `DELETE /v1/models/{model}` endpoint
+    and its conservative fine-tuned-model proxy behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "models" test/server.test.js` passed
+    3/3 tests.
+  - `node --test test/*.test.js` passed 371/371 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Models DELETE smoke used fake model id
+    `ft:open-codex-smoke:nonexistent:delete-test` and confirmed
+    HTTP 404 JSON with `code:"model_not_found"` and `param:"model"`.
+  - Disk guard after deployment: `/` 193G size, 178G used, 16G available,
+    92% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Models List Normalization
 
 - Rechecked the current official OpenAI Models OpenAPI paths:

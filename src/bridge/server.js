@@ -917,6 +917,29 @@ async function fetchProviderGet(config, route, incomingHeaders = {}, options = {
   }
 }
 
+async function fetchProviderDelete(config, route, incomingHeaders = {}, options = {}) {
+  if (!config.providerApiKey && !options.allowMissingKey) {
+    const error = new Error(`${config.providerApiKeyEnv} is required for upstream provider calls`);
+    error.status = 500;
+    throw error;
+  }
+
+  const controller = options.controller || new AbortController();
+  const timeout = setTimeout(() => {
+    options.onTimeout?.();
+    controller.abort();
+  }, config.requestTimeoutMs);
+  try {
+    return await fetch(`${config.providerBaseUrl}${route}`, {
+      method: "DELETE",
+      headers: providerHeaders(config, incomingHeaders),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function fetchProviderWithMcpToolLoop(config, chat, request, incomingHeaders, localMcp, toolBudget, options = {}) {
   const localToolSearch = options.localToolSearch || null;
   const usageParts = [];
@@ -11645,6 +11668,22 @@ async function handleModelGet(req, res, config, modelId) {
   });
 }
 
+async function handleModelDelete(req, res, config, modelId) {
+  if (config.providerApiKey) {
+    const deleted = await tryDeleteModel(config, req.headers, modelId);
+    if (deleted) {
+      sendJson(res, 200, deleted);
+      return;
+    }
+  }
+
+  sendError(res, 404, `model not found: ${modelId}`, {
+    type: "invalid_request_error",
+    code: "model_not_found",
+    param: "model",
+  });
+}
+
 async function tryFetchModel(config, headers, modelId) {
   try {
     const route = `${config.modelsPath.replace(/\/+$/, "")}/${encodeURIComponent(modelId)}`;
@@ -11673,6 +11712,17 @@ async function tryFindListedModel(config, headers, modelId) {
   }
 }
 
+async function tryDeleteModel(config, headers, modelId) {
+  try {
+    const route = `${config.modelsPath.replace(/\/+$/, "")}/${encodeURIComponent(modelId)}`;
+    const upstream = await fetchProviderDelete(config, route, headers);
+    if (!upstream.ok || !isJsonResponse(upstream)) return null;
+    return normalizeModelDeleteResponse(parseJsonOrNull(await upstream.text()), modelId);
+  } catch {
+    return null;
+  }
+}
+
 function normalizeModelObject(model) {
   if (!model?.id) return null;
   const created = Number(model.created);
@@ -11682,6 +11732,16 @@ function normalizeModelObject(model) {
     object: model.object || "model",
     created: Number.isFinite(created) ? created : 0,
     owned_by: model.owned_by || model.owned_by_organization || "upstream-provider",
+  };
+}
+
+function normalizeModelDeleteResponse(model, modelId) {
+  if (!model || model.deleted !== true) return null;
+  return {
+    ...model,
+    id: model.id || modelId,
+    object: model.object || "model",
+    deleted: true,
   };
 }
 
@@ -22316,9 +22376,16 @@ function createServer(config = loadConfig()) {
       }
 
       const modelRoute = url.pathname.match(/^\/v1\/models\/([^/]+)$/);
-      if (modelRoute && req.method === "GET") {
-        await handleModelGet(req, res, config, decodeURIComponent(modelRoute[1]));
-        return;
+      if (modelRoute) {
+        const modelId = decodeURIComponent(modelRoute[1]);
+        if (req.method === "GET") {
+          await handleModelGet(req, res, config, modelId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          await handleModelDelete(req, res, config, modelId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/conversations") {
