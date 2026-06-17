@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-17 Evals Output Item Status Projection
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `GET /evals/{eval_id}/runs/{run_id}/output_items` response examples and
+  `status=pass|fail` filter contract.
+- Tightened local Evals output item projection:
+  - stored local output-item statuses such as `passed`, `failed`, and
+    `errored` are now projected to official `pass` / `fail` values in list
+    and retrieve responses;
+  - the original local status is retained in
+    `metadata.compatibility.local_status` for auditability and backwards
+    debugging;
+  - `status=fail` filtering also matches local `errored` records because the
+    official filter has no separate errored output-item status.
+- Regression coverage updated:
+  - Evals lifecycle tests now assert official `pass` / `fail` output-item
+    statuses on list, filtered list, and retrieve responses, while confirming
+    the local status remains visible in compatibility metadata.
+- Documentation updated:
+  - compatibility matrix now records local-to-official Evals output item status
+    projection.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Evals API creates local runs" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public end-to-end smoke created a temporary eval, ran one provided-sample
+    row without provider generation, read one output item with
+    `status:"pass"` and `metadata.compatibility.local_status:"passed"`, then
+    deleted the eval with cleanup HTTP 200.
+  - Disk guard after cleanup: `/` 193G size, 181G used, 12G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Evals Sublist Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 Evals sublist query

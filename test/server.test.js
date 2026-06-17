@@ -30779,7 +30779,8 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     const outputItems = await outputItemsResponse.json();
     assert.equal(outputItems.object, "list");
     assert.equal(outputItems.data.length, 2);
-    assert.deepEqual(outputItems.data.map((item) => item.status), ["passed", "failed"]);
+    assert.deepEqual(outputItems.data.map((item) => item.status), ["pass", "fail"]);
+    assert.deepEqual(outputItems.data.map((item) => item.metadata.compatibility.local_status), ["passed", "failed"]);
     assert.equal(outputItems.data[0].sample.output_text, "Hardware");
     assert.equal(outputItems.data[1].results[0].reference, "Software");
 
@@ -30787,13 +30788,13 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(passedOutputItemsResponse.status, 200);
     const passedOutputItems = await passedOutputItemsResponse.json();
     assert.equal(passedOutputItems.data.length, 1);
-    assert.equal(passedOutputItems.data[0].status, "passed");
+    assert.equal(passedOutputItems.data[0].status, "pass");
 
     const failedOutputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?status=fail`);
     assert.equal(failedOutputItemsResponse.status, 200);
     const failedOutputItems = await failedOutputItemsResponse.json();
     assert.equal(failedOutputItems.data.length, 1);
-    assert.equal(failedOutputItems.data[0].status, "failed");
+    assert.equal(failedOutputItems.data[0].status, "fail");
 
     const outputItemsBeforeIgnored = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items?before=${outputItems.data[0].id}&limit=1`);
     assert.equal(outputItemsBeforeIgnored.status, 200);
@@ -30825,6 +30826,8 @@ test("Evals API creates local runs and output items from eval JSONL", async () =
     assert.equal(outputItemResponse.status, 200);
     const outputItem = await outputItemResponse.json();
     assert.equal(outputItem.id, outputItems.data[0].id);
+    assert.equal(outputItem.status, "pass");
+    assert.equal(outputItem.metadata.compatibility.local_status, "passed");
     assert.equal(outputItem.datasource_item.item.correct_label, "Hardware");
 
     const runGet = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}`);
@@ -31287,7 +31290,7 @@ test("Evals API runs local text similarity, python, and multi graders", async ()
     const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items`);
     assert.equal(outputItemsResponse.status, 200);
     const outputItems = await outputItemsResponse.json();
-    assert.equal(outputItems.data[0].status, "passed");
+    assert.equal(outputItems.data[0].status, "pass");
     assert.equal(outputItems.data[0].results[0].type, "text_similarity");
     assert.ok(outputItems.data[0].results[0].score >= 0.5);
     assert.equal(outputItems.data[0].results[1].type, "multi");
@@ -31373,7 +31376,7 @@ test("Evals API runs provider-backed score_model criteria", async () => {
     const outputItemsResponse = await fetch(`${baseUrl}/v1/evals/${evalObject.id}/runs/${run.id}/output_items`);
     assert.equal(outputItemsResponse.status, 200);
     const outputItems = await outputItemsResponse.json();
-    assert.equal(outputItems.data[0].status, "passed");
+    assert.equal(outputItems.data[0].status, "pass");
     assert.equal(outputItems.data[0].results[0].type, "score_model");
     assert.equal(outputItems.data[0].results[0].score, 0.8);
     assert.equal(outputItems.data[0].results[0].sampled_model_name, "judge-model");

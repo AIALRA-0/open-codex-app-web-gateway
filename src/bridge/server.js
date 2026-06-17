@@ -14604,7 +14604,7 @@ function handleEvalRunOutputItemsList(res, evalStore, evalId, runId, url) {
   const filtered = status
     ? items.filter((item) => evalOutputItemStatusMatches(item.status, status))
     : items;
-  sendJson(res, 200, paginateList(filtered, officialEvalSubListPaginationUrl(url)));
+  sendJson(res, 200, paginateList(filtered.map(projectEvalRunOutputItem), officialEvalSubListPaginationUrl(url)));
 }
 
 function validateOpenAIEvalRunOutputItemsListQuery(url) {
@@ -14642,7 +14642,7 @@ function officialEvalSubListPaginationUrl(url) {
 function evalOutputItemStatusMatches(actual, expected) {
   const normalized = String(actual || "");
   if (expected === "pass") return normalized === "pass" || normalized === "passed";
-  return normalized === "fail" || normalized === "failed";
+  return normalized === "fail" || normalized === "failed" || normalized === "errored";
 }
 
 function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId) {
@@ -14655,7 +14655,27 @@ function handleEvalRunOutputItemGet(res, evalStore, evalId, runId, outputItemId)
     });
     return;
   }
-  sendJson(res, 200, item);
+  sendJson(res, 200, projectEvalRunOutputItem(item));
+}
+
+function projectEvalRunOutputItem(item) {
+  const projected = clone(item);
+  const localStatus = String(projected.status || "");
+  if (["passed", "pass"].includes(localStatus)) {
+    projected.status = "pass";
+  } else if (["failed", "fail", "errored"].includes(localStatus)) {
+    projected.status = "fail";
+  }
+  if (localStatus && projected.status !== localStatus) {
+    projected.metadata = {
+      ...(isPlainObject(projected.metadata) ? projected.metadata : {}),
+      compatibility: {
+        ...(isPlainObject(projected.metadata?.compatibility) ? projected.metadata.compatibility : {}),
+        local_status: localStatus,
+      },
+    };
+  }
+  return projected;
 }
 
 function validateEvalBody(body, { requireCore }) {
