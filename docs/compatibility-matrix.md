@@ -709,12 +709,12 @@ state.
 | `POST /v1/organization/spend_alerts` | Implemented locally | Creates a local organization spend alert requiring `threshold_amount`, `currency:"USD"`, `interval:"month"`, and `notification_channel:{type:"email",recipients}`; no notification email is sent |
 | `POST /v1/organization/spend_alerts/{alert_id}` | Implemented locally | Updates the local organization spend alert threshold and notification channel or returns `404 organization_spend_alert_not_found` |
 | `DELETE /v1/organization/spend_alerts/{alert_id}` | Implemented locally | Deletes a local organization spend alert, records an audit-log event, and returns `organization.spend_alert.deleted` |
-| `GET /v1/organization/roles` | Implemented locally | Lists local custom `role` records with OpenAI-style cursor pagination |
+| `GET /v1/organization/roles` | Implemented locally | Lists local custom `role` records with OpenAI-style `next` cursor pagination; validates official `limit` from 0 through 1000 with default 1000, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and ignores unsupported `before` so it cannot shape official list results |
 | `POST /v1/organization/roles` | Implemented locally | Creates a local custom role from `role_name`, `description`, and non-empty `permissions`; duplicate permissions are de-duplicated and invalid input returns `400 invalid_role_permissions` |
 | `GET /v1/organization/roles/{role_id}` | Implemented locally | Retrieves a local role or returns `404 organization_role_not_found` |
 | `POST /v1/organization/roles/{role_id}` | Implemented locally | Updates local custom role `name`, `description`, and `permissions`; predefined roles are reserved and reject updates |
 | `DELETE /v1/organization/roles/{role_id}` | Implemented locally | Deletes a local role, removes local user/group assignments that reference it, and returns `role.deleted` |
-| `GET /v1/organization/groups` | Implemented locally | Lists local `group` records with OpenAI-style cursor pagination |
+| `GET /v1/organization/groups` | Implemented locally | Lists local `group` records with OpenAI-style `next` cursor pagination; validates official `limit` from 0 through 1000 with default 100, `after`, and `order:"asc"|"desc"`, rejects repeated scalar values, and ignores unsupported `before` so it cannot shape official list results |
 | `POST /v1/organization/groups` | Implemented locally | Creates a local non-SCIM `group` with `group_type:"group"` and `is_scim_managed:false` |
 | `GET /v1/organization/groups/{group_id}` | Implemented locally | Retrieves a local group or returns `404 organization_group_not_found` |
 | `POST /v1/organization/groups/{group_id}` | Implemented locally | Updates the local group `name`; SCIM-managed groups are reserved and reject updates |

@@ -1,5 +1,68 @@
 # Audit Log
 
+## 2026-06-17 Organization Roles and Groups List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schema through the
+  OpenAI developer-docs MCP:
+  - `GET /organization/roles` documents `limit`, `after`, and `order`, with
+    `limit` accepting 0 through 1000, default 1000, and `order` defaulting to
+    `asc`;
+  - `GET /organization/groups` documents `limit`, `after`, and `order`, with
+    `limit` accepting 0 through 1000, default 100, and `order` defaulting to
+    `asc`;
+  - both endpoints return `object:"list"`, `data`, `has_more`, and `next`
+    rather than `first_id`/`last_id`.
+- Tightened local Organization RBAC list behavior:
+  - `GET /v1/organization/roles` and `GET /v1/organization/groups` now
+    validate official `limit`, `after`, and `order` values before listing
+    local records;
+  - repeated scalar query values for `limit`, `after`, and `order` return
+    OpenAI-style HTTP 400 errors;
+  - `limit=0` is now preserved for next-cursor lists and returns an empty page
+    with `has_more:true` when local data exists and `next:null` because no
+    item cursor is emitted on an empty page;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official Organization Roles or Groups list results;
+  - existing default limits are preserved: 1000 for roles and 100 for groups.
+- Regression coverage updated:
+  - the Organization roles/groups lifecycle test now creates two local roles
+    and two local groups to verify official `limit=0`, `order=desc`, `after`,
+    ignored `before`, invalid `limit`, invalid `order`, repeated scalar
+    errors, cleanup of all temporary records, and zero upstream provider calls.
+- Documentation updated:
+  - compatibility matrix now records the official next-cursor pagination
+    contract for Organization Roles and Groups, including endpoint-specific
+    defaults and unsupported `before` handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization roles and groups manage local memberships and assignments" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Roles/Groups smoke marker `roles-groups-query-smoke-mqi9u8n9`
+    created two temporary roles and two temporary groups, verified `limit=0`,
+    `order=desc`, `after`, ignored `before`, invalid limits, invalid order,
+    repeated scalar errors, and deleted all temporary records.
+  - Disk guard after deployment: `/` 193G size, 183G used, 9.9G available,
+    95% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run selected 2 old UI screenshots totaling 166264 bytes;
+    `npm run prune:runtime -- --apply` deleted those 2 files with zero
+    errors, leaving repo `output/` at 4.4M.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or RBAC smoke-test secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Organization Spend Alerts List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schema for

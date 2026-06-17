@@ -6673,15 +6673,16 @@ function validateOpenAIListLimitQuery(url, options = {}) {
   return null;
 }
 
-function validateOpenAIListZeroLimitQuery(url) {
+function validateOpenAIListZeroLimitQuery(url, options = {}) {
   const limits = url.searchParams.getAll("limit");
   if (!limits.length) return null;
   if (limits.length > 1) {
     return requestValidationError("limit must be a single string query value", "limit");
   }
+  const max = Number.isFinite(options.max) ? options.max : 100;
   const value = limits[0];
-  if (!/^(0|[1-9]\d*)$/.test(value) || Number(value) > 100) {
-    return requestValidationError("limit must be an integer between 0 and 100", "limit");
+  if (!/^(0|[1-9]\d*)$/.test(value) || Number(value) > max) {
+    return requestValidationError(`limit must be an integer between 0 and ${max}`, "limit");
   }
   return null;
 }
@@ -15932,9 +15933,14 @@ async function handleOrganizationRoleCreate(req, res, organizationAdminStore) {
 }
 
 function handleOrganizationRolesList(res, organizationAdminStore, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationRoles(),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     1000,
     1000,
@@ -16008,9 +16014,14 @@ async function handleOrganizationGroupCreate(req, res, organizationAdminStore) {
 }
 
 function handleOrganizationGroupsList(res, organizationAdminStore, url) {
-  sendJson(res, 200, paginateNextListWithDefaultOrder(
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateNextListWithDefaultOrderAllowingZeroLimit(
     organizationAdminStore.listOrganizationGroups(),
-    url,
+    officialAdminNextCursorListPaginationUrl(url),
     "asc",
     100,
     1000,
@@ -16716,6 +16727,24 @@ function validateOpenAISpendAlertsListQuery(url) {
 function officialSpendAlertsListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "before", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIAdminNextCursorListQuery(url) {
+  const limitError = validateOpenAIListZeroLimitQuery(url, { max: 1000 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAIListOrderQuery(url);
+}
+
+function officialAdminNextCursorListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
   }
   return localUrl;
@@ -18645,6 +18674,12 @@ function paginateNextListWithDefaultOrder(items, url, order, fallbackLimit = 20,
   return paginateNextList(items, localUrl, fallbackLimit, maxLimit);
 }
 
+function paginateNextListWithDefaultOrderAllowingZeroLimit(items, url, order, fallbackLimit = 20, maxLimit = 1000) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  return paginateNextListAllowingZeroLimit(items, localUrl, fallbackLimit, maxLimit);
+}
+
 function paginateNextList(items, url, fallbackLimit = 20, maxLimit = 1000) {
   const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
   const after = url.searchParams.get("after");
@@ -18663,6 +18698,27 @@ function paginateNextList(items, url, fallbackLimit = 20, maxLimit = 1000) {
     data: page,
     has_more: data.length > page.length,
     next: data.length > page.length ? page.at(-1)?.id || null : null,
+  };
+}
+
+function paginateNextListAllowingZeroLimit(items, url, fallbackLimit = 20, maxLimit = 1000) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const limit = parseZeroLimit(url.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    has_more: data.length > page.length,
+    next: page.length > 0 && data.length > page.length ? page.at(-1)?.id || null : null,
   };
 }
 

@@ -22796,6 +22796,18 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.fail("Organization roles/groups compatibility should not call upstream provider");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertInvalidListQuery = async (path, param, message) => {
+      const invalid = await fetch(`${baseUrl}${path}`);
+      assert.equal(invalid.status, 400, path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, path);
+    };
 
     const roleResponse = await fetch(`${baseUrl}/v1/organization/roles`, {
       method: "POST",
@@ -22815,12 +22827,90 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(role.predefined_role, false);
     assert.equal(role.resource_type, "api.organization");
 
+    const secondRoleResponse = await fetch(`${baseUrl}/v1/organization/roles`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role_name: "Bridge Audit Reader",
+        permissions: ["api.audit_logs.read"],
+      }),
+    });
+    assert.equal(secondRoleResponse.status, 200);
+    const secondRole = await secondRoleResponse.json();
+
     const roles = await fetch(`${baseUrl}/v1/organization/roles?limit=20`);
     assert.equal(roles.status, 200);
     const rolesJson = await roles.json();
     assert.equal(rolesJson.object, "list");
     assert.equal(rolesJson.next, null);
-    assert.equal(rolesJson.data[0].id, role.id);
+    assert.deepEqual(new Set(rolesJson.data.map((entry) => entry.id)), new Set([
+      role.id,
+      secondRole.id,
+    ]));
+    const roleIdsAscending = rolesJson.data.map((entry) => entry.id);
+
+    const zeroRoleLimit = await fetch(`${baseUrl}/v1/organization/roles?limit=0`);
+    assert.equal(zeroRoleLimit.status, 200);
+    assert.deepEqual(await zeroRoleLimit.json(), {
+      object: "list",
+      data: [],
+      has_more: true,
+      next: null,
+    });
+
+    const rolesDesc = await fetch(`${baseUrl}/v1/organization/roles?order=desc&limit=1`);
+    assert.equal(rolesDesc.status, 200);
+    const rolesDescJson = await rolesDesc.json();
+    assert.equal(rolesDescJson.data.length, 1);
+    assert.equal(rolesDescJson.data[0].id, roleIdsAscending.at(-1));
+    assert.equal(rolesDescJson.has_more, true);
+    assert.equal(rolesDescJson.next, roleIdsAscending.at(-1));
+
+    const rolesNext = await fetch(`${baseUrl}/v1/organization/roles?order=desc&limit=1&after=${encodeURIComponent(rolesDescJson.next)}`);
+    assert.equal(rolesNext.status, 200);
+    const rolesNextJson = await rolesNext.json();
+    assert.equal(rolesNextJson.data.length, 1);
+    assert.equal(rolesNextJson.data[0].id, roleIdsAscending[0]);
+    assert.equal(rolesNextJson.has_more, false);
+    assert.equal(rolesNextJson.next, null);
+
+    const rolesBeforeIgnored = await fetch(`${baseUrl}/v1/organization/roles?order=desc&limit=2&before=${encodeURIComponent(roleIdsAscending[0])}`);
+    assert.equal(rolesBeforeIgnored.status, 200);
+    assert.deepEqual(
+      (await rolesBeforeIgnored.json()).data.map((entry) => entry.id),
+      [roleIdsAscending.at(-1), roleIdsAscending[0]],
+    );
+
+    await assertInvalidListQuery(
+      "/v1/organization/roles?limit=-1",
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/roles?limit=1001",
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/roles?limit=1&limit=2",
+      "limit",
+      "limit must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/roles?after=${encodeURIComponent(roleIdsAscending[0])}&after=${encodeURIComponent(roleIdsAscending.at(-1))}`,
+      "after",
+      "after must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/roles?order=newest",
+      "order",
+      "order must be one of: asc, desc",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/roles?order=asc&order=desc",
+      "order",
+      "order must be a single string query value",
+    );
 
     const fetchedRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`);
     assert.equal(fetchedRole.status, 200);
@@ -22862,12 +22952,87 @@ test("Organization roles and groups manage local memberships and assignments", a
     assert.equal(group.group_type, "group");
     assert.equal(group.is_scim_managed, false);
 
+    const secondGroupResponse = await fetch(`${baseUrl}/v1/organization/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Escalation Team" }),
+    });
+    assert.equal(secondGroupResponse.status, 200);
+    const secondGroup = await secondGroupResponse.json();
+
     const groups = await fetch(`${baseUrl}/v1/organization/groups?limit=20`);
     assert.equal(groups.status, 200);
     const groupsJson = await groups.json();
     assert.equal(groupsJson.object, "list");
     assert.equal(groupsJson.next, null);
-    assert.equal(groupsJson.data[0].id, group.id);
+    assert.deepEqual(new Set(groupsJson.data.map((entry) => entry.id)), new Set([
+      group.id,
+      secondGroup.id,
+    ]));
+    const groupIdsAscending = groupsJson.data.map((entry) => entry.id);
+
+    const zeroGroupLimit = await fetch(`${baseUrl}/v1/organization/groups?limit=0`);
+    assert.equal(zeroGroupLimit.status, 200);
+    assert.deepEqual(await zeroGroupLimit.json(), {
+      object: "list",
+      data: [],
+      has_more: true,
+      next: null,
+    });
+
+    const groupsDesc = await fetch(`${baseUrl}/v1/organization/groups?order=desc&limit=1`);
+    assert.equal(groupsDesc.status, 200);
+    const groupsDescJson = await groupsDesc.json();
+    assert.equal(groupsDescJson.data.length, 1);
+    assert.equal(groupsDescJson.data[0].id, groupIdsAscending.at(-1));
+    assert.equal(groupsDescJson.has_more, true);
+    assert.equal(groupsDescJson.next, groupIdsAscending.at(-1));
+
+    const groupsNext = await fetch(`${baseUrl}/v1/organization/groups?order=desc&limit=1&after=${encodeURIComponent(groupsDescJson.next)}`);
+    assert.equal(groupsNext.status, 200);
+    const groupsNextJson = await groupsNext.json();
+    assert.equal(groupsNextJson.data.length, 1);
+    assert.equal(groupsNextJson.data[0].id, groupIdsAscending[0]);
+    assert.equal(groupsNextJson.has_more, false);
+    assert.equal(groupsNextJson.next, null);
+
+    const groupsBeforeIgnored = await fetch(`${baseUrl}/v1/organization/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`);
+    assert.equal(groupsBeforeIgnored.status, 200);
+    assert.deepEqual(
+      (await groupsBeforeIgnored.json()).data.map((entry) => entry.id),
+      [groupIdsAscending.at(-1), groupIdsAscending[0]],
+    );
+
+    await assertInvalidListQuery(
+      "/v1/organization/groups?limit=-1",
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/groups?limit=1001",
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/groups?limit=1&limit=2",
+      "limit",
+      "limit must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/groups?after=${encodeURIComponent(groupIdsAscending[0])}&after=${encodeURIComponent(groupIdsAscending.at(-1))}`,
+      "after",
+      "after must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/groups?order=newest",
+      "order",
+      "order must be one of: asc, desc",
+    );
+    await assertInvalidListQuery(
+      "/v1/organization/groups?order=asc&order=desc",
+      "order",
+      "order must be a single string query value",
+    );
 
     const fetchedGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`);
     assert.equal(fetchedGroup.status, 200);
@@ -23008,6 +23173,12 @@ test("Organization roles and groups manage local memberships and assignments", a
       deleted: true,
     });
 
+    const deletedSecondRole = await fetch(`${baseUrl}/v1/organization/roles/${secondRole.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondRole.status, 200);
+    assert.equal((await deletedSecondRole.json()).id, secondRole.id);
+
     const deletedRole = await fetch(`${baseUrl}/v1/organization/roles/${role.id}`, {
       method: "DELETE",
     });
@@ -23017,6 +23188,12 @@ test("Organization roles and groups manage local memberships and assignments", a
       id: role.id,
       deleted: true,
     });
+
+    const deletedSecondGroup = await fetch(`${baseUrl}/v1/organization/groups/${secondGroup.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondGroup.status, 200);
+    assert.equal((await deletedSecondGroup.json()).id, secondGroup.id);
 
     const deletedGroup = await fetch(`${baseUrl}/v1/organization/groups/${group.id}`, {
       method: "DELETE",
