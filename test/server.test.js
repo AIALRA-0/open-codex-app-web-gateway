@@ -688,6 +688,43 @@ test("Responses endpoints validate input image and file detail before provider c
         endpoint: "/v1/responses/input_tokens",
         input: [{
           role: "user",
+          content: [{ type: "input_image", file_id: 123, detail: "low" }],
+        }],
+        param: "input.0.content.0.file_id",
+        message: "input.0.content.0.file_id must be a string or null",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "input_image",
+          image_url: { url: 7, detail: "low" },
+        }],
+        param: "input.0.image_url.url",
+        message: "input.0.image_url.url must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "function_call_output",
+          call_id: "call_image",
+          output: [{ type: "input_image", image_data: [], detail: "low" }],
+        }],
+        param: "input.0.output.0.image_data",
+        message: "input.0.output.0.image_data must be a string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "user",
+          content: [{ type: "input_image", image_file: "file_image", detail: "low" }],
+        }],
+        param: "input.0.content.0.image_file",
+        message: "input.0.content.0.image_file must be an object",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "user",
           content: [{ type: "input_file", file_id: "file_test", detail: "auto" }],
         }],
         param: "input.0.content.0.detail",

@@ -1,5 +1,66 @@
 # Audit Log
 
+## 2026-06-17 Responses Input Image Field Validation
+
+- Rechecked the current official OpenAI schema through the developer docs MCP
+  workflow and the official `openai-openapi` YAML for Responses
+  `InputImageContent`:
+  - Responses `type:"input_image"` defines `image_url`, `file_id`, and
+    `detail` fields;
+  - `image_url` may be a string URL/data URL or null in the official schema;
+  - `file_id` may be a string or null;
+  - `detail` values remain `auto`, `low`, `high`, or `original`.
+- Tightened Responses input validation before provider calls:
+  - ordinary Responses `input_image` content parts and top-level input items now
+    validate `image_url`, `file_id`, inline image data, `url`, filename, media
+    type, and nested `image_file` field shapes before upstream Chat requests;
+  - the local compatibility `image_url:{url,detail}` object shape remains
+    accepted but now requires a string `url`;
+  - marker-only `input_image` items remain accepted so existing compatibility
+    prompts and source-optional workflows are not broken.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `input_image.file_id`, `image_url.url`, inline `image_data`, and
+    `image_file` cases across `/v1/responses`, `/v1/responses/input_tokens`,
+    and `/v1/responses/compact`;
+  - existing valid image detail mapping and local `file_id` image resolution
+    tests remain green.
+- Documentation updated:
+  - compatibility matrix now records source-field type validation for
+    Responses `input_image` parts and the current Chat vision/text fallback
+    boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate input image and file
+    detail|maps input_image detail|resolves input_image file_id"
+    test/server.test.js` passes: 3 tests;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `input_image.file_id` input-token request returns
+    `400 invalid_request_parameter` with
+    `param:"input.0.content.0.file_id"`;
+  - public marker-only `input_image` input-token request returns 200 with
+    `input_tokens:19`.
+- Runtime/storage check:
+  - `/` has 14 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Input File Field Validation
 
 - Rechecked the current official OpenAI schema through the developer docs MCP

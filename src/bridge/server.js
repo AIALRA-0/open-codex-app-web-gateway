@@ -6094,11 +6094,53 @@ function validateOpenAIResponsesInputItemStatus(item, param) {
 function validateOpenAIResponsesInputImageDetails(part, param) {
   const detailError = validateOpenAIResponsesInputImageDetail(part.detail, `${param}.detail`);
   if (detailError) return detailError;
+  if (
+    Object.prototype.hasOwnProperty.call(part, "image_url")
+    && part.image_url !== null
+    && typeof part.image_url !== "string"
+    && !isPlainObject(part.image_url)
+  ) {
+    return requestValidationError(`${param}.image_url must be a string, object, or null`, `${param}.image_url`);
+  }
   if (isPlainObject(part.image_url)) {
+    if (typeof part.image_url.url !== "string") {
+      return requestValidationError(`${param}.image_url.url must be a string`, `${param}.image_url.url`);
+    }
     const imageUrlDetailError = validateOpenAIResponsesInputImageDetail(part.image_url.detail, `${param}.image_url.detail`);
     if (imageUrlDetailError) return imageUrlDetailError;
   }
+  if (
+    Object.prototype.hasOwnProperty.call(part, "file_id")
+    && part.file_id !== null
+    && typeof part.file_id !== "string"
+  ) {
+    return requestValidationError(`${param}.file_id must be a string or null`, `${param}.file_id`);
+  }
+  const sourceError = validateOpenAIChatFileSourceFields(part, param, [
+    "file_data",
+    "data",
+    "image_data",
+    "url",
+    "filename",
+    "mime_type",
+    "media_type",
+  ]);
+  if (sourceError) return sourceError;
+  if (Object.prototype.hasOwnProperty.call(part, "image_file") && !isPlainObject(part.image_file)) {
+    return requestValidationError(`${param}.image_file must be an object`, `${param}.image_file`);
+  }
   if (isPlainObject(part.image_file)) {
+    const imageFileSourceError = validateOpenAIChatFileSourceFields(part.image_file, `${param}.image_file`, [
+      "file_id",
+      "file_data",
+      "data",
+      "image_data",
+      "url",
+      "filename",
+      "mime_type",
+      "media_type",
+    ]);
+    if (imageFileSourceError) return imageFileSourceError;
     const imageFileDetailError = validateOpenAIResponsesInputImageDetail(part.image_file.detail, `${param}.image_file.detail`);
     if (imageFileDetailError) return imageFileDetailError;
   }
