@@ -1,5 +1,77 @@
 # Audit Log
 
+## 2026-06-17 Files and Uploads Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/uploads`;
+  - `POST /v1/uploads/{upload_id}/parts`;
+  - `POST /v1/uploads/{upload_id}/complete`;
+  - `POST /v1/uploads/{upload_id}/cancel`;
+  - `GET` / `POST /v1/files`;
+  - `GET` / `DELETE /v1/files/{file_id}`;
+  - `GET /v1/files/{file_id}/content`.
+- Official schema notes:
+  - Files list is the only Files path in this set with official query
+    parameters: `purpose`, `limit`, `order`, and `after`;
+  - File create is multipart body driven, File retrieve/delete/content are
+    path-only operations, Upload create/complete are JSON body operations,
+    Upload part creation is multipart body driven, and Upload cancel is
+    path-only;
+  - none of the Upload action endpoints declare query parameters beyond the
+    required `upload_id` path parameter.
+- Tightened local bridge behavior:
+  - `/v1/uploads`, `/v1/uploads/{upload_id}/parts`,
+    `/v1/uploads/{upload_id}/complete`, and
+    `/v1/uploads/{upload_id}/cancel` now reject unsupported query parameters
+    before body parsing, Part creation, completion, cancellation, or other
+    lifecycle mutation;
+  - `POST /v1/files`, `GET /v1/files/{file_id}`,
+    `GET /v1/files/{file_id}/content`, and
+    `DELETE /v1/files/{file_id}` now reject unsupported query parameters
+    before multipart/raw/JSON parsing, metadata/content reads, or deletion;
+  - `GET /v1/files` keeps the already-documented official list query support.
+- Regression coverage updated:
+  - added a local Files/Uploads query test that confirms invalid query
+    parameters return the shared OpenAI-style `invalid_request_parameter`
+    response;
+  - the test verifies invalid File delete leaves the file retrievable, invalid
+    Upload part creation leaves `part_ids` empty, invalid Upload complete keeps
+    status `pending`, and invalid Upload cancel does not cancel the Upload;
+  - existing local Files, Vector Stores, Uploads, PDF extraction, and
+    `input_file` integration tests were rerun.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for Uploads and
+    body/path-only Files endpoints while preserving official Files list query
+    handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Files and Uploads endpoints reject unsupported query parameters before local mutations" test/server.test.js`
+    passed 1/1 test.
+  - `node --test --test-name-pattern "Files and Uploads|local Files and Vector Stores|local Uploads API|local Uploads and Files preserve binary bytes" test/server.test.js`
+    passed 5/5 tests.
+  - Full `node --test test/*.test.js` passed 377/377 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Files/Uploads query smoke verified invalid `metadata` queries on
+    File create/retrieve/content/delete and Upload create/part/complete/cancel
+    return OpenAI-style 400 errors, that invalid File delete leaves the File
+    retrievable, and that invalid Upload complete/cancel leaves the Upload able
+    to complete normally.
+  - Cleaned up the small public smoke Upload-created File after validation.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available, 95%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5386 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, uploaded file content, generated File or Upload ids,
+    or smoke-test request secrets were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Core Create Endpoint Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

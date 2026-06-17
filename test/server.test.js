@@ -16027,6 +16027,106 @@ test("POST /v1/responses rejects invalid max_tool_calls", async () => {
   });
 });
 
+test("Files and Uploads endpoints reject unsupported query parameters before local mutations", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local Files or Uploads query validation");
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectedQueryError = {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    };
+    const assertInvalidQuery = async (method, pathSuffix, options = {}) => {
+      const response = await fetch(`${baseUrl}${pathSuffix}?metadata=debug`, {
+        method,
+        ...options,
+      });
+      assert.equal(response.status, 400, `${method} ${pathSuffix}`);
+      assert.deepEqual(await response.json(), expectedQueryError, `${method} ${pathSuffix}`);
+    };
+
+    await assertInvalidQuery("POST", "/v1/files", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const createdFileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "query-boundary.txt",
+        purpose: "assistants",
+        content: "query boundary fixture",
+      }),
+    });
+    assert.equal(createdFileResponse.status, 200);
+    const file = await createdFileResponse.json();
+
+    await assertInvalidQuery("GET", `/v1/files/${file.id}`);
+    await assertInvalidQuery("GET", `/v1/files/${file.id}/content`);
+    await assertInvalidQuery("DELETE", `/v1/files/${file.id}`);
+
+    const fileAfterInvalidDelete = await fetch(`${baseUrl}/v1/files/${file.id}`);
+    assert.equal(fileAfterInvalidDelete.status, 200);
+    assert.equal((await fileAfterInvalidDelete.json()).id, file.id);
+
+    await assertInvalidQuery("POST", "/v1/uploads", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const partContent = "upload query boundary";
+    const createdUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "upload-query-boundary.txt",
+        purpose: "user_data",
+        bytes: Buffer.byteLength(partContent, "utf8"),
+        mime_type: "text/plain",
+      }),
+    });
+    assert.equal(createdUploadResponse.status, 200);
+    const upload = await createdUploadResponse.json();
+
+    await assertInvalidQuery("POST", `/v1/uploads/${upload.id}/parts`, {
+      headers: { "content-type": "text/plain" },
+      body: partContent,
+    });
+    assert.deepEqual(readUploadRecordForTest(stateDir, upload.id).part_ids, []);
+
+    const partResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
+      method: "POST",
+      headers: { "content-type": "text/plain" },
+      body: partContent,
+    });
+    assert.equal(partResponse.status, 200);
+    const part = await partResponse.json();
+
+    await assertInvalidQuery("POST", `/v1/uploads/${upload.id}/complete`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(readUploadRecordForTest(stateDir, upload.id).upload.status, "pending");
+
+    await assertInvalidQuery("POST", `/v1/uploads/${upload.id}/cancel`);
+    assert.equal(readUploadRecordForTest(stateDir, upload.id).upload.status, "pending");
+
+    const completeResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [part.id] }),
+    });
+    assert.equal(completeResponse.status, 200);
+    assert.equal((await completeResponse.json()).status, "completed");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Files and Vector Stores back Responses file_search compatibility", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

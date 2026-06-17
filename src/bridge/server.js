@@ -7145,7 +7145,12 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
   sendJson(res, 200, response);
 }
 
-async function handleFileCreate(req, res, config, fileSearchStore) {
+async function handleFileCreate(req, res, config, fileSearchStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const upload = await readFileCreateRequest(req, config);
   const validationError = validateOpenAIFileCreateRequest(upload);
   if (validationError) {
@@ -7237,7 +7242,12 @@ function officialFilesListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleFileGet(res, fileSearchStore, fileId) {
+function handleFileGet(res, fileSearchStore, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const file = fileSearchStore.getFile(fileId);
   if (!file) {
     sendError(res, 404, `file not found: ${fileId}`, { code: "file_not_found" });
@@ -7246,7 +7256,12 @@ function handleFileGet(res, fileSearchStore, fileId) {
   sendJson(res, 200, file);
 }
 
-function handleFileContent(res, fileSearchStore, fileId) {
+function handleFileContent(res, fileSearchStore, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const file = fileSearchStore.getFile(fileId);
   const fallbackContent = fileSearchStore.getFileContent(fileId);
   const content = fileSearchStore.getFileContentBuffer?.(fileId)
@@ -7264,7 +7279,12 @@ function handleFileContent(res, fileSearchStore, fileId) {
   res.end(content);
 }
 
-function handleFileDelete(res, fileSearchStore, fileId) {
+function handleFileDelete(res, fileSearchStore, fileId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = fileSearchStore.deleteFile(fileId);
   if (!deleted) {
     sendError(res, 404, `file not found: ${fileId}`, { code: "file_not_found" });
@@ -7273,24 +7293,44 @@ function handleFileDelete(res, fileSearchStore, fileId) {
   sendJson(res, 200, deleted);
 }
 
-async function handleUploadCreate(req, res, uploadStore) {
+async function handleUploadCreate(req, res, uploadStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   sendJson(res, 200, uploadStore.createUpload(body));
 }
 
-async function handleUploadPartCreate(req, res, config, uploadStore, uploadId) {
+async function handleUploadPartCreate(req, res, config, uploadStore, uploadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const part = await readUploadPartRequest(req, config);
   sendJson(res, 200, uploadStore.addPart(uploadId, part.content, {
     sha256: part.sha256,
   }));
 }
 
-async function handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId) {
+async function handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   sendJson(res, 200, uploadStore.completeUpload(uploadId, body, fileSearchStore));
 }
 
-function handleUploadCancel(res, uploadStore, uploadId) {
+function handleUploadCancel(res, uploadStore, uploadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, uploadStore.cancelUpload(uploadId));
 }
 
@@ -23384,7 +23424,7 @@ function createServer(config = loadConfig()) {
       }
 
       if (url.pathname === "/v1/uploads" && req.method === "POST") {
-        await handleUploadCreate(req, res, uploadStore);
+        await handleUploadCreate(req, res, uploadStore, url);
         return;
       }
 
@@ -23393,15 +23433,15 @@ function createServer(config = loadConfig()) {
         const uploadId = decodeURIComponent(uploadRoute[1]);
         const action = uploadRoute[2];
         if (action === "parts" && req.method === "POST") {
-          await handleUploadPartCreate(req, res, config, uploadStore, uploadId);
+          await handleUploadPartCreate(req, res, config, uploadStore, uploadId, url);
           return;
         }
         if (action === "complete" && req.method === "POST") {
-          await handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId);
+          await handleUploadComplete(req, res, uploadStore, fileSearchStore, uploadId, url);
           return;
         }
         if (action === "cancel" && req.method === "POST") {
-          handleUploadCancel(res, uploadStore, uploadId);
+          handleUploadCancel(res, uploadStore, uploadId, url);
           return;
         }
       }
@@ -23412,7 +23452,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleFileCreate(req, res, config, fileSearchStore);
+          await handleFileCreate(req, res, config, fileSearchStore, url);
           return;
         }
       }
@@ -23422,15 +23462,15 @@ function createServer(config = loadConfig()) {
         const fileId = decodeURIComponent(fileRoute[1]);
         const action = fileRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleFileGet(res, fileSearchStore, fileId);
+          handleFileGet(res, fileSearchStore, fileId, url);
           return;
         }
         if (!action && req.method === "DELETE") {
-          handleFileDelete(res, fileSearchStore, fileId);
+          handleFileDelete(res, fileSearchStore, fileId, url);
           return;
         }
         if (action === "content" && req.method === "GET") {
-          handleFileContent(res, fileSearchStore, fileId);
+          handleFileContent(res, fileSearchStore, fileId, url);
           return;
         }
       }
