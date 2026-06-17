@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Responses Hosted Tool Choice Type-Only Validation
+
+- Rechecked the current official OpenAI `/v1/responses` OpenAPI schema through
+  the developer docs MCP and the official `openai-openapi` YAML:
+  - `ToolChoiceTypes` is a hosted-tool selector object whose only modeled
+    property is `type`;
+  - hosted selector values include `file_search`, `web_search_preview`,
+    `computer`, `computer_use_preview`, `computer_use`, `image_generation`,
+    and `code_interpreter`;
+  - `SpecificApplyPatchParam` and `SpecificFunctionShellParam` are also
+    type-only selector objects.
+- Tightened local Responses request validation before provider calls:
+  - hosted `tool_choice` selectors now reject fields other than `type`;
+  - this covers `file_search`, `web_search_preview`,
+    `web_search_preview_2025_03_11`, `computer`, `computer_use_preview`,
+    `computer_use`, `image_generation`, `code_interpreter`, local
+    `tool_search`, `apply_patch`, and `shell`;
+  - named `function`, `custom`, `mcp`, and `allowed_tools` choices keep their
+    existing schema-specific validation.
+- Regression coverage updated:
+  - the shared Responses tools validation table now rejects extra fields on
+    `file_search`, `computer`, `image_generation`, `code_interpreter`, and
+    local `tool_search` `tool_choice` objects across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - targeted regressions still cover valid allowed-tools mapping, local
+    computer, local image generation, and local hosted tool search flows.
+- Documentation updated:
+  - the compatibility matrix now records hosted-tool `tool_choice` selectors
+    as type-only before provider calls.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|allowed_tools|local computer|image_generation|tool_search"
+    test/server.test.js` passes: 26 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit token scan found only pre-existing environment-variable names,
+    documentation health-check placeholders, and test fake bearer values; no
+    real API-key or bearer-token values were introduced.
+- Runtime/storage check:
+  - `/` has 16 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed hosted `tool_choice` request with
+    `type:"image_generation"` plus an extra `model` field returns
+    `400 invalid_request_parameter` with `param:"tool_choice.model"`.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses Type-Only Tool Schema Validation
 
 - Rechecked the current official OpenAI Responses schema through the developer

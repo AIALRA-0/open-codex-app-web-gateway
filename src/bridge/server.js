@@ -365,6 +365,19 @@ const OPENAI_RESPONSES_TOOL_CHOICE_OBJECT_TYPES = Object.freeze([
   "apply_patch",
   "shell",
 ]);
+const OPENAI_RESPONSES_TYPE_ONLY_TOOL_CHOICE_TYPES = Object.freeze([
+  "file_search",
+  "web_search_preview",
+  "web_search_preview_2025_03_11",
+  "computer",
+  "computer_use_preview",
+  "computer_use",
+  "image_generation",
+  "code_interpreter",
+  "tool_search",
+  "apply_patch",
+  "shell",
+]);
 const OPENAI_RESPONSES_ALLOWED_TOOL_SELECTOR_TYPES = Object.freeze([
   "function",
   "mcp",
@@ -4847,7 +4860,7 @@ function validateOpenAIResponsesToolChoice(body = {}) {
       return requestValidationError("tool_choice.name must be a string or null", "tool_choice.name");
     }
   }
-  if (toolChoice.type === "shell" || toolChoice.type === "apply_patch") {
+  if (OPENAI_RESPONSES_TYPE_ONLY_TOOL_CHOICE_TYPES.includes(toolChoice.type)) {
     return validateOpenAIResponsesTypeOnlyObject(toolChoice, "tool_choice");
   }
   return null;

@@ -3367,6 +3367,31 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tool_choice.name must be a string or null",
       },
       {
+        body: { tool_choice: { type: "file_search", vector_store_ids: ["vs_123"] } },
+        param: "tool_choice.vector_store_ids",
+        message: "tool_choice.vector_store_ids is not supported",
+      },
+      {
+        body: { tool_choice: { type: "computer", environment: "browser" } },
+        param: "tool_choice.environment",
+        message: "tool_choice.environment is not supported",
+      },
+      {
+        body: { tool_choice: { type: "image_generation", model: "gpt-image-1" } },
+        param: "tool_choice.model",
+        message: "tool_choice.model is not supported",
+      },
+      {
+        body: { tool_choice: { type: "code_interpreter", container: "cntr_123" } },
+        param: "tool_choice.container",
+        message: "tool_choice.container is not supported",
+      },
+      {
+        body: { tool_choice: { type: "tool_search", execution: "client" } },
+        param: "tool_choice.execution",
+        message: "tool_choice.execution is not supported",
+      },
+      {
         body: { tool_choice: { type: "apply_patch", name: "patch" } },
         param: "tool_choice.name",
         message: "tool_choice.name is not supported",
