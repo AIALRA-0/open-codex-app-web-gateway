@@ -1,5 +1,47 @@
 # Audit Log
 
+## 2026-06-17 Prompt Cache Key Length Alignment
+
+- Rechecked the official OpenAI OpenAPI schema and API reference for
+  `prompt_cache_key`:
+  - `safety_identifier` has an official 64-character maximum;
+  - `prompt_cache_key` is documented as a string used for prompt-cache bucketing
+    and currently has no published maximum length in the official schema/docs;
+  - `prompt_cache_retention` remains `in_memory`, `24h`, or `null`.
+- Closed an over-strict local validation gap:
+  - Responses create, `/v1/responses/input_tokens`,
+    `/v1/responses/compact`, and direct `/v1/chat/completions` now validate
+    `prompt_cache_key` as string/null without applying the older local
+    64-character cap;
+  - `safety_identifier` still enforces the official 64-character limit;
+  - provider-aware forwarding/filtering and DeepSeek `user_id` normalization
+    remain unchanged.
+- Documentation updated:
+  - compatibility matrix now states that `prompt_cache_key` has no current
+    published maximum length, while `safety_identifier` remains capped at 64;
+  - evaluation plan now requires long string `prompt_cache_key` acceptance
+    coverage across Responses create, `/input_tokens`, `/compact`, and direct
+    Chat.
+- Validation:
+  - targeted identity/cache tests pass for Responses create,
+    `/v1/responses/input_tokens`, `/v1/responses/compact`, and direct
+    `/v1/chat/completions`;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - additional credential-pattern scan only matched a local test fixture bearer
+    token string;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm overlong `safety_identifier` still returns
+    `400 invalid_request_parameter`, while an 86-character `prompt_cache_key`
+    returns `200` through the DeepSeek chat-completion path.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Audio Request Schema Validation Tightening
 
 - Rechecked the official OpenAI OpenAPI schemas for request-based Audio APIs:

@@ -1320,10 +1320,11 @@ test("POST /v1/responses validates seed before provider calls", async () => {
 });
 
 test("POST /v1/responses validates identity and cache fields before provider calls", async () => {
+  const longPromptCacheKey = `cache-${"c".repeat(80)}`;
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.user, "legacy-user");
     assert.equal(call.body.safety_identifier, "safe-user");
-    assert.equal(call.body.prompt_cache_key, "cache-key");
+    assert.equal(call.body.prompt_cache_key, longPromptCacheKey);
     assert.equal(call.body.prompt_cache_retention, "24h");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -1349,11 +1350,6 @@ test("POST /v1/responses validates identity and cache fields before provider cal
         message: "safety_identifier must be at most 64 characters",
       },
       { body: { prompt_cache_key: [] }, param: "prompt_cache_key", message: "prompt_cache_key must be a string" },
-      {
-        body: { prompt_cache_key: "c".repeat(65) },
-        param: "prompt_cache_key",
-        message: "prompt_cache_key must be at most 64 characters",
-      },
       {
         body: { prompt_cache_retention: "forever" },
         param: "prompt_cache_retention",
@@ -1395,7 +1391,7 @@ test("POST /v1/responses validates identity and cache fields before provider cal
         input: "Check valid identity/cache request.",
         user: "legacy-user",
         safety_identifier: "safe-user",
-        prompt_cache_key: "cache-key",
+        prompt_cache_key: longPromptCacheKey,
         prompt_cache_retention: "24h",
       }),
     });
@@ -17535,11 +17531,6 @@ test("POST /v1/responses/compact validates official request fields before provid
         message: "prompt_cache_key must be a string",
       },
       {
-        body: { model: "mock-model", prompt_cache_key: "c".repeat(65) },
-        param: "prompt_cache_key",
-        message: "prompt_cache_key must be at most 64 characters",
-      },
-      {
         body: { model: "mock-model", prompt_cache_retention: "7d" },
         param: "prompt_cache_retention",
         message: "prompt_cache_retention must be one of: in_memory, 24h",
@@ -17575,9 +17566,10 @@ test("POST /v1/responses/compact validates official request fields before provid
 });
 
 test("POST /v1/responses/compact forwards validated cache and service fields to compaction Chat", async () => {
+  const longPromptCacheKey = `compact-${"c".repeat(80)}`;
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.model, "mock-model");
-    assert.equal(call.body.prompt_cache_key, "compact-cache");
+    assert.equal(call.body.prompt_cache_key, longPromptCacheKey);
     assert.equal(call.body.prompt_cache_retention, "24h");
     assert.equal(call.body.service_tier, "priority");
     assert.deepEqual(call.body.thinking, { type: "disabled" });
@@ -17602,7 +17594,7 @@ test("POST /v1/responses/compact forwards validated cache and service fields to 
       body: JSON.stringify({
         model: "mock-model",
         input: "Compact cache-aware state.",
-        prompt_cache_key: "compact-cache",
+        prompt_cache_key: longPromptCacheKey,
         prompt_cache_retention: "24h",
         service_tier: "priority",
       }),
@@ -18003,9 +17995,10 @@ test("POST /v1/responses/input_tokens validates seed before provider calls", asy
 });
 
 test("POST /v1/responses/input_tokens validates identity and cache fields before provider calls", async () => {
+  const longPromptCacheKey = `probe-${"c".repeat(80)}`;
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.user, "probe-user");
-    assert.equal(call.body.prompt_cache_key, "probe-cache");
+    assert.equal(call.body.prompt_cache_key, longPromptCacheKey);
     assert.equal(call.body.prompt_cache_retention, "in_memory");
     assert.equal(call.body.max_tokens, 1);
     res.writeHead(200, { "content-type": "application/json" });
@@ -18029,11 +18022,6 @@ test("POST /v1/responses/input_tokens validates identity and cache fields before
         body: { safety_identifier: "s".repeat(65) },
         param: "safety_identifier",
         message: "safety_identifier must be at most 64 characters",
-      },
-      {
-        body: { prompt_cache_key: "c".repeat(65) },
-        param: "prompt_cache_key",
-        message: "prompt_cache_key must be at most 64 characters",
       },
       {
         body: { prompt_cache_retention: "7d" },
@@ -18070,7 +18058,7 @@ test("POST /v1/responses/input_tokens validates identity and cache fields before
         model: "mock-model",
         input: "Count valid identity/cache request.",
         user: "probe-user",
-        prompt_cache_key: "probe-cache",
+        prompt_cache_key: longPromptCacheKey,
         prompt_cache_retention: "in_memory",
       }),
     });
@@ -23013,10 +23001,11 @@ test("POST /v1/chat/completions validates seed before provider calls", async () 
 });
 
 test("POST /v1/chat/completions validates identity and cache fields before provider calls", async () => {
+  const longPromptCacheKey = `chat-${"c".repeat(80)}`;
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.user, "chat-user");
     assert.equal(call.body.safety_identifier, "chat-safe-user");
-    assert.equal(call.body.prompt_cache_key, "chat-cache-key");
+    assert.equal(call.body.prompt_cache_key, longPromptCacheKey);
     assert.equal(call.body.prompt_cache_retention, "in_memory");
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify({
@@ -23082,7 +23071,7 @@ test("POST /v1/chat/completions validates identity and cache fields before provi
         messages: [{ role: "user", content: "hello" }],
         user: "chat-user",
         safety_identifier: "chat-safe-user",
-        prompt_cache_key: "chat-cache-key",
+        prompt_cache_key: longPromptCacheKey,
         prompt_cache_retention: "in_memory",
       }),
     });

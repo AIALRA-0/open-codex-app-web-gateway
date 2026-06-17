@@ -636,9 +636,10 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/responses/input_tokens`, local `/v1/responses/compact`, and direct Chat
   reject non-string `user`, `safety_identifier`, and `prompt_cache_key` values, reject
   `safety_identifier` values over 64 characters, reject unsupported
-  `prompt_cache_retention` values, enforce the Responses 64-character
-  `prompt_cache_key` limit, and keep valid fields eligible for upstream
-  passthrough or DeepSeek `user_id` mapping; legacy Completions must reject
+  `prompt_cache_retention` values, accept long string `prompt_cache_key` values
+  because the current official schema publishes no maximum length, and keep
+  valid fields eligible for upstream passthrough or DeepSeek `user_id` mapping;
+  legacy Completions must reject
   non-string `user` before prompt-to-Chat mapping.
 - Responses `include:["message.output_text.logprobs"]` and `top_logprobs` map to Chat logprobs and preserve returned token probability arrays in output text content, while stored response retrieval hides or returns them according to the include query. Regression coverage also validates official `logprobs` boolean/null handling on Responses and direct Chat requests, official `top_logprobs` integer bounds, the direct Chat requirement that `logprobs:true` be present whenever `top_logprobs` is set, and legacy Completions `echo` boolean/null plus `logprobs` integer 0..5 validation before prompt-to-Chat mapping.
 - Responses create requests must validate `include` as an array/null of the
@@ -770,8 +771,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   `/v1/responses`, `/v1/responses/input_tokens`, and `/v1/responses/compact`
   before provider calls.
 - Responses compact validates its official request contract before provider
-  calls: `model` is required, `prompt_cache_key` follows the Responses
-  64-character string limit, `prompt_cache_retention` follows the
+  calls: `model` is required, `prompt_cache_key` follows the current official
+  string/null shape without a published maximum length, `prompt_cache_retention` follows the
   `in_memory` / `24h` enum, and `service_tier` follows the
   `auto` / `default` / `flex` / `scale` / `priority` enum. Valid prompt-cache and
   provider-supported service-tier fields must survive the local compaction Chat

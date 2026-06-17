@@ -219,7 +219,6 @@ const OPENAI_LEGACY_BEST_OF_MAX = 20;
 const OPENAI_SEED_MIN = -9223372036854776000;
 const OPENAI_SEED_MAX = 9223372036854776000;
 const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
-const OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS = 64;
 const OPENAI_PROMPT_CACHE_RETENTION_VALUES = Object.freeze(["in_memory", "24h"]);
 const OPENAI_STREAM_OPTION_FIELDS = Object.freeze(["include_usage", "include_obfuscation"]);
 const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
@@ -965,9 +964,7 @@ async function handleResponses(req, res, config, store, backgroundJobs, fileSear
     sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
     return;
   }
-  const identityCacheError = validateOpenAIIdentityCacheFields(request, {
-    promptCacheKeyMaxLength: OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS,
-  });
+  const identityCacheError = validateOpenAIIdentityCacheFields(request);
   if (identityCacheError) {
     sendError(res, 400, identityCacheError.message, identityCacheError);
     return;
@@ -2790,7 +2787,7 @@ function validateOpenAISeed(body = {}) {
   });
 }
 
-function validateOpenAIIdentityCacheFields(body = {}, options = {}) {
+function validateOpenAIIdentityCacheFields(body = {}) {
   const userError = validateOpenAIStringParameter(body, "user");
   if (userError) return userError;
 
@@ -2799,10 +2796,7 @@ function validateOpenAIIdentityCacheFields(body = {}, options = {}) {
   });
   if (safetyIdentifierError) return safetyIdentifierError;
 
-  const promptCacheKeyOptions = options.promptCacheKeyMaxLength == null
-    ? {}
-    : { maxLength: options.promptCacheKeyMaxLength };
-  const promptCacheKeyError = validateOpenAIStringParameter(body, "prompt_cache_key", promptCacheKeyOptions);
+  const promptCacheKeyError = validateOpenAIStringParameter(body, "prompt_cache_key");
   if (promptCacheKeyError) return promptCacheKeyError;
 
   if (
@@ -4571,9 +4565,7 @@ async function handleResponseInputTokens(req, res, config, store, fileSearchStor
     sendError(res, 400, chatMaxTokensError.message, chatMaxTokensError);
     return;
   }
-  const identityCacheError = validateOpenAIIdentityCacheFields(request, {
-    promptCacheKeyMaxLength: OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS,
-  });
+  const identityCacheError = validateOpenAIIdentityCacheFields(request);
   if (identityCacheError) {
     sendError(res, 400, identityCacheError.message, identityCacheError);
     return;
@@ -4694,9 +4686,7 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     sendError(res, 400, truncationValueError.message, truncationValueError);
     return;
   }
-  const identityCacheError = validateOpenAIIdentityCacheFields(request, {
-    promptCacheKeyMaxLength: OPENAI_RESPONSES_PROMPT_CACHE_KEY_MAX_CHARS,
-  });
+  const identityCacheError = validateOpenAIIdentityCacheFields(request);
   if (identityCacheError) {
     sendError(res, 400, identityCacheError.message, identityCacheError);
     return;
