@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-17 Chat Completion Messages List Official Pagination
+
+- Rechecked official OpenAI OpenAPI for
+  `GET /v1/chat/completions/{completion_id}/messages`:
+  - operation `getChatCompletionMessages` lists messages from a stored Chat
+    completion;
+  - official query parameters are `after`, `limit`, and `order`;
+  - `order` supports ascending and descending message timestamp order, with
+    default `asc`;
+  - `before` is not an official query parameter for this endpoint.
+- Tightened local stored Chat completion message-list behavior:
+  - `GET /v1/chat/completions/{completion_id}/messages` still validates
+    official `after`, `limit`, and `order` inputs before projecting local
+    stored request/output messages;
+  - pagination now passes only official `after`, `order`, and `limit` through
+    to the shared list paginator, so unsupported generic paginator fields such
+    as `before` cannot silently affect official message-list results;
+  - existing message projection, legacy-record normalization, default ascending
+    order, and assistant-only field normalization are unchanged.
+- Regression coverage updated:
+  - the stored Chat completion lifecycle test now requests
+    `/messages?order=asc&limit=10&before=chatmsg_000001` and verifies the input
+    and output messages are both still returned in official ascending order.
+- Documentation updated:
+  - compatibility matrix now records that stored Chat message listing supports
+    official `limit`, `after`, and `order` pagination only, and that
+    unsupported generic paginator parameters such as `before` do not affect the
+    result.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/chat/completions proxies and stores chat responses when requested" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Chat completion messages smoke marker
+    `chat-messages-before-smoke-mqibmch7` created one temporary stored Chat
+    completion, verified `/messages?order=asc&limit=10` returns
+    `chatmsg_000000` and `chatmsg_000001`, verified unsupported
+    `before=chatmsg_000001` is ignored and still returns both messages, then
+    deleted the temporary completion.
+  - Disk guard after deployment: `/` 193G size, 178G used, 16G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5361 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or smoke-test request secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Chat Completions List Official Pagination
 
 - Rechecked official OpenAI OpenAPI through the OpenAI developer-docs MCP for

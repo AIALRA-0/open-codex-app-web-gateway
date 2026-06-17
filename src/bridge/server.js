@@ -18152,7 +18152,7 @@ function handleChatCompletionMessages(res, store, completionId, url) {
   }
 
   const messages = projectStoredChatMessages(record);
-  sendJson(res, 200, paginateList(messages, url));
+  sendJson(res, 200, paginateList(messages, officialChatCompletionMessagesListPaginationUrl(url)));
 }
 
 function validateOpenAIChatCompletionMessagesListQuery(url) {
@@ -18163,6 +18163,14 @@ function validateOpenAIChatCompletionMessagesListQuery(url) {
   if (limitError) return limitError;
 
   return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialChatCompletionMessagesListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function projectStoredChatMessages(record) {

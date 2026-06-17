@@ -30023,6 +30023,14 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
+    const messagesBeforeIgnored = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=asc&limit=10&before=chatmsg_000001`);
+    assert.equal(messagesBeforeIgnored.status, 200);
+    const messagesBeforeIgnoredJson = await messagesBeforeIgnored.json();
+    assert.deepEqual(
+      messagesBeforeIgnoredJson.data.map((message) => message.id),
+      ["chatmsg_000000", "chatmsg_000001"],
+    );
+
     const invalidMessagesOrder = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}/messages?order=sideways`);
     assert.equal(invalidMessagesOrder.status, 400);
     assert.deepEqual(await invalidMessagesOrder.json(), {
