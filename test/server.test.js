@@ -733,6 +733,101 @@ test("Responses endpoints validate input image and file detail before provider c
         param: "input.0.call_id",
         message: "input.0.call_id must be a non-empty string",
       },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "web_search_call",
+          id: "ws_bad",
+          status: "done",
+          action: { type: "search", query: "schema" },
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, searching, completed, failed",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "file_search_call",
+          id: "fs_bad",
+          status: "completed",
+          queries: "schema",
+        }],
+        param: "input.0.queries",
+        message: "input.0.queries must be an array",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "image_generation_call",
+          id: "ig_bad",
+          status: "completed",
+          result: { data: "bad" },
+        }],
+        param: "input.0.result",
+        message: "input.0.result must be a string or null",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "code_interpreter_call",
+          id: "ci_bad",
+          status: "completed",
+          outputs: {},
+        }],
+        param: "input.0.outputs",
+        message: "input.0.outputs must be an array or null",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "shell_call",
+          call_id: "call_shell",
+          status: "completed",
+        }],
+        param: "input.0.action",
+        message: "input.0.action must be an object",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: "text",
+        }],
+        param: "input.0.output",
+        message: "input.0.output must be an array",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "mcp_list_tools",
+          server_label: "dmcp",
+          tools: {},
+        }],
+        param: "input.0.tools",
+        message: "input.0.tools must be an array",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "mcp_approval_response",
+          approval_request_id: "mcpr_bad",
+          approve: "yes",
+        }],
+        param: "input.0.approve",
+        message: "input.0.approve must be a boolean",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "apply_patch_call",
+          call_id: "call_patch",
+          status: "failed",
+          operation: { type: "update", path: "README.md" },
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: in_progress, completed",
+      },
     ];
 
     for (const invalidCase of invalidCases) {

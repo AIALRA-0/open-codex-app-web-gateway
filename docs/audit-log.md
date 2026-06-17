@@ -1,5 +1,70 @@
 # Audit Log
 
+## 2026-06-17 Responses Tool Context Input Validation
+
+- Rechecked the current official OpenAI Responses schema through the developer
+  docs MCP and the official `openai-openapi` YAML for hosted/local tool item
+  fields and status enums:
+  - `file_search_call`, `web_search_call`, `image_generation_call`,
+    `code_interpreter_call`, `computer_call`, local shell, function shell,
+    apply-patch, and MCP item schemas use type-specific status enums;
+  - MCP approval responses require a boolean approval decision;
+  - file/search/code/shell/MCP result payloads have array/object/string
+    boundaries that should be rejected before upstream Chat provider calls.
+- Tightened Responses input validation before provider calls:
+  - prior hosted/local tool context items now validate known `status` values,
+    required call/action fields for shell/apply-patch/MCP approval paths,
+    array fields such as file-search `queries`, shell `output`, MCP `tools`,
+    code-interpreter `outputs`, and optional string/object fields;
+  - image-generation `result` accepts only string/null and remains summarized
+    before Chat replay, preventing object-shaped payloads from becoming prompt
+    text;
+  - `shell_call_output` accepts local compatibility `status:"failed"` so failed
+    local shell replays remain usable even though the official shell output
+    enum is narrower.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers invalid hosted/local
+    tool context items across `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`;
+  - targeted MCP, shell, container, and tool-context replay tests pass with the
+    new schema gate.
+- Documentation updated:
+  - compatibility matrix now records pre-provider validation for hosted/local
+    tool context replay items.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses endpoints validate input image and file detail|reuses input
+    mcp_list_tools|mcp_list_tools" test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "MCP|mcp|shell|Containers|container" test/server.test.js` passes: 26
+    tests;
+  - full `node --test test/*.test.js` passes: 365 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `mcp_approval_response.approve:"yes"` input-token request
+    returns `400 invalid_request_parameter` with `param:"input.0.approve"`;
+  - public valid `file_search_call` plus failed `shell_call_output` input-token
+    request returns 200 with `input_tokens:131`.
+- Runtime/storage check:
+  - `/` has 13 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Tool Item Context Replay
 
 - Rechecked the current official OpenAI Responses `Item` union through the
