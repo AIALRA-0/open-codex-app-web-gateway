@@ -16034,6 +16034,50 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const listed = await fetch(`${baseUrl}/v1/files?purpose=assistants`);
     assert.equal(listed.status, 200);
     assert.equal((await listed.json()).data[0].id, file.id);
+
+    const beforeIgnored = await fetch(`${baseUrl}/v1/files?purpose=assistants&before=${file.id}&limit=1`);
+    assert.equal(beforeIgnored.status, 200);
+    assert.equal((await beforeIgnored.json()).data[0].id, file.id);
+
+    const invalidFileListCases = [
+      {
+        path: `/v1/files?purpose=assistants&purpose=batch`,
+        message: "purpose must be a single string query value",
+        param: "purpose",
+      },
+      {
+        path: "/v1/files?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: "/v1/files?limit=10001",
+        message: "limit must be an integer between 1 and 10000",
+        param: "limit",
+      },
+      {
+        path: `/v1/files?after=${file.id}&after=file_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: "/v1/files?order=asc&order=desc",
+        message: "order must be a single string query value",
+        param: "order",
+      },
+    ];
+    for (const testCase of invalidFileListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
   });
 });
 

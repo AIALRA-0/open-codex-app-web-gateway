@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Files List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /files`
+  query schema:
+  - `purpose` is a string scalar filter;
+  - `limit` is an integer scalar with documented range 1 through 10000;
+  - `order` is an `asc` / `desc` string scalar;
+  - `after` is a string scalar cursor;
+  - `before` is not part of the official Files list query contract.
+- Tightened local Files list behavior:
+  - `GET /v1/files` now validates repeated scalar `purpose`, `limit`,
+    `order`, and `after` query parameters before listing files;
+  - `limit` is now validated with the official 10000 maximum instead of being
+    silently clamped by the local store paginator;
+  - the file-store paginator receives a sanitized URL containing only official
+    `after`, `limit`, and `order`, so generic `before` no longer affects the
+    official Files list result.
+- Regression coverage updated:
+  - extended the local Files and Vector Stores compatibility test with
+    repeated `purpose`, repeated `limit`, out-of-range `limit`, repeated
+    `after`, repeated `order`, and `before` sanitize checks.
+- Documentation updated:
+  - compatibility matrix now records Files list pagination as official
+    `purpose`, `limit`, `after`, and `order` only.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public repeated-`purpose` smoke against `/v1/files` returned HTTP 400 with
+    `code:"invalid_request_parameter"` and `param:"purpose"`.
+  - Public out-of-range `limit=10001` smoke against `/v1/files` returned
+    HTTP 400 with `code:"invalid_request_parameter"` and `param:"limit"`.
+  - Public `before` smoke against `/v1/files?before=...&limit=1` returned
+    HTTP 200 list output, confirming unsupported generic paginator state no
+    longer controls the official Files list result.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Evals Output Item Status Projection
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0

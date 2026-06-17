@@ -7098,10 +7098,36 @@ async function handleFileCreate(req, res, config, fileSearchStore) {
 }
 
 function handleFilesList(res, fileSearchStore, url) {
+  const queryError = validateOpenAIFilesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   sendJson(res, 200, fileSearchStore.listFiles({
     purpose: url.searchParams.get("purpose") || undefined,
-    url,
+    url: officialFilesListPaginationUrl(url),
   }));
+}
+
+function validateOpenAIFilesListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 10000 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "purpose");
+}
+
+function officialFilesListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit", "order"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleFileGet(res, fileSearchStore, fileId) {
