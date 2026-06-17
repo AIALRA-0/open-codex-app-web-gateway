@@ -322,6 +322,7 @@ const OPENAI_RESPONSES_COMPUTER_ENVIRONMENT_VALUES = Object.freeze([
   "ubuntu",
   "browser",
 ]);
+const OPENAI_TOOL_SEARCH_EXECUTION_VALUES = Object.freeze(["server", "client"]);
 const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
 const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
@@ -3766,6 +3767,9 @@ function validateOpenAIResponsesTools(body = {}) {
     } else if (tool.type === "computer" || tool.type === "computer_use") {
       const computerError = validateOpenAIResponsesComputerTool(tool, param);
       if (computerError) return computerError;
+    } else if (tool.type === "tool_search") {
+      const toolSearchError = validateOpenAIResponsesToolSearchTool(tool, param);
+      if (toolSearchError) return toolSearchError;
     } else if (tool.type === "shell") {
       const shellError = validateOpenAIResponsesShellTool(tool, param);
       if (shellError) return shellError;
@@ -3773,6 +3777,36 @@ function validateOpenAIResponsesTools(body = {}) {
       const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
       if (codeInterpreterError) return codeInterpreterError;
     }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesToolSearchTool(tool, param) {
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "execution")
+    && (
+      typeof tool.execution !== "string"
+      || !OPENAI_TOOL_SEARCH_EXECUTION_VALUES.includes(tool.execution)
+    )
+  ) {
+    return requestValidationError(
+      `${param}.execution must be one of: ${OPENAI_TOOL_SEARCH_EXECUTION_VALUES.join(", ")}`,
+      `${param}.execution`,
+    );
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "description")
+    && tool.description !== null
+    && typeof tool.description !== "string"
+  ) {
+    return requestValidationError(`${param}.description must be a string or null`, `${param}.description`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "parameters")
+    && tool.parameters !== null
+    && !isPlainObject(tool.parameters)
+  ) {
+    return requestValidationError(`${param}.parameters must be an object or null`, `${param}.parameters`);
   }
   return null;
 }

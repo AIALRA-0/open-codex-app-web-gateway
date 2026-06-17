@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Responses Tool Search Tool Schema Validation
+
+- Rechecked the official OpenAI `tool_search` guide through the developer docs:
+  - `tool_search` is enabled by adding `tools:[{type:"tool_search"}]`;
+  - deferred function, namespace, and MCP definitions are loaded at runtime;
+  - client-executed tool search uses `execution:"client"` plus a caller-defined
+    `parameters` schema and returns a later `tool_search_output`;
+  - hosted tool search returns `tool_search_call` /
+    `tool_search_output` with `execution:"server"`.
+- Tightened local Responses request validation before provider or local
+  tool-search adapter work:
+  - `tools[].execution` on `tool_search` must be `server` or `client` when
+    present;
+  - `tools[].description` must be a string or null when present;
+  - `tools[].parameters` must be an object or null when present;
+  - existing hosted local tool search, client-executed tool search,
+    `additional_tools`, streaming, background, and deferred MCP behavior is
+    unchanged for valid requests.
+- Regression coverage updated:
+  - the shared Responses tools validation table now rejects malformed
+    `tool_search` schemas across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - the targeted suite still covers hosted namespace loading, DeepSeek
+    text-call promotion, streaming name remapping, client-executed
+    `tool_search_output`, `additional_tools`, and deferred MCP tool search.
+- Documentation updated:
+  - the compatibility matrix now records `tool_search` request-field
+    validation before local adapter execution;
+  - the Local Tool Search Adapter section records the same entry validation
+    boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|tool_search|Tool search|additional_tools"
+    test/server.test.js test/translator.test.js` passes: 14 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit token scan found only pre-existing environment-variable names,
+    documentation placeholders, and test fake bearer values; no newly added
+    real API-key or bearer-token values were introduced.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `tool_search` request with `execution:"hosted"` returns
+    `400 invalid_request_parameter` with `param:"tools.0.execution"`.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses Computer Use Preview Tool Schema Validation
 
 - Rechecked current official OpenAI Computer Use guidance through the

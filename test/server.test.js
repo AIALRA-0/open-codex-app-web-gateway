@@ -3023,6 +3023,26 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.display_width must be a positive integer",
       },
       {
+        body: { tools: [{ type: "tool_search", execution: "hosted" }] },
+        param: "tools.0.execution",
+        message: "tools.0.execution must be one of: server, client",
+      },
+      {
+        body: { tools: [{ type: "tool_search", execution: 7 }] },
+        param: "tools.0.execution",
+        message: "tools.0.execution must be one of: server, client",
+      },
+      {
+        body: { tools: [{ type: "tool_search", description: 7 }] },
+        param: "tools.0.description",
+        message: "tools.0.description must be a string or null",
+      },
+      {
+        body: { tools: [{ type: "tool_search", parameters: [] }] },
+        param: "tools.0.parameters",
+        message: "tools.0.parameters must be an object or null",
+      },
+      {
         body: { tools: [{ type: "file_search" }] },
         param: "tools.0.vector_store_ids",
         message: "tools.0.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided",
