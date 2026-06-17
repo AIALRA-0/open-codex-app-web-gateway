@@ -4243,6 +4243,40 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     assert.equal(voiceGet.status, 200);
     assert.equal((await voiceGet.json()).id, voice.id);
 
+    const deleteConsentInUse = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deleteConsentInUse.status, 400);
+    assert.equal((await deleteConsentInUse.json()).error.code, "voice_consent_in_use");
+
+    const voiceDelete = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(voiceDelete.status, 200);
+    assert.deepEqual(await voiceDelete.json(), {
+      id: voice.id,
+      object: "audio.voice.deleted",
+      deleted: true,
+    });
+
+    const missingVoiceGet = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`);
+    assert.equal(missingVoiceGet.status, 404);
+    assert.equal((await missingVoiceGet.json()).error.code, "voice_not_found");
+
+    const consentDelete = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(consentDelete.status, 200);
+    assert.deepEqual(await consentDelete.json(), {
+      id: consent.id,
+      object: "audio.voice_consent.deleted",
+      deleted: true,
+    });
+
+    const missingConsentGet = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
+    assert.equal(missingConsentGet.status, 404);
+    assert.equal((await missingConsentGet.json()).error.code, "voice_consent_not_found");
+
     const missingRecording = await fetch(`${baseUrl}/v1/audio/voice_consents`, {
       method: "POST",
       headers: { "content-type": "application/json" },

@@ -887,7 +887,8 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   multipart, JSON/base64, verbose JSON, logprob include, timestamp
   granularities, official validation failures, and SSE paths,
   `/v1/audio/translations` multipart and JSON/base64 paths, custom voice
-  consent/voice metadata lifecycle, and local Batch JSONL execution over audio
+  consent/voice metadata lifecycle, local cleanup-extension deletes with
+  consent reference protection, and local Batch JSONL execution over audio
   transcription and translation requests.
 - Direct Videos API evaluation covers `/v1/videos` create, `GET
   /v1/videos/{video_id}`, `GET /v1/videos/{video_id}/content`, list, delete,

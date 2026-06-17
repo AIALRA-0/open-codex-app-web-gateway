@@ -9960,6 +9960,27 @@ function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId) {
   sendJson(res, 200, consent);
 }
 
+function handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId) {
+  try {
+    const deleted = audioVoiceStore.deleteConsent(consentId);
+    if (!deleted) {
+      sendError(res, 404, `voice consent not found: ${consentId}`, {
+        type: "invalid_request_error",
+        code: "voice_consent_not_found",
+        param: "consent_id",
+      });
+      return;
+    }
+    sendJson(res, 200, deleted);
+  } catch (error) {
+    sendError(res, error.status || 400, error.message || "voice consent delete failed", {
+      type: error.type || "invalid_request_error",
+      code: error.code || "voice_consent_delete_error",
+      param: error.param || null,
+    });
+  }
+}
+
 async function handleAudioVoicesCreate(req, res, config, audioVoiceStore) {
   try {
     if (!canUseLocalAudio(config)) {
@@ -10009,6 +10030,19 @@ function handleAudioVoiceGet(res, audioVoiceStore, voiceId) {
     return;
   }
   sendJson(res, 200, voice);
+}
+
+function handleAudioVoiceDelete(res, audioVoiceStore, voiceId) {
+  const deleted = audioVoiceStore.deleteVoice(voiceId);
+  if (!deleted) {
+    sendError(res, 404, `voice not found: ${voiceId}`, {
+      type: "invalid_request_error",
+      code: "voice_not_found",
+      param: "voice_id",
+    });
+    return;
+  }
+  sendJson(res, 200, deleted);
 }
 
 async function readAudioNamedFileRequest(req, config = {}, fileField = "file") {
@@ -18480,9 +18514,16 @@ function createServer(config = loadConfig()) {
       }
 
       const voiceConsentRoute = url.pathname.match(/^\/v1\/audio\/voice_consents\/([^/]+)$/);
-      if (voiceConsentRoute && req.method === "GET") {
-        handleAudioVoiceConsentGet(res, audioVoiceStore, decodeURIComponent(voiceConsentRoute[1]));
-        return;
+      if (voiceConsentRoute) {
+        const consentId = decodeURIComponent(voiceConsentRoute[1]);
+        if (req.method === "GET") {
+          handleAudioVoiceConsentGet(res, audioVoiceStore, consentId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId);
+          return;
+        }
       }
 
       if (url.pathname === "/v1/audio/voices") {
@@ -18497,9 +18538,16 @@ function createServer(config = loadConfig()) {
       }
 
       const audioVoiceRoute = url.pathname.match(/^\/v1\/audio\/voices\/([^/]+)$/);
-      if (audioVoiceRoute && req.method === "GET") {
-        handleAudioVoiceGet(res, audioVoiceStore, decodeURIComponent(audioVoiceRoute[1]));
-        return;
+      if (audioVoiceRoute) {
+        const voiceId = decodeURIComponent(audioVoiceRoute[1]);
+        if (req.method === "GET") {
+          handleAudioVoiceGet(res, audioVoiceStore, voiceId);
+          return;
+        }
+        if (req.method === "DELETE") {
+          handleAudioVoiceDelete(res, audioVoiceStore, voiceId);
+          return;
+        }
       }
 
       if (req.method === "POST" && url.pathname === "/v1/images/generations") {

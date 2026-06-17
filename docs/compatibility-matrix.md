@@ -1827,9 +1827,11 @@ Chat-only.
 | `POST /v1/audio/voice_consents` | Implemented locally | Accepts official-style multipart `name`, `language`, and `recording` plus JSON/base64 compatibility; stores local metadata only with `cons_*` ids, file byte counts, content type, format, and sha256 |
 | `GET /v1/audio/voice_consents` | Implemented locally | Lists local consent recording metadata with OpenAI-style list pagination |
 | `GET /v1/audio/voice_consents/{consent_id}` | Implemented locally | Retrieves local consent metadata by id |
+| `DELETE /v1/audio/voice_consents/{consent_id}` | Local cleanup extension | Deletes local consent metadata only when no stored custom voice references it; referenced consents fail closed with `voice_consent_in_use` so local state cannot keep dangling voice records |
 | `POST /v1/audio/voices` | Implemented locally | Accepts official-style multipart `name`, `consent`, and `audio_sample` plus JSON/base64 compatibility; requires an existing local `cons_*` id and enforces a local 20-voice cap |
 | `GET /v1/audio/voices` | Implemented locally | Lists local custom voice metadata; this is included for local UI and SDK compatibility even though the current public OpenAPI path metadata only expands `createVoice` |
 | `GET /v1/audio/voices/{voice_id}` | Implemented locally | Retrieves local custom voice metadata by id; custom voice ids can also be passed as `/v1/audio/speech` `voice` values for placeholder speech protocol tests |
+| `DELETE /v1/audio/voices/{voice_id}` | Local cleanup extension | Deletes local custom voice metadata and returns an OpenAI-style deleted object so long-running compatibility smoke tests can clean up bounded local state |
 
 Local Batch JSONL can execute `/v1/audio/transcriptions` and
 `/v1/audio/translations` when each request carries JSON/base64 audio data.

@@ -1,5 +1,61 @@
 # Audit Log
 
+## 2026-06-17 Audio Custom Voice Cleanup Extensions
+
+- Rechecked the official OpenAI audio custom voice OpenAPI surface through the
+  OpenAI developer docs MCP:
+  - `POST /v1/audio/voices` is the documented `createVoice` operation;
+  - `POST /v1/audio/voice_consents` and `GET /v1/audio/voice_consents` are
+    documented for consent upload/list;
+  - no official delete operation was exposed for custom voices or consents in
+    the fetched schema, so the new delete routes are documented only as local
+    cleanup extensions.
+- Added bounded local state cleanup for custom voice metadata:
+  - `DELETE /v1/audio/voices/{voice_id}` deletes a stored local custom voice
+    and returns `object:"audio.voice.deleted"`;
+  - `DELETE /v1/audio/voice_consents/{consent_id}` deletes a stored local
+    consent only when no local voice references it;
+  - referenced consents fail closed with `400 voice_consent_in_use` so
+    long-running smoke tests cannot leave dangling voice records.
+- Regression coverage added to the existing custom voice lifecycle test:
+  - creates a consent and voice without calling the upstream Chat provider;
+  - verifies in-use consent delete rejection;
+  - deletes the voice, confirms voice retrieval returns 404, then deletes the
+    consent and confirms consent retrieval returns 404.
+- Documentation updated:
+  - compatibility matrix now labels the two delete paths as local cleanup
+    extensions rather than official OpenAI custom voice API operations;
+  - evaluation plan now tracks cleanup-extension deletes and consent reference
+    protection under direct Audio API coverage.
+- Validation:
+  - `node --check src/bridge/store.js` passes;
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `Audio custom voice consent and voice endpoints store local
+    metadata` regression passes;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level key/token pattern scan over source, tests, docs, and package
+    manifests returns no matches;
+  - `npm test` passes: 347 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` creates a local
+    voice consent and voice via JSON/base64 audio samples, confirms in-use
+    consent deletion returns `voice_consent_in_use`, deletes the voice, confirms
+    voice retrieval returns 404, deletes the consent, and confirms consent
+    retrieval returns 404.
+- Runtime/storage check:
+  - `/` has 17 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 136 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Role Short Paths
 
 - Rechecked the official OpenAI endpoint inventory through the OpenAI

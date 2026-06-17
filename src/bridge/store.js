@@ -1561,6 +1561,42 @@ class FileAudioVoiceStore {
     return voice;
   }
 
+  deleteConsent(id) {
+    const consent = this.getConsent(id);
+    if (!consent) return null;
+    const referencingVoice = this.listVoices().find((voice) => voice.consent === id);
+    if (referencingVoice) {
+      const error = new Error(`voice consent is still used by custom voice: ${referencingVoice.id}`);
+      error.status = 400;
+      error.code = "voice_consent_in_use";
+      error.param = "consent_id";
+      throw error;
+    }
+    const filePath = this.filePath("consents", id);
+    if (filePath) {
+      try { fs.unlinkSync(filePath); } catch {}
+    }
+    return {
+      id,
+      object: "audio.voice_consent.deleted",
+      deleted: true,
+    };
+  }
+
+  deleteVoice(id) {
+    const voice = this.getVoice(id);
+    if (!voice) return null;
+    const filePath = this.filePath("voices", id);
+    if (filePath) {
+      try { fs.unlinkSync(filePath); } catch {}
+    }
+    return {
+      id,
+      object: "audio.voice.deleted",
+      deleted: true,
+    };
+  }
+
   read(kind, id) {
     const filePath = this.filePath(kind, id);
     if (!filePath) return null;
