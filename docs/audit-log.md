@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Create Nullable Metadata
+
+- Rechecked the official OpenAI OpenAPI schema for `POST /v1/chat/completions`:
+  - Chat create inherits `metadata` from `ModelResponseProperties`;
+  - `metadata` references the shared `Metadata` schema, which permits either a
+    string-valued metadata object or `null`;
+  - the stored Chat completion list example returns stored object metadata as
+    an object, including `{}` when empty.
+- Tightened local stored Chat create/replay semantics:
+  - non-streaming `store:true` Chat create now attaches request metadata to the
+    local stored Chat object before returning and storing it;
+  - streaming `store:true` reconstruction keeps using the same stored Chat
+    request-field attachment path;
+  - `metadata:null` on Chat create is accepted as official nullable Metadata
+    input and clears user metadata for both non-streaming and streaming
+    records;
+  - when no bridge compatibility metadata is needed, nullable create metadata is
+    stored/retrieved as `{}`;
+  - when DeepSeek-compatible stored fields are filtered locally, the user
+    metadata remains empty while `metadata.compatibility` preserves the filter
+    audit block;
+  - provider-returned metadata and bridge compatibility metadata remain
+    preserved when present.
+- Regression coverage added:
+  - `store:true` non-streaming Chat create response and retrieve response both
+    expose request metadata;
+  - non-streaming `metadata:null` stores and retrieves `{}`;
+  - streaming `metadata:null` stores and retrieves `{}` after SSE
+    reconstruction.
+  - DeepSeek-compatible stored-field filtering keeps user metadata empty and
+    preserves `metadata.compatibility.chat_passthrough.stored_chat_fields`.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe Chat create-time
+    nullable metadata normalization.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat create tests pass.
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes.
+  - local and public smoke created temporary `store:true` Chat completions with
+    `metadata:null`, confirmed user metadata is empty, confirmed
+    `metadata.compatibility.chat_passthrough.stored_chat_fields` is present
+    for the DeepSeek-compatible filtered fields, retrieved the records, and
+    deleted them.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Update Nullable Metadata
 
 - Rechecked the official OpenAI OpenAPI schema for

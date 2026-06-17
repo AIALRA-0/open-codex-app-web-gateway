@@ -24366,11 +24366,13 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(response.headers.has("content-length"), false);
     const json = await response.json();
     assert.equal(json.choices[0].message.content, "chat-ok");
+    assert.deepEqual(json.metadata, { suite: "chat-list" });
 
     const fetched = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`);
     assert.equal(fetched.status, 200);
     const fetchedJson = await fetched.json();
     assert.equal(fetchedJson.id, json.id);
+    assert.deepEqual(fetchedJson.metadata, { suite: "chat-list" });
 
     const invalidUpdate = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${json.id}`, {
       method: "POST",
@@ -24574,6 +24576,133 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     });
     assert.equal(repeatedDelete.status, 404);
   });
+});
+
+test("POST /v1/chat/completions stores nullable create metadata as empty object", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.equal(call.body.store, true);
+    assert.equal(call.body.metadata, null);
+
+    if (call.body.stream) {
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write(`data: ${JSON.stringify({
+        id: "chatcmpl_stream_null_metadata",
+        object: "chat.completion.chunk",
+        created: 1700000334,
+        model: "mock-stream-model",
+        choices: [{
+          index: 0,
+          delta: { role: "assistant", content: "stream-null-metadata" },
+          finish_reason: "stop",
+        }],
+      })}\n\n`);
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_null_metadata",
+      object: "chat.completion",
+      created: 1700000333,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "null-metadata-ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+
+    const created = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: null,
+        messages: [{ role: "user", content: "store nullable metadata" }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.id, "chatcmpl_null_metadata");
+    assert.deepEqual(createdJson.metadata, {});
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/chatcmpl_null_metadata`);
+    assert.equal(fetched.status, 200);
+    assert.deepEqual((await fetched.json()).metadata, {});
+
+    const streamed = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        stream: true,
+        metadata: null,
+        messages: [{ role: "user", content: "stream nullable metadata" }],
+      }),
+    });
+    assert.equal(streamed.status, 200);
+    const events = parseSseEvents(await streamed.text());
+    assert.equal(events.at(-1).data, "[DONE]");
+
+    const fetchedStream = await fetch(`${baseUrl}/v1/chat/completions/chatcmpl_stream_null_metadata`);
+    assert.equal(fetchedStream.status, 200);
+    assert.deepEqual((await fetchedStream.json()).metadata, {});
+  });
+});
+
+test("POST /v1/chat/completions keeps compatibility metadata when nullable stored fields are filtered", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.equal(call.body.store, undefined);
+    assert.equal(call.body.metadata, undefined);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_null_metadata_filtered",
+      object: "chat.completion",
+      created: 1700000335,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "null-metadata-filtered-ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const created = await fetch(`${baseUrl}/v1/chat/completions`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        store: true,
+        metadata: null,
+        messages: [{ role: "user", content: "store nullable metadata with local filtering" }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const createdJson = await created.json();
+    assert.equal(createdJson.metadata.suite, undefined);
+    assert.deepEqual(createdJson.metadata.compatibility.chat_passthrough.stored_chat_fields, {
+      filtered: ["metadata", "store"],
+      reason: "provider_unsupported_local_semantics",
+    });
+
+    const fetched = await fetch(`${baseUrl}/v1/chat/completions/chatcmpl_null_metadata_filtered`);
+    assert.equal(fetched.status, 200);
+    const fetchedJson = await fetched.json();
+    assert.equal(fetchedJson.metadata.suite, undefined);
+    assert.deepEqual(fetchedJson.metadata.compatibility.chat_passthrough.stored_chat_fields, {
+      filtered: ["metadata", "store"],
+      reason: "provider_unsupported_local_semantics",
+    });
+  }, { forwardStoredChatFields: false });
 });
 
 test("POST /v1/chat/completions normalizes OpenAI Chat fields for DeepSeek-compatible providers", async () => {

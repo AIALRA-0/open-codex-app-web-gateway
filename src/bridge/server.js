@@ -6791,6 +6791,9 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     annotateChatWebSearchCompletion(json, localWebSearch);
     attachLocalChatInlineModeration(json, body, config);
     attachChatPassthroughCompatibility(json, body, compatibility);
+    if (body.store === true && isPlainObject(json)) {
+      attachStoredChatRequestFields(json, body);
+    }
     if (json?.id && body.store === true) {
       store.put(json.id, {
         chat_completion: json,
@@ -6825,6 +6828,10 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
     if (upstream.ok) annotateChatWebSearchCompletion(json, localWebSearch);
     const localModeration = upstream.ok ? attachLocalChatInlineModeration(json, body, config) : null;
     const attachedCompatibility = upstream.ok ? attachChatPassthroughCompatibility(json, body, compatibility) : false;
+    const attachedStoredChatFields = upstream.ok && body.store === true && isPlainObject(json);
+    if (attachedStoredChatFields) {
+      attachStoredChatRequestFields(json, body);
+    }
     if (upstream.ok && json?.id && body.store === true) {
       store.put(json.id, {
         chat_completion: json,
@@ -6851,7 +6858,7 @@ async function handleChatPassthrough(req, res, config, store, fileSearchStore) {
         model: json.model || body.model,
       });
     }
-    if ((localModeration || attachedCompatibility) && isPlainObject(json)) {
+    if ((localModeration || attachedCompatibility || attachedStoredChatFields) && isPlainObject(json)) {
       res.writeHead(upstream.status, headers);
       res.end(`${JSON.stringify(json)}\n`);
       return;
@@ -8735,12 +8742,22 @@ function attachStoredChatRequestFields(completion, request = {}) {
     "user",
   ];
   for (const field of fields) {
+    if (field === "metadata") {
+      completion.metadata = normalizeStoredChatMetadata(completion.metadata, request.metadata);
+      continue;
+    }
     if (request[field] !== undefined && completion[field] === undefined) {
       completion[field] = clone(request[field]);
     }
   }
-  if (!completion.metadata && isPlainObject(request.metadata)) completion.metadata = clone(request.metadata);
   if (!completion.metadata) completion.metadata = {};
+}
+
+function normalizeStoredChatMetadata(completionMetadata, requestMetadata) {
+  return {
+    ...(isPlainObject(requestMetadata) ? clone(requestMetadata) : {}),
+    ...(isPlainObject(completionMetadata) ? clone(completionMetadata) : {}),
+  };
 }
 
 function proxyResponseHeaders(upstream) {

@@ -103,6 +103,12 @@ conversation items remain listable and individually retrievable. Conversation
 update coverage verifies the official nullable Metadata contract by accepting
 `metadata:null` as a local metadata clear while still rejecting missing
 metadata, non-string metadata values, and unsupported fields before storage.
+Stored Chat creation coverage verifies the same nullable Metadata boundary on
+`POST /v1/chat/completions`: `store:true` records preserve request metadata in
+the create response and retrieve response, while non-streaming and streaming
+`metadata:null` requests clear user metadata; when provider compatibility
+metadata is not needed they are returned as `{}`, and when stored fields are
+filtered locally the `metadata.compatibility` audit block is preserved.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
@@ -502,7 +508,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - No critical UI workflow regressions.
 - Stored Chat completion list/get/messages endpoints preserve local `store:true`
   lifecycle records with pagination, filters, object metadata updates, and
-  nullable `metadata:null` clears.
+  nullable `metadata:null` clears and create-time null normalization.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,
