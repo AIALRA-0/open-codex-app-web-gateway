@@ -24390,6 +24390,60 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(listedJson.object, "list");
     assert.equal(listedJson.data.some((entry) => entry.id === job.id), true);
 
+    const listedMetadataNull = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata=null`);
+    assert.equal(listedMetadataNull.status, 200);
+    const listedMetadataNullJson = await listedMetadataNull.json();
+    assert.equal(listedMetadataNullJson.object, "list");
+    assert.equal(listedMetadataNullJson.data.every((entry) => entry.metadata == null || Object.keys(entry.metadata).length === 0), true);
+
+    const listedWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata%5Bsuite%5D=fine-tuning-local&before=${job.id}&order=asc`);
+    assert.equal(listedWithNonOfficialPagination.status, 200);
+    assert.equal((await listedWithNonOfficialPagination.json()).data.some((entry) => entry.id === job.id), true);
+
+    for (const testCase of [
+      {
+        path: "/v1/fine_tuning/jobs?limit=0",
+        param: "limit",
+        message: "limit must be a positive integer",
+      },
+      {
+        path: "/v1/fine_tuning/jobs?limit=1&limit=2",
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/jobs?after=${job.id}&after=ftjob_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: "/v1/fine_tuning/jobs?metadata=invalid",
+        param: "metadata",
+        message: "metadata must be null or use metadata[key]=value query parameters",
+      },
+      {
+        path: "/v1/fine_tuning/jobs?metadata=null&metadata%5Bsuite%5D=fine-tuning-local",
+        param: "metadata",
+        message: "metadata=null cannot be combined with metadata[key]=value query parameters",
+      },
+      {
+        path: "/v1/fine_tuning/jobs?metadata%5Bsuite%5D=a&metadata%5Bsuite%5D=b",
+        param: "metadata.suite",
+        message: "metadata query filters must not repeat keys",
+      },
+    ]) {
+      const invalidJobsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidJobsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidJobsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const eventsResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/events?limit=10`);
     assert.equal(eventsResponse.status, 200);
     const events = await eventsResponse.json();
@@ -24397,6 +24451,39 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.ok(events.data.length >= 3);
     assert.equal(events.data[0].object, "fine_tuning.job.event");
     assert.equal(events.data.some((event) => /fine-tuned model/i.test(event.message)), true);
+
+    const eventsWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/events?limit=10&before=${events.data[0].id}&order=asc`);
+    assert.equal(eventsWithNonOfficialPagination.status, 200);
+    assert.equal((await eventsWithNonOfficialPagination.json()).data.length, events.data.length);
+
+    for (const testCase of [
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/events?limit=0`,
+        param: "limit",
+        message: "limit must be a positive integer",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/events?limit=1&limit=2`,
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/events?after=${events.data[0].id}&after=ftevent_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+    ]) {
+      const invalidEventsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidEventsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidEventsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const checkpointsResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=10`);
     assert.equal(checkpointsResponse.status, 200);
@@ -24409,6 +24496,39 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(checkpoint.fine_tuning_job_id, job.id);
     assert.equal(checkpoint.step_number, 1000);
     assert.match(checkpoint.fine_tuned_model_checkpoint, /:ckpt-step-1000$/);
+
+    const checkpointsWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=10&before=${checkpoint.id}&order=asc`);
+    assert.equal(checkpointsWithNonOfficialPagination.status, 200);
+    assert.equal((await checkpointsWithNonOfficialPagination.json()).data.length, 1);
+
+    for (const testCase of [
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=0`,
+        param: "limit",
+        message: "limit must be a positive integer",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=1&limit=2`,
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/jobs/${job.id}/checkpoints?after=${checkpoint.id}&after=ftckpt_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+    ]) {
+      const invalidCheckpointsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidCheckpointsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidCheckpointsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const checkpointPath = encodeURIComponent(checkpoint.fine_tuned_model_checkpoint);
     const permissionCreate = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions`, {

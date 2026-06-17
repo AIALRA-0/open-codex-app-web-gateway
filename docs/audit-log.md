@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
+  - `GET /fine_tuning/jobs`;
+  - `GET /fine_tuning/jobs/{fine_tuning_job_id}/events`;
+  - `GET /fine_tuning/jobs/{fine_tuning_job_id}/checkpoints`;
+  - `GET /batches`.
+- Confirmed Fine-tuning Jobs list supports official `after`, `limit`, and
+  deep-object `metadata[k]=v` filters, plus `metadata=null`.
+- Confirmed Fine-tuning Events and Checkpoints list routes support official
+  `after` and `limit` query parameters.
+- Confirmed Batches list was already aligned for official `after` and `limit`
+  validation, so this pass focused on Fine-tuning.
+- Tightened local Fine-tuning behavior:
+  - `GET /v1/fine_tuning/jobs` now validates repeated official scalar
+    `limit` and `after` query values before listing;
+  - `GET /v1/fine_tuning/jobs` now validates `metadata=null`,
+    `metadata[k]=v`, duplicate metadata keys, and invalid bare `metadata`
+    syntax before listing;
+  - Fine-tuning Jobs, Events, and Checkpoints list pagination now reads only
+    official `after` and `limit` parameters, so unsupported generic paginator
+    parameters such as `before` and `order` no longer affect results;
+  - `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/events` and
+    `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}/checkpoints` now validate
+    repeated official scalar `limit` and `after` query values before listing.
+- Regression coverage updated:
+  - Fine-tuning lifecycle tests now cover `metadata=null`, metadata filter
+    syntax errors, duplicate metadata keys, repeated `limit`, repeated
+    `after`, and non-official `before` / `order` parameters being ignored for
+    result shaping.
+- Documentation updated:
+  - compatibility matrix now records official Fine-tuning list query behavior
+    and removes the old implication that Fine-tuning Jobs officially support
+    `before`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Fine-tuning smoke marker `fine-tuning-query-smoke-mqi4504m`
+    created one small local job record without calling the Chat provider.
+  - Public Fine-tuning smoke confirmed metadata-filtered job listing returned
+    the new job, non-official `before` / `order` did not remove it, invalid
+    bare `metadata` returned HTTP 400, repeated job `limit` returned HTTP 400,
+    repeated event `after` returned HTTP 400, and checkpoint `limit=0`
+    returned HTTP 400.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available,
+    94% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 ChatKit List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:

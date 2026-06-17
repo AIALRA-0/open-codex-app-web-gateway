@@ -16325,8 +16325,53 @@ async function handleFineTuningJobCreate(req, res, fineTuningStore) {
 }
 
 function handleFineTuningJobsList(res, fineTuningStore, url) {
+  const queryError = validateOpenAIFineTuningJobsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const jobs = fineTuningStore.listJobs({ metadataFilter: fineTuningMetadataFilter(url) });
-  sendJson(res, 200, paginateListWithDefaultOrder(jobs, url, "desc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(jobs, officialFineTuningListPaginationUrl(url), "desc", 20, 100));
+}
+
+function validateOpenAIFineTuningJobsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAIFineTuningMetadataQueryFilters(url);
+}
+
+function validateOpenAIFineTuningSubListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function validateOpenAIFineTuningMetadataQueryFilters(url) {
+  if (url.searchParams.has("metadata")) {
+    const metadataError = validateOpenAISingleQueryValue(url, "metadata");
+    if (metadataError) return metadataError;
+
+    if (url.searchParams.get("metadata") !== "null") {
+      return requestValidationError("metadata must be null or use metadata[key]=value query parameters", "metadata");
+    }
+    if (metadataFiltersFromUrl(url).length) {
+      return requestValidationError("metadata=null cannot be combined with metadata[key]=value query parameters", "metadata");
+    }
+  }
+  return validateOpenAIStringMetadataFilterEntries(url);
+}
+
+function officialFineTuningListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleFineTuningJobGet(res, fineTuningStore, jobId) {
@@ -16354,6 +16399,11 @@ function handleFineTuningJobAction(res, fineTuningStore, jobId, action) {
 }
 
 function handleFineTuningJobEventsList(res, fineTuningStore, jobId, url) {
+  const queryError = validateOpenAIFineTuningSubListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const events = fineTuningStore.listEvents(jobId);
   if (!events) {
     sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
@@ -16362,10 +16412,15 @@ function handleFineTuningJobEventsList(res, fineTuningStore, jobId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateListWithDefaultOrder(events, url, "desc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(events, officialFineTuningListPaginationUrl(url), "desc", 20, 100));
 }
 
 function handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url) {
+  const queryError = validateOpenAIFineTuningSubListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const checkpoints = fineTuningStore.listCheckpoints(jobId);
   if (!checkpoints) {
     sendError(res, 404, `Fine-tuning job not found: ${jobId}`, {
@@ -16374,7 +16429,7 @@ function handleFineTuningJobCheckpointsList(res, fineTuningStore, jobId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateListWithDefaultOrder(checkpoints, url, "desc", 10, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(checkpoints, officialFineTuningListPaginationUrl(url), "desc", 10, 100));
 }
 
 async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningStore, checkpoint) {
@@ -17484,6 +17539,10 @@ function validateOpenAIStringMetadataQueryFilters(url) {
     return requestValidationError("metadata filters must use metadata[key]=value query parameters", "metadata");
   }
 
+  return validateOpenAIStringMetadataFilterEntries(url);
+}
+
+function validateOpenAIStringMetadataFilterEntries(url) {
   const filters = metadataFiltersFromUrl(url);
   if (filters.length > OPENAI_STRING_METADATA_MAX_PAIRS) {
     return metadataValidationError(`metadata must contain at most ${OPENAI_STRING_METADATA_MAX_PAIRS} key-value pairs`, "metadata");
