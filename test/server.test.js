@@ -620,6 +620,37 @@ test("Responses endpoints validate input image and file detail before provider c
         param: "input.0.content.0.image_url.detail",
         message: "input.0.content.0.image_url.detail must be one of: auto, low, high, original",
       },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "custom_tool_call_output",
+          call_id: "call_custom",
+          output: [{ type: "input_text" }],
+        }],
+        param: "input.0.output.0.text",
+        message: "input.0.output.0.text must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "custom_tool_call",
+          call_id: "call_custom",
+          name: "emit_text",
+          input: 7,
+        }],
+        param: "input.0.input",
+        message: "input.0.input must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "function_call_output",
+          call_id: "",
+          output: "ok",
+        }],
+        param: "input.0.call_id",
+        message: "input.0.call_id must be a non-empty string",
+      },
     ];
 
     for (const invalidCase of invalidCases) {
@@ -3677,7 +3708,146 @@ test("POST /v1/responses aliases 128-character function tool names for Chat prov
       providerAlias,
     );
     assert.equal(requests.length, 1);
-  });
+  }, { forwardChatCustomTools: false });
+});
+
+test("POST /v1/responses forwards custom tools for compatible Chat providers", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.deepEqual(call.body.tools, [{
+      type: "custom",
+      custom: {
+        name: "emit_text",
+        description: "Emit raw text.",
+        format: {
+          type: "grammar",
+          grammar: { definition: "start: /[a-z]+/", syntax: "lark" },
+        },
+      },
+    }]);
+    assert.deepEqual(call.body.tool_choice, { type: "custom", custom: { name: "emit_text" } });
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_custom_tool",
+      object: "chat.completion",
+      created: 1700000414,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: {
+          role: "assistant",
+          content: null,
+          tool_calls: [{
+            id: "call_custom",
+            type: "custom",
+            custom: { name: "emit_text", input: "raw input" },
+          }],
+        },
+        finish_reason: "tool_calls",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Call the custom tool.",
+        tools: [{
+          type: "custom",
+          name: "emit_text",
+          description: "Emit raw text.",
+          format: { type: "grammar", definition: "start: /[a-z]+/", syntax: "lark" },
+        }],
+        tool_choice: { type: "custom", name: "emit_text" },
+      }),
+    });
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].type, "custom_tool_call");
+    assert.equal(json.output[0].call_id, "call_custom");
+    assert.equal(json.output[0].name, "emit_text");
+    assert.equal(json.output[0].input, "raw input");
+    assert.equal(json.output[0].status, "completed");
+    assert.deepEqual(json.metadata.compatibility.unsupported_tools, []);
+    assert.equal(requests.length, 1);
+  }, { forwardChatCustomTools: true });
+});
+
+test("POST /v1/responses streams custom tool call input events", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.body.stream, true);
+    assert.equal(call.body.tools[0].type, "custom");
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_custom_tool",
+      object: "chat.completion.chunk",
+      created: 1700000416,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        delta: {
+          role: "assistant",
+          tool_calls: [{
+            index: 0,
+            id: "call_custom_stream",
+            type: "custom",
+            custom: { name: "emit_", input: "raw " },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_custom_tool",
+      object: "chat.completion.chunk",
+      choices: [{
+        index: 0,
+        delta: {
+          tool_calls: [{
+            index: 0,
+            custom: { name: "text", input: "input" },
+          }],
+        },
+        finish_reason: null,
+      }],
+    })}\n\n`);
+    res.write(`data: ${JSON.stringify({
+      id: "chatcmpl_stream_custom_tool",
+      object: "chat.completion.chunk",
+      choices: [{ index: 0, delta: {}, finish_reason: "tool_calls" }],
+      usage: { prompt_tokens: 5, completion_tokens: 4, total_tokens: 9 },
+    })}\n\n`);
+    res.write("data: [DONE]\n\n");
+    res.end();
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Stream the custom tool call.",
+        tools: [{ type: "custom", name: "emit_text", format: { type: "text" } }],
+        stream: true,
+      }),
+    });
+    assert.equal(response.status, 200);
+    const events = parseSseEvents(await response.text());
+    const added = events.find((event) => event.event === "response.output_item.added");
+    assert.equal(added.data.item.type, "custom_tool_call");
+    assert.equal(added.data.item.call_id, "call_custom_stream");
+    const deltas = events
+      .filter((event) => event.event === "response.custom_tool_call_input.delta")
+      .map((event) => event.data.delta)
+      .join("");
+    assert.equal(deltas, "raw input");
+    const done = events.find((event) => event.event === "response.custom_tool_call_input.done");
+    assert.equal(done.data.input, "raw input");
+    const completed = events.find((event) => event.event === "response.completed").data.response;
+    assert.equal(completed.output[0].type, "custom_tool_call");
+    assert.equal(completed.output[0].name, "emit_text");
+    assert.equal(completed.output[0].input, "raw input");
+    assert.equal(events.some((event) => event.event === "response.function_call_arguments.done"), false);
+  }, { forwardChatCustomTools: true });
 });
 
 test("POST /v1/responses maps allowed_tools function selectors for Chat providers", async () => {

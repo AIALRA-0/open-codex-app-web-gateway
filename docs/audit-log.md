@@ -1,5 +1,88 @@
 # Audit Log
 
+## 2026-06-17 Responses Custom Tool Call Mapping
+
+- Rechecked the current official OpenAI schema with the developer docs MCP and
+  the official `openai-openapi` YAML:
+  - Responses `CustomToolCall` requires `type:"custom_tool_call"`,
+    `call_id`, `name`, and string `input`, with returned resources carrying
+    `id` and `status`;
+  - Responses `CustomToolCallOutput` requires
+    `type:"custom_tool_call_output"`, `call_id`, and `output`, where output is
+    a string or text/image/file content array;
+  - Responses streaming has dedicated custom tool input events:
+    `response.custom_tool_call_input.delta` and
+    `response.custom_tool_call_input.done`.
+- Closed a custom-tool compatibility gap:
+  - Responses `tools[type=custom]` now map to Chat custom tools for providers
+    with `CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS=true`, converting Responses
+    flat grammar formats into Chat's nested `format.grammar` shape;
+  - Responses custom `tool_choice` and `allowed_tools` selectors map from the
+    flat Responses shape into Chat's nested custom selector shape;
+  - DeepSeek/function-only deployments still filter unsupported custom tools
+    and replay `custom_tool_call` / `custom_tool_call_output` input items as
+    explicit assistant/user text context instead of sending unsupported native
+    custom fields upstream;
+  - custom-tool-capable Chat provider outputs now become Responses
+    `custom_tool_call` items, and streaming custom tool-call input emits the
+    official `response.custom_tool_call_input.*` events instead of function
+    argument events.
+- Hardened request validation:
+  - Responses `function_call_output` and `custom_tool_call_output` input items
+    validate non-empty `call_id`, required string-or-array `output`, supported
+    text/image/file content parts, and optional returned `status` before
+    provider calls;
+  - Responses `custom_tool_call` input items validate `call_id`, `name`,
+    `namespace`, `input`, and optional `status` before provider calls.
+- Regression coverage updated:
+  - translator tests cover Responses custom tool/tool_choice passthrough,
+    function-only text replay, native custom replay, and Chat custom tool-call
+    output mapping/replay storage;
+  - server tests cover pre-provider input-item validation, non-streaming
+    custom tool passthrough/output mapping, streaming custom input
+    delta/done events, and the existing DeepSeek function-only custom-tool
+    filtering path.
+- Documentation updated:
+  - compatibility matrix now distinguishes function and custom tool-call
+    input/output replay plus streaming event names;
+  - deployment docs now clarify that
+    `CODEXCOMPAT_FORWARD_CHAT_CUSTOM_TOOLS` affects Responses custom tools,
+    custom selectors, and native custom replay.
+- Validation:
+  - `node --check src/bridge/translator.js` passes;
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --check test/translator.test.js` passes;
+  - `node --test test/translator.test.js` passes: 52 tests;
+  - targeted `node --test --test-name-pattern
+    "input image and file detail|forwards custom tools|streams custom tool
+    call|aliases 128-character function" test/server.test.js` passes: 4 tests.
+  - full `node --test test/*.test.js` passes: 363 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `custom_tool_call_output` input with missing
+    `input_text.text` returns `400 invalid_request_parameter` with
+    `param:"input.0.output.0.text"`;
+  - public valid `custom_tool_call` plus `custom_tool_call_output` input-token
+    request returns 200 with an input-token count.
+- Runtime/storage check:
+  - `/` has 15 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Custom Tool Grammar Format Validation
 
 - Rechecked the current official OpenAI custom-tool schemas through the

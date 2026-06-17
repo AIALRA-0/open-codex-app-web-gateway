@@ -5270,8 +5270,86 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     const error = validateOpenAIResponsesInputFileDetails(value, param);
     if (error) return error;
   }
+  if (value.type === "function_call_output" || value.type === "custom_tool_call_output") {
+    const error = validateOpenAIResponsesToolCallOutputInputItem(value, param);
+    if (error) return error;
+  }
+  if (value.type === "custom_tool_call") {
+    const error = validateOpenAIResponsesCustomToolCallInputItem(value, param);
+    if (error) return error;
+  }
   if (Object.prototype.hasOwnProperty.call(value, "content")) {
     return validateOpenAIResponsesInputDetailsValue(value.content, `${param}.content`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesToolCallOutputInputItem(item, param) {
+  if (typeof item.call_id !== "string" || item.call_id.length === 0) {
+    return requestValidationError(`${param}.call_id must be a non-empty string`, `${param}.call_id`);
+  }
+  if (!Object.prototype.hasOwnProperty.call(item, "output")) {
+    return requestValidationError(`${param}.output is required`, `${param}.output`);
+  }
+  if (typeof item.output === "string") {
+    return validateOpenAIResponsesInputItemStatus(item, param);
+  }
+  if (!Array.isArray(item.output)) {
+    return requestValidationError(`${param}.output must be a string or an array`, `${param}.output`);
+  }
+  for (const [index, part] of item.output.entries()) {
+    const partParam = `${param}.output.${index}`;
+    if (!isPlainObject(part)) {
+      return requestValidationError(`${partParam} must be an object`, partParam);
+    }
+    const type = part.type;
+    if (!["input_text", "text", "input_image", "image_url", "input_file", "file"].includes(type)) {
+      return requestValidationError(
+        `${partParam}.type must be one of: input_text, input_image, input_file`,
+        `${partParam}.type`,
+      );
+    }
+    if (type === "input_text" || type === "text") {
+      if (typeof (part.text ?? part.content) !== "string") {
+        return requestValidationError(`${partParam}.text must be a string`, `${partParam}.text`);
+      }
+      continue;
+    }
+    const detailError = type === "input_image" || type === "image_url"
+      ? validateOpenAIResponsesInputImageDetails(part, partParam)
+      : validateOpenAIResponsesInputFileDetails(part, partParam);
+    if (detailError) return detailError;
+  }
+  return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function validateOpenAIResponsesCustomToolCallInputItem(item, param) {
+  if (typeof item.call_id !== "string" || item.call_id.length === 0) {
+    return requestValidationError(`${param}.call_id must be a non-empty string`, `${param}.call_id`);
+  }
+  if (typeof item.name !== "string") {
+    return requestValidationError(`${param}.name must be a string`, `${param}.name`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(item, "namespace")
+    && item.namespace !== null
+    && typeof item.namespace !== "string"
+  ) {
+    return requestValidationError(`${param}.namespace must be a string or null`, `${param}.namespace`);
+  }
+  if (typeof item.input !== "string") {
+    return requestValidationError(`${param}.input must be a string`, `${param}.input`);
+  }
+  return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function validateOpenAIResponsesInputItemStatus(item, param) {
+  if (
+    Object.prototype.hasOwnProperty.call(item, "status")
+    && item.status !== null
+    && !["in_progress", "completed", "incomplete"].includes(item.status)
+  ) {
+    return requestValidationError(`${param}.status must be one of: in_progress, completed, incomplete`, `${param}.status`);
   }
   return null;
 }
@@ -7430,14 +7508,23 @@ function ensureReasoningItem(state, choiceState) {
 function ensureToolCallItem(state, choiceState, index, deltaToolCall) {
   if (choiceState.toolCalls.has(index)) return [];
   const callId = deltaToolCall.id || prefixedId("call");
-  const item = {
-    id: prefixedId("fc"),
-    type: "function_call",
-    call_id: callId,
-    name: "",
-    arguments: "",
-    status: "in_progress",
-  };
+  const item = isCustomChatStreamToolCallDelta(deltaToolCall)
+    ? {
+      id: prefixedId("ctc"),
+      type: "custom_tool_call",
+      call_id: callId,
+      name: "",
+      input: "",
+      status: "in_progress",
+    }
+    : {
+      id: prefixedId("fc"),
+      type: "function_call",
+      call_id: callId,
+      name: "",
+      arguments: "",
+      status: "in_progress",
+    };
   choiceState.toolCalls.set(index, item);
   state.response.output.push(item);
   return [{
@@ -7446,6 +7533,10 @@ function ensureToolCallItem(state, choiceState, index, deltaToolCall) {
     output_index: state.response.output.length - 1,
     item: clone(item),
   }];
+}
+
+function isCustomChatStreamToolCallDelta(deltaToolCall) {
+  return deltaToolCall?.type === "custom" || isPlainObject(deltaToolCall?.custom);
 }
 
 function applyChatStreamChunk(state, chunk) {
@@ -7568,15 +7659,53 @@ function applyChatStreamChunk(state, chunk) {
       const item = choiceState.toolCalls.get(index);
       const outputIndex = state.response.output.indexOf(item);
       if (deltaToolCall.id) item.call_id = deltaToolCall.id;
-      if (deltaToolCall.function?.name) item.name += deltaToolCall.function.name;
-      if (deltaToolCall.function?.arguments) {
-        item.arguments += deltaToolCall.function.arguments;
+      if (item.type === "custom_tool_call") {
+        if (deltaToolCall.custom?.name) item.name += deltaToolCall.custom.name;
+        if (deltaToolCall.custom?.input) {
+          item.input += deltaToolCall.custom.input;
+          events.push({
+            type: "response.custom_tool_call_input.delta",
+            response_id: state.response.id,
+            item_id: item.id,
+            output_index: outputIndex,
+            delta: deltaToolCall.custom.input,
+          });
+        }
+      } else {
+        if (deltaToolCall.function?.name) item.name += deltaToolCall.function.name;
+        if (deltaToolCall.function?.arguments) {
+          item.arguments += deltaToolCall.function.arguments;
+          events.push({
+            type: "response.function_call_arguments.delta",
+            response_id: state.response.id,
+            item_id: item.id,
+            output_index: outputIndex,
+            delta: deltaToolCall.function.arguments,
+          });
+        }
+      }
+    }
+
+    if (isPlainObject(delta.custom_tool_call)) {
+      const index = "__custom_tool_call";
+      const customToolCall = {
+        id: delta.custom_tool_call.call_id || legacyStreamFunctionCallId(chunk, choice),
+        type: "custom",
+        custom: delta.custom_tool_call,
+      };
+      events.push(...ensureToolCallItem(state, choiceState, index, customToolCall));
+      const item = choiceState.toolCalls.get(index);
+      const outputIndex = state.response.output.indexOf(item);
+      item.call_id = customToolCall.id;
+      if (delta.custom_tool_call.name) item.name += delta.custom_tool_call.name;
+      if (delta.custom_tool_call.input) {
+        item.input += stringifyContent(delta.custom_tool_call.input);
         events.push({
-          type: "response.function_call_arguments.delta",
+          type: "response.custom_tool_call_input.delta",
           response_id: state.response.id,
           item_id: item.id,
           output_index: outputIndex,
-          delta: deltaToolCall.function.arguments,
+          delta: stringifyContent(delta.custom_tool_call.input),
         });
       }
     }
@@ -7673,6 +7802,15 @@ function finishStreamState(state) {
         output_index: outputIndex,
         arguments: item.arguments,
       });
+    } else if (item.type === "custom_tool_call") {
+      item.status = "completed";
+      events.push({
+        type: "response.custom_tool_call_input.done",
+        response_id: state.response.id,
+        item_id: item.id,
+        output_index: outputIndex,
+        input: item.input,
+      });
     }
 
     events.push({
@@ -7727,8 +7865,9 @@ function streamStateToReplayMessages(state) {
     if (isPlainObject(choiceState.audio)) assistant.audio = clone(choiceState.audio);
     const toolCalls = Array.from(choiceState.toolCalls.values()).map((item) => ({
       id: item.call_id,
-      type: "function",
-      function: { name: item.name, arguments: item.arguments },
+      ...(item.type === "custom_tool_call"
+        ? { type: "custom", custom: { name: item.name, input: item.input } }
+        : { type: "function", function: { name: item.name, arguments: item.arguments } }),
     }));
     if (toolCalls.length) assistant.tool_calls = toolCalls;
     if (assistant.content !== null || assistant.tool_calls || assistant.reasoning_content || assistant.refusal) {
@@ -9822,11 +9961,14 @@ function mergeChatStreamToolCalls(state, deltas) {
   for (const delta of deltas) {
     if (!isPlainObject(delta)) continue;
     const index = Number.isFinite(Number(delta.index)) ? Number(delta.index) : state.tool_calls.length;
-    const current = state.tool_calls[index] || { function: {} };
+    const current = state.tool_calls[index] || (isCustomChatStreamToolCallDelta(delta) ? { custom: {} } : { function: {} });
     if (delta.id) current.id = delta.id;
     if (delta.type) current.type = delta.type;
     if (isPlainObject(delta.function)) {
       current.function = mergeChatStreamFunctionCall(current.function, delta.function);
+    }
+    if (isPlainObject(delta.custom)) {
+      current.custom = mergeChatStreamCustomToolCall(current.custom, delta.custom);
     }
     state.tool_calls[index] = current;
   }
@@ -9837,6 +9979,15 @@ function mergeChatStreamFunctionCall(current, delta) {
   if (delta.name !== undefined) merged.name = `${merged.name || ""}${stringifyContent(delta.name)}`;
   if (delta.arguments !== undefined) {
     merged.arguments = `${merged.arguments || ""}${stringifyContent(delta.arguments)}`;
+  }
+  return merged;
+}
+
+function mergeChatStreamCustomToolCall(current, delta) {
+  const merged = current ? { ...current } : {};
+  if (delta.name !== undefined) merged.name = `${merged.name || ""}${stringifyContent(delta.name)}`;
+  if (delta.input !== undefined) {
+    merged.input = `${merged.input || ""}${stringifyContent(delta.input)}`;
   }
   return merged;
 }
@@ -9903,6 +10054,16 @@ function finalizeChatStreamChoice(state) {
 }
 
 function normalizeStreamToolCall(toolCall) {
+  if (toolCall.type === "custom" || isPlainObject(toolCall.custom)) {
+    return {
+      id: toolCall.id || prefixedId("call"),
+      type: "custom",
+      custom: {
+        name: toolCall.custom?.name || "",
+        input: toolCall.custom?.input || "",
+      },
+    };
+  }
   return {
     id: toolCall.id || prefixedId("call"),
     type: toolCall.type || "function",

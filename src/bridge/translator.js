@@ -292,11 +292,46 @@ function inputItemToChatMessages(item, options = {}) {
     }];
   }
 
+  if (item.type === "custom_tool_call") {
+    if (shouldReplayCustomToolsNatively(options)) {
+      return [{
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: item.call_id || item.id || prefixedId("call"),
+          type: "custom",
+          custom: {
+            name: stringifyContent(item.name || ""),
+            input: stringifyContent(item.input ?? ""),
+          },
+        }],
+      }];
+    }
+    return [{
+      role: "assistant",
+      content: customToolCallToText(item),
+    }];
+  }
+
   if (item.type === "function_call_output") {
     return [{
       role: "tool",
       tool_call_id: item.call_id,
       content: stringifyContent(item.output ?? item.content ?? ""),
+    }];
+  }
+
+  if (item.type === "custom_tool_call_output") {
+    if (shouldReplayCustomToolsNatively(options)) {
+      return [{
+        role: "tool",
+        tool_call_id: item.call_id,
+        content: toolCallOutputToText(item.output ?? item.content ?? "", options),
+      }];
+    }
+    return [{
+      role: options.customToolOutputRole || "user",
+      content: customToolCallOutputToText(item, options),
     }];
   }
 
@@ -324,6 +359,43 @@ function inputItemToChatMessages(item, options = {}) {
   }
 
   return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+function shouldReplayCustomToolsNatively(options = {}) {
+  if (options.customToolReplayMode === "text") return false;
+  if (options.customToolReplayMode === "native") return true;
+  return options.forwardChatCustomTools !== false;
+}
+
+function customToolCallToText(item) {
+  const lines = ["Custom tool call:"];
+  if (item.call_id) lines.push(`call_id: ${stringifyContent(item.call_id)}`);
+  if (item.namespace) lines.push(`namespace: ${stringifyContent(item.namespace)}`);
+  if (item.name) lines.push(`name: ${stringifyContent(item.name)}`);
+  lines.push("input:");
+  lines.push(stringifyContent(item.input ?? ""));
+  return lines.join("\n");
+}
+
+function customToolCallOutputToText(item, options = {}) {
+  const lines = ["Custom tool call output:"];
+  if (item.call_id) lines.push(`call_id: ${stringifyContent(item.call_id)}`);
+  if (item.status) lines.push(`status: ${stringifyContent(item.status)}`);
+  lines.push("output:");
+  lines.push(toolCallOutputToText(item.output ?? item.content ?? "", options));
+  return lines.join("\n");
+}
+
+function toolCallOutputToText(output, options = {}) {
+  if (Array.isArray(output)) {
+    return normalizeContentParts(output, "user", {
+      ...options,
+      chatImageInputMode: "text",
+      chatAudioInputMode: "text",
+      chatFileInputMode: "text",
+    });
+  }
+  return stringifyContent(output);
 }
 
 function isLocalMcpContextItem(item) {
@@ -476,6 +548,16 @@ function mapResponsesTools(tools = [], options = {}) {
           ...(tool.strict != null ? { strict: tool.strict } : {}),
         },
       });
+    } else if (tool.type === "custom" && options.forwardChatCustomTools !== false) {
+      if (deferFunctionTools && tool.defer_loading) continue;
+      mapped.push({
+        type: "custom",
+        custom: {
+          name: stringifyContent(tool.name || ""),
+          ...(tool.description != null ? { description: stringifyContent(tool.description) } : {}),
+          ...(tool.format != null ? { format: mapResponsesCustomToolFormatForChat(tool.format) } : {}),
+        },
+      });
     } else if (localHostedTools.has(tool.type)) {
       continue;
     } else {
@@ -485,6 +567,21 @@ function mapResponsesTools(tools = [], options = {}) {
 
   const hasNameMap = Object.keys(functionToolNameMap.chat_to_responses).length > 0;
   return { mapped, unsupported, functionToolNameMap: hasNameMap ? functionToolNameMap : null };
+}
+
+function mapResponsesCustomToolFormatForChat(format) {
+  if (!isPlainObject(format)) return format;
+  if (format.type === "grammar") {
+    return {
+      type: "grammar",
+      grammar: {
+        definition: stringifyContent(format.definition ?? ""),
+        syntax: stringifyContent(format.syntax ?? ""),
+      },
+    };
+  }
+  if (format.type === "text") return { type: "text" };
+  return clone(format);
 }
 
 function chatFunctionNameForResponsesTool(name, usedNames) {
@@ -516,6 +613,13 @@ function mapToolChoice(toolChoice, options = {}) {
       return { type: "function", function: { name: mappedName } };
     }
   }
+  if (toolChoice.type === "custom") {
+    const name = toolChoice.name || toolChoice.custom?.name;
+    if (name && options.forwardChatCustomTools !== false) {
+      return { type: "custom", custom: { name: stringifyContent(name) } };
+    }
+    return undefined;
+  }
   if (toolChoice.type === "allowed_tools") {
     const allowedTools = mapResponsesAllowedToolsChoice(toolChoice, options);
     return allowedTools || undefined;
@@ -531,6 +635,8 @@ function mapResponsesAllowedToolsChoice(toolChoice, options = {}) {
     if (tool.type === "function" && tool.name) {
       const mappedName = options.functionToolNameMap?.responses_to_chat?.[tool.name] || tool.name;
       tools.push({ type: "function", function: { name: mappedName } });
+    } else if (tool.type === "custom" && tool.name && options.forwardChatCustomTools !== false) {
+      tools.push({ type: "custom", custom: { name: stringifyContent(tool.name) } });
     }
   }
   if (!tools.length) return null;
@@ -705,7 +811,7 @@ function responsesToChatRequest(request, previousMessages = [], options = {}) {
   const maxTokensCompatibility = mapMaxTokens(request, chat, options);
   const verbosityCompatibility = mapVerbosity(request, chat, options);
   const contextManagementCompatibility = mapContextManagement(request);
-  let toolChoice = mapToolChoice(request.tool_choice, { functionToolNameMap });
+  let toolChoice = mapToolChoice(request.tool_choice, { ...options, functionToolNameMap });
   const legacyFunctionsCompatibility = mapLegacyChatFunctions(request, tools, toolChoice, options);
   if (legacyFunctionsCompatibility?.tools) tools = legacyFunctionsCompatibility.tools;
   if (Object.prototype.hasOwnProperty.call(legacyFunctionsCompatibility || {}, "toolChoice")) {
@@ -1787,16 +1893,30 @@ function normalizeAssistantText(content) {
 
 function appendToolCallOutputs(response, toolCalls, options = {}) {
   for (const toolCall of toolCalls || []) {
-    if (!toolCall || toolCall.type !== "function") continue;
-    response.output.push({
-      id: prefixedId("fc"),
-      type: "function_call",
-      call_id: toolCall.id || prefixedId("call"),
-      name: remapChatFunctionName(toolCall.function?.name, options),
-      ...(toolCall.function?.namespace ? { namespace: toolCall.function.namespace } : {}),
-      arguments: stringifyContent(toolCall.function?.arguments ?? ""),
-      status: "completed",
-    });
+    if (!toolCall || !isPlainObject(toolCall)) continue;
+    if (toolCall.type === "function") {
+      response.output.push({
+        id: prefixedId("fc"),
+        type: "function_call",
+        call_id: toolCall.id || prefixedId("call"),
+        name: remapChatFunctionName(toolCall.function?.name, options),
+        ...(toolCall.function?.namespace ? { namespace: toolCall.function.namespace } : {}),
+        arguments: stringifyContent(toolCall.function?.arguments ?? ""),
+        status: "completed",
+      });
+      continue;
+    }
+    if (toolCall.type === "custom") {
+      response.output.push({
+        id: prefixedId("ctc"),
+        type: "custom_tool_call",
+        call_id: toolCall.id || prefixedId("call"),
+        name: stringifyContent(toolCall.custom?.name || ""),
+        ...(toolCall.custom?.namespace ? { namespace: stringifyContent(toolCall.custom.namespace) } : {}),
+        input: stringifyContent(toolCall.custom?.input ?? ""),
+        status: "completed",
+      });
+    }
   }
 }
 
@@ -1859,6 +1979,16 @@ function sanitizeReplayToolCalls(toolCalls = []) {
   return asArray(toolCalls)
     .filter((toolCall) => isPlainObject(toolCall))
     .map((toolCall) => {
+      if (toolCall.type === "custom") {
+        return {
+          id: toolCall.id || prefixedId("call"),
+          type: "custom",
+          custom: {
+            name: stringifyContent(toolCall.custom?.name || ""),
+            input: stringifyContent(toolCall.custom?.input ?? ""),
+          },
+        };
+      }
       if (toolCall.type !== "function") return clone(toolCall);
       return {
         id: toolCall.id || prefixedId("call"),

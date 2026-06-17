@@ -257,6 +257,80 @@ test("maps Responses function tools and tool_choice", () => {
   });
 });
 
+test("maps Responses custom tools and selectors for providers that support them", () => {
+  const { chat } = responsesToChatRequest({
+    model: "openai-compatible",
+    input: "Use the custom tool.",
+    tools: [{
+      type: "custom",
+      name: "emit_text",
+      description: "Emit raw text.",
+      format: { type: "grammar", definition: "start: /[a-z]+/", syntax: "lark" },
+    }],
+    tool_choice: { type: "custom", name: "emit_text" },
+  }, [], { forwardChatCustomTools: true });
+
+  assert.deepEqual(chat.tools, [{
+    type: "custom",
+    custom: {
+      name: "emit_text",
+      description: "Emit raw text.",
+      format: {
+        type: "grammar",
+        grammar: { definition: "start: /[a-z]+/", syntax: "lark" },
+      },
+    },
+  }]);
+  assert.deepEqual(chat.tool_choice, { type: "custom", custom: { name: "emit_text" } });
+
+  const filtered = responsesToChatRequest({
+    model: "deepseek-chat",
+    input: "Use the custom tool.",
+    tools: [{ type: "custom", name: "emit_text" }],
+    tool_choice: { type: "custom", name: "emit_text" },
+  }, [], { forwardChatCustomTools: false });
+
+  assert.equal(filtered.chat.tools, undefined);
+  assert.equal(filtered.chat.tool_choice, undefined);
+  assert.deepEqual(filtered.compatibility.unsupported_tools, ["custom"]);
+});
+
+test("maps Responses custom tool call input items to native or text replay", () => {
+  const native = responseInputToChatMessages([
+    { type: "custom_tool_call", call_id: "call_custom", name: "emit_text", input: "raw input" },
+    {
+      type: "custom_tool_call_output",
+      call_id: "call_custom",
+      output: [{ type: "input_text", text: "raw output" }],
+    },
+  ], { forwardChatCustomTools: true });
+
+  assert.deepEqual(native, [
+    {
+      role: "assistant",
+      content: null,
+      tool_calls: [{
+        id: "call_custom",
+        type: "custom",
+        custom: { name: "emit_text", input: "raw input" },
+      }],
+    },
+    { role: "tool", tool_call_id: "call_custom", content: "raw output" },
+  ]);
+
+  const textReplay = responseInputToChatMessages([
+    { type: "custom_tool_call", call_id: "call_custom", name: "emit_text", input: "raw input" },
+    { type: "custom_tool_call_output", call_id: "call_custom", output: "raw output" },
+  ], { forwardChatCustomTools: false });
+
+  assert.equal(textReplay[0].role, "assistant");
+  assert.match(textReplay[0].content, /Custom tool call:/);
+  assert.match(textReplay[0].content, /name: emit_text/);
+  assert.equal(textReplay[1].role, "user");
+  assert.match(textReplay[1].content, /Custom tool call output:/);
+  assert.match(textReplay[1].content, /raw output/);
+});
+
 test("maps Responses allowed_tools tool_choice to Chat allowed_tools shape", () => {
   const longName = "a".repeat(96);
   const { chat, compatibility } = responsesToChatRequest({
@@ -1404,6 +1478,41 @@ test("preserves non-streaming Chat refusal logprobs in compatibility metadata", 
   }]);
   assert.equal(response.metadata.compatibility.chat_refusal_logprobs[0].choice_index, 2);
   assert.equal(response.metadata.compatibility.chat_refusal_logprobs[0].logprobs[0].token, "I cannot");
+});
+
+test("maps Chat custom tool calls to Responses custom tool call items", () => {
+  const completion = {
+    id: "chatcmpl_custom_tool",
+    created: 447,
+    model: "openai-compatible",
+    choices: [{
+      index: 0,
+      message: {
+        role: "assistant",
+        content: null,
+        tool_calls: [{
+          id: "call_custom",
+          type: "custom",
+          custom: { name: "emit_text", input: "raw input" },
+        }],
+      },
+      finish_reason: "tool_calls",
+    }],
+  };
+  const response = chatCompletionToResponse(completion, { model: "openai-compatible" }, { responseId: "resp_custom_tool" });
+
+  assert.equal(response.output[0].type, "custom_tool_call");
+  assert.equal(response.output[0].call_id, "call_custom");
+  assert.equal(response.output[0].name, "emit_text");
+  assert.equal(response.output[0].input, "raw input");
+  assert.equal(response.output[0].status, "completed");
+
+  const replay = chatCompletionToReplayMessages(completion);
+  assert.deepEqual(replay[0].tool_calls, [{
+    id: "call_custom",
+    type: "custom",
+    custom: { name: "emit_text", input: "raw input" },
+  }]);
 });
 
 test("keeps DeepSeek reasoning_content in replay messages", () => {
