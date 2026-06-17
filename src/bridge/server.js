@@ -14546,6 +14546,16 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
     sendError(res, 400, includeError.message, includeError);
     return;
   }
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) {
+    sendError(res, 400, orderError.message, orderError);
+    return;
+  }
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) {
+    sendError(res, 400, limitError.message, limitError);
+    return;
+  }
   const items = conversationStore.listItems(conversationId);
   if (!items) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });

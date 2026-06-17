@@ -17107,6 +17107,30 @@ test("local Conversations API validates metadata and request contracts", async (
       assert.equal(json.error.param, "include.0", testCase.name);
     }
 
+    const invalidListOrder = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?order=sideways`);
+    assert.equal(invalidListOrder.status, 400);
+    assert.deepEqual(await invalidListOrder.json(), {
+      error: {
+        message: "order must be one of: asc, desc",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    for (const invalidLimit of ["abc", "1.5", "0", "101"]) {
+      const invalidListLimit = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?limit=${encodeURIComponent(invalidLimit)}`);
+      assert.equal(invalidListLimit.status, 400);
+      assert.deepEqual(await invalidListLimit.json(), {
+        error: {
+          message: "limit must be an integer between 1 and 100",
+          type: "invalid_request_error",
+          param: "limit",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+
     const updateCases = [
       {
         name: "update-body-shape",

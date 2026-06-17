@@ -93,7 +93,9 @@ Responses input-items coverage verifies that
 `GET /v1/responses/{response_id}/input_items` defaults to descending order,
 honors explicit ascending order, rejects unsupported `order` values, and
 enforces the official `limit` range from 1 through 100 before returning stored
-input items.
+input items. Local Conversations item-list coverage applies the same pagination
+query contract to `GET /v1/conversations/{conversation_id}/items` while keeping
+the Conversation-specific include projections intact.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
