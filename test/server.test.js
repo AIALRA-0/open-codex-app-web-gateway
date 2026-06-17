@@ -27427,6 +27427,10 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(retrievedCharacter.status, 200);
     assert.equal((await retrievedCharacter.json()).id, character.id);
 
+    const invalidCharacterGetQuery = await fetch(`${baseUrl}/v1/videos/characters/${character.id}?metadata=debug`);
+    assert.equal(invalidCharacterGetQuery.status, 400);
+    assert.equal((await invalidCharacterGetQuery.json()).error.code, "invalid_request_parameter");
+
     const created = await fetch(`${baseUrl}/v1/videos`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -27472,6 +27476,10 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     const retrieved = await fetch(`${baseUrl}/v1/videos/${video.id}`);
     assert.equal(retrieved.status, 200);
     assert.equal((await retrieved.json()).id, video.id);
+
+    const invalidVideoGetQuery = await fetch(`${baseUrl}/v1/videos/${video.id}?metadata=debug`);
+    assert.equal(invalidVideoGetQuery.status, 400);
+    assert.equal((await invalidVideoGetQuery.json()).error.code, "invalid_request_parameter");
 
     const list = await fetch(`${baseUrl}/v1/videos?limit=1`);
     assert.equal(list.status, 200);
@@ -27570,6 +27578,21 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(invalidVariant.status, 400);
     assert.equal((await invalidVariant.json()).error.code, "unsupported_video_variant");
 
+    const invalidContentQuery = await fetch(`${baseUrl}/v1/videos/${video.id}/content?variant=thumbnail&metadata=debug`);
+    assert.equal(invalidContentQuery.status, 400);
+    assert.equal((await invalidContentQuery.json()).error.code, "invalid_request_parameter");
+
+    const repeatedContentVariant = await fetch(`${baseUrl}/v1/videos/${video.id}/content?variant=thumbnail&variant=spritesheet`);
+    assert.equal(repeatedContentVariant.status, 400);
+    assert.deepEqual(await repeatedContentVariant.json(), {
+      error: {
+        message: "variant must be a single string query value",
+        type: "invalid_request_error",
+        param: "variant",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const form = new FormData();
     form.append("model", "sora-2");
     form.append("prompt", "Edit this tiny clip.");
@@ -27634,6 +27657,12 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(remixJson.source_video_id, video.id);
     assert.equal(remixJson.metadata.compatibility.operation, "remix");
 
+    const invalidVideoDeleteQuery = await fetch(`${baseUrl}/v1/videos/${video.id}?metadata=debug`, { method: "DELETE" });
+    assert.equal(invalidVideoDeleteQuery.status, 400);
+    assert.equal((await invalidVideoDeleteQuery.json()).error.code, "invalid_request_parameter");
+    const stillPresentAfterInvalidDelete = await fetch(`${baseUrl}/v1/videos/${video.id}`);
+    assert.equal(stillPresentAfterInvalidDelete.status, 200);
+
     const deleted = await fetch(`${baseUrl}/v1/videos/${video.id}`, { method: "DELETE" });
     assert.equal(deleted.status, 200);
     assert.deepEqual(await deleted.json(), {
@@ -27653,6 +27682,12 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     const missing = await fetch(`${baseUrl}/v1/videos/${video.id}`);
     assert.equal(missing.status, 404);
 
+    const invalidCharacterDeleteQuery = await fetch(`${baseUrl}/v1/videos/characters/${character.id}?metadata=debug`, { method: "DELETE" });
+    assert.equal(invalidCharacterDeleteQuery.status, 400);
+    assert.equal((await invalidCharacterDeleteQuery.json()).error.code, "invalid_request_parameter");
+    const characterStillPresentAfterInvalidDelete = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`);
+    assert.equal(characterStillPresentAfterInvalidDelete.status, 200);
+
     const deletedCharacter = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`, { method: "DELETE" });
     assert.equal(deletedCharacter.status, 200);
     assert.deepEqual(await deletedCharacter.json(), {
@@ -27663,6 +27698,39 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     const missingCharacter = await fetch(`${baseUrl}/v1/videos/characters/${character.id}`);
     assert.equal(missingCharacter.status, 404);
     assert.equal((await missingCharacter.json()).error.code, "video_character_not_found");
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("Videos direct endpoints reject unsupported query parameters before body parsing", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct video query parameters");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const endpoints = [
+      "/v1/videos",
+      "/v1/videos/characters",
+      "/v1/videos/edits",
+      "/v1/videos/extensions",
+      "/v1/videos/video_source/edits",
+      "/v1/videos/video_source/remix",
+    ];
+    for (const endpoint of endpoints) {
+      const response = await fetch(`${baseUrl}${endpoint}?metadata=debug`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: "not-json",
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "Unsupported query parameter: metadata",
+          type: "invalid_request_error",
+          param: "metadata",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
     assert.equal(requests.length, 0);
   });
 });

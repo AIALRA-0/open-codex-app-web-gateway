@@ -13172,6 +13172,13 @@ async function handleImagesVariations(req, res, config, fileSearchStore, imageGe
 
 async function handleVideosCreate(req, res, config, store, options = {}) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     const request = await readVideoCreateRequest(req, config);
     const video = createLocalVideoResource(request, config, options);
     store.put(video.id, {
@@ -13190,6 +13197,13 @@ async function handleVideosCreate(req, res, config, store, options = {}) {
 
 async function handleVideoCharacterCreate(req, res, config, store) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     const request = await readVideoCharacterCreateRequest(req, config);
     const character = createLocalVideoCharacterResource(request, config);
     store.put(character.id, {
@@ -13237,7 +13251,12 @@ function officialVideosListPaginationUrl(url) {
   return localUrl;
 }
 
-function handleVideoCharacterGet(res, store, characterId) {
+function handleVideoCharacterGet(res, store, characterId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(characterId);
   if (!record?.video_character) {
     sendError(res, 404, `video character not found: ${characterId}`, { code: "video_character_not_found" });
@@ -13246,7 +13265,12 @@ function handleVideoCharacterGet(res, store, characterId) {
   sendJson(res, 200, record.video_character);
 }
 
-function handleVideoCharacterDelete(res, store, characterId) {
+function handleVideoCharacterDelete(res, store, characterId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(characterId);
   if (!record?.video_character) {
     sendError(res, 404, `video character not found: ${characterId}`, { code: "video_character_not_found" });
@@ -13264,7 +13288,12 @@ function handleVideoCharacterDelete(res, store, characterId) {
   });
 }
 
-function handleVideoGet(res, store, videoId) {
+function handleVideoGet(res, store, videoId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(videoId);
   if (!record?.video) {
     sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
@@ -13273,7 +13302,12 @@ function handleVideoGet(res, store, videoId) {
   sendJson(res, 200, record.video);
 }
 
-function handleVideoDelete(res, store, videoId) {
+function handleVideoDelete(res, store, videoId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(videoId);
   if (!record?.video) {
     sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
@@ -13292,6 +13326,11 @@ function handleVideoDelete(res, store, videoId) {
 }
 
 function handleVideoContent(res, store, videoId, url) {
+  const queryError = validateOpenAIVideoContentQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = store.get(videoId);
   if (!record?.video) {
     sendError(res, 404, `video not found: ${videoId}`, { code: "video_not_found" });
@@ -13325,6 +13364,15 @@ function handleVideoContent(res, store, videoId, url) {
     "x-video-variant": variant,
   });
   res.end(content.buffer);
+}
+
+function validateOpenAIVideoContentQuery(url) {
+  for (const key of url.searchParams.keys()) {
+    if (key !== "variant") {
+      return requestValidationError(`Unsupported query parameter: ${key}`, key);
+    }
+  }
+  return validateOpenAISingleQueryValue(url, "variant");
 }
 
 async function readVideoCreateRequest(req, config) {
@@ -22906,11 +22954,11 @@ function createServer(config = loadConfig()) {
       if (videoCharacterRoute) {
         const characterId = decodeURIComponent(videoCharacterRoute[1]);
         if (req.method === "GET") {
-          handleVideoCharacterGet(res, store, characterId);
+          handleVideoCharacterGet(res, store, characterId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleVideoCharacterDelete(res, store, characterId);
+          handleVideoCharacterDelete(res, store, characterId, url);
           return;
         }
       }
@@ -22919,11 +22967,11 @@ function createServer(config = loadConfig()) {
       if (videoRoute) {
         const videoId = decodeURIComponent(videoRoute[1]);
         if (req.method === "GET") {
-          handleVideoGet(res, store, videoId);
+          handleVideoGet(res, store, videoId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleVideoDelete(res, store, videoId);
+          handleVideoDelete(res, store, videoId, url);
           return;
         }
       }

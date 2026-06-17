@@ -1980,18 +1980,18 @@ Completions.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/videos` | Implemented locally | Accepts JSON or multipart `prompt`, optional `model`, `size`, `seconds`, `quality`, `metadata`, `characters` with up to two character ID references, and asset references; returns an OpenAI-style `object:"video"` record with `status:"completed"` and `progress:100` |
+| `POST /v1/videos` | Implemented locally | Accepts JSON or multipart `prompt`, optional `model`, `size`, `seconds`, `quality`, `metadata`, `characters` with up to two character ID references, and asset references; rejects unsupported query parameters before body parsing; returns an OpenAI-style `object:"video"` record with `status:"completed"` and `progress:100` |
 | `GET /v1/videos` | Implemented locally | Lists local video jobs with official `limit`, `after`, and `order` pagination; `limit` is validated from 0 through 100 with default 20, `limit=0` returns an empty page with `has_more` when records exist, scalar `after` / `order` / `limit` may appear only once, `order` is validated against `asc` / `desc`, and unsupported generic paginator parameters such as `before` do not affect the official list result |
-| `GET /v1/videos/{video_id}` | Implemented locally | Retrieves a stored local video job |
-| `DELETE /v1/videos/{video_id}` | Implemented locally | Deletes a local video job and returns `object:"video.deleted"` |
-| `GET /v1/videos/{video_id}/content` | Implemented locally | Returns small placeholder bytes with `variant=video`, `thumbnail`, or `spritesheet` and matching `video/mp4`, `image/webp`, or `image/jpeg` content type |
-| `POST /v1/videos/characters` | Implemented locally | Accepts multipart `name` plus `video` upload, with JSON/base64 compatibility for tests, stores a local `object:"video.character"` record, and returns a reusable `char_...` id |
-| `GET /v1/videos/characters/{character_id}` | Implemented locally | Retrieves a stored local video character record |
-| `DELETE /v1/videos/characters/{character_id}` | Implemented locally | Deletes a local video character record and returns `object:"video.character.deleted"` |
-| `POST /v1/videos/edits` | Implemented locally | Accepts JSON or multipart edit requests with a source `video` reference/upload, returns a completed local video job, and records `source_video` plus `metadata.compatibility.operation:"edit"` |
-| `POST /v1/videos/{video_id}/edits` | Local compatibility alias | Accepts clients following earlier cookbook-style path examples, maps `{video_id}` to the local source video descriptor, and returns the same local edit job shape as `POST /v1/videos/edits` |
-| `POST /v1/videos/extensions` | Implemented locally | Accepts JSON or multipart extension requests with a source `video` reference/upload and returns a completed local video job with `source_video` and `metadata.compatibility.operation:"extend"` |
-| `POST /v1/videos/{video_id}/remix` | Implemented locally | Accepts JSON or multipart remix requests, records `source_video_id`, and returns a completed local video job |
+| `GET /v1/videos/{video_id}` | Implemented locally | Retrieves a stored local video job and rejects unsupported query parameters before lookup |
+| `DELETE /v1/videos/{video_id}` | Implemented locally | Deletes a local video job and returns `object:"video.deleted"`; unsupported query parameters fail before deletion |
+| `GET /v1/videos/{video_id}/content` | Implemented locally | Returns small placeholder bytes with single `variant=video`, `thumbnail`, or `spritesheet` and matching `video/mp4`, `image/webp`, or `image/jpeg` content type; unsupported query parameters and repeated `variant` values fail locally |
+| `POST /v1/videos/characters` | Implemented locally | Accepts multipart `name` plus `video` upload, with JSON/base64 compatibility for tests, rejects unsupported query parameters before body parsing, stores a local `object:"video.character"` record, and returns a reusable `char_...` id |
+| `GET /v1/videos/characters/{character_id}` | Implemented locally | Retrieves a stored local video character record and rejects unsupported query parameters before lookup |
+| `DELETE /v1/videos/characters/{character_id}` | Implemented locally | Deletes a local video character record and returns `object:"video.character.deleted"`; unsupported query parameters fail before deletion |
+| `POST /v1/videos/edits` | Implemented locally | Accepts JSON or multipart edit requests with a source `video` reference/upload, rejects unsupported query parameters before body parsing, returns a completed local video job, and records `source_video` plus `metadata.compatibility.operation:"edit"` |
+| `POST /v1/videos/{video_id}/edits` | Local compatibility alias | Accepts clients following earlier cookbook-style path examples, rejects unsupported query parameters before body parsing, maps `{video_id}` to the local source video descriptor, and returns the same local edit job shape as `POST /v1/videos/edits` |
+| `POST /v1/videos/extensions` | Implemented locally | Accepts JSON or multipart extension requests with a source `video` reference/upload, rejects unsupported query parameters before body parsing, and returns a completed local video job with `source_video` and `metadata.compatibility.operation:"extend"` |
+| `POST /v1/videos/{video_id}/remix` | Implemented locally | Accepts JSON or multipart remix requests, rejects unsupported query parameters before body parsing, records `source_video_id`, and returns a completed local video job |
 
 Local Batch JSONL now executes `/v1/videos` requests synchronously. This matches
 the documented Batch restriction that video Batch requests are JSON-only and use

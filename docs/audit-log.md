@@ -1,5 +1,73 @@
 # Audit Log
 
+## 2026-06-17 Videos Direct Endpoint Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/videos`;
+  - `GET /v1/videos`;
+  - `POST /v1/videos/edits`;
+  - `POST /v1/videos/extensions`;
+  - `POST /v1/videos/characters`;
+  - the official endpoint list entries for `/v1/videos/{video_id}`,
+    `/v1/videos/{video_id}/content`, `/v1/videos/{video_id}/remix`, and
+    `/v1/videos/characters/{character_id}`.
+- Official schema notes:
+  - video create/edit/extend/character-create POST operations declare request
+    bodies and no query parameters;
+  - video list allows `limit`, `order`, and `after`, so the existing list
+    pagination validator remains unchanged;
+  - local content downloads keep the bridge's existing `variant` compatibility
+    selector for `video`, `thumbnail`, and `spritesheet`.
+- Tightened local Videos behavior:
+  - `/v1/videos`, `/v1/videos/edits`, `/v1/videos/extensions`,
+    `/v1/videos/{video_id}/edits`, `/v1/videos/{video_id}/remix`, and
+    `/v1/videos/characters` now reject unsupported query parameters before
+    JSON/multipart parsing or local job creation;
+  - `GET` / `DELETE` video and video-character resource routes now reject
+    unsupported query parameters before lookup or deletion;
+  - `/v1/videos/{video_id}/content` now rejects unsupported query parameters
+    and repeated `variant` values while preserving valid `variant=video`,
+    `variant=thumbnail`, and `variant=spritesheet` responses;
+  - valid local placeholder video and character workflows remain unchanged,
+    including list pagination, content downloads, edit/extend/remix aliases,
+    and cleanup behavior.
+- Regression coverage updated:
+  - Videos API lifecycle tests now verify resource GET/DELETE query rejection,
+    content query validation, and that invalid delete queries do not remove
+    existing video or character resources;
+  - a direct Videos query test now verifies create/edit/extend/character/remix
+    POST endpoints fail on unsupported query parameters before parsing invalid
+    request bodies and without calling the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records the Videos no-query boundary and the
+    single-value content `variant` rule.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Videos API|Videos direct endpoints" test/server.test.js`
+    passed 2/2 tests.
+  - Full `node --test test/*.test.js` passed 374/374 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Videos query smoke verified invalid `metadata` queries for
+    create, character-create, edit, extension, path-edit, and remix POST
+    routes return OpenAI-style 400 errors; then created a temporary local
+    character and video, verified invalid resource/content/delete queries
+    return 400, verified valid thumbnail content returns `image/webp`, and
+    deleted the temporary resources.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5381 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, video payloads, generated resource ids from smoke
+    output, or smoke-test request secrets were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Images Direct Endpoint Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:
