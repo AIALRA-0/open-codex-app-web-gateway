@@ -16954,6 +16954,19 @@ function validateOpenAIFineTuningJobCreateBody(body) {
   const seedError = validateIntegerParameter(body, "seed", { min: 0, max: 2147483647 });
   if (seedError) return seedError;
 
+  const hyperparametersError = validateOpenAIFineTuningHyperparametersIfPresent(
+    body,
+    "hyperparameters",
+    "supervised",
+  );
+  if (hyperparametersError) return hyperparametersError;
+
+  const methodError = validateOpenAIFineTuningMethod(body);
+  if (methodError) return methodError;
+
+  const integrationsError = validateOpenAIFineTuningIntegrations(body);
+  if (integrationsError) return integrationsError;
+
   const metadataError = validateOpenAIStringMetadata(body);
   if (metadataError) return metadataError;
 
@@ -16975,6 +16988,216 @@ function validateOpenAIFineTuningRequiredString(body, param) {
   }
   if (typeof body[param] !== "string") {
     return requestValidationError(`${param} must be a string`, param);
+  }
+  return null;
+}
+
+function validateOpenAIFineTuningMethod(body) {
+  if (!Object.prototype.hasOwnProperty.call(body, "method")) return null;
+  const method = body.method;
+  if (!isPlainObject(method)) {
+    return requestValidationError("method must be an object", "method");
+  }
+  if (!Object.prototype.hasOwnProperty.call(method, "type") || method.type == null || method.type === "") {
+    return requestValidationError("method.type is required", "method.type");
+  }
+  if (typeof method.type !== "string") {
+    return requestValidationError("method.type must be a string", "method.type");
+  }
+  if (!["supervised", "dpo", "reinforcement"].includes(method.type)) {
+    return requestValidationError("method.type must be one of: supervised, dpo, reinforcement", "method.type");
+  }
+
+  const supervisedError = validateOpenAIFineTuningMethodSection(
+    method,
+    "supervised",
+    "method.supervised",
+    "supervised",
+  );
+  if (supervisedError) return supervisedError;
+
+  const dpoError = validateOpenAIFineTuningMethodSection(method, "dpo", "method.dpo", "dpo");
+  if (dpoError) return dpoError;
+
+  return validateOpenAIFineTuningReinforcementMethod(method);
+}
+
+function validateOpenAIFineTuningMethodSection(method, key, param, hyperparameterType) {
+  if (!Object.prototype.hasOwnProperty.call(method, key)) return null;
+  if (!isPlainObject(method[key])) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  return validateOpenAIFineTuningHyperparametersIfPresent(
+    method[key],
+    "hyperparameters",
+    hyperparameterType,
+    `${param}.hyperparameters`,
+  );
+}
+
+function validateOpenAIFineTuningReinforcementMethod(method) {
+  if (!Object.prototype.hasOwnProperty.call(method, "reinforcement")) return null;
+  const reinforcement = method.reinforcement;
+  if (!isPlainObject(reinforcement)) {
+    return requestValidationError("method.reinforcement must be an object", "method.reinforcement");
+  }
+  if (!Object.prototype.hasOwnProperty.call(reinforcement, "grader") || reinforcement.grader == null) {
+    return requestValidationError("method.reinforcement.grader is required", "method.reinforcement.grader");
+  }
+  if (!isPlainObject(reinforcement.grader)) {
+    return requestValidationError("method.reinforcement.grader must be an object", "method.reinforcement.grader");
+  }
+  return validateOpenAIFineTuningHyperparametersIfPresent(
+    reinforcement,
+    "hyperparameters",
+    "reinforcement",
+    "method.reinforcement.hyperparameters",
+  );
+}
+
+function validateOpenAIFineTuningIntegrations(body) {
+  if (!Object.prototype.hasOwnProperty.call(body, "integrations") || body.integrations == null) return null;
+  if (!Array.isArray(body.integrations)) {
+    return requestValidationError("integrations must be an array or null", "integrations");
+  }
+  for (const [index, integration] of body.integrations.entries()) {
+    const param = `integrations.${index}`;
+    if (!isPlainObject(integration)) {
+      return requestValidationError(`${param} must be an object`, param);
+    }
+    if (!Object.prototype.hasOwnProperty.call(integration, "type") || integration.type == null || integration.type === "") {
+      return requestValidationError(`${param}.type is required`, `${param}.type`);
+    }
+    if (integration.type !== "wandb") {
+      return requestValidationError(`${param}.type must be wandb`, `${param}.type`);
+    }
+    if (!Object.prototype.hasOwnProperty.call(integration, "wandb") || integration.wandb == null) {
+      return requestValidationError(`${param}.wandb is required`, `${param}.wandb`);
+    }
+    if (!isPlainObject(integration.wandb)) {
+      return requestValidationError(`${param}.wandb must be an object`, `${param}.wandb`);
+    }
+    const wandbError = validateOpenAIFineTuningWandbIntegration(integration.wandb, `${param}.wandb`);
+    if (wandbError) return wandbError;
+  }
+  return null;
+}
+
+function validateOpenAIFineTuningWandbIntegration(wandb, param) {
+  if (!Object.prototype.hasOwnProperty.call(wandb, "project") || wandb.project == null || wandb.project === "") {
+    return requestValidationError(`${param}.project is required`, `${param}.project`);
+  }
+  if (typeof wandb.project !== "string") {
+    return requestValidationError(`${param}.project must be a string`, `${param}.project`);
+  }
+  for (const field of ["name", "entity"]) {
+    if (Object.prototype.hasOwnProperty.call(wandb, field) && wandb[field] != null && typeof wandb[field] !== "string") {
+      return requestValidationError(`${param}.${field} must be a string or null`, `${param}.${field}`);
+    }
+  }
+  if (!Object.prototype.hasOwnProperty.call(wandb, "tags") || wandb.tags == null) return null;
+  if (!Array.isArray(wandb.tags)) {
+    return requestValidationError(`${param}.tags must be an array`, `${param}.tags`);
+  }
+  for (const [index, tag] of wandb.tags.entries()) {
+    if (typeof tag !== "string") {
+      return requestValidationError(`${param}.tags.${index} must be a string`, `${param}.tags.${index}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIFineTuningHyperparametersIfPresent(body, field, type, param = field) {
+  if (!Object.prototype.hasOwnProperty.call(body, field)) return null;
+  const hyperparameters = body[field];
+  if (!isPlainObject(hyperparameters)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  return validateOpenAIFineTuningHyperparameterFields(hyperparameters, type, param);
+}
+
+function validateOpenAIFineTuningHyperparameterFields(hyperparameters, type, param) {
+  for (const [field, max] of [["batch_size", 256], ["n_epochs", 50]]) {
+    const error = validateOpenAIFineTuningAutoIntegerRange(hyperparameters, field, param, 1, max);
+    if (error) return error;
+  }
+
+  const learningRateError = validateOpenAIFineTuningAutoNumberRange(
+    hyperparameters,
+    "learning_rate_multiplier",
+    param,
+    { exclusiveMin: 0 },
+  );
+  if (learningRateError) return learningRateError;
+
+  if (type === "dpo") {
+    const betaError = validateOpenAIFineTuningAutoNumberRange(hyperparameters, "beta", param, {
+      exclusiveMin: 0,
+      max: 2,
+    });
+    if (betaError) return betaError;
+  }
+
+  if (type === "reinforcement") {
+    const reasoningEffortError = validateOpenAIFineTuningEnumString(
+      hyperparameters,
+      "reasoning_effort",
+      param,
+      ["default", "low", "medium", "high"],
+    );
+    if (reasoningEffortError) return reasoningEffortError;
+
+    const computeMultiplierError = validateOpenAIFineTuningAutoNumberRange(
+      hyperparameters,
+      "compute_multiplier",
+      param,
+      { exclusiveMin: 0.00001, max: 10 },
+    );
+    if (computeMultiplierError) return computeMultiplierError;
+
+    for (const field of ["eval_interval", "eval_samples"]) {
+      const error = validateOpenAIFineTuningAutoIntegerRange(hyperparameters, field, param, 1);
+      if (error) return error;
+    }
+  }
+
+  return null;
+}
+
+function validateOpenAIFineTuningAutoIntegerRange(body, field, parentParam, min, max = null) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  if (body[field] === "auto") return null;
+  const param = `${parentParam}.${field}`;
+  const invalid = !Number.isInteger(body[field]) || body[field] < min || (max != null && body[field] > max);
+  if (!invalid) return null;
+  const message = max == null
+    ? `${param} must be auto or an integer greater than or equal to ${min}`
+    : `${param} must be auto or an integer between ${min} and ${max}`;
+  return requestValidationError(message, param);
+}
+
+function validateOpenAIFineTuningAutoNumberRange(body, field, parentParam, { exclusiveMin = null, max = null } = {}) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  if (body[field] === "auto") return null;
+  const param = `${parentParam}.${field}`;
+  const value = body[field];
+  const invalid = typeof value !== "number"
+    || !Number.isFinite(value)
+    || (exclusiveMin != null && value <= exclusiveMin)
+    || (max != null && value > max);
+  if (!invalid) return null;
+  const lower = exclusiveMin == null ? "a number" : `a number greater than ${exclusiveMin}`;
+  const message = max == null
+    ? `${param} must be auto or ${lower}`
+    : `${param} must be auto or ${lower} and less than or equal to ${max}`;
+  return requestValidationError(message, param);
+}
+
+function validateOpenAIFineTuningEnumString(body, field, parentParam, values) {
+  if (!Object.prototype.hasOwnProperty.call(body, field) || body[field] == null) return null;
+  const param = `${parentParam}.${field}`;
+  if (typeof body[field] !== "string" || !values.includes(body[field])) {
+    return requestValidationError(`${param} must be one of: ${values.join(", ")}`, param);
   }
   return null;
 }

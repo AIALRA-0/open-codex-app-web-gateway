@@ -1,5 +1,71 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Job Nested Schema Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for nested
+  `CreateFineTuningJobRequest` structures:
+  - `FineTuneMethod.type` is required when `method` is supplied and must be
+    one of `supervised`, `dpo`, or `reinforcement`;
+  - supervised and deprecated top-level hyperparameters accept `batch_size`,
+    `learning_rate_multiplier`, and `n_epochs` with documented `auto` or
+    numeric ranges;
+  - DPO hyperparameters additionally accept `beta` with documented range;
+  - reinforcement hyperparameters accept `reasoning_effort`,
+    `compute_multiplier`, `eval_interval`, and `eval_samples` with documented
+    enum/range constraints;
+  - `FineTuneReinforcementMethod` requires `grader` when the reinforcement
+    object is supplied;
+  - `integrations` is nullable array data, and the current integration object
+    supports only `type:"wandb"` with required `wandb.project` and optional
+    `name`, `entity`, and string-array `tags`.
+- Tightened local Fine-tuning job create behavior:
+  - invalid top-level deprecated `hyperparameters` now returns OpenAI-style
+    HTTP 400 before local state mutation;
+  - invalid `method`, missing `method.type`, unsupported method types, null
+    method sections, and invalid nested hyperparameter ranges now return
+    OpenAI-style `invalid_request_parameter` responses;
+  - supplied reinforcement method objects now require an object `grader`;
+  - invalid `integrations` shape, non-W&B integration types, missing
+    `wandb.project`, and non-string W&B tags are rejected before creating local
+    jobs, events, or synthetic checkpoints;
+  - successful local jobs still store official nested structures unchanged and
+    do not call the upstream Chat Completions provider.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now covers invalid top-level
+    hyperparameters, invalid method object/type/sections, supervised/DPO/
+    reinforcement hyperparameter bounds, missing reinforcement grader, invalid
+    integrations, and a valid W&B integration stored on the local job.
+- Documentation updated:
+  - compatibility matrix now records the nested create-body validation boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Fine-tuning nested schema smoke marker
+    `ft-job-nested-smoke-1781717806` verified invalid `method.type`, invalid
+    DPO `beta`, missing W&B `project`, and a valid local job with W&B
+    integration. The valid job returned `status:"succeeded"` and
+    `compatibility.actual_model_training:false`. No upstream provider training
+    or model call was performed.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5369 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Job Create Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for

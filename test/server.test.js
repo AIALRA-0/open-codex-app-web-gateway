@@ -26332,6 +26332,130 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
         code: "invalid_request_parameter",
         message: "metadata values must be strings",
       },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", hyperparameters: [] },
+        param: "hyperparameters",
+        code: "invalid_request_parameter",
+        message: "hyperparameters must be an object",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", hyperparameters: { batch_size: 0 } },
+        param: "hyperparameters.batch_size",
+        code: "invalid_request_parameter",
+        message: "hyperparameters.batch_size must be auto or an integer between 1 and 256",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", method: null },
+        param: "method",
+        code: "invalid_request_parameter",
+        message: "method must be an object",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", method: {} },
+        param: "method.type",
+        code: "invalid_request_parameter",
+        message: "method.type is required",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", method: { type: "unknown" } },
+        param: "method.type",
+        code: "invalid_request_parameter",
+        message: "method.type must be one of: supervised, dpo, reinforcement",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", method: { type: "supervised", supervised: null } },
+        param: "method.supervised",
+        code: "invalid_request_parameter",
+        message: "method.supervised must be an object",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          method: { type: "supervised", supervised: { hyperparameters: { n_epochs: 51 } } },
+        },
+        param: "method.supervised.hyperparameters.n_epochs",
+        code: "invalid_request_parameter",
+        message: "method.supervised.hyperparameters.n_epochs must be auto or an integer between 1 and 50",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          method: { type: "dpo", dpo: { hyperparameters: { beta: 0 } } },
+        },
+        param: "method.dpo.hyperparameters.beta",
+        code: "invalid_request_parameter",
+        message: "method.dpo.hyperparameters.beta must be auto or a number greater than 0 and less than or equal to 2",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          method: { type: "reinforcement", reinforcement: { hyperparameters: {} } },
+        },
+        param: "method.reinforcement.grader",
+        code: "invalid_request_parameter",
+        message: "method.reinforcement.grader is required",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          method: {
+            type: "reinforcement",
+            reinforcement: {
+              grader: { type: "string_check" },
+              hyperparameters: { reasoning_effort: "extreme" },
+            },
+          },
+        },
+        param: "method.reinforcement.hyperparameters.reasoning_effort",
+        code: "invalid_request_parameter",
+        message: "method.reinforcement.hyperparameters.reasoning_effort must be one of: default, low, medium, high",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", integrations: {} },
+        param: "integrations",
+        code: "invalid_request_parameter",
+        message: "integrations must be an array or null",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", integrations: [{}] },
+        param: "integrations.0.type",
+        code: "invalid_request_parameter",
+        message: "integrations.0.type is required",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          integrations: [{ type: "tensorboard", wandb: { project: "compat-project" } }],
+        },
+        param: "integrations.0.type",
+        code: "invalid_request_parameter",
+        message: "integrations.0.type must be wandb",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          integrations: [{ type: "wandb", wandb: {} }],
+        },
+        param: "integrations.0.wandb.project",
+        code: "invalid_request_parameter",
+        message: "integrations.0.wandb.project is required",
+      },
+      {
+        body: {
+          model: "gpt-4o-mini",
+          training_file: "file_train_local",
+          integrations: [{ type: "wandb", wandb: { project: "compat-project", tags: ["local", 42] } }],
+        },
+        param: "integrations.0.wandb.tags.1",
+        code: "invalid_request_parameter",
+        message: "integrations.0.wandb.tags.1 must be a string",
+      },
     ]) {
       const invalidCreate = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
         method: "POST",
@@ -26366,6 +26490,15 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
           },
         },
         metadata: { suite: "fine-tuning-local" },
+        integrations: [{
+          type: "wandb",
+          wandb: {
+            project: "compat-project",
+            name: "compat-run",
+            entity: null,
+            tags: ["local"],
+          },
+        }],
       }),
     });
     assert.equal(createResponse.status, 200);
@@ -26381,6 +26514,9 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(job.method.supervised.hyperparameters.n_epochs, 2);
     assert.equal(job.hyperparameters.n_epochs, 2);
     assert.equal(job.metadata.suite, "fine-tuning-local");
+    assert.equal(job.integrations[0].type, "wandb");
+    assert.equal(job.integrations[0].wandb.project, "compat-project");
+    assert.deepEqual(job.integrations[0].wandb.tags, ["local"]);
     assert.equal(job.compatibility.provider, "local");
     assert.equal(job.compatibility.actual_model_training, false);
 
