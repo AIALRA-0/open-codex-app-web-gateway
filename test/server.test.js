@@ -24424,6 +24424,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.object, "list");
     assert.equal(messagesJson.data.length, 1);
     assert.equal(messagesJson.data[0].role, "user");
+    assert.equal(messagesJson.data[0].name, null);
+    assert.equal(messagesJson.data[0].content_parts, null);
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
@@ -24454,6 +24456,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     const messagesDescJson = await messagesDesc.json();
     assert.equal(messagesDescJson.data.length, 1);
     assert.equal(messagesDescJson.data[0].direction, "output");
+    assert.equal(messagesDescJson.data[0].name, null);
+    assert.equal(messagesDescJson.data[0].content_parts, null);
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     const secondResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
@@ -25464,6 +25468,8 @@ test("POST /v1/chat/completions falls back to text markers for direct Chat image
     assert.equal(messages.status, 200);
     const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
     assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "image_url", "image_url"]);
+    assert.equal(inputMessage.name, null);
+    assert.deepEqual(inputMessage.content_parts.map((part) => part.type), ["text", "image_url", "image_url"]);
   }, { chatImageInputMode: "text" });
 });
 
@@ -25544,6 +25550,8 @@ test("POST /v1/chat/completions falls back to text markers for direct Chat audio
     assert.equal(messages.status, 200);
     const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
     assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "input_audio", "audio"]);
+    assert.equal(inputMessage.name, null);
+    assert.equal(inputMessage.content_parts, null);
   }, { chatAudioInputMode: "text" });
 });
 
@@ -25634,6 +25642,8 @@ test("POST /v1/chat/completions extracts direct Chat file content for text provi
     assert.equal(messages.status, 200);
     const inputMessage = (await messages.json()).data.find((message) => message.direction === "input");
     assert.deepEqual(inputMessage.content.map((part) => part.type), ["text", "input_file", "file"]);
+    assert.equal(inputMessage.name, null);
+    assert.equal(inputMessage.content_parts, null);
   }, { chatFileInputMode: "text" });
 });
 

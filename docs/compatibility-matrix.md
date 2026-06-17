@@ -450,7 +450,7 @@ stored Chat completion records.
 | `GET /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Returns a locally stored upstream Chat completion object |
 | `POST /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Updates only the stored completion `metadata` field, matching the current OpenAI API restriction for stored Chat Completions; accepts nullable official Metadata by clearing local metadata to `{}` |
 | `DELETE /v1/chat/completions/{completion_id}` | Implemented for local `store:true` records | Deletes a locally stored Chat completion and returns `object:"chat.completion.deleted"` |
-| `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with official `limit`, `after`, and `order` pagination; `order` is validated against the official `asc` / `desc` enum and defaults to `asc`, and `limit` must be a positive integer query value |
+| `GET /v1/chat/completions/{completion_id}/messages` | Implemented for local `store:true` records | Returns request messages plus assistant choice messages with official `limit`, `after`, and `order` pagination; message records include official `id`, `role`, `content`, `name`, and `content_parts` fields, and keep local `direction` for replay/debugging. `content_parts` is populated only when the stored Chat content-part array contains official `text` / `image_url` parts and is `null` for string content or bridge extension parts such as audio/file inputs. `order` is validated against the official `asc` / `desc` enum and defaults to `asc`, and `limit` must be a positive integer query value |
 
 The bridge stores Chat completions only when the incoming Chat request sets
 `store:true`. Non-streaming requests normalize the upstream
@@ -459,7 +459,9 @@ Streaming requests are forwarded as SSE and reconstructed from the observed
 `chat.completion.chunk` sequence into a local terminal `chat.completion`,
 including accumulated assistant text, streamed tool-call arguments, logprobs
 when present, terminal finish reasons, usage-bearing final chunks, request
-metadata, and message history. This matches the
+metadata, and message history. Stored Chat message-list records expose
+`name:null` when no caller name is present and `content_parts` for pure
+official text/image content-part inputs. This matches the
 stored-completion lifecycle intent and avoids unbounded state growth for
 ordinary passthrough Chat traffic.
 

@@ -1,5 +1,51 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Message List Shape
+
+- Rechecked the official OpenAI OpenAPI schema for
+  `GET /v1/chat/completions/{completion_id}/messages`:
+  - it returns a `ChatCompletionMessageList`;
+  - each message has required `id` plus Chat completion message fields;
+  - `content_parts` is defined for stored text/image content-part inputs and
+    otherwise `null`;
+  - the official example includes `name:null` and `content_parts:null` for a
+    simple user message.
+- Tightened local stored Chat message records:
+  - every stored Chat message list item now includes `name`, defaulting to
+    `null` when no caller name is present;
+  - every item now includes `content_parts`, populated only for pure official
+    `text` / `image_url` content-part arrays and `null` otherwise;
+  - local `direction` remains available for replay/debugging and existing
+    compatibility tests.
+- Regression coverage added:
+  - string input message list items expose `name:null` and
+    `content_parts:null`;
+  - assistant output message list items expose `name:null` and
+    `content_parts:null`;
+  - direct Chat image content-part requests preserve the official text/image
+    parts in `content_parts`.
+  - direct Chat audio/file extension content-part requests keep official
+    `content_parts:null` while preserving local `content` for replay/debugging.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe stored Chat message
+    list shape normalization.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle plus direct Chat image/audio/file
+    message-list tests pass;
+  - `npm test` passes: 345 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level secret pattern scan passes;
+  - local and public smoke created temporary `store:true` Chat completions,
+    confirmed stored message-list records expose `name:null`,
+    `content_parts:null`, `object:"list"`, and input/output message ids, then
+    deleted the temporary records.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Object Shape Normalization
 
 - Rechecked the official OpenAI OpenAPI schema for Chat Completions:

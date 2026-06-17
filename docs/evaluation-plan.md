@@ -111,7 +111,11 @@ metadata is not needed they are returned as `{}`, and when stored fields are
 filtered locally the `metadata.compatibility` audit block is preserved. The
 same coverage also verifies that locally stored non-streaming Chat completions
 always expose the official `object:"chat.completion"`, integer `created`, and
-string `model` fields in create, retrieve, and list responses.
+string `model` fields in create, retrieve, and list responses. Stored Chat
+message-list coverage verifies official `name` and `content_parts` fields for
+string and pure text/image content-part inputs, verifies audio/file extension
+parts keep official `content_parts:null`, and preserves local `direction`
+metadata for replay assertions.
 
 PDF extraction is covered in mock-provider regression tests for both Responses
 `input_file` translation and direct Chat passthrough text fallback, and local
@@ -512,7 +516,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
 - Stored Chat completion list/get/messages endpoints preserve local `store:true`
   lifecycle records with pagination, filters, object metadata updates, and
   nullable `metadata:null` clears, create-time null normalization, and the
-  official stored Chat completion object shape.
+  official stored Chat completion and message-list object shapes.
 - Direct Chat passthrough accepts current OpenAI Chat `developer` role requests
   against DeepSeek-compatible providers by normalizing the upstream role,
   mapping `max_completion_tokens` to the configured provider token field,

@@ -8811,8 +8811,18 @@ function addStoredChatMessageId(message, index, direction) {
     : { role: "user", content: stringifyContent(message) };
   if (!stored.id) stored.id = `chatmsg_${String(index).padStart(6, "0")}`;
   if (!stored.object) stored.object = "chat.completion.message";
+  if (!Object.prototype.hasOwnProperty.call(stored, "name")) stored.name = null;
+  if (!Object.prototype.hasOwnProperty.call(stored, "content_parts")) {
+    stored.content_parts = storedChatMessageContentParts(stored.content);
+  }
   stored.direction = direction;
   return stored;
+}
+
+function storedChatMessageContentParts(content) {
+  if (!Array.isArray(content)) return null;
+  if (!content.every((part) => isPlainObject(part) && ["text", "image_url"].includes(part.type))) return null;
+  return content.length ? clone(content) : null;
 }
 
 async function handleModels(req, res, config) {
