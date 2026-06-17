@@ -5810,7 +5810,9 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (callIdError) return callIdError;
     const actionError = validateOpenAIRequiredObjectItemField(item, param, "action");
     if (actionError) return actionError;
-    return validateOpenAIOptionalObjectItemField(item, param, "environment", { nullable: true });
+    const actionShapeError = validateOpenAIResponsesShellCallAction(item.action, `${param}.action`);
+    if (actionShapeError) return actionShapeError;
+    return validateOpenAIResponsesShellCallEnvironment(item.environment, `${param}.environment`);
   }
 
   if (item.type === "shell_call_output") {
@@ -5820,7 +5822,7 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (callIdError) return callIdError;
     const outputError = validateOpenAIRequiredArrayItemField(item, param, "output");
     if (outputError) return outputError;
-    const chunksError = validateOpenAIResponsesShellOutputChunks(item.output, `${param}.output`);
+    const chunksError = validateOpenAIResponsesShellOutputChunks(item.output, `${param}.output`, item.outcome);
     if (chunksError) return chunksError;
     return validateOpenAIOptionalIntegerItemField(item, param, "max_output_length", { nullable: true });
   }
@@ -6022,6 +6024,62 @@ function validateOpenAIResponsesWebSearchSources(sources, param) {
   return null;
 }
 
+function validateOpenAIResponsesShellCallAction(action, param) {
+  if (Object.prototype.hasOwnProperty.call(action, "commands")) {
+    const commandsError = validateOpenAIStringArray(action.commands, `${param}.commands`);
+    if (commandsError) return commandsError;
+  } else if (Object.prototype.hasOwnProperty.call(action, "command")) {
+    const command = action.command;
+    if (typeof command === "string") {
+      if (!command) {
+        return requestValidationError(`${param}.command must be a non-empty string`, `${param}.command`);
+      }
+    } else {
+      const commandError = validateOpenAIStringArray(command, `${param}.command`, { nonEmpty: true });
+      if (commandError) return commandError;
+    }
+  } else {
+    return requestValidationError(`${param}.commands must be an array`, `${param}.commands`);
+  }
+  const timeoutError = validateOpenAIOptionalIntegerObjectField(action, `${param}.timeout_ms`, "timeout_ms", {
+    nullable: true,
+  });
+  if (timeoutError) return timeoutError;
+  return validateOpenAIOptionalIntegerObjectField(action, `${param}.max_output_length`, "max_output_length", {
+    nullable: true,
+  });
+}
+
+function validateOpenAIResponsesShellCallEnvironment(environment, param) {
+  if (environment === undefined || environment === null) return null;
+  if (!isPlainObject(environment)) {
+    return requestValidationError(`${param} must be an object or null`, param);
+  }
+  if (typeof environment.type !== "string") {
+    return requestValidationError(`${param}.type must be a string`, `${param}.type`);
+  }
+  if (environment.type === "local") {
+    return validateOpenAILocalEnvironment(environment, param);
+  }
+  if (environment.type === "container_reference") {
+    return validateOpenAIContainerReference(environment, param);
+  }
+  return requestValidationError(
+    `${param}.type must be one of: local, container_reference`,
+    `${param}.type`,
+  );
+}
+
+function validateOpenAIOptionalIntegerObjectField(object, param, field, options = {}) {
+  if (!Object.prototype.hasOwnProperty.call(object, field)) return null;
+  if (object[field] === null && options.nullable) return null;
+  if (!Number.isInteger(object[field])) {
+    const nullableSuffix = options.nullable ? " or null" : "";
+    return requestValidationError(`${param} must be an integer${nullableSuffix}`, param);
+  }
+  return null;
+}
+
 function validateOpenAIRequiredStringItemField(item, param, field) {
   if (typeof item[field] !== "string" || item[field].length === 0) {
     return requestValidationError(`${param}.${field} must be a non-empty string`, `${param}.${field}`);
@@ -6147,20 +6205,33 @@ function validateOpenAIResponsesCodeInterpreterOutputs(outputs, param) {
   return null;
 }
 
-function validateOpenAIResponsesShellOutputChunks(output, param) {
+function validateOpenAIResponsesShellOutputChunks(output, param, fallbackOutcome) {
   for (const [index, chunk] of output.entries()) {
     const chunkParam = `${param}.${index}`;
     if (!isPlainObject(chunk)) {
       return requestValidationError(`${chunkParam} must be an object`, chunkParam);
     }
     for (const field of ["stdout", "stderr"]) {
-      if (Object.prototype.hasOwnProperty.call(chunk, field) && typeof chunk[field] !== "string") {
+      if (typeof chunk[field] !== "string") {
         return requestValidationError(`${chunkParam}.${field} must be a string`, `${chunkParam}.${field}`);
       }
     }
-    if (Object.prototype.hasOwnProperty.call(chunk, "outcome") && !isPlainObject(chunk.outcome)) {
-      return requestValidationError(`${chunkParam}.outcome must be an object`, `${chunkParam}.outcome`);
-    }
+    const outcome = Object.prototype.hasOwnProperty.call(chunk, "outcome") ? chunk.outcome : fallbackOutcome;
+    const outcomeError = validateOpenAIResponsesShellOutcome(outcome, `${chunkParam}.outcome`);
+    if (outcomeError) return outcomeError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesShellOutcome(outcome, param) {
+  if (!isPlainObject(outcome)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  if (typeof outcome.type !== "string" || !["exit", "timeout"].includes(outcome.type)) {
+    return requestValidationError(`${param}.type must be one of: exit, timeout`, `${param}.type`);
+  }
+  if (outcome.type === "exit" && !Number.isInteger(outcome.exit_code)) {
+    return requestValidationError(`${param}.exit_code must be an integer`, `${param}.exit_code`);
   }
   return null;
 }

@@ -1243,12 +1243,98 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses/compact",
         input: [{
+          type: "shell_call",
+          call_id: "call_shell",
+          status: "completed",
+          action: {},
+        }],
+        param: "input.0.action.commands",
+        message: "input.0.action.commands must be an array",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "shell_call",
+          call_id: "call_shell",
+          status: "completed",
+          action: { commands: ["printf ok", 7] },
+        }],
+        param: "input.0.action.commands.1",
+        message: "input.0.action.commands.1 must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "shell_call",
+          call_id: "call_shell",
+          status: "completed",
+          action: { commands: ["printf ok"], timeout_ms: "fast" },
+        }],
+        param: "input.0.action.timeout_ms",
+        message: "input.0.action.timeout_ms must be an integer or null",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "shell_call",
+          call_id: "call_shell",
+          status: "completed",
+          action: { commands: ["printf ok"] },
+          environment: { type: "container_auto" },
+        }],
+        param: "input.0.environment.type",
+        message: "input.0.environment.type must be one of: local, container_reference",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
           type: "shell_call_output",
           call_id: "call_shell",
           output: "text",
         }],
         param: "input.0.output",
         message: "input.0.output must be an array",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: [{
+            stderr: "",
+            outcome: { type: "exit", exit_code: 0 },
+          }],
+        }],
+        param: "input.0.output.0.stdout",
+        message: "input.0.output.0.stdout must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: [{
+            stdout: "",
+            stderr: "",
+            outcome: { type: "signal" },
+          }],
+        }],
+        param: "input.0.output.0.outcome.type",
+        message: "input.0.output.0.outcome.type must be one of: exit, timeout",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "shell_call_output",
+          call_id: "call_shell",
+          output: [{
+            stdout: "",
+            stderr: "",
+            outcome: { type: "exit" },
+          }],
+        }],
+        param: "input.0.output.0.outcome.exit_code",
+        message: "input.0.output.0.outcome.exit_code must be an integer",
       },
       {
         endpoint: "/v1/responses",
