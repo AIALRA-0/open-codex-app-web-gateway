@@ -868,7 +868,7 @@ can satisfy SDK and workflow calls that expect moderation-shaped responses.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/moderations` | Implemented locally | Accepts a string, an array of strings, or a multimodal text/image content-part array; returns OpenAI-style category booleans, category scores, applied input types, and a `modr_` id without calling the upstream Chat provider |
+| `POST /v1/moderations` | Implemented locally | Accepts the official no-query create shape; unsupported query parameters return 400 before local classification or usage recording; accepts a string, an array of strings, or a multimodal text/image content-part array; returns OpenAI-style category booleans, category scores, applied input types, and a `modr_` id without calling the upstream Chat provider |
 
 The local classifier is a conservative keyword/rule compatibility baseline,
 not OpenAI's hosted moderation model and not image-content inspection. It

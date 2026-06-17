@@ -22053,6 +22053,22 @@ test("POST /v1/moderations returns local OpenAI-compatible category results", as
     res.writeHead(500, { "content-type": "application/json" });
     res.end(JSON.stringify({ error: { message: "moderations should not call upstream" } }));
   }, async ({ bridgeAddress, requests }) => {
+    const invalidQuery = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/moderations?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input: "query should be rejected before moderation classification" }),
+    });
+    assert.equal(invalidQuery.status, 400);
+    assert.deepEqual(await invalidQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    assert.equal(requests.length, 0);
+
     const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/moderations`, {
       method: "POST",
       headers: { "content-type": "application/json" },

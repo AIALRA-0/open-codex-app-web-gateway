@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-17 Moderations Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for:
+  - `POST /v1/moderations`.
+- Official schema notes:
+  - moderation creation defines a JSON request body and no query parameters;
+  - supported examples use plain JSON body fields for text and multimodal
+    inputs.
+- Tightened local compatibility behavior:
+  - `POST /v1/moderations` now rejects unsupported query parameters before
+    local classification or usage recording;
+  - valid local moderation requests keep the existing deterministic classifier
+    and OpenAI-style category response shape without calling the upstream Chat
+    provider.
+- Regression coverage updated:
+  - moderation test now verifies invalid create query rejection and confirms
+    the local upstream mock remains unused.
+- Documentation updated:
+  - compatibility matrix now records the no-query boundary for moderation
+    creation.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/moderations returns local OpenAI-compatible category results" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public moderation query smoke marker
+    `moderations-query-smoke-1781719481013` verified
+    `/v1/moderations?metadata=debug` returns an OpenAI-style 400 error and a
+    normal two-input moderation request still returns two local results with
+    expected flagged states.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available, 94%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5375 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, moderation inputs, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Models And Embeddings Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

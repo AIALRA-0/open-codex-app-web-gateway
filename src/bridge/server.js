@@ -11852,6 +11852,13 @@ async function handleEmbeddings(req, res, config) {
 }
 
 async function handleModerations(req, res, config) {
+  const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const request = await readJson(req);
   let inputs = [];
   try {
