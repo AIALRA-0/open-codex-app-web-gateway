@@ -1,5 +1,53 @@
 # Audit Log
 
+## 2026-06-17 Stored Chat Message Projection
+
+- Rechecked the official Chat Completions stored-message surface alongside the
+  stored completion object examples:
+  - stored message-list items expose stable message identity fields such as
+    `id`, `object`, `role`, `content`, `name`, and `content_parts`;
+  - assistant message examples expose empty assistant fields such as
+    `refusal:null`, `annotations:[]`, `tool_calls:null`, and
+    `function_call:null` when those values are absent.
+- Tightened local stored Chat message projection:
+  - message-list projection now fills missing `role` from local direction and
+    missing `content` with an empty string or `null` for tool/function outputs;
+  - assistant/output messages now expose missing `refusal`, `annotations`,
+    `tool_calls`, and `function_call` with official empty values;
+  - input messages are not given assistant-only fields, preserving their lean
+    request-message shape.
+- Regression coverage added:
+  - non-streaming stored Chat message-list tests verify input messages omit
+    assistant-only fields and output messages expose the assistant empty-field
+    shape;
+  - streaming stored Chat message-list tests verify text and tool-call output
+    messages expose the same assistant empty-field shape;
+  - legacy stored-message projection tests verify older direct state records
+    receive the current output-message shape at read time.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now describe assistant/output
+    message-list projection separately from input message projection.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted stored Chat lifecycle, streaming stored Chat, and legacy
+    projection tests pass;
+  - `npm test` passes: 346 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level key/token pattern scan over source, tests, docs, and package
+    manifests returns no matches;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - local and public smoke wrote a temporary older-format stored Chat JSON,
+    confirmed `/v1/chat/completions/{completion_id}/messages` input/output
+    projection through `http://127.0.0.1:12912` and
+    `https://opencodexapp.aialra.online`, then deleted the temporary record.
+- Secret handling:
+  - no API keys, provider credentials, or live secrets were added to source,
+    tests, docs, or logs.
+
 ## 2026-06-17 Stored Chat Legacy Projection
 
 - Rechecked the official Chat Completions stored-list endpoint:

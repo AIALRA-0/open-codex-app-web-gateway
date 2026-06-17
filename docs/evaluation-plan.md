@@ -121,9 +121,11 @@ shape for request sampling/tool/format fields, `system_fingerprint`, and
 unknown official fields normalized to `null`, without inventing provider
 defaults. Stored Chat message-list coverage verifies official `name` and
 `content_parts` fields for string and pure text/image content-part inputs,
-verifies audio/file extension parts keep
-official `content_parts:null`, and preserves local `direction` metadata for
-replay assertions. A legacy-record regression writes an older minimal
+verifies audio/file extension parts keep official `content_parts:null`,
+verifies assistant/output messages expose `refusal:null`, `annotations:[]`,
+`tool_calls:null`, and `function_call:null` while input messages avoid
+assistant-only fields, and preserves local `direction` metadata for replay
+assertions. A legacy-record regression writes an older minimal
 `chat_completion` JSON directly to the local state store and verifies retrieve,
 list, metadata update, and message-list endpoints all project it to the current
 stored Chat shape without a provider call.

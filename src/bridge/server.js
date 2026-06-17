@@ -8868,11 +8868,23 @@ function addStoredChatMessageId(message, index, direction) {
   const stored = message && typeof message === "object" && !Array.isArray(message)
     ? clone(message)
     : { role: "user", content: stringifyContent(message) };
+  if (typeof stored.role !== "string" || !stored.role) {
+    stored.role = direction === "output" ? "assistant" : "user";
+  }
+  if (!Object.prototype.hasOwnProperty.call(stored, "content")) {
+    stored.content = stored.tool_calls || stored.function_call ? null : "";
+  }
   if (!stored.id) stored.id = `chatmsg_${String(index).padStart(6, "0")}`;
   if (!stored.object) stored.object = "chat.completion.message";
   if (!Object.prototype.hasOwnProperty.call(stored, "name")) stored.name = null;
   if (!Object.prototype.hasOwnProperty.call(stored, "content_parts")) {
     stored.content_parts = storedChatMessageContentParts(stored.content);
+  }
+  if (stored.role === "assistant" || direction === "output") {
+    if (!Object.prototype.hasOwnProperty.call(stored, "refusal")) stored.refusal = null;
+    if (!Object.prototype.hasOwnProperty.call(stored, "annotations")) stored.annotations = [];
+    if (!Object.prototype.hasOwnProperty.call(stored, "tool_calls")) stored.tool_calls = null;
+    if (!Object.prototype.hasOwnProperty.call(stored, "function_call")) stored.function_call = null;
   }
   stored.direction = direction;
   return stored;

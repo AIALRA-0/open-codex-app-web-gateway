@@ -24479,6 +24479,8 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesJson.data[0].role, "user");
     assert.equal(messagesJson.data[0].name, null);
     assert.equal(messagesJson.data[0].content_parts, null);
+    assert.equal(Object.prototype.hasOwnProperty.call(messagesJson.data[0], "refusal"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(messagesJson.data[0], "tool_calls"), false);
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.has_more, true);
 
@@ -24511,6 +24513,10 @@ test("POST /v1/chat/completions proxies and stores chat responses when requested
     assert.equal(messagesDescJson.data[0].direction, "output");
     assert.equal(messagesDescJson.data[0].name, null);
     assert.equal(messagesDescJson.data[0].content_parts, null);
+    assert.equal(messagesDescJson.data[0].refusal, null);
+    assert.deepEqual(messagesDescJson.data[0].annotations, []);
+    assert.equal(messagesDescJson.data[0].tool_calls, null);
+    assert.equal(messagesDescJson.data[0].function_call, null);
 
     await new Promise((resolve) => setTimeout(resolve, 5));
     const secondResponse = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions`, {
@@ -26533,7 +26539,14 @@ test("POST /v1/chat/completions streams and stores reconstructed chat completion
     assert.equal(messagesJson.data[0].direction, "input");
     assert.equal(messagesJson.data[1].direction, "output");
     assert.equal(messagesJson.data[1].content, "stream-store-ok");
+    assert.equal(messagesJson.data[1].refusal, null);
+    assert.deepEqual(messagesJson.data[1].annotations, []);
+    assert.equal(messagesJson.data[1].tool_calls, null);
+    assert.equal(messagesJson.data[1].function_call, null);
     assert.equal(messagesJson.data[2].tool_calls[0].function.arguments, "{\"ok\":true}");
+    assert.equal(messagesJson.data[2].refusal, null);
+    assert.deepEqual(messagesJson.data[2].annotations, []);
+    assert.equal(messagesJson.data[2].function_call, null);
 
     const listed = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions?metadata[suite]=chat-stream-list`);
     assert.equal(listed.status, 200);
@@ -26635,10 +26648,16 @@ test("Stored Chat retrieval, list, update, and messages project legacy records t
     assert.equal(messagesJson.data[0].object, "chat.completion.message");
     assert.equal(messagesJson.data[0].name, null);
     assert.equal(messagesJson.data[0].content_parts, null);
+    assert.equal(Object.prototype.hasOwnProperty.call(messagesJson.data[0], "refusal"), false);
+    assert.equal(Object.prototype.hasOwnProperty.call(messagesJson.data[0], "tool_calls"), false);
     assert.equal(messagesJson.data[1].id, "chatmsg_000001");
     assert.equal(messagesJson.data[1].object, "chat.completion.message");
     assert.equal(messagesJson.data[1].name, null);
     assert.equal(messagesJson.data[1].content_parts, null);
+    assert.equal(messagesJson.data[1].refusal, null);
+    assert.deepEqual(messagesJson.data[1].annotations, []);
+    assert.equal(messagesJson.data[1].tool_calls, null);
+    assert.equal(messagesJson.data[1].function_call, null);
 
     const updated = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/chat/completions/${legacyId}`, {
       method: "POST",
