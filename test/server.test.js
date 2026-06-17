@@ -24192,6 +24192,87 @@ test("Organization projects manage local users and rate limits", async () => {
     assert.equal(usersJson.data.length, 1);
     assert.equal(usersJson.data[0].id, user.id);
 
+    const secondUserResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        user_id: "user_bridge_access_second",
+        email: "bridge-access-second@example.com",
+        role: "member",
+      }),
+    });
+    assert.equal(secondUserResponse.status, 200);
+    const secondUser = await secondUserResponse.json();
+    assert.equal(secondUser.id, "user_bridge_access_second");
+
+    const firstUserPage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1`);
+    assert.equal(firstUserPage.status, 200);
+    const firstUserPageJson = await firstUserPage.json();
+    assert.equal(firstUserPageJson.object, "list");
+    assert.equal(firstUserPageJson.data.length, 1);
+    assert.equal(firstUserPageJson.has_more, true);
+    const firstListedUserId = firstUserPageJson.data[0].id;
+    const nextListedUserId = [user.id, secondUser.id].find((userId) => userId !== firstListedUserId);
+    assert.ok(nextListedUserId);
+
+    const orderIgnoredUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1&order=desc`);
+    assert.equal(orderIgnoredUsers.status, 200);
+    assert.equal((await orderIgnoredUsers.json()).data[0].id, firstListedUserId);
+
+    const afterUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1&after=${encodeURIComponent(firstListedUserId)}`);
+    assert.equal(afterUsers.status, 200);
+    const afterUsersJson = await afterUsers.json();
+    assert.equal(afterUsersJson.data.length, 1);
+    assert.equal(afterUsersJson.data[0].id, nextListedUserId);
+
+    const allUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=10`);
+    assert.equal(allUsers.status, 200);
+    const allUsersJson = await allUsers.json();
+    assert.equal(allUsersJson.data.length, 2);
+
+    const beforeIgnoredUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
+    assert.equal(beforeIgnoredUsers.status, 200);
+    const beforeIgnoredUsersJson = await beforeIgnoredUsers.json();
+    assert.deepEqual(
+      beforeIgnoredUsersJson.data.map((item) => item.id),
+      allUsersJson.data.map((item) => item.id),
+    );
+
+    const invalidProjectUserListCases = [
+      {
+        path: `/v1/organization/projects/${project.id}/users?limit=0`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/users?limit=101`,
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/users?limit=1&limit=2`,
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: `/v1/organization/projects/${project.id}/users?after=${encodeURIComponent(firstListedUserId)}&after=${encodeURIComponent(nextListedUserId)}`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+    ];
+    for (const testCase of invalidProjectUserListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const fetchedUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`);
     assert.equal(fetchedUser.status, 200);
     assert.equal((await fetchedUser.json()).email, "bridge-access@example.com");
@@ -24312,6 +24393,16 @@ test("Organization projects manage local users and rate limits", async () => {
     });
     assert.equal(missingRateLimit.status, 404);
     assert.equal((await missingRateLimit.json()).error.code, "project_rate_limit_not_found");
+
+    const deletedSecondUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${secondUser.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondUser.status, 200);
+    assert.deepEqual(await deletedSecondUser.json(), {
+      object: "organization.project.user.deleted",
+      id: secondUser.id,
+      deleted: true,
+    });
 
     const deletedUser = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users/${user.id}`, {
       method: "DELETE",

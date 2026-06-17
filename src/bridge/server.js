@@ -16322,8 +16322,19 @@ async function handleOrganizationProjectUserCreate(req, res, organizationAdminSt
 }
 
 function handleOrganizationProjectUsersList(res, organizationAdminStore, projectId, url) {
+  const queryError = validateOpenAIProjectUsersListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const users = organizationAdminStore.listProjectUsers(projectId);
-  sendJson(res, 200, paginateListWithDefaultOrder(users, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    users,
+    officialProjectUsersListPaginationUrl(url),
+    "asc",
+    20,
+    100,
+  ));
 }
 
 function handleOrganizationProjectUserGet(res, organizationAdminStore, projectId, userId) {
@@ -16523,6 +16534,21 @@ function validateOpenAIProjectApiKeysListQuery(url) {
 }
 
 function officialProjectApiKeysListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
+}
+
+function validateOpenAIProjectUsersListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialProjectUsersListPaginationUrl(url) {
   const localUrl = new URL("http://local/");
   for (const name of ["after", "limit"]) {
     if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));

@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Project Users List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI YAML for
+  `GET /organization/projects/{project_id}/users`.
+- Confirmed the official list query parameters are `limit` and `after`; no
+  `order` or `before` query parameter is documented for this endpoint. The
+  official `limit` description allows values from 1 through 100 and defaults to
+  20.
+- Tightened local Project Users list behavior:
+  - `GET /v1/organization/projects/{project_id}/users` now validates `limit`
+    from 1 through 100 and rejects repeated `limit` values;
+  - repeated official `after` cursor values now return OpenAI-style HTTP 400
+    before listing local records;
+  - pagination keeps the official default 20 item limit;
+  - unsupported `order` and `before` query values are stripped before
+    pagination, so they no longer shape official Project Users list results.
+- Regression coverage updated:
+  - organization/project admin tests now cover `limit`, `after`, ignored
+    `order`, ignored `before`, invalid `limit`, and repeated scalar cursor
+    values for Project Users listing;
+  - coverage creates a second temporary local project user for cursor tests and
+    deletes it before the existing project-user lifecycle cleanup.
+- Documentation updated:
+  - compatibility matrix now records the official Project Users list pagination
+    contract and unsupported query handling.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local users and rate limits" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 371/371 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Project Users smoke marker `project-user-query-smoke-mqi5yo9t`
+    created a temporary local project, created two local project users,
+    confirmed `limit=1` paging, verified unsupported `order=desc` did not
+    change the official list result, verified `after` advanced the cursor,
+    confirmed unsupported `before` did not change the official list result,
+    confirmed invalid `limit=0` returned HTTP 400 with `param:"limit"`,
+    confirmed repeated `after` returned HTTP 400 with `param:"after"`, deleted
+    the temporary users, and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 178G used, 15G available,
+    93% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - `npm run secret-scan` passed with exit code 0.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    user credentials, or deployment env files were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Project API Keys List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI YAML for

@@ -749,7 +749,7 @@ state.
 | `GET /v1/organization/projects/{project_id}` | Implemented locally | Retrieves a local project or returns `404 project_not_found` |
 | `POST /v1/organization/projects/{project_id}` | Implemented locally | Updates the local project `name`; archived projects reject mutations with `project_archived` |
 | `POST /v1/organization/projects/{project_id}/archive` | Implemented locally | Marks the project `status:"archived"` and sets `archived_at`; repeated archive calls are idempotent |
-| `GET /v1/organization/projects/{project_id}/users` | Implemented locally | Lists local `organization.project.user` records for active projects |
+| `GET /v1/organization/projects/{project_id}/users` | Implemented locally | Lists local `organization.project.user` records for active projects; validates official `limit` and `after` pagination, rejects repeated scalar values, enforces `limit` from 1 through 100 with official default 20, and ignores unsupported `order`/`before` so they cannot shape the official list result |
 | `POST /v1/organization/projects/{project_id}/users` | Implemented locally | Adds or updates a local project user from `user_id` and/or `email`; requires `role:"owner"` or `role:"member"` and returns `added_at`, optional `email/name`, and local compatibility metadata |
 | `GET /v1/organization/projects/{project_id}/users/{user_id}` | Implemented locally | Retrieves a local project user or returns `404 project_user_not_found` |
 | `POST /v1/organization/projects/{project_id}/users/{user_id}` | Implemented locally | Updates the local user's project role; invalid roles return `400 invalid_project_role` |
