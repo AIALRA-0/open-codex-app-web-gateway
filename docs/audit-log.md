@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Responses MCP Tool Schema Validation
+
+- Rechecked the current official OpenAI OpenAPI schemas for Responses MCP
+  tools:
+  - `MCPTool` requires `type:"mcp"` and string `server_label`;
+  - `server_url` is a URI string and `connector_id` is limited to the current
+    official connector ids;
+  - `authorization` and `server_description` are strings;
+  - `headers` is null or an object with string values;
+  - `allowed_tools` is null, a string array, or an `MCPToolFilter`;
+  - `require_approval` is null, `always`, `never`, or an object containing
+    `always` / `never` filters;
+  - `MCPToolFilter` only allows `tool_names` string arrays and `read_only`
+    booleans.
+- Tightened local Responses request validation before provider or MCP adapter
+  work:
+  - MCP `server_url`, `connector_id`, `authorization`,
+    `server_description`, `headers`, `allowed_tools`, `require_approval`, and
+    `defer_loading` now fail locally when malformed;
+  - existing local MCP behavior remains unchanged for valid remote
+    `server_url` tools, hosted connector ids, allowed-tool filters,
+    approval-required tools, deferred MCP discovery, streaming, background
+    execution, and approval continuations.
+- Regression coverage updated:
+  - the Responses tools validation table now rejects malformed MCP schemas
+    across `/v1/responses` and `/v1/responses/input_tokens`;
+  - focused MCP tests still cover remote tools/list import, deferred MCP
+    through hosted `tool_search`, auto-approved calls, approval requests,
+    approval responses, streaming paths, background paths, authorization
+    redaction, and local `mcp_list_tools` output.
+- Documentation updated:
+  - compatibility matrix documents MCP field validation boundaries before
+    local adapter execution;
+  - evaluation plan now requires MCP malformed-schema regression coverage
+    beside hosted search, image-generation, and container schema checks.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|remote MCP|mcp_list_tools|hosted tool_search"
+    test/server.test.js` passes: 19 tests.
+  - full `node --test test/*.test.js` passes: 358 tests.
+  - `git diff --check` passes.
+  - `npm run secret-scan` exits successfully.
+  - explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization
+    values, or deployment env files were added to source, tests, docs, logs,
+    or commits.
+
 ## 2026-06-17 Responses Image Generation Tool Schema Validation
 
 - Rechecked the current official OpenAI image-generation guide and OpenAPI

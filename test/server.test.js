@@ -2882,6 +2882,96 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.server_label must be a string",
       },
       {
+        body: { tools: [{ type: "mcp", server_label: "docs", server_url: 7 }] },
+        param: "tools.0.server_url",
+        message: "tools.0.server_url must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", server_url: "not a url" }] },
+        param: "tools.0.server_url",
+        message: "tools.0.server_url must be a valid URI",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", connector_id: "connector_box" }] },
+        param: "tools.0.connector_id",
+        message: /^tools\.0\.connector_id must be one of:/,
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", authorization: null }] },
+        param: "tools.0.authorization",
+        message: "tools.0.authorization must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", server_description: 7 }] },
+        param: "tools.0.server_description",
+        message: "tools.0.server_description must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", headers: [] }] },
+        param: "tools.0.headers",
+        message: "tools.0.headers must be an object or null",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", headers: { "x-docs": 7 } }] },
+        param: "tools.0.headers.x-docs",
+        message: "tools.0.headers.x-docs must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", allowed_tools: 7 }] },
+        param: "tools.0.allowed_tools",
+        message: "tools.0.allowed_tools must be an array, object, or null",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", allowed_tools: ["search", 7] }] },
+        param: "tools.0.allowed_tools.1",
+        message: "tools.0.allowed_tools.1 must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", allowed_tools: { tool_names: [7] } }] },
+        param: "tools.0.allowed_tools.tool_names.0",
+        message: "tools.0.allowed_tools.tool_names.0 must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", allowed_tools: { read_only: "yes" } }] },
+        param: "tools.0.allowed_tools.read_only",
+        message: "tools.0.allowed_tools.read_only must be a boolean",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", allowed_tools: { category: "docs" } }] },
+        param: "tools.0.allowed_tools.category",
+        message: "tools.0.allowed_tools.category is not supported",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", require_approval: "sometimes" }] },
+        param: "tools.0.require_approval",
+        message: "tools.0.require_approval must be one of: always, never",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", require_approval: [] }] },
+        param: "tools.0.require_approval",
+        message: "tools.0.require_approval must be an object, string, or null",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", require_approval: { default: {} } }] },
+        param: "tools.0.require_approval.default",
+        message: "tools.0.require_approval.default is not supported",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", require_approval: { never: { tool_names: [7] } } }] },
+        param: "tools.0.require_approval.never.tool_names.0",
+        message: "tools.0.require_approval.never.tool_names.0 must be a string",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", require_approval: { always: { read_only: "yes" } } }] },
+        param: "tools.0.require_approval.always.read_only",
+        message: "tools.0.require_approval.always.read_only must be a boolean",
+      },
+      {
+        body: { tools: [{ type: "mcp", server_label: "docs", defer_loading: "true" }] },
+        param: "tools.0.defer_loading",
+        message: "tools.0.defer_loading must be a boolean",
+      },
+      {
         body: { tools: [{ type: "file_search" }] },
         param: "tools.0.vector_store_ids",
         message: "tools.0.vector_store_ids must be a non-empty array unless tool_resources.file_search.vector_store_ids is provided",

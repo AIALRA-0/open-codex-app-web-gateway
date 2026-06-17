@@ -91,23 +91,25 @@ values continue to map into model-visible system guidance.
 
 Responses hosted-tool schema coverage must also include `shell.environment` and
 `code_interpreter.container` validation before provider calls. It must also
-cover `file_search`, `web_search*`, and `image_generation` hosted-tool request
-schemas before the local adapters run: `file_search.vector_store_ids` or the
-local `tool_resources.file_search.vector_store_ids` fallback,
+cover `file_search`, `web_search*`, `image_generation`, and `mcp` hosted-tool
+request schemas before the local adapters run: `file_search.vector_store_ids`
+or the local `tool_resources.file_search.vector_store_ids` fallback,
 `max_num_results`, `ranking_options`, recursive filters, web-search context
 size, web-search location, domain filters, preview search content types,
 image-generation quality/format/moderation/background/action enums, string
 model/size fields, `output_compression` 0-100 integer range, `partial_images`
-0-3 integer range, nullable `input_fidelity`, and strict `input_image_mask`
-fields. The unit track
+0-3 integer range, nullable `input_fidelity`, strict `input_image_mask` fields,
+MCP server URI / connector / header fields, MCP `allowed_tools` string-array
+or filter shapes, MCP `require_approval` enum/filter shapes, and MCP
+`defer_loading` booleans. The unit track
 checks rejected malformed container references, `container_auto.file_ids`
 limits, memory-limit enums, network-policy allowlists, skill-reference limits,
 required code-interpreter containers, official `{type:"auto"}` containers,
 local Files API mounting through shell/code-interpreter auto containers,
-malformed hosted search and image-generation schemas across Responses create
-and `/input_tokens`, positive `tool_resources` file-search fallback, and the
-current `web_search_2025_08_26` hosted-tool alias entering local web-search
-execution.
+malformed hosted search, image-generation, and MCP schemas across Responses
+create and `/input_tokens`, positive `tool_resources` file-search fallback,
+and the current `web_search_2025_08_26` hosted-tool alias entering local
+web-search execution.
 
 Responses and Chat tool-choice coverage must distinguish Responses
 `allowed_tools` from Chat's nested `allowed_tools` envelope. The unit track

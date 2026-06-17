@@ -304,6 +304,17 @@ const OPENAI_IMAGE_GENERATION_MODERATION_VALUES = Object.freeze(["auto", "low"])
 const OPENAI_IMAGE_GENERATION_BACKGROUND_VALUES = Object.freeze(["transparent", "opaque", "auto"]);
 const OPENAI_IMAGE_GENERATION_INPUT_FIDELITY_VALUES = Object.freeze(["high", "low"]);
 const OPENAI_IMAGE_GENERATION_ACTION_VALUES = Object.freeze(["generate", "edit", "auto"]);
+const OPENAI_MCP_CONNECTOR_ID_VALUES = Object.freeze([
+  "connector_dropbox",
+  "connector_gmail",
+  "connector_googlecalendar",
+  "connector_googledrive",
+  "connector_microsoftteams",
+  "connector_outlookcalendar",
+  "connector_outlookemail",
+  "connector_sharepoint",
+]);
+const OPENAI_MCP_REQUIRE_APPROVAL_VALUES = Object.freeze(["always", "never"]);
 const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
 const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
@@ -3738,9 +3749,8 @@ function validateOpenAIResponsesTools(body = {}) {
       const imageGenerationError = validateOpenAIResponsesImageGenerationTool(tool, param);
       if (imageGenerationError) return imageGenerationError;
     } else if (tool.type === "mcp") {
-      if (typeof tool.server_label !== "string") {
-        return requestValidationError(`${param}.server_label must be a string`, `${param}.server_label`);
-      }
+      const mcpError = validateOpenAIResponsesMcpTool(tool, param);
+      if (mcpError) return mcpError;
     } else if (tool.type === "shell") {
       const shellError = validateOpenAIResponsesShellTool(tool, param);
       if (shellError) return shellError;
@@ -3748,6 +3758,59 @@ function validateOpenAIResponsesTools(body = {}) {
       const codeInterpreterError = validateOpenAIResponsesCodeInterpreterTool(tool, param);
       if (codeInterpreterError) return codeInterpreterError;
     }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesMcpTool(tool, param) {
+  if (typeof tool.server_label !== "string") {
+    return requestValidationError(`${param}.server_label must be a string`, `${param}.server_label`);
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "server_url")) {
+    if (typeof tool.server_url !== "string") {
+      return requestValidationError(`${param}.server_url must be a string`, `${param}.server_url`);
+    }
+    if (!isValidOpenAIUri(tool.server_url)) {
+      return requestValidationError(`${param}.server_url must be a valid URI`, `${param}.server_url`);
+    }
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "connector_id")
+    && (
+      typeof tool.connector_id !== "string"
+      || !OPENAI_MCP_CONNECTOR_ID_VALUES.includes(tool.connector_id)
+    )
+  ) {
+    return requestValidationError(
+      `${param}.connector_id must be one of: ${OPENAI_MCP_CONNECTOR_ID_VALUES.join(", ")}`,
+      `${param}.connector_id`,
+    );
+  }
+  for (const field of ["authorization", "server_description"]) {
+    if (
+      Object.prototype.hasOwnProperty.call(tool, field)
+      && typeof tool[field] !== "string"
+    ) {
+      return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "headers")) {
+    const headersError = validateOpenAIResponsesMcpHeaders(tool.headers, `${param}.headers`);
+    if (headersError) return headersError;
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "allowed_tools")) {
+    const allowedToolsError = validateOpenAIResponsesMcpAllowedTools(tool.allowed_tools, `${param}.allowed_tools`);
+    if (allowedToolsError) return allowedToolsError;
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "require_approval")) {
+    const approvalError = validateOpenAIResponsesMcpRequireApproval(tool.require_approval, `${param}.require_approval`);
+    if (approvalError) return approvalError;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "defer_loading")
+    && typeof tool.defer_loading !== "boolean"
+  ) {
+    return requestValidationError(`${param}.defer_loading must be a boolean`, `${param}.defer_loading`);
   }
   return null;
 }
@@ -4271,6 +4334,87 @@ function validateOpenAIResponsesImageGenerationMask(mask, param) {
     if (typeof mask[field] !== "string") {
       return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
     }
+  }
+  return null;
+}
+
+function isValidOpenAIUri(value) {
+  try {
+    new URL(value);
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+function validateOpenAIResponsesMcpHeaders(headers, param) {
+  if (headers == null) return null;
+  if (!isPlainObject(headers)) {
+    return requestValidationError(`${param} must be an object or null`, param);
+  }
+  for (const [key, value] of Object.entries(headers)) {
+    if (typeof value !== "string") {
+      return requestValidationError(`${param}.${key} must be a string`, `${param}.${key}`);
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesMcpAllowedTools(allowedTools, param) {
+  if (allowedTools == null) return null;
+  if (Array.isArray(allowedTools)) {
+    return validateOpenAIStringArray(allowedTools, param);
+  }
+  if (!isPlainObject(allowedTools)) {
+    return requestValidationError(`${param} must be an array, object, or null`, param);
+  }
+  return validateOpenAIResponsesMcpToolFilter(allowedTools, param);
+}
+
+function validateOpenAIResponsesMcpRequireApproval(requireApproval, param) {
+  if (requireApproval == null) return null;
+  if (typeof requireApproval === "string") {
+    if (!OPENAI_MCP_REQUIRE_APPROVAL_VALUES.includes(requireApproval)) {
+      return requestValidationError(
+        `${param} must be one of: ${OPENAI_MCP_REQUIRE_APPROVAL_VALUES.join(", ")}`,
+        param,
+      );
+    }
+    return null;
+  }
+  if (!isPlainObject(requireApproval)) {
+    return requestValidationError(`${param} must be an object, string, or null`, param);
+  }
+  const allowedFields = new Set(["always", "never"]);
+  for (const field of Object.keys(requireApproval)) {
+    if (!allowedFields.has(field)) {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
+    }
+    const filterError = validateOpenAIResponsesMcpToolFilter(requireApproval[field], `${param}.${field}`);
+    if (filterError) return filterError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesMcpToolFilter(filter, param) {
+  if (!isPlainObject(filter)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  const allowedFields = new Set(["tool_names", "read_only"]);
+  for (const field of Object.keys(filter)) {
+    if (!allowedFields.has(field)) {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(filter, "tool_names")) {
+    const toolNamesError = validateOpenAIStringArray(filter.tool_names, `${param}.tool_names`);
+    if (toolNamesError) return toolNamesError;
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(filter, "read_only")
+    && typeof filter.read_only !== "boolean"
+  ) {
+    return requestValidationError(`${param}.read_only must be a boolean`, `${param}.read_only`);
   }
   return null;
 }
