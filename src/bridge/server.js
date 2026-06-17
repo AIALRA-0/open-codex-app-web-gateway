@@ -16454,8 +16454,20 @@ async function handleOrganizationProjectGroupCreate(req, res, organizationAdminS
 }
 
 function handleOrganizationProjectGroupsList(res, organizationAdminStore, projectId, url) {
+  const queryError = validateOpenAIAdminNextCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const groups = organizationAdminStore.listProjectGroups(projectId);
-  sendJson(res, 200, paginateListByCursorFieldWithDefaultOrder(groups, url, "group_id", "asc", 20, 100));
+  sendJson(res, 200, paginateNextListByCursorFieldWithDefaultOrderAllowingZeroLimit(
+    groups,
+    officialAdminNextCursorListPaginationUrl(url),
+    "group_id",
+    "asc",
+    20,
+    1000,
+  ));
 }
 
 function handleOrganizationProjectGroupGet(res, organizationAdminStore, projectId, groupId, url) {
@@ -18710,6 +18722,19 @@ function paginateNextListWithDefaultOrderAllowingZeroLimit(items, url, order, fa
   return paginateNextListAllowingZeroLimit(items, localUrl, fallbackLimit, maxLimit);
 }
 
+function paginateNextListByCursorFieldWithDefaultOrderAllowingZeroLimit(
+  items,
+  url,
+  cursorField,
+  order,
+  fallbackLimit = 20,
+  maxLimit = 1000,
+) {
+  const localUrl = new URL(url.toString());
+  if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", order);
+  return paginateNextListByCursorFieldAllowingZeroLimit(items, localUrl, cursorField, fallbackLimit, maxLimit);
+}
+
 function paginateNextList(items, url, fallbackLimit = 20, maxLimit = 1000) {
   const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
   const after = url.searchParams.get("after");
@@ -18749,6 +18774,27 @@ function paginateNextListAllowingZeroLimit(items, url, fallbackLimit = 20, maxLi
     data: page,
     has_more: data.length > page.length,
     next: page.length > 0 && data.length > page.length ? page.at(-1)?.id || null : null,
+  };
+}
+
+function paginateNextListByCursorFieldAllowingZeroLimit(items, url, cursorField, fallbackLimit = 20, maxLimit = 1000) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const limit = parseZeroLimit(url.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item?.[cursorField] === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    has_more: data.length > page.length,
+    next: page.length > 0 && data.length > page.length ? page.at(-1)?.[cursorField] || null : null,
   };
 }
 

@@ -24989,6 +24989,18 @@ test("Organization projects manage local group access", async () => {
     assert.fail("Organization project groups compatibility should not call upstream provider");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertInvalidListQuery = async (path, param, message) => {
+      const invalid = await fetch(`${baseUrl}${path}`);
+      assert.equal(invalid.status, 400, path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, path);
+    };
 
     const projectResponse = await fetch(`${baseUrl}/v1/organization/projects`, {
       method: "POST",
@@ -25006,14 +25018,21 @@ test("Organization projects manage local group access", async () => {
     assert.equal(groupResponse.status, 200);
     const group = await groupResponse.json();
 
+    const secondGroupResponse = await fetch(`${baseUrl}/v1/organization/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Project Group Second" }),
+    });
+    assert.equal(secondGroupResponse.status, 200);
+    const secondGroup = await secondGroupResponse.json();
+
     const emptyGroups = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`);
     assert.equal(emptyGroups.status, 200);
     assert.deepEqual(await emptyGroups.json(), {
       object: "list",
       data: [],
-      first_id: null,
-      last_id: null,
       has_more: false,
+      next: null,
     });
 
     const missingGroup = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
@@ -25047,14 +25066,90 @@ test("Organization projects manage local group access", async () => {
     assert.equal(typeof created.created_at, "number");
     assert.equal(created.compatibility.actual_openai_admin_data, false);
 
+    const secondCreatedResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ group_id: secondGroup.id, role: "owner" }),
+    });
+    assert.equal(secondCreatedResponse.status, 200);
+    const secondCreated = await secondCreatedResponse.json();
+    assert.equal(secondCreated.object, "project.group");
+    assert.equal(secondCreated.project_id, project.id);
+    assert.equal(secondCreated.group_id, secondGroup.id);
+
     const listed = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?limit=10`);
     assert.equal(listed.status, 200);
     const listedJson = await listed.json();
     assert.equal(listedJson.object, "list");
-    assert.equal(listedJson.data.length, 1);
-    assert.equal(listedJson.first_id, group.id);
-    assert.equal(listedJson.last_id, group.id);
-    assert.equal(listedJson.data[0].group_id, group.id);
+    assert.deepEqual(new Set(listedJson.data.map((entry) => entry.group_id)), new Set([
+      group.id,
+      secondGroup.id,
+    ]));
+    assert.equal(listedJson.next, null);
+    const groupIdsAscending = listedJson.data.map((entry) => entry.group_id);
+
+    const zeroLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?limit=0`);
+    assert.equal(zeroLimit.status, 200);
+    assert.deepEqual(await zeroLimit.json(), {
+      object: "list",
+      data: [],
+      has_more: true,
+      next: null,
+    });
+
+    const desc = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?order=desc&limit=1`);
+    assert.equal(desc.status, 200);
+    const descJson = await desc.json();
+    assert.equal(descJson.data.length, 1);
+    assert.equal(descJson.data[0].group_id, groupIdsAscending.at(-1));
+    assert.equal(descJson.has_more, true);
+    assert.equal(descJson.next, groupIdsAscending.at(-1));
+
+    const nextPage = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?order=desc&limit=1&after=${encodeURIComponent(descJson.next)}`);
+    assert.equal(nextPage.status, 200);
+    const nextPageJson = await nextPage.json();
+    assert.equal(nextPageJson.data.length, 1);
+    assert.equal(nextPageJson.data[0].group_id, groupIdsAscending[0]);
+    assert.equal(nextPageJson.has_more, false);
+    assert.equal(nextPageJson.next, null);
+
+    const beforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups?order=desc&limit=2&before=${encodeURIComponent(groupIdsAscending[0])}`);
+    assert.equal(beforeIgnored.status, 200);
+    assert.deepEqual(
+      (await beforeIgnored.json()).data.map((entry) => entry.group_id),
+      [groupIdsAscending.at(-1), groupIdsAscending[0]],
+    );
+
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?limit=-1`,
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?limit=1001`,
+      "limit",
+      "limit must be an integer between 0 and 1000",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?limit=1&limit=2`,
+      "limit",
+      "limit must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?after=${encodeURIComponent(groupIdsAscending[0])}&after=${encodeURIComponent(groupIdsAscending.at(-1))}`,
+      "after",
+      "after must be a single string query value",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?order=newest`,
+      "order",
+      "order must be one of: asc, desc",
+    );
+    await assertInvalidListQuery(
+      `/v1/organization/projects/${project.id}/groups?order=asc&order=desc`,
+      "order",
+      "order must be a single string query value",
+    );
 
     const fetched = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${group.id}`);
     assert.equal(fetched.status, 200);
@@ -25093,6 +25188,15 @@ test("Organization projects manage local group access", async () => {
     assert.equal(missingAfterDelete.status, 404);
     assert.equal((await missingAfterDelete.json()).error.code, "project_group_not_found");
 
+    const deletedSecond = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups/${secondGroup.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecond.status, 200);
+    assert.deepEqual(await deletedSecond.json(), {
+      object: "project.group.deleted",
+      deleted: true,
+    });
+
     const recreated = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/groups`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -25111,6 +25215,7 @@ test("Organization projects manage local group access", async () => {
     });
     assert.equal(missingGroupCreate.status, 404);
     assert.equal((await missingGroupCreate.json()).error.code, "organization_group_not_found");
+    await fetch(`${baseUrl}/v1/organization/groups/${secondGroup.id}`, { method: "DELETE" });
 
     assert.equal(requests.length, 0);
   });

@@ -1,5 +1,74 @@
 # Audit Log
 
+## 2026-06-17 Project Groups List Query Validation
+
+- Rechecked current official/generated OpenAI SDK source for the project group
+  access list slice:
+  - `openai-node` generated
+    `src/resources/admin/organization/projects/groups/groups.ts` documents
+    `client.admin.organization.projects.groups.list()` as a
+    `NextCursorPage`, `GroupListParams extends NextCursorPageParams`, and
+    `order:"asc"|"desc"`;
+  - project group list items use `group_id`, so the local cursor field is
+    `group_id` instead of the generic `id` field used by most other
+    next-cursor helpers.
+- Tightened local project group list behavior:
+  - `GET /v1/organization/projects/{project_id}/groups` now validates SDK list
+    parameters before listing local project group access records;
+  - the endpoint validates `limit` from 0 through 1000, single `after`, and
+    `order:"asc"|"desc"`;
+  - repeated scalar values for `limit`, `after`, and `order` return
+    OpenAI-style HTTP 400 errors;
+  - unsupported `before` query values are stripped before pagination, so they
+    no longer shape official SDK list results;
+  - the response now uses SDK `NextCursorPage` fields `data`, `has_more`, and
+    `next`, with no legacy `first_id` or `last_id` fields;
+  - `limit=0` is preserved and returns an empty page with `has_more:true` when
+    data exists and `next:null`;
+  - the existing local default `limit=20` is preserved for this list because
+    the generated SDK source confirms the parameter shape but does not
+    document an endpoint-specific default.
+- Regression coverage updated:
+  - the Organization project group lifecycle test now creates two local
+    organization groups, grants both access to one local project, and verifies
+    `NextCursorPage` output, `group_id` cursoring, `limit=0`, `order=desc`,
+    `after`, ignored `before`, invalid limits, invalid order, repeated scalar
+    errors, cleanup of all temporary access records, and zero upstream
+    provider calls.
+- Documentation updated:
+  - compatibility matrix now records the SDK `NextCursorPage` contract,
+    `group_id` cursor field, local default limit, repeated scalar rejection,
+    unsupported `before` handling, and archived-project boundary for the
+    project group access list.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local group access" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public project groups smoke marker `project-groups-query-smoke-mqiamvh1`
+    created one temporary project, two temporary organization groups, and two
+    temporary project group access records; verified normal list output,
+    `limit=0`, `order=desc`, `after`, ignored `before`, invalid limits,
+    invalid order, repeated scalar errors, then deleted temporary access
+    records, deleted the groups, and archived the temporary project.
+  - Disk guard after deployment: `/` 193G size, 184G used, 8.8G available,
+    96% used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5339 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, or public smoke-test secrets were added to source,
+    tests, docs, logs, or commits.
+
 ## 2026-06-17 Project RBAC List Query Validation
 
 - Rechecked current official/generated OpenAI SDK sources for the project
