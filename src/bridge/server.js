@@ -13069,6 +13069,13 @@ function handleAudioVoiceConsentDelete(res, audioVoiceStore, consentId, url) {
 
 async function handleAudioVoicesCreate(req, res, config, audioVoiceStore) {
   try {
+    const url = new URL(req.url, `http://${req.headers.host || "127.0.0.1"}`);
+    const queryError = validateOpenAINoQuery(url);
+    if (queryError) {
+      sendError(res, 400, queryError.message, queryError);
+      return;
+    }
+
     if (!canUseLocalAudio(config)) {
       sendError(res, 400, "local audio compatibility is disabled", {
         type: "invalid_request_error",
@@ -13102,10 +13109,29 @@ async function handleAudioVoicesCreate(req, res, config, audioVoiceStore) {
 }
 
 function handleAudioVoicesList(res, audioVoiceStore, url) {
-  sendJson(res, 200, paginateList(audioVoiceStore.listVoices(), url));
+  const queryError = validateOpenAIAudioVoicesListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateList(audioVoiceStore.listVoices(), officialAudioVoicesListPaginationUrl(url)));
 }
 
-function handleAudioVoiceGet(res, audioVoiceStore, voiceId) {
+function validateOpenAIAudioVoicesListQuery(url) {
+  return validateOpenAIAudioVoiceConsentsListQuery(url);
+}
+
+function officialAudioVoicesListPaginationUrl(url) {
+  return officialAudioVoiceConsentsListPaginationUrl(url);
+}
+
+function handleAudioVoiceGet(res, audioVoiceStore, voiceId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const voice = audioVoiceStore.getVoice(voiceId);
   if (!voice) {
     sendError(res, 404, `voice not found: ${voiceId}`, {
@@ -13118,7 +13144,13 @@ function handleAudioVoiceGet(res, audioVoiceStore, voiceId) {
   sendJson(res, 200, voice);
 }
 
-function handleAudioVoiceDelete(res, audioVoiceStore, voiceId) {
+function handleAudioVoiceDelete(res, audioVoiceStore, voiceId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = audioVoiceStore.deleteVoice(voiceId);
   if (!deleted) {
     sendError(res, 404, `voice not found: ${voiceId}`, {
@@ -23527,11 +23559,11 @@ function createServer(config = loadConfig()) {
       if (audioVoiceRoute) {
         const voiceId = decodeURIComponent(audioVoiceRoute[1]);
         if (req.method === "GET") {
-          handleAudioVoiceGet(res, audioVoiceStore, voiceId);
+          handleAudioVoiceGet(res, audioVoiceStore, voiceId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleAudioVoiceDelete(res, audioVoiceStore, voiceId);
+          handleAudioVoiceDelete(res, audioVoiceStore, voiceId, url);
           return;
         }
       }

@@ -1,5 +1,59 @@
 # Audit Log
 
+## 2026-06-17 Audio Voices Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Audio custom voices:
+  - `POST /v1/audio/voices` is the documented `createVoice` operation;
+  - the current public path metadata for `/audio/voices` does not expose
+    official list, retrieve, or delete operations;
+  - local `GET /v1/audio/voices`, `GET /v1/audio/voices/{voice_id}`, and
+    `DELETE /v1/audio/voices/{voice_id}` remain compatibility extensions for
+    UI/SDK smoke tests and bounded local state cleanup.
+- Tightened local bridge behavior:
+  - voice create now rejects unsupported query parameters before multipart or
+    JSON body parsing;
+  - local voice list now accepts only `after` and `limit`, rejects
+    unsupported `before` / `order`, validates `limit` from 1 through 100, and
+    validates repeated scalar `after`;
+  - local voice retrieve/delete now reject unsupported query parameters before
+    reading or deleting local state.
+- Regression coverage updated:
+  - extended the custom voice lifecycle test to cover invalid voice create,
+    list, retrieve, and delete query parameters;
+  - verified invalid create query with malformed JSON fails on query
+    validation first;
+  - verified invalid delete query leaves the local voice retrievable.
+- Documentation updated:
+  - compatibility matrix now records custom voice create no-query behavior and
+    marks list/retrieve/delete as local extensions with strict query
+    boundaries.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Audio custom voice consent and voice endpoints store local metadata" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Audio voices smoke verified invalid create query returns HTTP 400
+    with `param:"metadata"` before body parsing, and invalid list query
+    returns HTTP 400 with `param:"order"`.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated voice ids, generated consent ids, audio
+    sample bytes, or smoke request payloads were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Project Certificates List First ID Parity
 
 - Rechecked official OpenAI API references:

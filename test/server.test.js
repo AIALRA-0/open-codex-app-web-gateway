@@ -6412,6 +6412,21 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
       },
     });
 
+    const invalidVoiceCreateQuery = await fetch(`${baseUrl}/v1/audio/voices?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(invalidVoiceCreateQuery.status, 400);
+    assert.deepEqual(await invalidVoiceCreateQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const voiceForm = new FormData();
     voiceForm.append("name", "Test Voice");
     voiceForm.append("consent", consent.id);
@@ -6433,20 +6448,79 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     assert.equal(voice.audio_sample.content, undefined);
     assert.equal(voice.compatibility.synthetic_voice_model_created, false);
 
-    const voiceList = await fetch(`${baseUrl}/v1/audio/voices`);
+    const voiceList = await fetch(`${baseUrl}/v1/audio/voices?limit=1`);
     assert.equal(voiceList.status, 200);
     const voiceListJson = await voiceList.json();
     assert.equal(voiceListJson.data[0].id, voice.id);
 
+    const invalidVoiceListQuery = await fetch(`${baseUrl}/v1/audio/voices?order=desc&before=${encodeURIComponent(voice.id)}&limit=10`);
+    assert.equal(invalidVoiceListQuery.status, 400);
+    assert.deepEqual(await invalidVoiceListQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const invalidVoiceLimit = await fetch(`${baseUrl}/v1/audio/voices?limit=101`);
+    assert.equal(invalidVoiceLimit.status, 400);
+    assert.deepEqual(await invalidVoiceLimit.json(), {
+      error: {
+        message: "limit must be an integer between 1 and 100",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const invalidVoiceAfter = await fetch(`${baseUrl}/v1/audio/voices?after=${encodeURIComponent(voice.id)}&after=voice_other`);
+    assert.equal(invalidVoiceAfter.status, 400);
+    assert.deepEqual(await invalidVoiceAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const voiceGet = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`);
     assert.equal(voiceGet.status, 200);
     assert.equal((await voiceGet.json()).id, voice.id);
+
+    const invalidVoiceGetQuery = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}?metadata=debug`);
+    assert.equal(invalidVoiceGetQuery.status, 400);
+    assert.deepEqual(await invalidVoiceGetQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const deleteConsentInUse = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`, {
       method: "DELETE",
     });
     assert.equal(deleteConsentInUse.status, 400);
     assert.equal((await deleteConsentInUse.json()).error.code, "voice_consent_in_use");
+
+    const invalidVoiceDeleteQuery = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}?metadata=debug`, {
+      method: "DELETE",
+    });
+    assert.equal(invalidVoiceDeleteQuery.status, 400);
+    assert.deepEqual(await invalidVoiceDeleteQuery.json(), {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    });
+    const voiceStillPresent = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`);
+    assert.equal(voiceStillPresent.status, 200);
 
     const voiceDelete = await fetch(`${baseUrl}/v1/audio/voices/${voice.id}`, {
       method: "DELETE",
