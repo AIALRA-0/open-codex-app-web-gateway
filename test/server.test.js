@@ -17531,14 +17531,24 @@ test("POST /v1/responses/compact validates official request fields before provid
         message: "prompt_cache_key must be a string",
       },
       {
+        body: { model: "mock-model", prompt_cache_key: "c".repeat(65) },
+        param: "prompt_cache_key",
+        message: "prompt_cache_key must be at most 64 characters",
+      },
+      {
         body: { model: "mock-model", prompt_cache_retention: "7d" },
         param: "prompt_cache_retention",
         message: "prompt_cache_retention must be one of: in_memory, 24h",
       },
       {
+        body: { model: "mock-model", service_tier: "scale" },
+        param: "service_tier",
+        message: "service_tier must be one of: auto, default, flex, priority",
+      },
+      {
         body: { model: "mock-model", service_tier: "fast" },
         param: "service_tier",
-        message: "service_tier must be one of: auto, default, flex, scale, priority",
+        message: "service_tier must be one of: auto, default, flex, priority",
       },
     ];
 
@@ -17566,10 +17576,10 @@ test("POST /v1/responses/compact validates official request fields before provid
 });
 
 test("POST /v1/responses/compact forwards validated cache and service fields to compaction Chat", async () => {
-  const longPromptCacheKey = `compact-${"c".repeat(80)}`;
+  const compactPromptCacheKey = "compact-cache";
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.model, "mock-model");
-    assert.equal(call.body.prompt_cache_key, longPromptCacheKey);
+    assert.equal(call.body.prompt_cache_key, compactPromptCacheKey);
     assert.equal(call.body.prompt_cache_retention, "24h");
     assert.equal(call.body.service_tier, "priority");
     assert.deepEqual(call.body.thinking, { type: "disabled" });
@@ -17594,7 +17604,7 @@ test("POST /v1/responses/compact forwards validated cache and service fields to 
       body: JSON.stringify({
         model: "mock-model",
         input: "Compact cache-aware state.",
-        prompt_cache_key: longPromptCacheKey,
+        prompt_cache_key: compactPromptCacheKey,
         prompt_cache_retention: "24h",
         service_tier: "priority",
       }),

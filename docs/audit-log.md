@@ -1,5 +1,43 @@
 # Audit Log
 
+## 2026-06-17 Compact Schema Endpoint Split
+
+- Rechecked the official OpenAI OpenAPI schema for `/v1/responses/compact` and
+  confirmed that compact uses `CompactResponseMethodPublicBody`, not the shared
+  `ModelResponseProperties` request field set:
+  - compact `prompt_cache_key` is a string/null field with a 64-character
+    maximum;
+  - compact `service_tier` accepts `auto`, `default`, `flex`, and `priority`,
+    while the shared Responses/Chat `ServiceTier` also accepts `scale`.
+- Split local validation accordingly:
+  - Responses create, `/v1/responses/input_tokens`, and direct
+    `/v1/chat/completions` keep the shared prompt-cache behavior from the
+    previous alignment;
+  - `/v1/responses/compact` now enforces the compact-specific
+    `prompt_cache_key` limit and compact service-tier enum before provider
+    calls.
+- Documentation updated:
+  - compatibility matrix now calls out the compact-specific prompt-cache and
+    service-tier schema;
+  - evaluation plan now requires long shared `prompt_cache_key` acceptance while
+    preserving compact's 64-character maximum and compact service-tier enum.
+- Validation:
+  - targeted compact schema and identity/cache tests pass;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm compact overlong `prompt_cache_key` returns
+    `400 invalid_request_parameter`, compact `service_tier:"scale"` returns
+    `400 invalid_request_parameter`, and valid compact requests return
+    `200 response.compaction`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Prompt Cache Key Length Alignment
 
 - Rechecked the official OpenAI OpenAPI schema and API reference for

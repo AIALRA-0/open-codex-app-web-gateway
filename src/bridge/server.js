@@ -219,6 +219,7 @@ const OPENAI_LEGACY_BEST_OF_MAX = 20;
 const OPENAI_SEED_MIN = -9223372036854776000;
 const OPENAI_SEED_MAX = 9223372036854776000;
 const OPENAI_SAFETY_IDENTIFIER_MAX_CHARS = 64;
+const OPENAI_COMPACT_PROMPT_CACHE_KEY_MAX_CHARS = 64;
 const OPENAI_PROMPT_CACHE_RETENTION_VALUES = Object.freeze(["in_memory", "24h"]);
 const OPENAI_STREAM_OPTION_FIELDS = Object.freeze(["include_usage", "include_obfuscation"]);
 const OPENAI_RESPONSES_INCLUDE_VALUES = Object.freeze([
@@ -252,6 +253,7 @@ const OPENAI_AUDIO_OUTPUT_FORMAT_VALUES = Object.freeze(["wav", "aac", "mp3", "f
 const OPENAI_REASONING_EFFORT_VALUES = Object.freeze(["none", "minimal", "low", "medium", "high", "xhigh"]);
 const OPENAI_REASONING_SUMMARY_VALUES = Object.freeze(["auto", "concise", "detailed"]);
 const OPENAI_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "scale", "priority"]);
+const OPENAI_COMPACT_SERVICE_TIER_VALUES = Object.freeze(["auto", "default", "flex", "priority"]);
 const OPENAI_VERBOSITY_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_WEB_SEARCH_CONTEXT_SIZE_VALUES = Object.freeze(["low", "medium", "high"]);
 const OPENAI_CHAT_MESSAGE_ROLES = Object.freeze(["developer", "system", "user", "assistant", "tool", "function"]);
@@ -2787,7 +2789,7 @@ function validateOpenAISeed(body = {}) {
   });
 }
 
-function validateOpenAIIdentityCacheFields(body = {}) {
+function validateOpenAIIdentityCacheFields(body = {}, options = {}) {
   const userError = validateOpenAIStringParameter(body, "user");
   if (userError) return userError;
 
@@ -2796,7 +2798,10 @@ function validateOpenAIIdentityCacheFields(body = {}) {
   });
   if (safetyIdentifierError) return safetyIdentifierError;
 
-  const promptCacheKeyError = validateOpenAIStringParameter(body, "prompt_cache_key");
+  const promptCacheKeyOptions = options.promptCacheKeyMaxLength == null
+    ? {}
+    : { maxLength: options.promptCacheKeyMaxLength };
+  const promptCacheKeyError = validateOpenAIStringParameter(body, "prompt_cache_key", promptCacheKeyOptions);
   if (promptCacheKeyError) return promptCacheKeyError;
 
   if (
@@ -3516,11 +3521,12 @@ function validateOpenAIVerbosity(body = {}) {
   return null;
 }
 
-function validateOpenAIServiceTier(body = {}) {
+function validateOpenAIServiceTier(body = {}, options = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "service_tier") || body.service_tier == null) return null;
-  if (typeof body.service_tier !== "string" || !OPENAI_SERVICE_TIER_VALUES.includes(body.service_tier)) {
+  const values = options.values || OPENAI_SERVICE_TIER_VALUES;
+  if (typeof body.service_tier !== "string" || !values.includes(body.service_tier)) {
     return requestValidationError(
-      `service_tier must be one of: ${OPENAI_SERVICE_TIER_VALUES.join(", ")}`,
+      `service_tier must be one of: ${values.join(", ")}`,
       "service_tier",
     );
   }
@@ -4686,12 +4692,16 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
     sendError(res, 400, truncationValueError.message, truncationValueError);
     return;
   }
-  const identityCacheError = validateOpenAIIdentityCacheFields(request);
+  const identityCacheError = validateOpenAIIdentityCacheFields(request, {
+    promptCacheKeyMaxLength: OPENAI_COMPACT_PROMPT_CACHE_KEY_MAX_CHARS,
+  });
   if (identityCacheError) {
     sendError(res, 400, identityCacheError.message, identityCacheError);
     return;
   }
-  const serviceTierError = validateOpenAIServiceTier(request);
+  const serviceTierError = validateOpenAIServiceTier(request, {
+    values: OPENAI_COMPACT_SERVICE_TIER_VALUES,
+  });
   if (serviceTierError) {
     sendError(res, 400, serviceTierError.message, serviceTierError);
     return;
