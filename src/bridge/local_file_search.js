@@ -210,7 +210,7 @@ class LocalFileSearchStore {
   }
 
   listVectorStores({ url } = {}) {
-    const stores = this.listJson(this.vectorStoresDir())
+    const stores = this.listVectorStoreRecords()
       .map((record) => record.vector_store)
       .filter(Boolean)
       .map((store) => this.hydrateVectorStore(store.id))
@@ -578,6 +578,17 @@ class LocalFileSearchStore {
       return fs.readdirSync(dir)
         .filter((name) => name.endsWith(".json"))
         .map((name) => this.readJson(path.join(dir, name)))
+        .filter(Boolean);
+    } catch {
+      return [];
+    }
+  }
+
+  listVectorStoreRecords() {
+    try {
+      return fs.readdirSync(this.vectorStoresDir(), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => this.readJson(path.join(this.vectorStoresDir(), entry.name, "store.json")))
         .filter(Boolean);
     } catch {
       return [];

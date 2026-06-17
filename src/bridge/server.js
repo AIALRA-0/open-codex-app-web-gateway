@@ -7193,7 +7193,33 @@ async function handleVectorStoreCreate(req, res, fileSearchStore) {
 }
 
 function handleVectorStoresList(res, fileSearchStore, url) {
-  sendJson(res, 200, fileSearchStore.listVectorStores({ url }));
+  const queryError = validateOpenAIVectorStoresListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, fileSearchStore.listVectorStores({ url: officialCursorListPaginationUrl(url) }));
+}
+
+function validateOpenAIVectorStoresListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "before");
+}
+
+function officialCursorListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "before", "limit", "order"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleVectorStoreGet(res, fileSearchStore, storeId) {

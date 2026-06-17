@@ -1062,7 +1062,7 @@ not in Git; clearly text-like files also keep a text index for local
 | `GET /v1/files/{file_id}/content` | Implemented | Returns stored bytes with the best local content type, preserving binary uploads such as PDFs |
 | `DELETE /v1/files/{file_id}` | Implemented | Deletes the file and detaches it from all local vector stores |
 | `POST /v1/vector_stores` | Implemented | Creates a local vector-store record with `file_counts` and metadata |
-| `GET /v1/vector_stores` | Implemented | Lists local vector stores with pagination; expired stores are marked `status:"expired"` |
+| `GET /v1/vector_stores` | Implemented | Lists local vector stores with official `limit`, `after`, `before`, and `order` pagination; repeated scalar query values return 400, `limit` is validated from 1 through 100, and expired stores are marked `status:"expired"` |
 | `GET /v1/vector_stores/{vector_store_id}` | Implemented | Returns local vector-store metadata, live file counts, and expired status when `expires_at` is in the past |
 | `POST /v1/vector_stores/{vector_store_id}` | Implemented | Updates local vector-store `name`, `metadata`, and `expires_after`; computes `expires_at` from the local `last_active_at` timestamp |
 | `DELETE /v1/vector_stores/{vector_store_id}` | Implemented | Deletes the local vector store and its file attachments |

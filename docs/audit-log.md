@@ -1,5 +1,63 @@
 # Audit Log
 
+## 2026-06-17 Vector Stores List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `GET /vector_stores` query schema:
+  - `limit` is an integer scalar with documented range 1 through 100;
+  - `order` is an `asc` / `desc` string scalar;
+  - `after` is a string scalar cursor;
+  - `before` is a string scalar cursor.
+- Tightened local Vector Stores list behavior:
+  - `GET /v1/vector_stores` now validates repeated scalar `limit`,
+    `order`, `after`, and `before` query parameters before listing stores;
+  - `limit` is now validated with the official 100 maximum instead of being
+    silently clamped by the local paginator;
+  - the vector-store paginator receives a sanitized URL containing only
+    official `after`, `before`, `limit`, and `order` query parameters.
+- Fixed a local listing bug:
+  - vector stores are stored as nested `vector_stores/<id>/store.json`
+    records, so list operations now read those records before hydrating live
+    file counts and expiration status.
+- Regression coverage updated:
+  - extended the local Files and Vector Stores compatibility test to assert
+    that a newly created vector store appears in `GET /v1/vector_stores`;
+  - added invalid list-query coverage for out-of-range `limit`, repeated
+    `limit`, repeated `order`, repeated `after`, and repeated `before`.
+- Documentation updated:
+  - compatibility matrix now records official Vector Stores list pagination
+    and query validation behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check src/bridge/local_file_search.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Vector Stores smoke created a temporary vector store, found it via
+    `GET /v1/vector_stores?limit=20&order=desc`, then deleted it successfully.
+  - Public out-of-range `limit=101` smoke against `/v1/vector_stores`
+    returned HTTP 400 with `code:"invalid_request_parameter"` and
+    `param:"limit"`.
+  - Public repeated-`before` smoke against `/v1/vector_stores` returned HTTP
+    400 with `code:"invalid_request_parameter"` and `param:"before"`.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Files List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `GET /files`

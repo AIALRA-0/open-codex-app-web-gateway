@@ -15722,6 +15722,50 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     const vectorStore = await createdStore.json();
     assert.equal(vectorStore.object, "vector_store");
 
+    const listedVectorStores = await fetch(`${baseUrl}/v1/vector_stores?limit=1&order=desc`);
+    assert.equal(listedVectorStores.status, 200);
+    assert.equal((await listedVectorStores.json()).data[0].id, vectorStore.id);
+
+    const invalidVectorStoreListCases = [
+      {
+        path: "/v1/vector_stores?limit=101",
+        message: "limit must be an integer between 1 and 100",
+        param: "limit",
+      },
+      {
+        path: "/v1/vector_stores?limit=1&limit=2",
+        message: "limit must be a single string query value",
+        param: "limit",
+      },
+      {
+        path: "/v1/vector_stores?order=asc&order=desc",
+        message: "order must be a single string query value",
+        param: "order",
+      },
+      {
+        path: `/v1/vector_stores?after=${vectorStore.id}&after=vs_other`,
+        message: "after must be a single string query value",
+        param: "after",
+      },
+      {
+        path: `/v1/vector_stores?before=${vectorStore.id}&before=vs_other`,
+        message: "before must be a single string query value",
+        param: "before",
+      },
+    ];
+    for (const testCase of invalidVectorStoreListCases) {
+      const invalid = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalid.status, 400, testCase.path);
+      assert.deepEqual(await invalid.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const attached = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/files`, {
       method: "POST",
       headers: { "content-type": "application/json" },
