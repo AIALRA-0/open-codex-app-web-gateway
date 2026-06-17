@@ -19780,7 +19780,12 @@ function validateOpenAIAssistantCursorListQuery(url) {
   return validateOpenAISingleQueryValue(url, "before");
 }
 
-async function handleAssistantCreate(req, res, assistantStore) {
+async function handleAssistantCreate(req, res, assistantStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   if (!stringifyContent(body.model).trim()) {
     sendError(res, 400, "model is required", {
@@ -19793,7 +19798,12 @@ async function handleAssistantCreate(req, res, assistantStore) {
   sendJson(res, 200, assistantStore.createAssistant(body));
 }
 
-function handleAssistantGet(res, assistantStore, assistantId) {
+function handleAssistantGet(res, assistantStore, assistantId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const assistant = assistantStore.getAssistant(assistantId);
   if (!assistant) {
     sendError(res, 404, `No assistant found for id '${assistantId}'`, {
@@ -19806,7 +19816,12 @@ function handleAssistantGet(res, assistantStore, assistantId) {
   sendJson(res, 200, assistant);
 }
 
-async function handleAssistantUpdate(req, res, assistantStore, assistantId) {
+async function handleAssistantUpdate(req, res, assistantStore, assistantId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const updated = assistantStore.updateAssistant(assistantId, await readJson(req));
   if (!updated) {
     sendError(res, 404, `No assistant found for id '${assistantId}'`, {
@@ -19819,7 +19834,12 @@ async function handleAssistantUpdate(req, res, assistantStore, assistantId) {
   sendJson(res, 200, updated);
 }
 
-function handleAssistantDelete(res, assistantStore, assistantId) {
+function handleAssistantDelete(res, assistantStore, assistantId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = assistantStore.deleteAssistant(assistantId);
   if (!deleted) {
     sendError(res, 404, `No assistant found for id '${assistantId}'`, {
@@ -20123,7 +20143,12 @@ function assistantThreadLockedError(threadId, run, operation) {
   });
 }
 
-async function handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore) {
+async function handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const thread = assistantStore.createThread(await readJson(req));
   const materialized = materializeAssistantThreadMessageAttachments({
     assistantStore,
@@ -20138,7 +20163,12 @@ async function handleAssistantThreadCreate(req, res, assistantStore, fileSearchS
   sendJson(res, 200, materialized.thread || thread);
 }
 
-function handleAssistantThreadGet(res, assistantStore, threadId) {
+function handleAssistantThreadGet(res, assistantStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const thread = assistantStore.getThread(threadId);
   if (!thread) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -20151,7 +20181,12 @@ function handleAssistantThreadGet(res, assistantStore, threadId) {
   sendJson(res, 200, thread);
 }
 
-async function handleAssistantThreadUpdate(req, res, assistantStore, threadId) {
+async function handleAssistantThreadUpdate(req, res, assistantStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const thread = assistantStore.updateThread(threadId, await readJson(req));
   if (!thread) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -20164,7 +20199,12 @@ async function handleAssistantThreadUpdate(req, res, assistantStore, threadId) {
   sendJson(res, 200, thread);
 }
 
-function handleAssistantThreadDelete(res, assistantStore, threadId) {
+function handleAssistantThreadDelete(res, assistantStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = assistantStore.deleteThread(threadId);
   if (!deleted) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -20207,7 +20247,12 @@ function officialAssistantMessagesListPaginationUrl(url) {
   return officialCursorListPaginationUrl(url);
 }
 
-async function handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId) {
+async function handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const thread = assistantStore.getThread(threadId);
   if (!thread) {
     sendError(res, 404, `No thread found for id '${threadId}'`, {
@@ -20245,7 +20290,12 @@ async function handleAssistantMessageCreate(req, res, assistantStore, fileSearch
   sendJson(res, 200, message);
 }
 
-function handleAssistantMessageGet(res, assistantStore, threadId, messageId) {
+function handleAssistantMessageGet(res, assistantStore, threadId, messageId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const message = assistantStore.getMessage(threadId, messageId);
   if (!message) {
     sendError(res, 404, `No message found for id '${messageId}'`, {
@@ -20258,7 +20308,12 @@ function handleAssistantMessageGet(res, assistantStore, threadId, messageId) {
   sendJson(res, 200, message);
 }
 
-async function handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId) {
+async function handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const message = assistantStore.updateMessage(threadId, messageId, await readJson(req));
   if (!message) {
     sendError(res, 404, `No message found for id '${messageId}'`, {
@@ -20271,7 +20326,12 @@ async function handleAssistantMessageUpdate(req, res, assistantStore, threadId, 
   sendJson(res, 200, message);
 }
 
-function handleAssistantMessageDelete(res, assistantStore, threadId, messageId) {
+function handleAssistantMessageDelete(res, assistantStore, threadId, messageId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = assistantStore.deleteMessage(threadId, messageId);
   if (!deleted) {
     sendError(res, 404, `No message found for id '${messageId}'`, {
@@ -20303,7 +20363,7 @@ function handleAssistantRunsList(res, assistantStore, threadId, url) {
 }
 
 async function handleAssistantRunCreate(req, res, config, assistantStore, threadId, fileSearchStore, containerStore, skillStore, url) {
-  const queryError = validateAssistantRunStepIncludeQuery(url);
+  const queryError = validateAssistantRunCreateQuery(url);
   if (queryError) {
     sendError(res, 400, queryError.message, queryError);
     return;
@@ -20342,6 +20402,11 @@ async function handleAssistantRunCreate(req, res, config, assistantStore, thread
 }
 
 async function handleAssistantThreadAndRunCreate(req, res, config, assistantStore, fileSearchStore, containerStore, skillStore, url) {
+  const queryError = validateAssistantRunCreateQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const thread = assistantStore.createThread(isPlainObject(body.thread) ? body.thread : {});
   const materialized = materializeAssistantThreadMessageAttachments({
@@ -20387,7 +20452,12 @@ async function handleAssistantThreadAndRunCreate(req, res, config, assistantStor
   sendJson(res, 200, result.run);
 }
 
-function handleAssistantRunGet(res, assistantStore, threadId, runId) {
+function handleAssistantRunGet(res, assistantStore, threadId, runId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const run = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!run) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -20400,7 +20470,12 @@ function handleAssistantRunGet(res, assistantStore, threadId, runId) {
   sendJson(res, 200, run);
 }
 
-async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runId) {
+async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const currentRun = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!currentRun) {
@@ -20426,7 +20501,12 @@ async function handleAssistantRunUpdate(req, res, assistantStore, threadId, runI
   sendJson(res, 200, run);
 }
 
-function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
+function handleAssistantRunCancel(res, assistantStore, threadId, runId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const currentRun = refreshAssistantRunState(assistantStore, threadId, runId);
   if (!currentRun) {
     sendError(res, 404, `No run found for id '${runId}'`, {
@@ -20452,7 +20532,12 @@ function handleAssistantRunCancel(res, assistantStore, threadId, runId) {
   sendJson(res, 200, run);
 }
 
-async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore) {
+async function handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   if (body.stream === true) {
     await streamAssistantToolOutputs({
@@ -20520,6 +20605,15 @@ function handleAssistantRunStepsList(res, assistantStore, threadId, runId, url) 
 function validateOpenAIAssistantRunStepsListQuery(url) {
   const listError = validateOpenAIAssistantCursorListQuery(url);
   if (listError) return listError;
+  return validateAssistantRunStepIncludeQuery(url);
+}
+
+function validateAssistantRunCreateQuery(url) {
+  for (const key of url.searchParams.keys()) {
+    if (key !== "include" && key !== "include[]") {
+      return requestValidationError(`Unsupported query parameter: ${key}`, key);
+    }
+  }
   return validateAssistantRunStepIncludeQuery(url);
 }
 
@@ -23250,7 +23344,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleAssistantCreate(req, res, assistantStore);
+          await handleAssistantCreate(req, res, assistantStore, url);
           return;
         }
       }
@@ -23259,15 +23353,15 @@ function createServer(config = loadConfig()) {
       if (assistantRoute) {
         const assistantId = decodeURIComponent(assistantRoute[1]);
         if (req.method === "GET") {
-          handleAssistantGet(res, assistantStore, assistantId);
+          handleAssistantGet(res, assistantStore, assistantId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleAssistantUpdate(req, res, assistantStore, assistantId);
+          await handleAssistantUpdate(req, res, assistantStore, assistantId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleAssistantDelete(res, assistantStore, assistantId);
+          handleAssistantDelete(res, assistantStore, assistantId, url);
           return;
         }
       }
@@ -23279,7 +23373,7 @@ function createServer(config = loadConfig()) {
 
       if (url.pathname === "/v1/threads") {
         if (req.method === "POST") {
-          await handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore);
+          await handleAssistantThreadCreate(req, res, assistantStore, fileSearchStore, url);
           return;
         }
       }
@@ -23305,10 +23399,10 @@ function createServer(config = loadConfig()) {
         const runId = decodeURIComponent(assistantRunActionRoute[2]);
         const action = assistantRunActionRoute[3];
         if (action === "cancel") {
-          handleAssistantRunCancel(res, assistantStore, threadId, runId);
+          handleAssistantRunCancel(res, assistantStore, threadId, runId, url);
           return;
         }
-        await handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore);
+        await handleAssistantRunSubmitToolOutputs(req, res, config, assistantStore, threadId, runId, fileSearchStore, containerStore, skillStore, url);
         return;
       }
 
@@ -23325,11 +23419,11 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (runId && req.method === "GET") {
-          handleAssistantRunGet(res, assistantStore, threadId, runId);
+          handleAssistantRunGet(res, assistantStore, threadId, runId, url);
           return;
         }
         if (runId && req.method === "POST") {
-          await handleAssistantRunUpdate(req, res, assistantStore, threadId, runId);
+          await handleAssistantRunUpdate(req, res, assistantStore, threadId, runId, url);
           return;
         }
       }
@@ -23343,19 +23437,19 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (!messageId && req.method === "POST") {
-          await handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId);
+          await handleAssistantMessageCreate(req, res, assistantStore, fileSearchStore, threadId, url);
           return;
         }
         if (messageId && req.method === "GET") {
-          handleAssistantMessageGet(res, assistantStore, threadId, messageId);
+          handleAssistantMessageGet(res, assistantStore, threadId, messageId, url);
           return;
         }
         if (messageId && req.method === "POST") {
-          await handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId);
+          await handleAssistantMessageUpdate(req, res, assistantStore, threadId, messageId, url);
           return;
         }
         if (messageId && req.method === "DELETE") {
-          handleAssistantMessageDelete(res, assistantStore, threadId, messageId);
+          handleAssistantMessageDelete(res, assistantStore, threadId, messageId, url);
           return;
         }
       }
@@ -23364,15 +23458,15 @@ function createServer(config = loadConfig()) {
       if (assistantThreadRoute) {
         const threadId = decodeURIComponent(assistantThreadRoute[1]);
         if (req.method === "GET") {
-          handleAssistantThreadGet(res, assistantStore, threadId);
+          handleAssistantThreadGet(res, assistantStore, threadId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleAssistantThreadUpdate(req, res, assistantStore, threadId);
+          await handleAssistantThreadUpdate(req, res, assistantStore, threadId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleAssistantThreadDelete(res, assistantStore, threadId);
+          handleAssistantThreadDelete(res, assistantStore, threadId, url);
           return;
         }
       }

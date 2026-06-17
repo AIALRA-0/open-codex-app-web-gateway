@@ -1,5 +1,74 @@
 # Audit Log
 
+## 2026-06-17 Assistants and Threads Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 metadata for Assistants and Threads:
+  - `GET /v1/assistants` declares `limit`, `order`, `after`, and `before`
+    query parameters;
+  - `POST /v1/assistants` and `POST /v1/threads` are JSON body operations and
+    do not declare generic query parameters;
+  - the official endpoint list includes Assistants path/body operations for
+    assistant retrieve/update/delete, thread retrieve/update/delete, message
+    create/retrieve/update/delete, run retrieve/update/cancel/submit, run-step
+    list/retrieve, and create-thread-and-run.
+- Tightened local bridge behavior:
+  - `POST /v1/assistants`, `GET` / `POST` / `DELETE
+    /v1/assistants/{assistant_id}`, `POST /v1/threads`, `GET` / `POST` /
+    `DELETE /v1/threads/{thread_id}`, `POST
+    /v1/threads/{thread_id}/messages`, `GET` / `POST` / `DELETE
+    /v1/threads/{thread_id}/messages/{message_id}`, `GET` / `POST
+    /v1/threads/{thread_id}/runs/{run_id}`, `POST
+    /v1/threads/{thread_id}/runs/{run_id}/cancel`, and `POST
+    /v1/threads/{thread_id}/runs/{run_id}/submit_tool_outputs` now reject
+    unsupported query parameters before body parsing, local reads, lifecycle
+    refreshes, mutations, deletion, or provider replay;
+  - `POST /v1/threads/{thread_id}/runs` and `POST /v1/threads/runs` now allow
+    only the local Assistants Run Step `include` / `include[]` projection query
+    and reject other query parameters before body parsing, thread/message/run
+    creation, or provider calls;
+  - existing official list query behavior for Assistants, Messages, Runs, and
+    Run Steps remains unchanged.
+- Regression coverage updated:
+  - added an Assistants/Threads query-boundary test covering assistant,
+    thread, message, and run CRUD/action endpoints;
+  - the test verifies invalid query requests return OpenAI-style
+    `invalid_request_parameter`, do not parse malformed JSON bodies, do not
+    mutate metadata, do not delete records, do not create messages/runs, and do
+    not call the mock provider before a valid run request.
+- Documentation updated:
+  - compatibility matrix now records no-query boundaries for body/path-only
+    Assistants/Threads endpoints and the include-only query boundary for run
+    create and create-thread-and-run.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Assistants and Threads endpoints reject unsupported query parameters before local mutations|Assistants API local lifecycle runs threads through upstream Chat|Assistants API maps image_url and image_file message content to Chat vision parts|Assistants Runs include local file_search results only when Run Step include is requested" test/server.test.js`
+    passed 3/3 matched tests.
+  - `node --test --test-name-pattern "Assistants" test/server.test.js`
+    passed 21/21 Assistants tests.
+  - Full `node --test test/*.test.js` passed 379/379 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Assistants/Threads query smoke marker
+    `assistants-query-smoke-1781722781015` verified invalid `metadata` queries
+    on assistant create/retrieve/update/delete, thread create/retrieve/update/
+    delete, message create/retrieve/update/delete, run create/retrieve/update/
+    cancel/submit-tool-outputs, and create-thread-and-run; it also verified
+    invalid update/delete/cancel requests leave local state intact.
+  - Cleaned up the small public smoke Thread and Assistant after validation.
+  - Disk guard after deployment: `/` 193G size, 183G used, 11G available, 95%
+    used.
+  - Runtime prune dry-run scanned 5389 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Assistant/Thread/Message/Run ids, prompt
+    payload secrets, or smoke-test request secrets were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Vector Stores Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for:

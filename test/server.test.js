@@ -6855,6 +6855,178 @@ test("Assistants API local lifecycle runs threads through upstream Chat", async 
   });
 });
 
+test("Assistants and Threads endpoints reject unsupported query parameters before local mutations", async () => {
+  await withMockProvider((_req, res, request) => {
+    assert.equal(request.body.model, "gpt-4o-mini");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_assistants_query_boundary",
+      object: "chat.completion",
+      created: 1700000000,
+      model: request.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "assistants-query-boundary-ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 10, completion_tokens: 3, total_tokens: 13 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectedQueryError = {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    };
+    const assertInvalidQuery = async (method, pathSuffix, options = {}) => {
+      const response = await fetch(`${baseUrl}${pathSuffix}?metadata=debug`, {
+        method,
+        ...options,
+      });
+      assert.equal(response.status, 400, `${method} ${pathSuffix}`);
+      assert.deepEqual(await response.json(), expectedQueryError, `${method} ${pathSuffix}`);
+    };
+
+    await assertInvalidQuery("POST", "/v1/assistants", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const assistantResponse = await fetch(`${baseUrl}/v1/assistants`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "gpt-4o-mini",
+        instructions: "Return the query-boundary marker.",
+        metadata: { phase: "initial" },
+      }),
+    });
+    assert.equal(assistantResponse.status, 200);
+    const assistant = await assistantResponse.json();
+
+    const assistantsList = await fetch(`${baseUrl}/v1/assistants?limit=10`);
+    assert.equal(assistantsList.status, 200);
+    assert.deepEqual((await assistantsList.json()).data.map((item) => item.id), [assistant.id]);
+
+    await assertInvalidQuery("GET", `/v1/assistants/${assistant.id}`);
+    await assertInvalidQuery("POST", `/v1/assistants/${assistant.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let assistantAfterInvalid = await fetch(`${baseUrl}/v1/assistants/${assistant.id}`);
+    assert.equal(assistantAfterInvalid.status, 200);
+    assert.deepEqual((await assistantAfterInvalid.json()).metadata, { phase: "initial" });
+
+    await assertInvalidQuery("DELETE", `/v1/assistants/${assistant.id}`);
+    assistantAfterInvalid = await fetch(`${baseUrl}/v1/assistants/${assistant.id}`);
+    assert.equal(assistantAfterInvalid.status, 200);
+
+    await assertInvalidQuery("POST", "/v1/threads", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
+    const threadResponse = await fetch(`${baseUrl}/v1/threads`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ metadata: { phase: "thread-initial" } }),
+    });
+    assert.equal(threadResponse.status, 200);
+    const thread = await threadResponse.json();
+
+    await assertInvalidQuery("GET", `/v1/threads/${thread.id}`);
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let threadAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}`);
+    assert.equal(threadAfterInvalid.status, 200);
+    assert.deepEqual((await threadAfterInvalid.json()).metadata, { phase: "thread-initial" });
+
+    await assertInvalidQuery("DELETE", `/v1/threads/${thread.id}`);
+    threadAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}`);
+    assert.equal(threadAfterInvalid.status, 200);
+
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/messages`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let messages = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages?limit=10`);
+    assert.equal(messages.status, 200);
+    assert.deepEqual((await messages.json()).data, []);
+
+    const messageResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        role: "user",
+        content: "Create a run after this message.",
+        metadata: { phase: "message-initial" },
+      }),
+    });
+    assert.equal(messageResponse.status, 200);
+    const message = await messageResponse.json();
+
+    await assertInvalidQuery("GET", `/v1/threads/${thread.id}/messages/${message.id}`);
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/messages/${message.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let messageAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages/${message.id}`);
+    assert.equal(messageAfterInvalid.status, 200);
+    assert.deepEqual((await messageAfterInvalid.json()).metadata, { phase: "message-initial" });
+
+    await assertInvalidQuery("DELETE", `/v1/threads/${thread.id}/messages/${message.id}`);
+    messageAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}/messages/${message.id}`);
+    assert.equal(messageAfterInvalid.status, 200);
+
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/runs`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    await assertInvalidQuery("POST", "/v1/threads/runs", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(requests.length, 0);
+
+    const runResponse = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        assistant_id: assistant.id,
+        metadata: { phase: "run-initial" },
+      }),
+    });
+    assert.equal(runResponse.status, 200);
+    const run = await runResponse.json();
+    assert.equal(requests.length, 1);
+
+    await assertInvalidQuery("GET", `/v1/threads/${thread.id}/runs/${run.id}`);
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/runs/${run.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let runAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}`);
+    assert.equal(runAfterInvalid.status, 200);
+    assert.equal((await runAfterInvalid.json()).metadata.phase, "run-initial");
+
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/runs/${run.id}/cancel`);
+    runAfterInvalid = await fetch(`${baseUrl}/v1/threads/${thread.id}/runs/${run.id}`);
+    assert.equal(runAfterInvalid.status, 200);
+    assert.equal((await runAfterInvalid.json()).status, "completed");
+
+    await assertInvalidQuery("POST", `/v1/threads/${thread.id}/runs/${run.id}/submit_tool_outputs`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    assert.equal(requests.length, 1);
+  });
+});
+
 test("Assistants API maps image_url and image_file message content to Chat vision parts", async () => {
   const imageBase64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider((_req, res, request) => {
