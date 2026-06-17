@@ -693,6 +693,7 @@ DeepSeek parity should not be asserted from one benchmark. The minimum bar:
   provider calls: `messages` must be a non-empty array, roles are constrained
   to the OpenAI Chat message roles, content arrays are role-specific, user
   content accepts official multimodal/file parts plus bridge-supported aliases,
+  official Chat `image_url` parts require the `{url, detail?}` object shape,
   assistant `tool_calls` / deprecated `function_call` messages must carry
   valid call payloads, and tool/function replay messages must include their
   required identifiers. Regression coverage must prove invalid message shapes

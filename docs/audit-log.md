@@ -1,5 +1,36 @@
 # Audit Log
 
+## 2026-06-17 Chat Image URL Object Validation
+
+- Rechecked the official OpenAI OpenAPI schema for
+  `ChatCompletionRequestMessageContentPartImage`:
+  - content part `type` is `image_url`;
+  - `image_url` is a required object;
+  - `image_url.url` is required as a string, with optional `detail` enum
+    `auto`, `low`, or `high`.
+- Tightened direct Chat message validation so official `image_url` parts no
+  longer accept a bare string URL. Responses `input_image` and bridge-supported
+  aliases remain unchanged.
+- Documentation updated:
+  - compatibility matrix and evaluation plan now call out the official
+    `{url, detail?}` object shape for direct Chat `image_url` parts.
+- Validation:
+  - targeted direct Chat message-shape tests pass, including existing direct
+    Chat image fallback coverage;
+  - `node --check src/bridge/server.js` and
+    `node --check test/server.test.js` pass;
+  - `npm test` passes: 343 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - `aialra-opencodexapp-bridge`, `aialra-opencodexapp-web`, and
+    `aialra-opencodexapp-app-server` are active after restart;
+  - local and public smoke confirm bare-string direct Chat `image_url` parts
+    return `400 invalid_request_parameter`, while the official
+    `image_url:{url,detail}` shape returns `200`.
+- Secret handling:
+  - no API keys, account credentials, provider headers, or local deployment env
+    files were added to the repository.
+
 ## 2026-06-17 Logit Bias Integer Validation
 
 - Rechecked the official OpenAI OpenAPI schemas for Chat Completions and legacy

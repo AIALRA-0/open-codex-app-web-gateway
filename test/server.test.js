@@ -22643,6 +22643,16 @@ test("POST /v1/chat/completions validates messages before provider calls", async
         body: {
           messages: [{
             role: "user",
+            content: [{ type: "image_url", image_url: "https://example.test/a.png" }],
+          }],
+        },
+        param: "messages.0.content.0.image_url",
+        message: "messages.0.content.0.image_url must be an object",
+      },
+      {
+        body: {
+          messages: [{
+            role: "user",
             content: [{ type: "input_audio", input_audio: { data: "abc", format: "flac" } }],
           }],
         },
