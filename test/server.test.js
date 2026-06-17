@@ -15458,6 +15458,35 @@ test("local Containers expire workspaces and block shell reuse", async () => {
   });
 });
 
+test("local Containers reject missing Responses shell container references", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called when a referenced local container is missing");
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: "Execute: echo should-not-run",
+        tools: [{
+          type: "shell",
+          environment: {
+            type: "container_reference",
+            container_id: "cntr_missing_reference",
+          },
+        }],
+        store: false,
+      }),
+    });
+    assert.equal(response.status, 404);
+    const json = await response.json();
+    assert.equal(json.error.code, "container_not_found");
+    assert.equal(json.error.param, "container_id");
+    assert.match(json.error.message, /cntr_missing_reference/);
+  });
+});
+
 test("local code_interpreter emits Responses code_interpreter_call outputs", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.body.tools, undefined);

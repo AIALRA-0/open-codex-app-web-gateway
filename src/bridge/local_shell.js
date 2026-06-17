@@ -83,11 +83,10 @@ class LocalContainerStore {
       || (typeof tool.container === "string" && tool.container !== "auto" ? tool.container : "");
     if (referenceId) {
       const container = this.getContainer(referenceId);
+      if (!container) throw containerNotFoundError(referenceId);
       if (container && !isActiveContainer(container)) throw containerExpiredError(referenceId);
-      if (container) {
-        this.markActive(referenceId);
-        return this.getContainer(referenceId);
-      }
+      this.markActive(referenceId);
+      return this.getContainer(referenceId);
     }
     return this.createContainer({
       name: tool.name || "local-shell-auto",
@@ -893,6 +892,14 @@ function containerExpiredError(containerId) {
   const error = new Error(`container expired: ${containerId}`);
   error.status = 400;
   error.code = "container_expired";
+  error.param = "container_id";
+  return error;
+}
+
+function containerNotFoundError(containerId) {
+  const error = new Error(`container not found: ${containerId}`);
+  error.status = 404;
+  error.code = "container_not_found";
   error.param = "container_id";
   return error;
 }

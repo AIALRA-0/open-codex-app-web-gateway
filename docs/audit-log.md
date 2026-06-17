@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Missing Container Reference Fail-Closed
+
+- Rechecked the official OpenAI Containers and Responses OpenAPI references
+  through the OpenAI developer docs MCP:
+  - `/v1/containers` creates and lists first-class container resources;
+  - container metadata carries lifecycle state such as `status`,
+    `expires_after`, `last_active_at`, `memory_limit`, and `network_policy`;
+  - Responses hosted tools are separate tool calls that may bind to container
+    state. The explicit missing-reference behavior is implemented as a
+    compatibility inference from resource-reference semantics: a missing
+    resource ID must not silently allocate unrelated state.
+- Closed a local shell/code-interpreter compatibility gap:
+  - explicit `container_reference` IDs now fail before command execution when
+    the local container does not exist;
+  - the bridge returns `404` with `code:"container_not_found"` and
+    `param:"container_id"`;
+  - `container_auto` and omitted container references continue to allocate a
+    new local workspace.
+- Regression coverage added:
+  - a Responses `shell` request referencing
+    `cntr_missing_reference` returns `container_not_found`;
+  - the mock provider is configured to fail the test if it is called, proving
+    the error happens before any upstream Chat provider request.
+- Documentation updated:
+  - compatibility matrix now records missing explicit `container_reference`
+    fail-closed behavior;
+  - evaluation plan now includes this scenario in the hosted-tool emulation
+    coverage.
+- Validation:
+  - `node --check src/bridge/local_shell.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "local Containers"
+    test/server.test.js` passes: 4 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 351 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` posts a
+    Responses shell request with missing
+    `container_id:"cntr_missing_public_smoke"` and verifies
+    `404 container_not_found`.
+- Runtime/storage check:
+  - `/` has 15 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Container Create Expiration Validation
 
 - Rechecked the official OpenAI Containers create/retrieve documentation

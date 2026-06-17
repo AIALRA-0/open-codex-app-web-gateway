@@ -1438,6 +1438,9 @@ local container workspace. The adapter:
   code block commands;
 - creates or reuses local container workspaces through `container_auto` and
   `container_reference`-style tool configuration;
+- treats missing explicit `container_reference` IDs as
+  `404 container_not_found`; only `container_auto` or omitted container
+  references allocate a new local workspace;
 - lazily expires referenced containers whose `expires_after` policy has elapsed,
   prunes their local `/mnt/data` workspace, and fails shell/code-interpreter
   execution with `container_expired` instead of forwarding a stale tool context;
