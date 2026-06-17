@@ -39,6 +39,19 @@
   - `npm run secret-scan` passed.
   - Disk guard before deployment: `/` 193G size, 182G used, 12G available,
     95% used.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images variation smokes verified `gpt-image-1` returns HTTP 400
+    with `model must be dall-e-2 for image variations`, and object-valued
+    `model` returns HTTP 400 with `model must be a string`.
+  - Smoke response payloads used only invalid synthetic request bodies and were
+    removed from `/tmp` after inspection.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
 - Secret handling:
   - no API keys, account credentials, bearer tokens, provider headers, local
     deployment env files, generated image bytes, provider image responses, or
