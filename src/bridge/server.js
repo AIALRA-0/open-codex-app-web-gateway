@@ -17543,6 +17543,16 @@ function validateOpenAINoQuery(url) {
   return null;
 }
 
+function validateOpenAIAllowedQueryKeys(url, allowedKeys) {
+  const allowed = new Set(allowedKeys);
+  for (const key of url.searchParams.keys()) {
+    if (!allowed.has(key)) {
+      return requestValidationError(`Unsupported query parameter: ${key}`, key);
+    }
+  }
+  return null;
+}
+
 function validateOpenAIFineTuningNoQuery(url) {
   return validateOpenAINoQuery(url);
 }
@@ -18907,7 +18917,12 @@ function projectStoredChatMessages(record) {
   ));
 }
 
-async function handleConversationCreate(req, res, conversationStore) {
+async function handleConversationCreate(req, res, conversationStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const validationError = validateConversationCreateRequest(body);
   if (validationError) {
@@ -18917,7 +18932,12 @@ async function handleConversationCreate(req, res, conversationStore) {
   sendJson(res, 200, conversationStore.create(body));
 }
 
-function handleConversationGet(res, conversationStore, conversationId) {
+function handleConversationGet(res, conversationStore, conversationId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const record = conversationStore.get(conversationId);
   if (!record || record.deleted === true) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
@@ -18931,7 +18951,12 @@ function handleConversationGet(res, conversationStore, conversationId) {
   });
 }
 
-async function handleConversationUpdate(req, res, conversationStore, conversationId) {
+async function handleConversationUpdate(req, res, conversationStore, conversationId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const validationError = validateConversationUpdateRequest(body);
   if (validationError) {
@@ -18986,7 +19011,12 @@ function validateConversationUpdateRequest(body = {}) {
   return validateOpenAIStringMetadata(body);
 }
 
-function handleConversationDelete(res, conversationStore, conversationId) {
+function handleConversationDelete(res, conversationStore, conversationId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = conversationStore.delete(conversationId);
   if (!deleted) {
     sendError(res, 404, `conversation not found: ${conversationId}`, { code: "conversation_not_found" });
@@ -18996,6 +19026,11 @@ function handleConversationDelete(res, conversationStore, conversationId) {
 }
 
 async function handleConversationItemsCreate(req, res, conversationStore, conversationId, url) {
+  const queryError = validateOpenAIConversationItemsIncludeOnlyQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const body = await readJson(req);
   const includeError = validateOpenAIIncludeQuery(url);
   if (includeError) {
@@ -19058,6 +19093,11 @@ function isValidLocalConversationItemExtension(value) {
 }
 
 function handleConversationItemsList(res, conversationStore, conversationId, url) {
+  const queryError = validateOpenAIConversationItemsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const includeError = validateOpenAIIncludeQuery(url);
   if (includeError) {
     sendError(res, 400, includeError.message, includeError);
@@ -19087,6 +19127,11 @@ function handleConversationItemsList(res, conversationStore, conversationId, url
 }
 
 function handleConversationItemGet(res, conversationStore, conversationId, itemId, url) {
+  const queryError = validateOpenAIConversationItemsIncludeOnlyQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const includeError = validateOpenAIIncludeQuery(url);
   if (includeError) {
     sendError(res, 400, includeError.message, includeError);
@@ -19100,7 +19145,20 @@ function handleConversationItemGet(res, conversationStore, conversationId, itemI
   sendJson(res, 200, projectInputItemsForIncludes([item], url)[0]);
 }
 
-function handleConversationItemDelete(res, conversationStore, conversationId, itemId) {
+function validateOpenAIConversationItemsListQuery(url) {
+  return validateOpenAIAllowedQueryKeys(url, ["after", "include", "include[]", "limit", "order"]);
+}
+
+function validateOpenAIConversationItemsIncludeOnlyQuery(url) {
+  return validateOpenAIAllowedQueryKeys(url, ["include", "include[]"]);
+}
+
+function handleConversationItemDelete(res, conversationStore, conversationId, itemId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const deleted = conversationStore.deleteItem(conversationId, itemId);
   if (!deleted) {
     sendError(res, 404, `conversation item not found: ${itemId}`, { code: "conversation_item_not_found" });
@@ -20609,11 +20667,8 @@ function validateOpenAIAssistantRunStepsListQuery(url) {
 }
 
 function validateAssistantRunCreateQuery(url) {
-  for (const key of url.searchParams.keys()) {
-    if (key !== "include" && key !== "include[]") {
-      return requestValidationError(`Unsupported query parameter: ${key}`, key);
-    }
-  }
+  const queryError = validateOpenAIAllowedQueryKeys(url, ["include", "include[]"]);
+  if (queryError) return queryError;
   return validateAssistantRunStepIncludeQuery(url);
 }
 
@@ -23737,7 +23792,7 @@ function createServer(config = loadConfig()) {
 
       if (url.pathname === "/v1/conversations") {
         if (req.method === "POST") {
-          await handleConversationCreate(req, res, conversationStore);
+          await handleConversationCreate(req, res, conversationStore, url);
           return;
         }
       }
@@ -23759,7 +23814,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (itemId && req.method === "DELETE") {
-          handleConversationItemDelete(res, conversationStore, conversationId, itemId);
+          handleConversationItemDelete(res, conversationStore, conversationId, itemId, url);
           return;
         }
       }
@@ -23768,15 +23823,15 @@ function createServer(config = loadConfig()) {
       if (conversationRoute) {
         const conversationId = decodeURIComponent(conversationRoute[1]);
         if (req.method === "GET") {
-          handleConversationGet(res, conversationStore, conversationId);
+          handleConversationGet(res, conversationStore, conversationId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleConversationUpdate(req, res, conversationStore, conversationId);
+          await handleConversationUpdate(req, res, conversationStore, conversationId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleConversationDelete(res, conversationStore, conversationId);
+          handleConversationDelete(res, conversationStore, conversationId, url);
           return;
         }
       }

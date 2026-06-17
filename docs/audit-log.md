@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Conversations Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 / developer reference metadata for
+  Conversations:
+  - `POST /v1/conversations` declares no query parameters;
+  - `GET /v1/conversations/{conversation_id}/items` supports `after`,
+    `include`, `limit`, and `order` query parameters;
+  - `POST /v1/conversations/{conversation_id}/items` and `GET
+    /v1/conversations/{conversation_id}/items/{item_id}` support the
+    `include` projection query;
+  - conversation retrieve/update/delete and item delete are path/body-driven
+    operations with no generic query parameters.
+- Tightened local bridge behavior:
+  - conversation create/retrieve/update/delete reject unsupported query
+    parameters before body parsing, local state reads, metadata mutation, or
+    soft deletion;
+  - conversation item list now rejects unknown query parameters before reading
+    local items while preserving official `after`, `include`, `limit`, and
+    `order` handling;
+  - conversation item create and retrieve now allow only `include` /
+    `include[]` and reject other query parameters before body parsing,
+    appending, or reading;
+  - conversation item delete rejects unsupported query parameters before
+    removing the item.
+- Regression coverage updated:
+  - added a Conversations query-boundary test that verifies OpenAI-style
+    `invalid_request_parameter` responses across create, retrieve, update,
+    delete, item list, item create, item retrieve, and item delete;
+  - the test confirms invalid create does not persist a conversation file,
+    invalid update/delete do not mutate or delete the conversation, invalid
+    item create does not append, invalid item delete leaves the item
+    retrievable, and no provider call occurs.
+- Documentation updated:
+  - compatibility matrix now records no-query boundaries for conversation
+    body/path-only endpoints and the official list/include-only query
+    allowlists for conversation item endpoints.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Conversations endpoints reject unsupported query parameters before local mutations|local Conversations API validates metadata and request contracts|local Conversations API persists items and feeds Responses conversation context|Responses auxiliary endpoints replay local conversation state" test/server.test.js`
+    passed 4/4 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    passed.
+  - Public Conversations query smoke marker
+    `conversations-query-smoke-1781723186896` verified invalid `metadata`
+    queries on conversation create/retrieve/update/delete, item list/create/
+    retrieve/delete, and confirmed invalid update/delete/item append/item
+    delete requests leave local state intact.
+  - Cleaned up the small public smoke Conversation and temporary item after
+    validation.
+  - Disk guard after deployment: `/` 193G size, 183G used, 11G available, 95%
+    used.
+  - Runtime prune dry-run scanned 5389 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated Conversation or item ids, prompt payload
+    secrets, or smoke-test request secrets were added to source, tests, docs,
+    logs, or commits.
+
 ## 2026-06-17 Assistants and Threads Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 metadata for Assistants and Threads:

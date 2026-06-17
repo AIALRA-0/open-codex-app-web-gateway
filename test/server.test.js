@@ -21062,6 +21062,102 @@ test("local Conversations API validates metadata and request contracts", async (
   });
 });
 
+test("Conversations endpoints reject unsupported query parameters before local mutations", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local conversation query validation");
+  }, async ({ bridgeAddress, requests, stateDir }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const expectedQueryError = {
+      error: {
+        message: "Unsupported query parameter: metadata",
+        type: "invalid_request_error",
+        param: "metadata",
+        code: "invalid_request_parameter",
+      },
+    };
+    const assertInvalidQuery = async (method, pathSuffix, options = {}) => {
+      const response = await fetch(`${baseUrl}${pathSuffix}?metadata=debug`, {
+        method,
+        ...options,
+      });
+      assert.equal(response.status, 400, `${method} ${pathSuffix}`);
+      assert.deepEqual(await response.json(), expectedQueryError, `${method} ${pathSuffix}`);
+    };
+
+    await assertInvalidQuery("POST", "/v1/conversations", {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    const conversationStateDir = path.join(stateDir, "local-conversations");
+    const initialConversationFiles = fs.existsSync(conversationStateDir)
+      ? fs.readdirSync(conversationStateDir).filter((name) => name.endsWith(".json"))
+      : [];
+    assert.deepEqual(initialConversationFiles, []);
+
+    const created = await fetch(`${baseUrl}/v1/conversations`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        metadata: { phase: "initial" },
+        items: [{ type: "message", role: "user", content: "conversation query boundary" }],
+      }),
+    });
+    assert.equal(created.status, 200);
+    const conversation = await created.json();
+
+    await assertInvalidQuery("GET", `/v1/conversations/${conversation.id}`);
+    await assertInvalidQuery("POST", `/v1/conversations/${conversation.id}`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let refetched = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`);
+    assert.equal(refetched.status, 200);
+    assert.deepEqual((await refetched.json()).metadata, { phase: "initial" });
+
+    await assertInvalidQuery("DELETE", `/v1/conversations/${conversation.id}`);
+    refetched = await fetch(`${baseUrl}/v1/conversations/${conversation.id}`);
+    assert.equal(refetched.status, 200);
+
+    await assertInvalidQuery("POST", `/v1/conversations/${conversation.id}/items`, {
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    let items = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?order=asc&limit=10`);
+    assert.equal(items.status, 200);
+    let itemsJson = await items.json();
+    assert.equal(itemsJson.data.length, 1);
+    assert.equal(itemsJson.data[0].content, "conversation query boundary");
+
+    await assertInvalidQuery("GET", `/v1/conversations/${conversation.id}/items`);
+
+    const createdItem = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        items: [{ type: "message", role: "user", content: "delete boundary item" }],
+      }),
+    });
+    assert.equal(createdItem.status, 200);
+    const createdItemJson = await createdItem.json();
+    const itemId = createdItemJson.data[0].id;
+
+    await assertInvalidQuery("GET", `/v1/conversations/${conversation.id}/items/${itemId}`);
+    await assertInvalidQuery("DELETE", `/v1/conversations/${conversation.id}/items/${itemId}`);
+    const stillThere = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items/${itemId}`);
+    assert.equal(stillThere.status, 200);
+    assert.equal((await stillThere.json()).content, "delete boundary item");
+
+    items = await fetch(`${baseUrl}/v1/conversations/${conversation.id}/items?order=asc&limit=10`);
+    assert.equal(items.status, 200);
+    itemsJson = await items.json();
+    assert.deepEqual(itemsJson.data.map((item) => item.content), [
+      "conversation query boundary",
+      "delete boundary item",
+    ]);
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("Responses truncation auto drops oldest replay messages before upstream Chat", async () => {
   await withMockProvider(async (_req, res, call) => {
     const prompt = call.body.messages.map((message) => message.content || "").join("\n");
