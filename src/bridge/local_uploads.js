@@ -8,6 +8,7 @@ const { prefixedId } = require("./translator");
 const OFFICIAL_UPLOAD_MAX_BYTES = 8 * 1024 * 1024 * 1024;
 const OFFICIAL_UPLOAD_PART_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_UPLOAD_EXPIRY_SECONDS = 3600;
+const OFFICIAL_FILE_PURPOSES = new Set(["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]);
 
 class LocalUploadStore {
   constructor(config = {}) {
@@ -19,7 +20,7 @@ class LocalUploadStore {
 
   createUpload(body = {}) {
     const filename = requireString(body.filename, "filename");
-    const purpose = requireString(body.purpose, "purpose");
+    const purpose = requireUploadPurpose(body.purpose);
     const mimeType = requireString(body.mime_type || body.mimeType, "mime_type");
     const bytes = requireInteger(body.bytes, "bytes");
     if (bytes < 0) throw httpError("bytes must be non-negative", 400, "invalid_upload", "bytes");
@@ -107,7 +108,10 @@ class LocalUploadStore {
     const buffers = [];
     const orderedPartChecksums = [];
     for (const rawPartId of body.part_ids) {
-      const partId = safeId(rawPartId);
+      if (typeof rawPartId !== "string" || !rawPartId.trim()) {
+        throw httpError("part_ids must be an array of part ID strings", 400, "invalid_part_ids", "part_ids");
+      }
+      const partId = safeId(rawPartId.trim());
       if (seen.has(partId)) throw httpError(`duplicate part_id: ${partId}`, 400, "duplicate_part_id", "part_ids");
       seen.add(partId);
       const partRecord = this.readJson(this.partJsonPath(upload.id, partId));
@@ -351,14 +355,25 @@ function normalizeExpirySeconds(expiresAfter) {
   if (!isPlainObject(expiresAfter)) {
     throw httpError("expires_after must be an object", 400, "invalid_expires_after", "expires_after");
   }
-  if (expiresAfter.anchor && expiresAfter.anchor !== "created_at") {
+  if (!Object.prototype.hasOwnProperty.call(expiresAfter, "anchor")) {
+    throw httpError("expires_after.anchor is required", 400, "invalid_expires_after", "expires_after.anchor");
+  }
+  if (expiresAfter.anchor !== "created_at") {
     throw httpError("expires_after.anchor must be created_at", 400, "invalid_expires_after", "expires_after.anchor");
   }
-  const seconds = expiresAfter.seconds == null ? DEFAULT_UPLOAD_EXPIRY_SECONDS : Number(expiresAfter.seconds);
-  if (!Number.isFinite(seconds) || seconds <= 0) {
-    throw httpError("expires_after.seconds must be positive", 400, "invalid_expires_after", "expires_after.seconds");
+  if (!Object.prototype.hasOwnProperty.call(expiresAfter, "seconds")) {
+    throw httpError("expires_after.seconds is required", 400, "invalid_expires_after", "expires_after.seconds");
   }
-  return Math.min(Math.trunc(seconds), DEFAULT_UPLOAD_EXPIRY_SECONDS);
+  const seconds = expiresAfter.seconds;
+  if (!Number.isInteger(seconds) || seconds < 1 || seconds > DEFAULT_UPLOAD_EXPIRY_SECONDS) {
+    throw httpError(
+      `expires_after.seconds must be an integer between 1 and ${DEFAULT_UPLOAD_EXPIRY_SECONDS}`,
+      400,
+      "invalid_expires_after",
+      "expires_after.seconds",
+    );
+  }
+  return seconds;
 }
 
 function requireString(value, param) {
@@ -369,11 +384,23 @@ function requireString(value, param) {
 }
 
 function requireInteger(value, param) {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed)) {
+  if (!Number.isInteger(value)) {
     throw httpError(`${param} must be an integer`, 400, "invalid_upload", param);
   }
-  return parsed;
+  return value;
+}
+
+function requireUploadPurpose(value) {
+  const purpose = requireString(value, "purpose");
+  if (!OFFICIAL_FILE_PURPOSES.has(purpose)) {
+    throw httpError(
+      `purpose must be one of: ${Array.from(OFFICIAL_FILE_PURPOSES).join(", ")}`,
+      400,
+      "invalid_upload",
+      "purpose",
+    );
+  }
+  return purpose;
 }
 
 function expectedSha256FromOptions(options = {}) {

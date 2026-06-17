@@ -1,5 +1,61 @@
 # Audit Log
 
+## 2026-06-17 Uploads Create Request Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
+  - `POST /uploads`;
+  - `POST /uploads/{upload_id}/parts`;
+  - `POST /uploads/{upload_id}/complete`;
+  - `GET/POST /files`.
+- Rechecked the official File purpose list from the Files create reference:
+  `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, and `evals`.
+- Confirmed the official Upload create body is JSON with `purpose`,
+  `filename`, integer `bytes`, `mime_type`, and an optional
+  `expires_after` policy using `anchor:"created_at"` and `seconds`.
+- Tightened local Uploads behavior:
+  - `POST /v1/uploads` now rejects non-official `purpose` values before
+    creating Upload state;
+  - `POST /v1/uploads` now requires `bytes` to be a JSON integer instead of
+    accepting numeric strings;
+  - `POST /v1/uploads` now validates `expires_after` as an object with
+    required `anchor:"created_at"` and required integer `seconds` from 1
+    through 3600, avoiding the previous silent clamp to the one-hour Upload
+    window;
+  - `POST /v1/uploads/{upload_id}/complete` now rejects non-string
+    `part_ids[]` entries with HTTP 400 before looking up local Part records.
+- Regression coverage updated:
+  - Uploads lifecycle tests now cover invalid `purpose`, string `bytes`,
+    non-object `expires_after`, missing/wrong `expires_after.anchor`,
+    missing/string/too-large `expires_after.seconds`, and numeric
+    `part_ids[]`.
+- Documentation updated:
+  - compatibility matrix now records official File purpose validation,
+    integer `bytes`, `expires_after:{anchor:"created_at",seconds:1..3600}`,
+    and ordered string `part_ids`.
+- Validation:
+  - `node --check src/bridge/local_uploads.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Uploads API assembles ordered parts into Files and Responses input_file" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Uploads smoke marker `upload-query-smoke-mqi4dk72` confirmed
+    invalid `purpose`, string `bytes`, too-large `expires_after.seconds`, and
+    numeric `part_ids[]` all returned HTTP 400.
+  - Public Uploads smoke also created a one-byte Upload, added a Part,
+    completed it into a File, fetched the File content successfully, and
+    deleted the temporary File.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Fine-tuning List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:

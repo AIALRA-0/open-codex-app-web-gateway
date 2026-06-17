@@ -16652,6 +16652,78 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     assert.equal(upload.status, "pending");
     assert.equal(upload.bytes, Buffer.byteLength(fullContent, "utf8"));
 
+    const requiredUploadBody = {
+      filename: "invalid-upload.txt",
+      purpose: "assistants",
+      bytes: 1,
+      mime_type: "text/plain",
+    };
+    for (const testCase of [
+      {
+        body: { ...requiredUploadBody, purpose: "unknown" },
+        param: "purpose",
+        code: "invalid_upload",
+        message: "purpose must be one of: assistants, batch, fine-tune, vision, user_data, evals",
+      },
+      {
+        body: { ...requiredUploadBody, bytes: "1" },
+        param: "bytes",
+        code: "invalid_upload",
+        message: "bytes must be an integer",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: "soon" },
+        param: "expires_after",
+        code: "invalid_expires_after",
+        message: "expires_after must be an object",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: { seconds: 3600 } },
+        param: "expires_after.anchor",
+        code: "invalid_expires_after",
+        message: "expires_after.anchor is required",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: { anchor: "completed_at", seconds: 3600 } },
+        param: "expires_after.anchor",
+        code: "invalid_expires_after",
+        message: "expires_after.anchor must be created_at",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: { anchor: "created_at" } },
+        param: "expires_after.seconds",
+        code: "invalid_expires_after",
+        message: "expires_after.seconds is required",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: { anchor: "created_at", seconds: "3600" } },
+        param: "expires_after.seconds",
+        code: "invalid_expires_after",
+        message: "expires_after.seconds must be an integer between 1 and 3600",
+      },
+      {
+        body: { ...requiredUploadBody, expires_after: { anchor: "created_at", seconds: 3601 } },
+        param: "expires_after.seconds",
+        code: "invalid_expires_after",
+        message: "expires_after.seconds must be an integer between 1 and 3600",
+      },
+    ]) {
+      const invalidCreate = await fetch(`${baseUrl}/v1/uploads`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(invalidCreate.status, 400, testCase.param);
+      assert.deepEqual(await invalidCreate.json(), {
+        error: {
+          message: testCase.message,
+          type: "compatibility_bridge_error",
+          param: testCase.param,
+          code: testCase.code,
+        },
+      }, testCase.param);
+    }
+
     const partBResponse = await fetch(`${baseUrl}/v1/uploads/${upload.id}/parts`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -16786,6 +16858,21 @@ test("local Uploads API assembles ordered parts into Files and Responses input_f
     });
     assert.equal(mismatchComplete.status, 400);
     assert.equal((await mismatchComplete.json()).error.code, "upload_bytes_mismatch");
+
+    const invalidPartIdsComplete = await fetch(`${baseUrl}/v1/uploads/${mismatchUpload.id}/complete`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ part_ids: [123] }),
+    });
+    assert.equal(invalidPartIdsComplete.status, 400);
+    assert.deepEqual(await invalidPartIdsComplete.json(), {
+      error: {
+        message: "part_ids must be an array of part ID strings",
+        type: "compatibility_bridge_error",
+        param: "part_ids",
+        code: "invalid_part_ids",
+      },
+    });
 
     const checksumMismatchUploadResponse = await fetch(`${baseUrl}/v1/uploads`, {
       method: "POST",
