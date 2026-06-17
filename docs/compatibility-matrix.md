@@ -312,10 +312,10 @@ Chat responses back to `object:"text_completion"` completion objects.
 
 | Legacy Completions field | Chat bridge behavior | Status |
 | --- | --- | --- |
-| `prompt` string | one `role:"user"` Chat message | Direct |
-| `prompt` array of strings | one upstream Chat request per prompt, aggregated into one `text_completion` response | Emulated locally for non-stream and stream |
-| token-id prompts | token ids are preserved as visible numeric text because a Chat-only provider cannot decode the legacy model tokenizer | Best-effort local compatibility |
-| `model` | `model` | Direct, defaults to `CODEXCOMPAT_DEFAULT_MODEL` when omitted |
+| `prompt` string | one `role:"user"` Chat message | Direct after request validation; legacy Completions `prompt` must be present and must be `null`, a string, an array of strings, an array of token integers, or an array of non-empty token-integer arrays before any upstream Chat request |
+| `prompt` array of strings | one upstream Chat request per prompt, aggregated into one `text_completion` response | Emulated locally for non-stream and stream after the same prompt schema validation |
+| token-id prompts | token ids are preserved as visible numeric text because a Chat-only provider cannot decode the legacy model tokenizer | Best-effort local compatibility after prompt arrays are validated as integer-only token IDs |
+| `model` | `model` | Direct after required string request validation |
 | `max_tokens` | configured Chat max-token field, default `max_tokens` | Direct |
 | `temperature`, `top_p`, `frequency_penalty`, `presence_penalty`, `stop`, `seed`, `n` | same-name Chat fields | Direct/provider-dependent after request validation; legacy Completions `temperature` must be a number from 0 through 2, `top_p` must be a number from 0 through 1, `frequency_penalty` / `presence_penalty` must be numbers from -2 through 2, `stop` must be a string or an array of 1 to 4 strings, `seed` must be an integer in the official 64-bit-compatible range, and `n` must be an integer from 1 through 128 before any upstream Chat request |
 | `logprobs` | `logprobs:true` plus bounded `top_logprobs`; Chat token logprobs are reshaped to legacy `tokens`, `token_logprobs`, `top_logprobs`, and `text_offset` when present | Provider-dependent after request validation; legacy Completions `logprobs` must be an integer from 0 through 5 before prompt-to-Chat mapping |

@@ -2871,6 +2871,32 @@ function validateOpenAILegacyEcho(body = {}) {
   return validateOpenAIBooleanParameter(body, "echo");
 }
 
+function validateOpenAILegacyPrompt(body = {}) {
+  const requiredError = validateOpenAIRequiredParameter(body, "prompt");
+  if (requiredError) return requiredError;
+  const prompt = body.prompt;
+  if (prompt == null || typeof prompt === "string") return null;
+  if (!Array.isArray(prompt)) {
+    return requestValidationError(openAILegacyPromptMessage(), "prompt");
+  }
+  if (!prompt.length || prompt.every((item) => typeof item === "string")) return null;
+  if (prompt.every((item) => Number.isInteger(item))) return null;
+  if (
+    prompt.every((item) => (
+      Array.isArray(item)
+      && item.length >= 1
+      && item.every((token) => Number.isInteger(token))
+    ))
+  ) {
+    return null;
+  }
+  return requestValidationError(openAILegacyPromptMessage(), "prompt");
+}
+
+function openAILegacyPromptMessage() {
+  return "prompt must be a string, an array of strings, an array of token integers, or an array of token integer arrays";
+}
+
 function validateOpenAILegacyLogprobs(body = {}) {
   if (!Object.prototype.hasOwnProperty.call(body, "logprobs") || body.logprobs == null) return null;
   if (
@@ -10462,7 +10488,7 @@ async function handleLegacyCompletions(req, res, config) {
     sendError(res, 400, modelError.message, modelError);
     return;
   }
-  const promptError = validateOpenAIRequiredParameter(request, "prompt");
+  const promptError = validateOpenAILegacyPrompt(request);
   if (promptError) {
     sendError(res, 400, promptError.message, promptError);
     return;

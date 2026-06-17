@@ -24367,6 +24367,71 @@ test("POST /v1/completions validates required fields before provider calls", asy
   });
 });
 
+test("POST /v1/completions validates prompt schema before provider calls", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_legacy_prompt_schema",
+      object: "chat.completion",
+      created: 1700000125,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "legacy prompt ok" },
+        finish_reason: "stop",
+      }],
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const message = "prompt must be a string, an array of strings, an array of token integers, or an array of token integer arrays";
+    const invalidPrompts = [
+      { text: "object prompt" },
+      [1, "two"],
+      [1.5],
+      [[1], []],
+      [[1], ["two"]],
+      [null],
+    ];
+
+    for (const prompt of invalidPrompts) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mock-model", prompt }),
+      });
+      assert.equal(response.status, 400);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param: "prompt",
+          code: "invalid_request_parameter",
+        },
+      });
+    }
+    assert.equal(requests.length, 0);
+
+    const validCases = [
+      { prompt: null, expectedContent: "" },
+      { prompt: [1212, 318, 257, 1332], expectedContent: "1212 318 257 1332" },
+    ];
+    for (const validCase of validCases) {
+      const response = await fetch(`${baseUrl}/v1/completions`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "mock-model", prompt: validCase.prompt }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).choices[0].text, "legacy prompt ok");
+    }
+    assert.equal(requests.length, validCases.length);
+    assert.deepEqual(
+      requests.map((request) => request.body.messages[0].content),
+      validCases.map((validCase) => validCase.expectedContent),
+    );
+  });
+});
+
 test("POST /v1/completions validates logit_bias before provider calls", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.logit_bias, { "11": -100, "12": 100 });

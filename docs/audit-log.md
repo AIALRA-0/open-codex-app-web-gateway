@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Legacy Completions Prompt Schema Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `CreateCompletionRequest`
+  schema:
+  - `POST /v1/completions` requires `model` and `prompt`;
+  - `prompt` is nullable and otherwise accepts only a string, an array of
+    strings, an array of token integers, or an array of non-empty token-integer
+    arrays.
+- Tightened legacy Completions validation before provider calls:
+  - `/v1/completions` now rejects object prompts, mixed string/token arrays,
+    non-integer token arrays, empty token-array children, and arrays containing
+    `null` before prompt-to-Chat mapping.
+  - Officially nullable `prompt:null`, string prompts, string arrays, token-id
+    arrays, and token-id array batches remain accepted.
+- Regression coverage updated:
+  - added a focused legacy prompt schema test proving invalid prompt shapes
+    fail with `param:"prompt"` and zero provider calls;
+  - confirmed nullable and token-id prompts still map to Chat-visible prompt
+    text.
+- Documentation updated:
+  - compatibility matrix now records the legacy prompt schema boundary and fixes
+    the stale legacy `model` row to required string validation.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "prompt schema" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - `git diff --check` passed.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public object-prompt smoke against `/v1/completions` returned HTTP 400
+    with `code:"invalid_request_parameter"` and `param:"prompt"`.
+  - Disk guard after deployment: `/` 193G size, 180G used, 14G available,
+    94% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Direct Chat Tools Count Validation
 
 - Rechecked the current official OpenAI Chat Completions OpenAPI YAML through
