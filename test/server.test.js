@@ -15933,6 +15933,23 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(excludedFilterSearch.status, 200);
     assert.deepEqual((await excludedFilterSearch.json()).data, []);
 
+    const missingQuerySearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filters: { type: "eq", key: "suite", value: "server-test" },
+      }),
+    });
+    assert.equal(missingQuerySearch.status, 400);
+    assert.deepEqual(await missingQuerySearch.json(), {
+      error: {
+        message: "query is required",
+        type: "invalid_request_error",
+        param: "query",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const invalidFilterSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -15942,7 +15959,14 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       }),
     });
     assert.equal(invalidFilterSearch.status, 400);
-    assert.match(await invalidFilterSearch.text(), /invalid_vector_store_filter|filters/);
+    assert.deepEqual(await invalidFilterSearch.json(), {
+      error: {
+        message: "filters.filters must be a non-empty array for and",
+        type: "invalid_request_error",
+        param: "filters.filters",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidLimitSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",
@@ -15953,7 +15977,14 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       }),
     });
     assert.equal(invalidLimitSearch.status, 400);
-    assert.match(await invalidLimitSearch.text(), /max_num_results/);
+    assert.deepEqual(await invalidLimitSearch.json(), {
+      error: {
+        message: "max_num_results must be an integer between 1 and 50",
+        type: "invalid_request_error",
+        param: "max_num_results",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const looseRankingSearch = await fetch(`${baseUrl}/v1/vector_stores/${vectorStore.id}/search`, {
       method: "POST",
@@ -16031,7 +16062,14 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
       }),
     });
     assert.equal(invalidRankingSearch.status, 400);
-    assert.match(await invalidRankingSearch.text(), /score_threshold/);
+    assert.deepEqual(await invalidRankingSearch.json(), {
+      error: {
+        message: "ranking_options.score_threshold must be a number between 0 and 1",
+        type: "invalid_request_error",
+        param: "ranking_options.score_threshold",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const response = await fetch(`${baseUrl}/v1/responses`, {
       method: "POST",

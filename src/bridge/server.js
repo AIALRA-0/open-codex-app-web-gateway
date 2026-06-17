@@ -7393,12 +7393,76 @@ function handleVectorStoreFileDelete(res, fileSearchStore, storeId, fileId) {
 
 async function handleVectorStoreSearch(req, res, fileSearchStore, storeId) {
   const body = await readJson(req);
-  const page = fileSearchStore.searchVectorStore(storeId, body);
+  const validationError = validateOpenAIVectorStoreSearchRequest(body);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
+    return;
+  }
+  let page;
+  try {
+    page = fileSearchStore.searchVectorStore(storeId, body);
+  } catch (error) {
+    sendError(res, error.status || 500, error.message || "vector store search failed", {
+      code: error.code || (error.status === 400 ? "invalid_request_parameter" : null),
+      param: error.param || null,
+      type: error.type || (error.status === 400 ? "invalid_request_error" : undefined),
+    });
+    return;
+  }
   if (!page) {
     sendError(res, 404, `vector store not found: ${storeId}`, { code: "vector_store_not_found" });
     return;
   }
   sendJson(res, 200, page);
+}
+
+function validateOpenAIVectorStoreSearchRequest(body) {
+  if (!isPlainObject(body)) {
+    return requestValidationError("request body must be an object", null);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(body, "query")) {
+    return requestValidationError("query is required", "query");
+  }
+  if (Array.isArray(body.query)) {
+    const queryError = validateOpenAIStringArray(body.query, "query", {
+      nonEmpty: true,
+      nonEmptyString: true,
+    });
+    if (queryError) return queryError;
+    for (const [index, query] of body.query.entries()) {
+      if (!query.trim()) return requestValidationError(`query.${index} must be a non-empty string`, `query.${index}`);
+    }
+  } else if (typeof body.query !== "string" || !body.query.trim()) {
+    return requestValidationError("query must be a non-empty string or array of strings", "query");
+  }
+
+  for (const field of ["max_num_results", "limit"]) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    if (
+      !Number.isInteger(body[field])
+      || body[field] < 1
+      || body[field] > OPENAI_FILE_SEARCH_MAX_RESULTS
+    ) {
+      return requestValidationError(
+        `${field} must be an integer between 1 and ${OPENAI_FILE_SEARCH_MAX_RESULTS}`,
+        field,
+      );
+    }
+  }
+
+  for (const field of ["ranking_options", "rankingOptions"]) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    const rankingError = validateOpenAIFileSearchRankingOptions(body[field], field);
+    if (rankingError) return rankingError;
+  }
+
+  for (const field of ["filters", "filter", "attribute_filter", "attributeFilter"]) {
+    if (!Object.prototype.hasOwnProperty.call(body, field)) continue;
+    const filterError = validateOpenAIFileSearchFilter(body[field], field);
+    if (filterError) return filterError;
+  }
+  return null;
 }
 
 async function handleSkillCreate(req, res, config, skillStore) {

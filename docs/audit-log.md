@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Vector Store Search Request Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0
+  `POST /vector_stores/{vector_store_id}/search` endpoint and examples.
+- Tightened local Vector Store search request handling:
+  - `query` is now required for direct `POST /v1/vector_stores/{id}/search`
+    calls and must be a non-empty string or a non-empty array of non-empty
+    strings;
+  - `max_num_results` is now validated at the handler boundary as an integer
+    from 1 through 50;
+  - the local compatibility alias `limit` is retained and validated with the
+    same 1 through 50 range;
+  - `ranking_options` and compatibility alias `rankingOptions` are now
+    validated before local search normalization;
+  - OpenAI-style filters and compatibility aliases `filter`,
+    `attribute_filter`, and `attributeFilter` are now validated before local
+    search normalization;
+  - local search validation errors are returned as structured OpenAI-style
+    HTTP 400 JSON instead of relying on the generic compatibility error type.
+- Regression coverage updated:
+  - direct Vector Store search tests now assert exact JSON error bodies for
+    missing `query`, invalid compound filters, invalid `max_num_results`, and
+    invalid `ranking_options.score_threshold`;
+  - existing local file_search success, metadata filter, hybrid ranking, and
+    Responses `file_search_call` projection coverage remains intact.
+- Documentation updated:
+  - compatibility matrix now records required search `query` and structured
+    OpenAI-style 400s for invalid search request fields.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned HTTP
+    200 with `ok:true`.
+  - Public Vector Store search smoke created one temporary local file and one
+    temporary vector store; `POST /v1/vector_stores/{id}/search` returned the
+    attached file for a matching query and metadata filter.
+  - Public missing-`query` smoke returned HTTP 400 with
+    `type:"invalid_request_error"`, `code:"invalid_request_parameter"`, and
+    `param:"query"`.
+  - Public invalid `ranking_options.score_threshold` smoke returned HTTP 400
+    with `type:"invalid_request_error"`, `code:"invalid_request_parameter"`,
+    and `param:"ranking_options.score_threshold"`.
+  - Public smoke cleanup deleted the temporary vector store and temporary file
+    successfully.
+  - Disk guard after deployment: `/` 193G size, 182G used, 11G available,
+    95% used; repo `state/` 41M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Vector Store File List Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 list schemas for:
