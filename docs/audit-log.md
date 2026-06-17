@@ -42,6 +42,15 @@
   - `npm run secret-scan` passed.
   - Disk guard before deployment: `/` 193G size, 181G used, 12G available,
     94% used.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images generation smokes verified `gpt-image-1` with
+    `response_format:"url"` and `dall-e-2` with `stream:true` both return HTTP
+    400 with `invalid_request_parameter`.
 - Secret handling:
   - no API keys, account credentials, bearer tokens, provider headers, local
     deployment env files, generated image bytes, provider image responses, or
