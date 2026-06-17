@@ -23829,6 +23829,76 @@ test("Organization projects manage local service accounts and redacted API keys"
     assert.equal(apiKeyDelete.status, 400);
     assert.equal((await apiKeyDelete.json()).error.code, "service_account_api_key_delete_not_supported");
 
+    const secondServiceAccountResponse = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bridge Service Account Second", role: "member" }),
+    });
+    assert.equal(secondServiceAccountResponse.status, 200);
+    const secondServiceAccount = await secondServiceAccountResponse.json();
+    assert.match(secondServiceAccount.id, /^svc_acct_/);
+
+    const serviceAccountsLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1`);
+    assert.equal(serviceAccountsLimit.status, 200);
+    const serviceAccountsLimitJson = await serviceAccountsLimit.json();
+    assert.equal(serviceAccountsLimitJson.object, "list");
+    assert.equal(serviceAccountsLimitJson.data.length, 1);
+    assert.equal(serviceAccountsLimitJson.has_more, true);
+    const firstListedServiceAccountId = serviceAccountsLimitJson.data[0].id;
+    const nextListedServiceAccountId = [serviceAccount.id, secondServiceAccount.id]
+      .find((serviceAccountId) => serviceAccountId !== firstListedServiceAccountId);
+    assert.ok(nextListedServiceAccountId);
+
+    const serviceAccountsOrderIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&order=desc`);
+    assert.equal(serviceAccountsOrderIgnored.status, 200);
+    const serviceAccountsOrderIgnoredJson = await serviceAccountsOrderIgnored.json();
+    assert.equal(serviceAccountsOrderIgnoredJson.data[0].id, firstListedServiceAccountId);
+
+    const serviceAccountsAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&after=${encodeURIComponent(firstListedServiceAccountId)}`);
+    assert.equal(serviceAccountsAfter.status, 200);
+    const serviceAccountsAfterJson = await serviceAccountsAfter.json();
+    assert.equal(serviceAccountsAfterJson.data.length, 1);
+    assert.equal(serviceAccountsAfterJson.data[0].id, nextListedServiceAccountId);
+
+    const serviceAccountsAll = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=10`);
+    assert.equal(serviceAccountsAll.status, 200);
+    const serviceAccountsAllJson = await serviceAccountsAll.json();
+    assert.equal(serviceAccountsAllJson.data.length, 2);
+
+    const serviceAccountsBeforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=10&before=${encodeURIComponent(nextListedServiceAccountId)}`);
+    assert.equal(serviceAccountsBeforeIgnored.status, 200);
+    const serviceAccountsBeforeIgnoredJson = await serviceAccountsBeforeIgnored.json();
+    assert.deepEqual(
+      serviceAccountsBeforeIgnoredJson.data.map((item) => item.id),
+      serviceAccountsAllJson.data.map((item) => item.id),
+    );
+
+    const invalidServiceAccountLimitZero = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=0`);
+    assert.equal(invalidServiceAccountLimitZero.status, 400);
+    assert.equal((await invalidServiceAccountLimitZero.json()).error.param, "limit");
+
+    const invalidServiceAccountLimitHigh = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=101`);
+    assert.equal(invalidServiceAccountLimitHigh.status, 400);
+    assert.equal((await invalidServiceAccountLimitHigh.json()).error.param, "limit");
+
+    const repeatedServiceAccountLimit = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&limit=2`);
+    assert.equal(repeatedServiceAccountLimit.status, 400);
+    assert.equal((await repeatedServiceAccountLimit.json()).error.param, "limit");
+
+    const repeatedServiceAccountAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?after=${encodeURIComponent(firstListedServiceAccountId)}&after=${encodeURIComponent(nextListedServiceAccountId)}`);
+    assert.equal(repeatedServiceAccountAfter.status, 400);
+    assert.equal((await repeatedServiceAccountAfter.json()).error.param, "after");
+
+    const deletedSecondServiceAccount = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts/${secondServiceAccount.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(deletedSecondServiceAccount.status, 200);
+    assert.deepEqual(await deletedSecondServiceAccount.json(), {
+      object: "organization.project.service_account.deleted",
+      id: secondServiceAccount.id,
+      deleted: true,
+    });
+
     const updatedServiceAccount = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts/${serviceAccount.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },

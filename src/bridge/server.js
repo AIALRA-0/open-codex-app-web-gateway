@@ -16267,8 +16267,19 @@ async function handleOrganizationProjectServiceAccountCreate(req, res, organizat
 }
 
 function handleOrganizationProjectServiceAccountsList(res, organizationAdminStore, projectId, url) {
+  const queryError = validateOpenAIProjectServiceAccountsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const serviceAccounts = organizationAdminStore.listProjectServiceAccounts(projectId);
-  sendJson(res, 200, paginateListWithDefaultOrder(serviceAccounts, url, "asc", 20, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    serviceAccounts,
+    officialProjectServiceAccountsListPaginationUrl(url),
+    "asc",
+    20,
+    100,
+  ));
 }
 
 function handleOrganizationProjectServiceAccountGet(res, organizationAdminStore, projectId, serviceAccountId) {
@@ -16476,6 +16487,21 @@ async function handleOrganizationProjectRateLimitUpdate(req, res, organizationAd
     });
   }
   sendJson(res, 200, organizationAdminStore.updateProjectRateLimit(projectId, rateLimitId, body));
+}
+
+function validateOpenAIProjectServiceAccountsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialProjectServiceAccountsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function validateOpenAIProjectRateLimitsListQuery(url) {
