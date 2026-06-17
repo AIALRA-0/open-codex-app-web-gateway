@@ -15680,6 +15680,140 @@ test("POST /v1/images/edits accepts JSON image_url and mask inputs", async () =>
   });
 });
 
+test("POST /v1/images/edits validates model, prompt, and JSON reference boundaries", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image edit boundaries");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const validImage = { image_url: `data:image/png;base64,${sourcePng}` };
+    for (const testCase of [
+      {
+        body: { model: { id: "gpt-image-1" }, prompt: "Edit a compact badge.", images: [validImage] },
+        message: "model must be a string",
+        param: "model",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "x".repeat(1001), images: [validImage] },
+        message: "prompt must be at most 1000 characters for dall-e-2",
+        param: "prompt",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "x".repeat(32001), images: [validImage] },
+        message: "prompt must be at most 32000 characters for GPT image models",
+        param: "prompt",
+      },
+      {
+        body: { model: "dall-e-2", prompt: "Edit a compact badge.", images: [validImage] },
+        message: "JSON image edit requests only support GPT image models",
+        param: "model",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: validImage },
+        message: "images must be an array",
+        param: "images",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: Array.from({ length: 17 }, () => validImage) },
+        message: "images must contain between 1 and 16 items",
+        param: "images",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [{ image_url: validImage.image_url, file_id: "file_both" }] },
+        message: "images.0 must provide exactly one of image_url or file_id",
+        param: "images.0",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [{}] },
+        message: "images.0 must provide exactly one of image_url or file_id",
+        param: "images.0",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [validImage], response_format: "url" },
+        message: "response_format is not supported for GPT image models",
+        param: "response_format",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [validImage], quality: "standard" },
+        message: "quality must be one of: auto, high, medium, low for GPT image models",
+        param: "quality",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [validImage], size: "512x512" },
+        message: "size must be one of: auto, 1024x1024, 1536x1024, 1024x1536 for GPT image edit models",
+        param: "size",
+      },
+      {
+        body: { model: "gpt-image-1", prompt: "Edit a compact badge.", images: [validImage], background: "transparent", output_format: "jpeg" },
+        message: "background transparent requires output_format png or webp",
+        param: "background",
+      },
+    ]) {
+      const response = await fetch(`${baseUrl}/v1/images/edits`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.param);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
+test("POST /v1/images/edits validates dall-e-2 multipart image boundaries", async () => {
+  const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+  const nonSquarePng = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAADklEQVR4nGP4z8DwH4QBEfcD/ePF9e8AAAAASUVORK5CYII=";
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid dall-e-2 direct image edits");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertMultipartEditError = async (form, message, param = "image") => {
+      const response = await fetch(`${baseUrl}/v1/images/edits`, {
+        method: "POST",
+        body: form,
+      });
+      assert.equal(response.status, 400, param);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message,
+          type: "invalid_request_error",
+          param,
+          code: "invalid_request_parameter",
+        },
+      }, param);
+    };
+
+    const twoImagesForm = new FormData();
+    twoImagesForm.append("model", "dall-e-2");
+    twoImagesForm.append("prompt", "Edit one compact badge.");
+    twoImagesForm.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source-a.png");
+    twoImagesForm.append("image", new Blob([Buffer.from(sourcePng, "base64")], { type: "image/png" }), "source-b.png");
+    await assertMultipartEditError(twoImagesForm, "dall-e-2 image edits require exactly one input image");
+
+    const jpegForm = new FormData();
+    jpegForm.append("model", "dall-e-2");
+    jpegForm.append("prompt", "Edit one compact badge.");
+    jpegForm.append("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }), "source.jpg");
+    await assertMultipartEditError(jpegForm, "image must be a PNG file for dall-e-2 image edits");
+
+    const nonSquareForm = new FormData();
+    nonSquareForm.append("model", "dall-e-2");
+    nonSquareForm.append("prompt", "Edit one compact badge.");
+    nonSquareForm.append("image", new Blob([Buffer.from(nonSquarePng, "base64")], { type: "image/png" }), "wide.png");
+    await assertMultipartEditError(nonSquareForm, "image must be square for dall-e-2 image edits");
+
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/variations accepts multipart placeholder requests", async () => {
   const sourcePng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async () => {

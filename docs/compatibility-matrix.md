@@ -1956,7 +1956,21 @@ available and synthesizing compatible events for placeholder or JSON fallback
 responses. Direct edit validates `background`, `input_fidelity`, `moderation`,
 `output_compression`, `output_format`, `quality`, `response_format`, `stream`
 (including multipart-compatible boolean strings), and `partial_images` before
-image reference resolution or provider forwarding. The direct
+image reference resolution or provider forwarding. It also validates `model` as
+a string, rejects over-limit prompts instead of silently truncating them
+(`dall-e-2` 1000 characters, GPT image models 32000 characters), rejects JSON
+edit requests for `dall-e-2` because official JSON edit bodies are GPT-image
+only, validates official JSON `images[]` as 1 to 16 references with exactly one
+of `image_url` or `file_id`, rejects `response_format` for GPT image models,
+constrains GPT edit `quality` to `auto`, `high`, `medium`, or `low`, constrains
+non-`gpt-image-2` GPT edit sizes to `auto`, `1024x1024`, `1536x1024`, or
+`1024x1536`, and requires transparent backgrounds to use `png` or `webp`
+output. Multipart `dall-e-2` edits are validated after local image resolution:
+they require exactly one square PNG image under 4MB, and masks must be valid
+PNG files under 4MB with the same dimensions as the source image. Compatibility
+aliases such as JSON `image` / `image_url` remain available for Batch and local
+test harnesses, but official `images[]` entries follow the stricter reference
+shape. The direct
 `POST /v1/images/variations` endpoint follows the
 official Images variation operation shape: multipart requests accept one
 `image` file plus `model`, `n`, `size`, `response_format`, and `user`, default

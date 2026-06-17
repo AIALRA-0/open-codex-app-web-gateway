@@ -1,5 +1,60 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Edit Model and Input Bounds
+
+- Rechecked official OpenAI Images API references:
+  - `POST /v1/images/edits` supports multipart image edits for GPT image
+    models and `dall-e-2`, while JSON edit bodies are documented for GPT image
+    models only;
+  - multipart edit inputs allow up to 16 images for GPT image models, but
+    `dall-e-2` accepts exactly one square PNG image under 4MB;
+  - edit prompts are capped at 1000 characters for `dall-e-2` and 32000
+    characters for GPT image models;
+  - JSON `images[]` references must contain 1 to 16 items, and each reference
+    provides exactly one of `image_url` or `file_id`;
+  - GPT image edit options document `quality` values `auto`, `high`, `medium`,
+    and `low`, standard GPT edit sizes, and transparent backgrounds require
+    `png` or `webp` output.
+- Tightened local bridge behavior:
+  - direct `POST /v1/images/edits` now rejects non-string `model` values and
+    over-limit prompts before image resolution, placeholder generation,
+    provider forwarding, streaming event synthesis, or usage recording;
+  - JSON edit requests for `dall-e-2` fail closed, official JSON `images[]`
+    validates array length and `image_url` / `file_id` exclusivity, and GPT
+    image edit option boundaries are checked locally;
+  - multipart `dall-e-2` edits now require exactly one square PNG input image
+    under 4MB, and mask images must be PNG files under 4MB with matching
+    dimensions;
+  - existing JSON compatibility aliases remain available for Batch/local test
+    harnesses while official `images[]` entries use the stricter shape.
+- Regression coverage updated:
+  - added direct edit negative tests for non-string `model`, over-limit
+    `dall-e-2` and GPT prompts, JSON `dall-e-2`, invalid `images[]` shapes,
+    GPT-only option conflicts, invalid GPT edit quality/size, transparent JPEG
+    output, and `dall-e-2` multipart image contract failures;
+  - verified invalid requests return `invalid_request_parameter` and do not call
+    the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records direct edit model/prompt/JSON reference
+    boundaries, GPT option constraints, and multipart `dall-e-2` image
+    requirements.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/images" test/server.test.js`
+    passed 15/15 matched tests.
+  - Full `node --test test/*.test.js` passed 387/387 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Disk guard before deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Generation Model Option Bounds
 
 - Rechecked official OpenAI Images API references:

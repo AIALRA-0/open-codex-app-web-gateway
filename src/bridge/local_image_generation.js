@@ -34,6 +34,8 @@ const IMAGE_API_DALL_E_3_QUALITY_VALUES = ["standard", "hd"];
 const IMAGE_API_GPT_QUALITY_VALUES = ["auto", "high", "medium", "low"];
 const IMAGE_API_DALL_E_2_SIZE_VALUES = ["256x256", "512x512", "1024x1024"];
 const IMAGE_API_DALL_E_3_SIZE_VALUES = ["1024x1024", "1792x1024", "1024x1792"];
+const IMAGE_API_EDIT_GPT_SIZE_VALUES = ["auto", "1024x1024", "1536x1024", "1024x1536"];
+const MAX_IMAGES_EDIT_INPUT_IMAGES = 16;
 
 function isImageGenerationTool(tool) {
   return !!tool && typeof tool === "object" && IMAGE_GENERATION_TOOL_TYPES.has(tool.type);
@@ -723,6 +725,177 @@ function validateImagesGenerationModelOptionConstraints({ model, options = {}, p
   }
 }
 
+function validateImagesEditModelConstraints({
+  editInput = null,
+  jsonRequest = false,
+  model,
+  options = {},
+  partialImagesRequested = false,
+  prompt,
+  request = {},
+}) {
+  const maxPrompt = isDallE2ImageModel(model)
+    ? MAX_DALL_E_2_PROMPT_CHARS
+    : MAX_GPT_IMAGE_PROMPT_CHARS;
+  if (prompt.length > maxPrompt) {
+    throw imageApiError(`prompt must be at most ${maxPrompt} characters for ${isDallE2ImageModel(model) ? "dall-e-2" : "GPT image models"}`, {
+      code: "invalid_request_parameter",
+      param: "prompt",
+    });
+  }
+
+  validateImagesEditJsonReferences(request);
+
+  if (jsonRequest && isDallE2ImageModel(model)) {
+    throw imageApiError("JSON image edit requests only support GPT image models", {
+      code: "invalid_request_parameter",
+      param: "model",
+    });
+  }
+
+  if (isDallE2ImageModel(model)) {
+    for (const key of ["background", "input_fidelity", "moderation", "output_compression", "output_format"]) {
+      if (options[key] !== undefined) {
+        throw unsupportedImageModelOption(key, "GPT image models");
+      }
+    }
+    if (partialImagesRequested) throw unsupportedImageModelOption("partial_images", "GPT image models");
+  }
+
+  if (isKnownGptImageModel(model)) {
+    if (options.response_format !== undefined) {
+      throw imageApiError("response_format is not supported for GPT image models", {
+        code: "invalid_request_parameter",
+        param: "response_format",
+      });
+    }
+    validateImageOptionValue("quality", options.quality, IMAGE_API_GPT_QUALITY_VALUES, "GPT image models");
+    if (!isGptImage2Model(model)) {
+      validateImageOptionValue("size", options.size, IMAGE_API_EDIT_GPT_SIZE_VALUES, "GPT image edit models");
+    }
+  }
+
+  if (options.background === "transparent"
+    && options.output_format !== undefined
+    && !["png", "webp"].includes(options.output_format)) {
+    throw imageApiError("background transparent requires output_format png or webp", {
+      code: "invalid_request_parameter",
+      param: "background",
+    });
+  }
+
+  if (editInput) validateImagesEditInputModelConstraints({ editInput, model });
+}
+
+function validateImagesEditJsonReferences(request = {}) {
+  if (request.images !== undefined) {
+    if (!Array.isArray(request.images)) {
+      throw imageApiError("images must be an array", {
+        code: "invalid_request_parameter",
+        param: "images",
+      });
+    }
+    if (request.images.length < 1 || request.images.length > MAX_IMAGES_EDIT_INPUT_IMAGES) {
+      throw imageApiError("images must contain between 1 and 16 items", {
+        code: "invalid_request_parameter",
+        param: "images",
+      });
+    }
+    request.images.forEach((item, index) => validateImageEditRefParam(item, `images.${index}`));
+  }
+  if (isPlainObject(request.mask)) validateImageEditRefParam(request.mask, "mask");
+}
+
+function validateImageEditRefParam(value, param) {
+  if (!isPlainObject(value)) {
+    throw imageApiError(`${param} must be an object`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  const hasImageUrl = value.image_url !== undefined && value.image_url !== null && value.image_url !== "";
+  const hasFileId = value.file_id !== undefined && value.file_id !== null && value.file_id !== "";
+  if (hasImageUrl === hasFileId) {
+    throw imageApiError(`${param} must provide exactly one of image_url or file_id`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  if (hasImageUrl && typeof value.image_url !== "string") {
+    throw imageApiError(`${param}.image_url must be a string`, {
+      code: "invalid_request_parameter",
+      param: `${param}.image_url`,
+    });
+  }
+  if (hasFileId && typeof value.file_id !== "string") {
+    throw imageApiError(`${param}.file_id must be a string`, {
+      code: "invalid_request_parameter",
+      param: `${param}.file_id`,
+    });
+  }
+}
+
+function validateImagesEditInputModelConstraints({ editInput = {}, model }) {
+  const imageCount = editInput.images?.length || 0;
+  if (imageCount > MAX_IMAGES_EDIT_INPUT_IMAGES) {
+    throw imageApiError("image edit accepts at most 16 input images", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+
+  if (!isDallE2ImageModel(model)) return;
+
+  if (imageCount !== 1) {
+    throw imageApiError("dall-e-2 image edits require exactly one input image", {
+      code: "invalid_request_parameter",
+      param: "image",
+    });
+  }
+  validateDallE2EditImageInput(editInput.images[0], "image");
+  if (editInput.mask) validateDallE2EditImageInput(editInput.mask, "mask");
+  if (editInput.mask) {
+    const imageDimensions = pngDimensions(editInput.images[0].buffer);
+    const maskDimensions = pngDimensions(editInput.mask.buffer);
+    if (imageDimensions
+      && maskDimensions
+      && (imageDimensions.width !== maskDimensions.width || imageDimensions.height !== maskDimensions.height)) {
+      throw imageApiError("mask must have the same dimensions as image for dall-e-2 image edits", {
+        code: "invalid_request_parameter",
+        param: "mask",
+      });
+    }
+  }
+}
+
+function validateDallE2EditImageInput(image = {}, param) {
+  if (image.media_type !== "image/png") {
+    throw imageApiError(`${param} must be a PNG file for dall-e-2 image edits`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  if (!Buffer.isBuffer(image.buffer) || !image.buffer.length || !pngDimensions(image.buffer)) {
+    throw imageApiError(`${param} must be a valid PNG file for dall-e-2 image edits`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  if (image.buffer.length > MAX_IMAGE_VARIATION_BYTES) {
+    throw imageApiError(`${param} must be less than 4MB for dall-e-2 image edits`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  const dimensions = pngDimensions(image.buffer);
+  if (param === "image" && dimensions.width !== dimensions.height) {
+    throw imageApiError("image must be square for dall-e-2 image edits", {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+}
+
 function unsupportedImageModelOption(param, modelLabel) {
   return imageApiError(`${param} is only supported for ${modelLabel}`, {
     code: "invalid_request_parameter",
@@ -738,6 +911,11 @@ function validateImageOptionValue(param, value, allowedValues, modelLabel) {
       param,
     });
   }
+}
+
+function isGptImage2Model(model) {
+  const normalized = normalizeImageModelName(model);
+  return normalized === "gpt-image-2" || normalized.startsWith("gpt-image-2-");
 }
 
 function normalizeImagesVariationOptions(request = {}) {
@@ -1505,10 +1683,20 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
 
   const n = normalizeImagesGenerationN(request.n);
   const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
-  const prompt = truncateForPrompt(request.prompt.trim(), 32000);
-  const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
+  const prompt = request.prompt.trim();
+  const model = normalizeImageApiModel(request.model, config.imageGenerationModel || "gpt-image-2");
   const requestOptions = normalizeImagesEditOptions(request);
   const stream = normalizeImageApiFormBoolean(request.stream);
+  const jsonRequest = isDirectJsonEditRequest(request);
+
+  validateImagesEditModelConstraints({
+    jsonRequest,
+    model,
+    options: requestOptions,
+    partialImagesRequested: request.partial_images !== undefined,
+    prompt,
+    request,
+  });
 
   const editInput = await resolveDirectImagesEditInput({ request, config, options });
   if (!editInput.images.length) {
@@ -1523,6 +1711,15 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
       param: "mask",
     });
   }
+  validateImagesEditModelConstraints({
+    editInput,
+    jsonRequest,
+    model,
+    options: requestOptions,
+    partialImagesRequested: request.partial_images !== undefined,
+    prompt,
+    request,
+  });
 
   return {
     model,
@@ -1747,6 +1944,11 @@ function directEditImageFiles(request = {}) {
 
 function directEditMaskFile(request = {}) {
   return request.mask_file || null;
+}
+
+function isDirectJsonEditRequest(request = {}) {
+  return directEditImageFiles(request).length === 0
+    && (request.images !== undefined || request.image !== undefined || request.image_url !== undefined);
 }
 
 function directEditImageParts(request = {}) {
