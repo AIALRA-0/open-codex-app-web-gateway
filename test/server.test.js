@@ -32563,9 +32563,12 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
         object: "list",
         data: [{
           id: "listed-model",
-          object: "model",
           created: 456,
           owned_by: "provider-list",
+        }, {
+          id: "org-owned-model",
+          created: "not-a-number",
+          owned_by_organization: "provider-org",
         }],
       }));
       return;
@@ -32575,6 +32578,27 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
     res.end(JSON.stringify({ error: { message: "not found" } }));
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const modelList = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(modelList.status, 200);
+    assert.deepEqual(await modelList.json(), {
+      object: "list",
+      data: [
+        {
+          id: "listed-model",
+          object: "model",
+          created: 456,
+          owned_by: "provider-list",
+        },
+        {
+          id: "org-owned-model",
+          object: "model",
+          created: 0,
+          owned_by_organization: "provider-org",
+          owned_by: "provider-org",
+        },
+      ],
+    });
+
     const direct = await fetch(`${baseUrl}/v1/models/direct-model`);
     assert.equal(direct.status, 200);
     assert.deepEqual(await direct.json(), {
@@ -32602,10 +32626,29 @@ test("GET /v1/models/{model} proxies direct retrieval and falls back to model li
       owned_by: "compatibility-bridge",
     });
 
-    assert.equal(requests[0].req.url, "/models/direct-model");
-    assert.equal(requests[1].req.url, "/models/listed-model");
-    assert.equal(requests[2].req.url, "/models");
-    assert.equal(requests[3].req.url, "/models/omni-moderation-latest");
-    assert.equal(requests[4].req.url, "/models");
+    assert.equal(requests[0].req.url, "/models");
+    assert.equal(requests[1].req.url, "/models/direct-model");
+    assert.equal(requests[2].req.url, "/models/listed-model");
+    assert.equal(requests[3].req.url, "/models");
+    assert.equal(requests[4].req.url, "/models/omni-moderation-latest");
+    assert.equal(requests[5].req.url, "/models");
+  });
+});
+
+test("GET /v1/models falls back to local bridge catalog when upstream list is unavailable", async () => {
+  await withMockProvider(async (_req, res) => {
+    res.writeHead(200, { "content-type": "text/html" });
+    res.end("<html>not a model list</html>");
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const response = await fetch(`${baseUrl}/v1/models`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.object, "list");
+    const ids = json.data.map((model) => model.id);
+    assert.ok(ids.includes("mock-model"));
+    assert.ok(ids.includes("hashed-semantic-256"));
+    assert.ok(ids.includes("omni-moderation-latest"));
+    assert.ok(json.data.every((model) => model.object === "model"));
   });
 });

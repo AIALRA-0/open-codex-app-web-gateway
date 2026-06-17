@@ -11585,14 +11585,15 @@ async function handleModels(req, res, config) {
   if (config.providerApiKey) {
     try {
       const upstream = await fetchProviderGet(config, config.modelsPath, req.headers);
-      if (upstream.ok) {
-        const text = await upstream.text();
-        res.writeHead(200, {
-          "content-type": upstream.headers.get("content-type") || "application/json; charset=utf-8",
-          "cache-control": "no-store",
-        });
-        res.end(text);
-        return;
+      if (upstream.ok && isJsonResponse(upstream)) {
+        const body = parseJsonOrNull(await upstream.text());
+        const normalized = normalizeModelListResponse(body);
+        if (normalized) {
+          sendJson(res, 200, normalized);
+          return;
+        }
+      } else if (upstream.ok) {
+        await upstream.text();
       }
     } catch {
       // Fall through to local model catalog.
@@ -11603,6 +11604,18 @@ async function handleModels(req, res, config) {
     object: "list",
     data: localModelCatalog(config),
   });
+}
+
+function normalizeModelListResponse(body) {
+  const source = Array.isArray(body) ? body : (Array.isArray(body?.data) ? body.data : null);
+  if (!source) return null;
+  const data = source.map((model) => normalizeModelObject(model)).filter(Boolean);
+  if (!data.length && source.length) return null;
+  return {
+    ...(isPlainObject(body) && !Array.isArray(body) ? body : {}),
+    object: "list",
+    data,
+  };
 }
 
 async function handleModelGet(req, res, config, modelId) {
@@ -11650,8 +11663,9 @@ async function tryFindListedModel(config, headers, modelId) {
     const upstream = await fetchProviderGet(config, config.modelsPath, headers);
     if (!upstream.ok || !isJsonResponse(upstream)) return null;
     const body = parseJsonOrNull(await upstream.text());
-    const found = Array.isArray(body?.data)
-      ? body.data.find((model) => model?.id === modelId)
+    const normalized = normalizeModelListResponse(body);
+    const found = Array.isArray(normalized?.data)
+      ? normalized.data.find((model) => model?.id === modelId)
       : null;
     return normalizeModelObject(found);
   } catch {

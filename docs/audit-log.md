@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Models List Normalization
+
+- Rechecked the current official OpenAI Models OpenAPI paths:
+  - `GET /models`;
+  - `GET /models/{model}`;
+  - `DELETE /models/{model}` for fine-tuned models.
+- Confirmed `GET /v1/models` returns an OpenAI-style list object containing
+  Model objects with `id`, `object:"model"`, `created`, and `owned_by`.
+- Tightened local Models behavior:
+  - upstream `GET /v1/models` proxy responses are now accepted only when they
+    are JSON model lists;
+  - proxied model list entries are normalized with the same Model-object
+    projector used by `GET /v1/models/{model}`;
+  - invalid, empty-invalid, or non-JSON upstream list responses fall back to
+    the local bridge catalog instead of leaking arbitrary provider bodies to
+    OpenAI SDK callers.
+- Regression coverage updated:
+  - Models tests now cover `GET /v1/models` proxy normalization and local
+    fallback when upstream returns non-JSON content.
+- Documentation updated:
+  - compatibility matrix now records normalized upstream model-list proxying
+    and fallback to configured local bridge model IDs.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "GET /v1/models" test/server.test.js`
+    passed 2/2 tests.
+  - `node --test test/*.test.js` passed 370/370 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Models smoke confirmed
+    `https://opencodexapp.aialra.online/v1/models` returned HTTP 200
+    `application/json`, `object:"list"`, two normalized model objects, and
+    first model `deepseek-v4-flash`.
+  - Public Models smoke confirmed
+    `GET /v1/models/deepseek-v4-flash` returned a normalized
+    `object:"model"` response.
+  - Disk guard after deployment: `/` 193G size, 177G used, 16G available,
+    92% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Files Create Expiration Validation
 
 - Rechecked the current official OpenAI Files create OpenAPI path and examples.

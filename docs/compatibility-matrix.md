@@ -834,7 +834,7 @@ OpenAI's current endpoint list includes `GET /v1/models` and
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `GET /v1/models` | Implemented | Proxies upstream when available, otherwise returns local bridge models for the configured default Chat provider model, local embeddings model, and local moderations model |
+| `GET /v1/models` | Implemented | Proxies and normalizes upstream JSON model lists when available; invalid or non-JSON upstream list responses fall back to local bridge models for the configured default Chat provider model, local embeddings model, local moderations model, and local audio models |
 | `GET /v1/models/{model}` | Implemented | Proxies upstream single-model retrieval when supported; otherwise searches upstream model list, then falls back to local bridge model objects for the configured default, embeddings, or moderations model IDs |
 
 ## Embeddings Endpoint Coverage
