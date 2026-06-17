@@ -438,6 +438,7 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
     assert.match(content, /tool-context-patch-output-ok/);
     assert.match(content, /Prior Responses tool context \(image_generation_call\)/);
     assert.match(content, /base64_image\(96 chars\)/);
+    assert.match(content, /prior-output-with-citation-ok/);
     assert.doesNotMatch(content, /\[web_search_call:/);
     assert.doesNotMatch(content, /B{64}/);
 
@@ -513,6 +514,30 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
             id: "ig_context",
             status: "completed",
             result: "B".repeat(96),
+          },
+          {
+            role: "assistant",
+            content: [{
+              type: "output_text",
+              text: "prior-output-with-citation-ok",
+              annotations: [{
+                type: "url_citation",
+                url: "https://example.test/source",
+                start_index: 0,
+                end_index: 5,
+                title: "Source",
+              }],
+              logprobs: [{
+                token: "prior",
+                logprob: -0.1,
+                bytes: [112, 114, 105, 111, 114],
+                top_logprobs: [{
+                  token: "prior",
+                  logprob: -0.1,
+                  bytes: [112, 114, 105, 111, 114],
+                }],
+              }],
+            }],
           },
           { role: "user", content: "Use the tool context." },
         ],
@@ -918,6 +943,80 @@ test("Responses endpoints validate input image and file detail before provider c
         }],
         param: "input.0.content.0.annotations",
         message: "input.0.content.0.annotations must be an array or null",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "assistant",
+          content: [{ type: "output_text", text: "bad annotation item", annotations: ["citation"] }],
+        }],
+        param: "input.0.content.0.annotations.0",
+        message: "input.0.content.0.annotations.0 must be an object",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "assistant",
+          content: [{
+            type: "output_text",
+            text: "bad annotation uri",
+            annotations: [{
+              type: "url_citation",
+              url: "not a uri",
+              start_index: 0,
+              end_index: 3,
+              title: "Bad URL",
+            }],
+          }],
+        }],
+        param: "input.0.content.0.annotations.0.url",
+        message: "input.0.content.0.annotations.0.url must be a valid URI",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          role: "assistant",
+          content: [{
+            type: "output_text",
+            text: "bad annotation integer",
+            annotations: [{ type: "file_path", file_id: "file_test" }],
+          }],
+        }],
+        param: "input.0.content.0.annotations.0.index",
+        message: "input.0.content.0.annotations.0.index must be an integer",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "assistant",
+          content: [{
+            type: "output_text",
+            text: "bad logprobs item",
+            annotations: [],
+            logprobs: [{ token: "yes", logprob: "-0.1", bytes: [121], top_logprobs: [] }],
+          }],
+        }],
+        param: "input.0.content.0.logprobs.0.logprob",
+        message: "input.0.content.0.logprobs.0.logprob must be a number",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "assistant",
+          content: [{
+            type: "output_text",
+            text: "bad top logprobs bytes",
+            annotations: [],
+            logprobs: [{
+              token: "yes",
+              logprob: -0.1,
+              bytes: [121],
+              top_logprobs: [{ token: "yes", logprob: -0.1 }],
+            }],
+          }],
+        }],
+        param: "input.0.content.0.logprobs.0.top_logprobs.0.bytes",
+        message: "input.0.content.0.logprobs.0.top_logprobs.0.bytes must be an array",
       },
       {
         endpoint: "/v1/responses",

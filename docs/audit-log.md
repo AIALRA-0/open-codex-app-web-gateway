@@ -1,5 +1,55 @@
 # Audit Log
 
+## 2026-06-18 - Responses output text replay annotation/logprob validation
+
+- Used the current official OpenAI OpenAPI 2.3.0 Responses schemas to tighten
+  the next prior-output replay compatibility target:
+  - `OutputTextContent.annotations[]` items are typed annotation objects:
+    `file_citation`, `url_citation`, `container_file_citation`, or
+    `file_path`;
+  - citation/file-path annotation fields use required string/integer fields,
+    and URL citations require valid URI strings;
+  - `OutputTextContent.logprobs[]` items require `token`, numeric `logprob`,
+    integer `bytes[]`, and nested `top_logprobs[]` entries with the same
+    token/logprob/bytes shape.
+- Closed the validation gap without adding dependencies:
+  - prior assistant `output_text` replay still accepts omitted or nullable
+    `annotations` / `logprobs` to preserve existing stored-response
+    compatibility;
+  - when clients provide those arrays, malformed annotation or logprob elements
+    are rejected before any upstream Chat provider call;
+  - legal prior `output_text` replay with a `url_citation` annotation and
+    token logprob metadata continues to map into Chat-readable context.
+- Updated docs:
+  - compatibility matrix now records official annotation item and token-logprob
+    element validation for prior `message` output replay.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - Focused `node --test --test-name-pattern "replays Responses tool items|input image and file detail" test/server.test.js`:
+    passed 2/2, covering legal replay plus invalid annotation/logprob elements
+    across `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact`.
+  - Full `node --test test/*.test.js`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    artifacts and selected 3 expired code-benchmark workdirs totaling 26,027
+    bytes for potential cleanup, with zero deletion in dry-run mode.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 12 GiB
+    available at 95% used; repository size was 290 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz`: returned `ok:true`.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with
+    malformed `output_text.logprobs[0].logprob`: returned HTTP 400 with
+    `param:"input.0.content.0.logprobs.0.logprob"` and the official number
+    shape message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses apply patch operation schema validation
 
 - Used the current official OpenAI OpenAPI 2.3.0 request schemas to correct

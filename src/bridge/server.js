@@ -5600,7 +5600,14 @@ function validateOpenAIResponsesMessageContentPart(part, param) {
     }
     const annotationsError = validateOpenAIOptionalArrayItemField(part, param, "annotations", { nullable: true });
     if (annotationsError) return annotationsError;
-    return validateOpenAIOptionalArrayItemField(part, param, "logprobs", { nullable: true });
+    const annotationItemsError = validateOpenAIResponsesOutputTextAnnotations(
+      part.annotations,
+      `${param}.annotations`,
+    );
+    if (annotationItemsError) return annotationItemsError;
+    const logprobsError = validateOpenAIOptionalArrayItemField(part, param, "logprobs", { nullable: true });
+    if (logprobsError) return logprobsError;
+    return validateOpenAIResponsesOutputTextLogprobs(part.logprobs, `${param}.logprobs`);
   }
 
   if (part.type === "refusal" || part.type === "output_refusal") {
@@ -5644,6 +5651,105 @@ function validateOpenAIResponsesMessageAudioContentPart(part, param) {
   }
   if (data == null) {
     return requestValidationError(`${param} requires data, audio_data, file_data, or content_base64`, param);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesOutputTextAnnotations(annotations, param) {
+  if (annotations == null) return null;
+  for (const [index, annotation] of annotations.entries()) {
+    const annotationParam = `${param}.${index}`;
+    if (!isPlainObject(annotation)) {
+      return requestValidationError(`${annotationParam} must be an object`, annotationParam);
+    }
+    if (typeof annotation.type !== "string") {
+      return requestValidationError(`${annotationParam}.type must be a string`, `${annotationParam}.type`);
+    }
+    if (annotation.type === "file_citation") {
+      const fileIdError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "file_id");
+      if (fileIdError) return fileIdError;
+      const indexError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "index");
+      if (indexError) return indexError;
+      const filenameError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "filename");
+      if (filenameError) return filenameError;
+      continue;
+    }
+    if (annotation.type === "url_citation") {
+      const urlError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "url");
+      if (urlError) return urlError;
+      const uriError = validateOpenAIUriString(annotation.url, `${annotationParam}.url`);
+      if (uriError) return uriError;
+      const startError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "start_index");
+      if (startError) return startError;
+      const endError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "end_index");
+      if (endError) return endError;
+      const titleError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "title");
+      if (titleError) return titleError;
+      continue;
+    }
+    if (annotation.type === "container_file_citation") {
+      for (const field of ["container_id", "file_id"]) {
+        const stringError = validateOpenAIRequiredStringItemField(annotation, annotationParam, field);
+        if (stringError) return stringError;
+      }
+      const startError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "start_index");
+      if (startError) return startError;
+      const endError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "end_index");
+      if (endError) return endError;
+      const filenameError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "filename");
+      if (filenameError) return filenameError;
+      continue;
+    }
+    if (annotation.type === "file_path") {
+      const fileIdError = validateOpenAIRequiredStringItemField(annotation, annotationParam, "file_id");
+      if (fileIdError) return fileIdError;
+      const indexError = validateOpenAIRequiredIntegerItemField(annotation, annotationParam, "index");
+      if (indexError) return indexError;
+      continue;
+    }
+    return requestValidationError(
+      `${annotationParam}.type must be one of: file_citation, url_citation, container_file_citation, file_path`,
+      `${annotationParam}.type`,
+    );
+  }
+  return null;
+}
+
+function validateOpenAIResponsesOutputTextLogprobs(logprobs, param) {
+  if (logprobs == null) return null;
+  for (const [index, logprob] of logprobs.entries()) {
+    const logprobParam = `${param}.${index}`;
+    const logprobError = validateOpenAIResponsesOutputTextLogprob(logprob, logprobParam);
+    if (logprobError) return logprobError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesOutputTextLogprob(logprob, param) {
+  if (!isPlainObject(logprob)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  const tokenError = validateOpenAIRequiredStringItemField(logprob, param, "token");
+  if (tokenError) return tokenError;
+  if (typeof logprob.logprob !== "number" || !Number.isFinite(logprob.logprob)) {
+    return requestValidationError(`${param}.logprob must be a number`, `${param}.logprob`);
+  }
+  const bytesError = validateOpenAIRequiredIntegerArrayItemField(logprob, param, "bytes");
+  if (bytesError) return bytesError;
+  const topLogprobsArrayError = validateOpenAIRequiredArrayItemField(logprob, param, "top_logprobs");
+  if (topLogprobsArrayError) return topLogprobsArrayError;
+  for (const [index, topLogprob] of logprob.top_logprobs.entries()) {
+    const topParam = `${param}.top_logprobs.${index}`;
+    if (!isPlainObject(topLogprob)) {
+      return requestValidationError(`${topParam} must be an object`, topParam);
+    }
+    const topTokenError = validateOpenAIRequiredStringItemField(topLogprob, topParam, "token");
+    if (topTokenError) return topTokenError;
+    if (typeof topLogprob.logprob !== "number" || !Number.isFinite(topLogprob.logprob)) {
+      return requestValidationError(`${topParam}.logprob must be a number`, `${topParam}.logprob`);
+    }
+    const topBytesError = validateOpenAIRequiredIntegerArrayItemField(topLogprob, topParam, "bytes");
+    if (topBytesError) return topBytesError;
   }
   return null;
 }
@@ -6338,6 +6444,24 @@ function validateOpenAIOptionalObjectItemField(item, param, field, options = {})
 function validateOpenAIRequiredArrayItemField(item, param, field) {
   if (!Array.isArray(item[field])) {
     return requestValidationError(`${param}.${field} must be an array`, `${param}.${field}`);
+  }
+  return null;
+}
+
+function validateOpenAIRequiredIntegerItemField(item, param, field) {
+  if (!Number.isInteger(item[field])) {
+    return requestValidationError(`${param}.${field} must be an integer`, `${param}.${field}`);
+  }
+  return null;
+}
+
+function validateOpenAIRequiredIntegerArrayItemField(item, param, field) {
+  const arrayError = validateOpenAIRequiredArrayItemField(item, param, field);
+  if (arrayError) return arrayError;
+  for (const [index, value] of item[field].entries()) {
+    if (!Number.isInteger(value)) {
+      return requestValidationError(`${param}.${field}.${index} must be an integer`, `${param}.${field}.${index}`);
+    }
   }
   return null;
 }
