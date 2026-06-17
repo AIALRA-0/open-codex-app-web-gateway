@@ -16877,19 +16877,9 @@ function handleResponseCancel(res, store, responseId, backgroundJobs, url) {
 }
 
 function handleResponseInputItems(res, store, responseId, url) {
-  const includeError = validateOpenAIIncludeQuery(url);
-  if (includeError) {
-    sendError(res, 400, includeError.message, includeError);
-    return;
-  }
-  const orderError = validateOpenAIListOrderQuery(url);
-  if (orderError) {
-    sendError(res, 400, orderError.message, orderError);
-    return;
-  }
-  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
-  if (limitError) {
-    sendError(res, 400, limitError.message, limitError);
+  const queryError = validateOpenAIResponseInputItemsQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
     return;
   }
   const record = store.get(responseId);
@@ -16902,6 +16892,19 @@ function handleResponseInputItems(res, store, responseId, url) {
     ? record.input_items
     : normalizeStoredInputItems(record.request?.input);
   sendJson(res, 200, paginateInputItems(projectInputItemsForIncludes(items, url), url));
+}
+
+function validateOpenAIResponseInputItemsQuery(url) {
+  const includeError = validateOpenAIIncludeQuery(url);
+  if (includeError) return includeError;
+
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
 }
 
 function handleChatCompletionGet(res, store, completionId) {

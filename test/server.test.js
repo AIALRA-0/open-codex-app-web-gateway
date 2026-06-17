@@ -5436,6 +5436,17 @@ test("Responses input_items validate include query and default to descending ord
       });
     }
 
+    const repeatedAfter = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items?after=item_000000&after=item_000001`);
+    assert.equal(repeatedAfter.status, 400);
+    assert.deepEqual(await repeatedAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
     const defaultItems = await fetch(`${baseUrl}/v1/responses/${json.id}/input_items`);
     assert.equal(defaultItems.status, 200);
     const defaultItemsJson = await defaultItems.json();
