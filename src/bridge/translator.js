@@ -335,6 +335,13 @@ function inputItemToChatMessages(item, options = {}) {
     }];
   }
 
+  if (isResponsesToolContextItem(item)) {
+    return [{
+      role: options.responsesToolContextRole || "system",
+      content: responsesToolContextItemToText(item, options),
+    }];
+  }
+
   if (item.type === "computer_call_output") {
     return [{
       role: options.computerOutputRole || "user",
@@ -359,6 +366,184 @@ function inputItemToChatMessages(item, options = {}) {
   }
 
   return [{ role: "user", content: `[${item.type || "item"}:${JSON.stringify(item)}]` }];
+}
+
+const RESPONSES_TOOL_CONTEXT_TYPES = new Set([
+  "file_search_call",
+  "web_search_call",
+  "image_generation_call",
+  "code_interpreter_call",
+  "computer_call",
+  "shell_call",
+  "shell_call_output",
+  "local_shell_call",
+  "local_shell_call_output",
+  "apply_patch_call",
+  "apply_patch_call_output",
+  "mcp_list_tools",
+  "mcp_call",
+  "mcp_approval_request",
+  "mcp_approval_response",
+]);
+
+function isResponsesToolContextItem(item) {
+  return isPlainObject(item) && RESPONSES_TOOL_CONTEXT_TYPES.has(item.type);
+}
+
+function responsesToolContextItemToText(item, options = {}) {
+  const lines = [`Prior Responses tool context (${item.type || "unknown"}):`];
+  appendContextField(lines, "id", item.id);
+  appendContextField(lines, "call_id", item.call_id);
+  appendContextField(lines, "status", item.status);
+  appendContextField(lines, "server_label", item.server_label);
+  appendContextField(lines, "name", item.name);
+  appendContextField(lines, "container_id", item.container_id);
+
+  if (item.type === "file_search_call") appendFileSearchContext(lines, item);
+  else if (item.type === "web_search_call") appendWebSearchContext(lines, item);
+  else if (item.type === "image_generation_call") appendImageGenerationContext(lines, item);
+  else if (item.type === "code_interpreter_call") appendCodeInterpreterContext(lines, item);
+  else if (item.type === "computer_call") appendComputerCallContext(lines, item);
+  else if (item.type === "shell_call" || item.type === "local_shell_call") appendShellCallContext(lines, item);
+  else if (item.type === "shell_call_output" || item.type === "local_shell_call_output") appendShellOutputContext(lines, item);
+  else if (item.type === "apply_patch_call") appendApplyPatchCallContext(lines, item);
+  else if (item.type === "apply_patch_call_output") appendContextField(lines, "output", item.output, 2000);
+  else if (item.type === "mcp_call") appendMcpCallContext(lines, item);
+  else if (item.type === "mcp_list_tools") appendMcpListToolsContext(lines, item);
+  else if (item.type === "mcp_approval_request" || item.type === "mcp_approval_response") appendMcpApprovalContext(lines, item);
+
+  appendContextExtras(lines, item, options);
+  return lines.join("\n");
+}
+
+function appendFileSearchContext(lines, item) {
+  appendContextField(lines, "queries", Array.isArray(item.queries) ? item.queries.join("; ") : item.queries, 1000);
+  if (Array.isArray(item.results)) {
+    lines.push(`results_count: ${item.results.length}`);
+    item.results.slice(0, 5).forEach((result, index) => {
+      if (!isPlainObject(result)) return;
+      const label = result.filename || result.file_id || `result_${index + 1}`;
+      lines.push(`result_${index + 1}: ${truncateText(label, 160)}`);
+      appendContextField(lines, `result_${index + 1}_score`, result.score);
+      appendContextField(lines, `result_${index + 1}_text`, result.text, 1000);
+    });
+  }
+}
+
+function appendWebSearchContext(lines, item) {
+  appendContextField(lines, "action", item.action, 1200);
+  if (Array.isArray(item.results)) {
+    lines.push(`results_count: ${item.results.length}`);
+    item.results.slice(0, 5).forEach((result, index) => {
+      if (!isPlainObject(result)) return;
+      const title = result.title || result.url || `result_${index + 1}`;
+      lines.push(`result_${index + 1}: ${truncateText(title, 160)}`);
+      appendContextField(lines, `result_${index + 1}_url`, result.url, 500);
+      appendContextField(lines, `result_${index + 1}_snippet`, result.snippet || result.text, 1000);
+    });
+  }
+}
+
+function appendImageGenerationContext(lines, item) {
+  if (typeof item.result === "string" && item.result.length > 0) {
+    lines.push(`result: base64_image(${item.result.length} chars)`);
+  } else {
+    appendContextField(lines, "result", item.result);
+  }
+  appendContextField(lines, "partial_image_count", Array.isArray(item.partial_images) ? item.partial_images.length : undefined);
+}
+
+function appendCodeInterpreterContext(lines, item) {
+  appendContextField(lines, "code", item.code, 2000);
+  if (Array.isArray(item.outputs)) {
+    lines.push(`outputs_count: ${item.outputs.length}`);
+    item.outputs.slice(0, 5).forEach((output, index) => {
+      if (!isPlainObject(output)) return;
+      appendContextField(lines, `output_${index + 1}_type`, output.type);
+      if (output.type === "logs") appendContextField(lines, `output_${index + 1}_logs`, output.logs, 2000);
+      else if (output.type === "image") {
+        const image = output.image || output.image_url || output.file_id || output;
+        appendContextField(lines, `output_${index + 1}_image`, image, 600);
+      } else appendContextField(lines, `output_${index + 1}`, output, 1000);
+    });
+  }
+}
+
+function appendComputerCallContext(lines, item) {
+  appendContextField(lines, "action", item.action || item.actions, 1200);
+  if (Array.isArray(item.pending_safety_checks)) {
+    lines.push(`pending_safety_checks_count: ${item.pending_safety_checks.length}`);
+    const checks = safetyChecksToText(item.pending_safety_checks);
+    if (checks) appendContextField(lines, "pending_safety_checks", checks, 1200);
+  }
+}
+
+function appendShellCallContext(lines, item) {
+  appendContextField(lines, "action", item.action, 2000);
+  appendContextField(lines, "environment", item.environment, 600);
+}
+
+function appendShellOutputContext(lines, item) {
+  if (Array.isArray(item.output)) {
+    lines.push(`output_chunks: ${item.output.length}`);
+    item.output.slice(0, 5).forEach((chunk, index) => {
+      if (!isPlainObject(chunk)) return;
+      appendContextField(lines, `chunk_${index + 1}_stdout`, chunk.stdout, 2000);
+      appendContextField(lines, `chunk_${index + 1}_stderr`, chunk.stderr, 2000);
+      appendContextField(lines, `chunk_${index + 1}_outcome`, chunk.outcome, 600);
+    });
+  } else {
+    appendContextField(lines, "output", item.output, 2000);
+  }
+  appendContextField(lines, "max_output_length", item.max_output_length);
+}
+
+function appendApplyPatchCallContext(lines, item) {
+  appendContextField(lines, "operation", item.operation, 2000);
+}
+
+function appendMcpCallContext(lines, item) {
+  appendContextField(lines, "arguments", item.arguments, 2000);
+  appendContextField(lines, "output", item.output, 2000);
+  appendContextField(lines, "error", item.error, 2000);
+  appendContextField(lines, "approval_request_id", item.approval_request_id);
+}
+
+function appendMcpListToolsContext(lines, item) {
+  if (Array.isArray(item.tools)) {
+    lines.push(`tools_count: ${item.tools.length}`);
+    item.tools.slice(0, 10).forEach((tool, index) => {
+      if (!isPlainObject(tool)) return;
+      const name = tool.name || tool.function?.name || `tool_${index + 1}`;
+      lines.push(`tool_${index + 1}: ${truncateText(name, 160)}`);
+      appendContextField(lines, `tool_${index + 1}_description`, tool.description || tool.function?.description, 500);
+    });
+  }
+}
+
+function appendMcpApprovalContext(lines, item) {
+  appendContextField(lines, "approval_request_id", item.approval_request_id || item.id);
+  appendContextField(lines, "approve", item.approve);
+  appendContextField(lines, "reason", item.reason, 1000);
+  appendContextField(lines, "arguments", item.arguments, 2000);
+}
+
+function appendContextExtras(lines, item, options = {}) {
+  const known = new Set([
+    "type", "id", "call_id", "status", "server_label", "name", "container_id",
+    "queries", "results", "action", "actions", "result", "partial_images", "code",
+    "outputs", "pending_safety_checks", "environment", "output", "max_output_length",
+    "operation", "arguments", "error", "approval_request_id", "tools", "approve", "reason",
+  ]);
+  const extras = Object.fromEntries(Object.entries(item).filter(([key, value]) => !known.has(key) && value !== undefined));
+  if (Object.keys(extras).length && options.includeResponsesToolContextExtras !== false) {
+    appendContextField(lines, "extra", extras, 1200);
+  }
+}
+
+function appendContextField(lines, label, value, maxChars = 500) {
+  if (value === undefined || value === null || value === "") return;
+  lines.push(`${label}: ${truncateText(value, maxChars)}`);
 }
 
 function shouldReplayCustomToolsNatively(options = {}) {

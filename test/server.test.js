@@ -386,6 +386,88 @@ test("POST /v1/responses maps to /v1/chat/completions and stores previous respon
   });
 });
 
+test("POST /v1/responses replays Responses tool items as readable Chat context", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    const content = call.body.messages.map((message) => message.content || "").join("\n---\n");
+    assert.match(content, /Prior Responses tool context \(web_search_call\)/);
+    assert.match(content, /tool-context-web-ok/);
+    assert.match(content, /Prior Responses tool context \(file_search_call\)/);
+    assert.match(content, /tool-context-file-ok/);
+    assert.match(content, /Prior Responses tool context \(shell_call_output\)/);
+    assert.match(content, /tool-context-shell-ok/);
+    assert.match(content, /Prior Responses tool context \(image_generation_call\)/);
+    assert.match(content, /base64_image\(96 chars\)/);
+    assert.doesNotMatch(content, /\[web_search_call:/);
+    assert.doesNotMatch(content, /B{64}/);
+
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_tool_context_replay",
+      object: "chat.completion",
+      created: 100,
+      model: "mock-model",
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "tool context replay ok" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 8, completion_tokens: 4, total_tokens: 12 },
+    }));
+  }, async ({ bridgeAddress }) => {
+    const response = await fetch(`http://127.0.0.1:${bridgeAddress.port}/v1/responses`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "mock-model",
+        input: [
+          {
+            type: "web_search_call",
+            id: "ws_context",
+            status: "completed",
+            action: { type: "search", query: "tool context" },
+            results: [{
+              title: "Tool Context",
+              url: "https://example.test/context",
+              snippet: "tool-context-web-ok",
+            }],
+          },
+          {
+            type: "file_search_call",
+            id: "fs_context",
+            status: "completed",
+            queries: ["tool context"],
+            results: [{
+              file_id: "file_context",
+              filename: "context.md",
+              text: "tool-context-file-ok",
+            }],
+          },
+          {
+            type: "shell_call_output",
+            call_id: "call_shell_context",
+            output: [{
+              stdout: "tool-context-shell-ok",
+              stderr: "",
+              outcome: { type: "exit", exit_code: 0 },
+            }],
+          },
+          {
+            type: "image_generation_call",
+            id: "ig_context",
+            status: "completed",
+            result: "B".repeat(96),
+          },
+          { role: "user", content: "Use the tool context." },
+        ],
+      }),
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.output[0].content[0].text, "tool context replay ok");
+  });
+});
+
 test("POST /v1/responses expands configured local prompt templates", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.deepEqual(call.body.messages, [

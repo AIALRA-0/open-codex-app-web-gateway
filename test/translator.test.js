@@ -551,6 +551,86 @@ test("skips MCP protocol input items when the local MCP adapter is active", () =
   assert.deepEqual(messages, [{ role: "user", content: "Use the cached MCP context." }]);
 });
 
+test("maps Responses hosted and local tool items to readable context", () => {
+  const messages = responseInputToChatMessages([
+    {
+      type: "file_search_call",
+      id: "fs_1",
+      status: "completed",
+      queries: ["project status"],
+      results: [{ file_id: "file_1", filename: "status.md", text: "The marker is file-search-context-ok.", score: 0.91 }],
+    },
+    {
+      type: "web_search_call",
+      id: "ws_1",
+      status: "completed",
+      action: { type: "search", query: "release notes" },
+      results: [{ title: "Release Notes", url: "https://example.test/release", snippet: "web-context-ok" }],
+    },
+    {
+      type: "image_generation_call",
+      id: "ig_1",
+      status: "completed",
+      result: "A".repeat(120),
+    },
+    {
+      type: "code_interpreter_call",
+      id: "ci_1",
+      status: "completed",
+      container_id: "cntr_1",
+      code: "print('code-context-ok')",
+      outputs: [{ type: "logs", logs: "code-context-ok" }],
+    },
+    {
+      type: "shell_call",
+      call_id: "call_shell",
+      status: "completed",
+      action: { commands: ["printf shell-context-ok"] },
+    },
+    {
+      type: "shell_call_output",
+      call_id: "call_shell",
+      output: [{ stdout: "shell-context-ok", stderr: "", outcome: { type: "exit", exit_code: 0 } }],
+    },
+    {
+      type: "apply_patch_call",
+      call_id: "call_patch",
+      status: "completed",
+      operation: { type: "update", path: "README.md" },
+    },
+    {
+      type: "apply_patch_call_output",
+      call_id: "call_patch",
+      status: "completed",
+      output: "patch-context-ok",
+    },
+    {
+      type: "mcp_call",
+      id: "mcp_1",
+      server_label: "dmcp",
+      name: "roll",
+      arguments: "{\"diceRollExpression\":\"2d4+1\"}",
+      output: "mcp-context-ok",
+      status: "completed",
+    },
+  ]);
+
+  assert.equal(messages.length, 9);
+  assert.ok(messages.every((message) => message.role === "system"));
+  const content = messages.map((message) => message.content).join("\n---\n");
+  assert.match(content, /Prior Responses tool context \(file_search_call\)/);
+  assert.match(content, /file-search-context-ok/);
+  assert.match(content, /Prior Responses tool context \(web_search_call\)/);
+  assert.match(content, /web-context-ok/);
+  assert.match(content, /result: base64_image\(120 chars\)/);
+  assert.doesNotMatch(content, /A{80}/);
+  assert.match(content, /code-context-ok/);
+  assert.match(content, /shell-context-ok/);
+  assert.match(content, /patch-context-ok/);
+  assert.match(content, /mcp-context-ok/);
+  assert.doesNotMatch(content, /^\[file_search_call:/m);
+});
+
 test("maps computer_call_output input to readable chat context", () => {
   const messages = responseInputToChatMessages([{
     type: "computer_call_output",

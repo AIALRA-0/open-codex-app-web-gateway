@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Responses Tool Item Context Replay
+
+- Rechecked the current official OpenAI Responses `Item` union through the
+  developer docs MCP and the official `openai-openapi` schema. Beyond messages,
+  function/custom calls, reasoning, and compaction items, the union includes
+  hosted/local tool result items such as file search, web search, image
+  generation, code interpreter, computer use, local shell, apply patch, MCP
+  list/call/approval, and custom-tool outputs.
+- Closed a stateless replay compatibility gap for Chat-only providers:
+  - prior `file_search_call`, `web_search_call`, `image_generation_call`,
+    `code_interpreter_call`, `computer_call`, `shell_call`,
+    `shell_call_output`, `local_shell_call`, `local_shell_call_output`,
+    `apply_patch_call`, `apply_patch_call_output`, `mcp_list_tools`,
+    `mcp_call`, `mcp_approval_request`, and `mcp_approval_response` input
+    items now become readable `Prior Responses tool context` system messages
+    instead of raw `[type:{...json...}]` fallback prompts;
+  - tool-search protocol items keep their specialized function-loading path,
+    and MCP protocol items are still skipped when the local MCP adapter is
+    already importing them;
+  - image generation base64 results are summarized as
+    `base64_image(<chars> chars)` so replay does not inject large binary-like
+    payloads into upstream Chat prompts.
+- Regression coverage updated:
+  - translator tests cover hosted/local tool item text replay, bounded image
+    result summaries, and non-JSON fallback behavior;
+  - server tests cover `/v1/responses` forwarding these items into provider
+    Chat messages as readable context.
+- Documentation updated:
+  - compatibility matrix now records the official hosted/local tool item replay
+    boundary and its MCP/tool-search exceptions.
+- Validation:
+  - `node --check src/bridge/translator.js` passes;
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --check test/translator.test.js` passes;
+  - targeted translator and server regressions pass;
+  - full `node --test test/*.test.js` passes: 365 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public `/v1/responses/input_tokens` request containing prior
+    `web_search_call` and `image_generation_call` items returns 200 with
+    `input_tokens:110`.
+- Runtime/storage check:
+  - `/` has 14 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Custom Tool Call Mapping
 
 - Rechecked the current official OpenAI schema with the developer docs MCP and
