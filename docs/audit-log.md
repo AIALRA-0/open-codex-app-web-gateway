@@ -1,5 +1,54 @@
 # Audit Log
 
+## 2026-06-17 Organization Certificates List Query Allowlist Validation
+
+- Rechecked official OpenAI API references:
+  - OpenAPI 2.3.0 for `GET /v1/organization/certificates` declares only
+    `limit`, `after`, and `order` query parameters;
+  - the official endpoint list includes
+    `/v1/organization/projects/{project_id}/certificates`, and the local
+    bridge intentionally shares the same certificate-list validator for
+    organization and project certificate lists.
+- Tightened local bridge behavior:
+  - organization certificate listing now rejects unsupported query parameters
+    before reading local certificate state, so ignored `before` pagination can
+    no longer shape or appear to shape list output;
+  - project certificate listing inherits the same allowlist and rejects
+    unsupported `before` before project/certificate lookup;
+  - existing official `limit`, `after`, and `order` scalar/range validation
+    remains unchanged, including `limit` from 1 through 100 and
+    `order:"asc"|"desc"` support.
+- Regression coverage updated:
+  - changed the Organization certificates lifecycle test from ignored
+    organization/project `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the organization and project certificate
+    list query allowlists and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization certificates manage local organization and project activation" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization certificates smoke verified health, allowed
+    `limit=1&order=desc` organization certificate listing, unsupported
+    organization `before` query rejection, and unsupported project certificate
+    `before` query rejection without creating local certificate or project
+    state.
+  - Disk guard after deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, certificate PEM material, generated
+    admin record ids, or smoke payload secrets were added to source, tests,
+    docs, logs, or commits.
+
 ## 2026-06-17 Organization Admin API Keys List Query Allowlist Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Organization admin API keys:

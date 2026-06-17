@@ -24579,12 +24579,16 @@ test("Organization certificates manage local organization and project activation
     assert.equal(certificateNextPageJson.data.length, 1);
     assert.equal(certificateNextPageJson.data[0].id, nextListedCertificateId);
 
-    const beforeIgnoredCertificates = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=2&before=${encodeURIComponent(nextListedCertificateId)}`);
-    assert.equal(beforeIgnoredCertificates.status, 200);
-    assert.deepEqual(
-      (await beforeIgnoredCertificates.json()).data.map((entry) => entry.id),
-      ascCertificateIds,
-    );
+    const organizationCertificatesWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/certificates?order=asc&limit=2&before=${encodeURIComponent(nextListedCertificateId)}`);
+    assert.equal(organizationCertificatesWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await organizationCertificatesWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidCertificateListCases = [
       {
@@ -24727,12 +24731,16 @@ test("Organization certificates manage local organization and project activation
     assert.equal(nextProjectCertificatePageJson.has_more, false);
     assert.equal(nextProjectCertificatePageJson.last_id, projectCertificateIdsAscending[1]);
 
-    const beforeIgnoredProjectCertificates = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=2&before=${encodeURIComponent(projectCertificateIdsAscending[1])}`);
-    assert.equal(beforeIgnoredProjectCertificates.status, 200);
-    assert.deepEqual(
-      (await beforeIgnoredProjectCertificates.json()).data.map((entry) => entry.id),
-      projectCertificateIdsAscending,
-    );
+    const projectCertificatesWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/certificates?order=asc&limit=2&before=${encodeURIComponent(projectCertificateIdsAscending[1])}`);
+    assert.equal(projectCertificatesWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await projectCertificatesWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidProjectCertificateListCases = [
       {
