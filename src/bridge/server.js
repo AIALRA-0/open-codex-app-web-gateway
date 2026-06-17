@@ -16559,10 +16559,44 @@ function handleChatKitSessionCancel(res, chatKitStore, sessionId) {
 }
 
 function handleChatKitThreadsList(res, chatKitStore, url) {
+  const queryError = validateOpenAIChatKitThreadsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const user = url.searchParams.get("user");
   const threads = chatKitStore.listThreads()
     .filter((thread) => !user || thread.user === user);
   sendJson(res, 200, paginateChatKitThreads(threads, url));
+}
+
+function validateOpenAIChatKitThreadsListQuery(url) {
+  const listError = validateOpenAIChatKitCursorListQuery(url);
+  if (listError) return listError;
+
+  const userError = validateOpenAISingleQueryValue(url, "user");
+  if (userError) return userError;
+
+  if (!url.searchParams.has("user")) return null;
+  const user = url.searchParams.get("user");
+  const userLength = Array.from(user || "").length;
+  if (userLength < 1 || userLength > 512) {
+    return requestValidationError("user must be a string with length between 1 and 512", "user");
+  }
+  return null;
+}
+
+function validateOpenAIChatKitCursorListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListZeroLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  return validateOpenAISingleQueryValue(url, "before");
 }
 
 async function handleChatKitThreadCreate(req, res, chatKitStore) {
@@ -16625,6 +16659,11 @@ function handleChatKitThreadDelete(res, chatKitStore, threadId) {
 }
 
 function handleChatKitThreadItemsList(res, chatKitStore, threadId, url) {
+  const queryError = validateOpenAIChatKitCursorListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const items = chatKitStore.listItems(threadId);
   if (!items) {
     sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
@@ -16633,7 +16672,7 @@ function handleChatKitThreadItemsList(res, chatKitStore, threadId, url) {
     });
     return;
   }
-  sendJson(res, 200, paginateList(items, url));
+  sendJson(res, 200, paginateChatKitList(items, url));
 }
 
 async function handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId) {
@@ -18032,9 +18071,41 @@ function paginateInputItems(items, url) {
 }
 
 function paginateChatKitThreads(items, url) {
+  return paginateChatKitList(items, url);
+}
+
+function paginateChatKitList(items, url) {
   const localUrl = new URL(url.toString());
   if (!localUrl.searchParams.has("order")) localUrl.searchParams.set("order", "desc");
-  return paginateList(items, localUrl);
+  return paginateListAllowingZeroLimit(items, localUrl);
+}
+
+function paginateListAllowingZeroLimit(items, url, fallbackLimit = 20, maxLimit = 100) {
+  const order = String(url.searchParams.get("order") || "asc").toLowerCase() === "desc" ? "desc" : "asc";
+  const after = url.searchParams.get("after");
+  const before = url.searchParams.get("before");
+  const limit = parseZeroLimit(url.searchParams.get("limit"), fallbackLimit, maxLimit);
+  let data = items.map((item) => clone(item));
+  if (order === "desc") data.reverse();
+
+  if (after) {
+    const index = data.findIndex((item) => item.id === after);
+    data = index === -1 ? [] : data.slice(index + 1);
+  }
+
+  if (before) {
+    const index = data.findIndex((item) => item.id === before);
+    data = index === -1 ? [] : data.slice(0, index);
+  }
+
+  const page = data.slice(0, limit);
+  return {
+    object: "list",
+    data: page,
+    first_id: page[0]?.id || null,
+    last_id: page.at(-1)?.id || null,
+    has_more: data.length > page.length,
+  };
 }
 
 function paginateListWithDefaultOrder(items, url, order, fallbackLimit = 20, maxLimit = 100) {
@@ -18206,6 +18277,13 @@ function fineTuningMetadataFilter(url) {
 function parseLimit(value, fallback, max) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.trunc(parsed), max);
+}
+
+function parseZeroLimit(value, fallback, max) {
+  if (value == null) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
   return Math.min(Math.trunc(parsed), max);
 }
 

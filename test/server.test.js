@@ -24573,12 +24573,71 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.equal(multiItems.data.length, 2);
     assert.equal(multiItems.data[0].metadata.index, 2);
 
-    const itemsList = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=10`);
+    const itemsList = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=10&order=asc`);
     assert.equal(itemsList.status, 200);
     const itemsListJson = await itemsList.json();
     assert.equal(itemsListJson.object, "list");
     assert.equal(itemsListJson.data.length, 3);
     assert.deepEqual(itemsListJson.data.map((entry) => entry.metadata.index), [1, 2, 3]);
+
+    const itemsListDesc = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=2`);
+    assert.equal(itemsListDesc.status, 200);
+    const itemsListDescJson = await itemsListDesc.json();
+    assert.equal(itemsListDescJson.object, "list");
+    assert.equal(itemsListDescJson.data.length, 2);
+    assert.deepEqual(itemsListDescJson.data.map((entry) => entry.metadata.index), [3, 2]);
+    assert.equal(itemsListDescJson.has_more, true);
+
+    const itemsListZero = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=0`);
+    assert.equal(itemsListZero.status, 200);
+    const itemsListZeroJson = await itemsListZero.json();
+    assert.equal(itemsListZeroJson.object, "list");
+    assert.deepEqual(itemsListZeroJson.data, []);
+    assert.equal(itemsListZeroJson.has_more, true);
+
+    for (const testCase of [
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?limit=101`,
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?limit=-1`,
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?limit=1&limit=2`,
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?order=latest`,
+        param: "order",
+        message: "order must be one of: asc, desc",
+      },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?after=a&after=b`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?before=a&before=b`,
+        param: "before",
+        message: "before must be a single string query value",
+      },
+    ]) {
+      const invalidItemsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidItemsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidItemsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const threadList = await fetch(`${baseUrl}/v1/chatkit/threads?limit=10&user=chatkit-user`);
     assert.equal(threadList.status, 200);
@@ -24593,6 +24652,63 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     const allThreadsDescJson = await allThreadsDesc.json();
     assert.equal(allThreadsDescJson.data[0].id, otherThread.id);
     assert.equal(allThreadsDescJson.data.some((entry) => entry.id === thread.id), true);
+
+    const threadListZero = await fetch(`${baseUrl}/v1/chatkit/threads?limit=0&user=chatkit-user`);
+    assert.equal(threadListZero.status, 200);
+    const threadListZeroJson = await threadListZero.json();
+    assert.equal(threadListZeroJson.object, "list");
+    assert.deepEqual(threadListZeroJson.data, []);
+    assert.equal(threadListZeroJson.has_more, true);
+
+    const longChatKitUser = "x".repeat(513);
+    for (const testCase of [
+      {
+        path: "/v1/chatkit/threads?limit=101",
+        param: "limit",
+        message: "limit must be an integer between 0 and 100",
+      },
+      {
+        path: "/v1/chatkit/threads?order=latest",
+        param: "order",
+        message: "order must be one of: asc, desc",
+      },
+      {
+        path: "/v1/chatkit/threads?after=a&after=b",
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: "/v1/chatkit/threads?before=a&before=b",
+        param: "before",
+        message: "before must be a single string query value",
+      },
+      {
+        path: "/v1/chatkit/threads?user=",
+        param: "user",
+        message: "user must be a string with length between 1 and 512",
+      },
+      {
+        path: "/v1/chatkit/threads?user=chatkit-user&user=other-user",
+        param: "user",
+        message: "user must be a single string query value",
+      },
+      {
+        path: `/v1/chatkit/threads?user=${longChatKitUser}`,
+        param: "user",
+        message: "user must be a string with length between 1 and 512",
+      },
+    ]) {
+      const invalidThreadsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidThreadsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidThreadsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
 
     const cancelled = await fetch(`${baseUrl}/v1/chatkit/sessions/${session.id}/cancel`, {
       method: "POST",

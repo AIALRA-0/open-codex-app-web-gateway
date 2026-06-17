@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 ChatKit List Query Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
+  - `GET /chatkit/threads`;
+  - `GET /chatkit/threads/{thread_id}/items`;
+  - `POST /chatkit/sessions`.
+- Confirmed ChatKit thread list supports official query parameters
+  `limit`, `order`, `after`, `before`, and `user`; `limit` is documented from
+  0 through 100, `order` is `asc` / `desc`, and `user` is a string from 1
+  through 512 characters.
+- Confirmed ChatKit thread item list supports official query parameters
+  `limit`, `order`, `after`, and `before`; `limit` is documented from 0
+  through 100 and `order` is `asc` / `desc`.
+- Confirmed ChatKit session create has no query parameters in the official
+  schema.
+- Tightened local ChatKit behavior:
+  - `GET /v1/chatkit/threads` now rejects repeated scalar `limit`, `order`,
+    `after`, `before`, and `user` query values;
+  - `GET /v1/chatkit/threads` now validates `limit` from 0 through 100 and
+    validates `user` length from 1 through 512 characters;
+  - `GET /v1/chatkit/threads/{thread_id}/items` now rejects repeated scalar
+    `limit`, `order`, `after`, and `before` query values;
+  - ChatKit list pagination now honors official `limit=0` instead of falling
+    back to 20;
+  - ChatKit thread item list now uses the official default `order:"desc"`.
+- Regression coverage updated:
+  - ChatKit lifecycle tests now cover explicit ascending item order,
+    default descending item order, `limit=0`, invalid limits, invalid order,
+    repeated cursors, repeated `user`, empty `user`, and overlong `user`.
+- Documentation updated:
+  - compatibility matrix now records strict ChatKit list query validation,
+    official `limit=0..100`, default descending order, and `user` bounds.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "ChatKit API manages local sessions, threads, and items" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public ChatKit smoke marker `chatkit-query-smoke-mqi3w7ag` created one
+    temporary session, thread, and item batch without calling the Chat
+    provider.
+  - Public ChatKit smoke confirmed thread item default order returned metadata
+    indexes `[3,2]` for `limit=2`, `limit=0` returned an empty page, invalid
+    item `order=latest` returned HTTP 400, and empty thread `user` returned
+    HTTP 400.
+  - Public smoke cleanup deleted the temporary thread and cancelled the
+    temporary session successfully.
+  - Disk guard after deployment: `/` 193G size, 184G used, 9.6G available,
+    96% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Assistants Include Query Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
