@@ -1127,6 +1127,43 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses/compact",
         input: [{
+          type: "web_search_call",
+          id: "ws_bad_action",
+          status: "completed",
+          action: { type: "browse", query: "schema" },
+        }],
+        param: "input.0.action.type",
+        message: "input.0.action.type must be one of: search, open_page, find_in_page",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "web_search_call",
+          id: "ws_bad_find",
+          status: "completed",
+          action: { type: "find_in_page", url: "https://example.test/page" },
+        }],
+        param: "input.0.action.pattern",
+        message: "input.0.action.pattern must be a string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "web_search_call",
+          id: "ws_bad_source",
+          status: "completed",
+          action: {
+            type: "search",
+            query: "schema",
+            sources: [{ type: "document", url: "https://example.test/source" }],
+          },
+        }],
+        param: "input.0.action.sources.0.type",
+        message: "input.0.action.sources.0.type must be url",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
           type: "file_search_call",
           status: "completed",
           queries: ["schema"],
@@ -8878,7 +8915,7 @@ test("local web_search can find matches inside opened pages", async () => {
   assert.equal(context.calls[2].action.type, "find_in_page");
   assert.equal(context.calls[2].status, "completed");
   assert.equal(context.calls[2].action.url, "https://example.test/find-page");
-  assert.match(context.calls[2].action.query, /open-page-ok/);
+  assert.match(context.calls[2].action.pattern, /open-page-ok/);
   assert.equal(context.results[0].find_in_page.status, "completed");
   assert.equal(context.results[0].find_in_page.match_count, 1);
   assert.match(context.results[0].find_in_page.matches[0].text, /open-page-ok/);
@@ -8933,6 +8970,7 @@ test("POST /v1/responses emits local web_search open_page calls", async () => {
       assert.equal(json.output[2].type, "web_search_call");
       assert.equal(json.output[2].action.type, "find_in_page");
       assert.equal(json.output[2].action.url, `http://127.0.0.1:${pageAddress.port}/open-page`);
+      assert.match(json.output[2].action.pattern, /open page result/i);
       assert.equal(json.output[2].status, "completed");
       assert.equal(json.output[3].type, "message");
       assert.equal(json.metadata.compatibility.local_web_search.opened_count, 1);

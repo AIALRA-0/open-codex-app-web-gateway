@@ -387,7 +387,7 @@ function findInOpenedPages(context, config = {}, options = {}) {
       action: {
         type: "find_in_page",
         url: result.url,
-        query: context.query || "",
+        pattern: context.query || "",
       },
     };
     try {

@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-17 Responses Web Search Action Shape Validation
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `WebSearchToolCall`,
+  `WebSearchActionSearch`, `WebSearchActionOpenPage`, and
+  `WebSearchActionFind` schemas through the developer docs MCP workflow and the
+  official `openai-openapi` YAML:
+  - `web_search_call.action.type` must be `search`, `open_page`, or
+    `find_in_page`;
+  - `search` requires string `query` and may include string-array `queries`
+    plus URL sources;
+  - `open_page.url` may be string/null when present;
+  - `find_in_page` requires string `url` and string `pattern`.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject malformed web-search action types,
+    missing `find_in_page.pattern`, and malformed search sources.
+- Aligned local output:
+  - local `find_in_page` web-search calls now emit `action.pattern` instead of
+    the non-official `action.query` field.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with malformed
+    web-search action cases;
+  - updated local web-search output tests to assert `find_in_page.pattern`.
+- Documentation updated:
+  - compatibility matrix now records official web-search action shapes and
+    `find_in_page.pattern`.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check src/bridge/web_search.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --test --test-name-pattern "input image and file detail|web_search|open_page" test/server.test.js`
+    passes 15/15 after correcting the new assertion to match normalized query
+    casing;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `web_search_call` action smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.action.pattern"` with
+    message `input.0.action.pattern must be a string`.
+- Disk guard:
+  - root filesystem has 16 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Apply Patch Replay Required Fields
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 `ApplyPatchToolCall`,

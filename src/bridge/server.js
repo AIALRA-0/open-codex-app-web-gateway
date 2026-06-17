@@ -5762,6 +5762,8 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
     if (requiredStatusError) return requiredStatusError;
     const actionError = validateOpenAIRequiredObjectItemField(item, param, "action");
     if (actionError) return actionError;
+    const actionShapeError = validateOpenAIResponsesWebSearchCallAction(item.action, `${param}.action`);
+    if (actionShapeError) return actionShapeError;
     const resultsError = validateOpenAIOptionalArrayItemField(item, param, "results", { nullable: true });
     if (resultsError) return resultsError;
     return null;
@@ -5964,6 +5966,58 @@ function validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param) 
   if (!values) return null;
   if (typeof item.status !== "string" || !values.includes(item.status)) {
     return requestValidationError(`${param}.status must be one of: ${values.join(", ")}`, `${param}.status`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesWebSearchCallAction(action, param) {
+  const typeValues = ["search", "open_page", "find_in_page"];
+  if (typeof action.type !== "string" || !typeValues.includes(action.type)) {
+    return requestValidationError(`${param}.type must be one of: ${typeValues.join(", ")}`, `${param}.type`);
+  }
+  if (action.type === "search") {
+    if (typeof action.query !== "string") {
+      return requestValidationError(`${param}.query must be a string`, `${param}.query`);
+    }
+    const queriesError = validateOpenAIStringArray(action.queries, `${param}.queries`, { nullable: true });
+    if (queriesError) return queriesError;
+    return validateOpenAIResponsesWebSearchSources(action.sources, `${param}.sources`);
+  }
+  if (action.type === "open_page") {
+    if (
+      Object.prototype.hasOwnProperty.call(action, "url")
+      && action.url !== null
+      && typeof action.url !== "string"
+    ) {
+      return requestValidationError(`${param}.url must be a string or null`, `${param}.url`);
+    }
+    return null;
+  }
+  if (typeof action.url !== "string") {
+    return requestValidationError(`${param}.url must be a string`, `${param}.url`);
+  }
+  if (typeof action.pattern !== "string") {
+    return requestValidationError(`${param}.pattern must be a string`, `${param}.pattern`);
+  }
+  return null;
+}
+
+function validateOpenAIResponsesWebSearchSources(sources, param) {
+  if (sources == null) return null;
+  if (!Array.isArray(sources)) {
+    return requestValidationError(`${param} must be an array or null`, param);
+  }
+  for (const [index, source] of sources.entries()) {
+    const sourceParam = `${param}.${index}`;
+    if (!isPlainObject(source)) {
+      return requestValidationError(`${sourceParam} must be an object`, sourceParam);
+    }
+    if (source.type !== "url") {
+      return requestValidationError(`${sourceParam}.type must be url`, `${sourceParam}.type`);
+    }
+    if (typeof source.url !== "string") {
+      return requestValidationError(`${sourceParam}.url must be a string`, `${sourceParam}.url`);
+    }
   }
   return null;
 }
