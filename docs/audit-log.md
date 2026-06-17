@@ -1,5 +1,64 @@
 # Audit Log
 
+## 2026-06-17 Responses Input Audio Content Validation
+
+- Rechecked the current official OpenAI schema through the developer docs MCP
+  workflow and the official `openai-openapi` YAML for
+  `ChatCompletionRequestMessageContentPartAudio` and Responses `InputAudio`:
+  - official `type:"input_audio"` content carries an `input_audio` object;
+  - `input_audio.data` and `input_audio.format` are required strings;
+  - supported audio formats are `mp3` and `wav`;
+  - Chat Completions has the same native audio content-part shape.
+- Tightened Responses message content validation before provider calls:
+  - official `input_audio` content parts now require
+    `input_audio:{data,format}`;
+  - invalid `input_audio.format` values are rejected with the same
+    `wav` / `mp3` enum message as direct Chat requests;
+  - the local compatibility `audio` alias still accepts top-level
+    `data`, `audio_data`, `file_data`, or `content_base64`, but now also
+    requires one of those data fields.
+- Regression coverage updated:
+  - the shared Responses input validation test now covers malformed
+    `input_audio` and `audio` content across `/v1/responses`,
+    `/v1/responses/input_tokens`, and `/v1/responses/compact`;
+  - existing valid Responses audio input and audio-output replay tests remain
+    green.
+- Documentation updated:
+  - compatibility matrix now distinguishes the official Responses
+    `input_audio` schema from the bridge's local `audio` alias and records the
+    text-provider fallback boundary for DeepSeek.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "validate input image and file
+    detail|input_audio content|audio output" test/server.test.js` passes:
+    3 tests;
+  - full `node --test test/*.test.js` passes: 367 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `input_audio` top-level data input-token request returns
+    `400 invalid_request_parameter` with
+    `param:"input.0.content.0.input_audio"`;
+  - public valid `input_audio:{data,format}` input-token request returns 200
+    with `input_tokens:21`.
+- Runtime/storage check:
+  - `/` has 11 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Item Reference Input Validation
 
 - Rechecked the current official Responses input union through the OpenAI docs

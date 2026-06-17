@@ -5454,6 +5454,10 @@ function validateOpenAIResponsesMessageContentPart(part, param) {
 }
 
 function validateOpenAIResponsesMessageAudioContentPart(part, param) {
+  if (part.type === "input_audio") {
+    return validateOpenAIChatInputAudioPart(part, param);
+  }
+
   const source = isPlainObject(part.input_audio) ? part.input_audio : part;
   const data = source.data ?? source.audio_data ?? source.file_data ?? source.content_base64;
   if (data != null && typeof data !== "string") {
@@ -5464,6 +5468,9 @@ function validateOpenAIResponsesMessageAudioContentPart(part, param) {
   }
   if (source.transcript != null && typeof source.transcript !== "string") {
     return requestValidationError(`${param}.transcript must be a string`, `${param}.transcript`);
+  }
+  if (data == null) {
+    return requestValidationError(`${param} requires data, audio_data, file_data, or content_base64`, param);
   }
   return null;
 }

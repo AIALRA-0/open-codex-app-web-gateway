@@ -762,6 +762,42 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          role: "user",
+          content: [{ type: "input_audio", data: "UklGRg==", format: "wav" }],
+        }],
+        param: "input.0.content.0.input_audio",
+        message: "input.0.content.0.input_audio must be an object",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          role: "user",
+          content: [{ type: "input_audio", input_audio: { format: "wav" } }],
+        }],
+        param: "input.0.content.0.input_audio.data",
+        message: "input.0.content.0.input_audio.data must be a string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          role: "user",
+          content: [{ type: "input_audio", input_audio: { data: "UklGRg==", format: "flac" } }],
+        }],
+        param: "input.0.content.0.input_audio.format",
+        message: "input.0.content.0.input_audio.format must be one of: wav, mp3",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          role: "user",
+          content: [{ type: "audio", format: "wav" }],
+        }],
+        param: "input.0.content.0",
+        message: "input.0.content.0 requires data, audio_data, file_data, or content_base64",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "custom_tool_call_output",
           call_id: "call_custom",
           output: [{ type: "input_text" }],
