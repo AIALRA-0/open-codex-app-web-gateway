@@ -15876,6 +15876,43 @@ test("local Files and Vector Stores back Responses file_search compatibility", a
     assert.equal(file.object, "file");
     assert.equal(file.filename, "fixture.txt");
 
+    for (const testCase of [
+      {
+        label: "json",
+        response: await fetch(`${baseUrl}/v1/files`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            filename: "invalid-purpose.txt",
+            purpose: "unknown",
+            content: "invalid purpose",
+          }),
+        }),
+      },
+      {
+        label: "raw",
+        response: await fetch(`${baseUrl}/v1/files`, {
+          method: "POST",
+          headers: {
+            "content-type": "text/plain",
+            "x-filename": "invalid-purpose-raw.txt",
+            "x-purpose": "unknown",
+          },
+          body: "invalid purpose",
+        }),
+      },
+    ]) {
+      assert.equal(testCase.response.status, 400, testCase.label);
+      assert.deepEqual(await testCase.response.json(), {
+        error: {
+          message: "purpose must be one of: assistants, batch, fine-tune, vision, user_data, evals",
+          type: "invalid_request_error",
+          param: "purpose",
+          code: "invalid_request_parameter",
+        },
+      }, testCase.label);
+    }
+
     const content = await fetch(`${baseUrl}/v1/files/${file.id}/content`);
     assert.equal(content.status, 200);
     assert.match(await content.text(), /file-search-ok/);

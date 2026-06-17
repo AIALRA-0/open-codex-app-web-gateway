@@ -204,6 +204,7 @@ const LOCAL_PLACEHOLDER_JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
 const OPENAI_STRING_METADATA_MAX_PAIRS = 16;
 const OPENAI_STRING_METADATA_MAX_KEY_CHARS = 64;
 const OPENAI_STRING_METADATA_MAX_VALUE_CHARS = 512;
+const OPENAI_FILE_PURPOSE_VALUES = Object.freeze(["assistants", "batch", "fine-tune", "vision", "user_data", "evals"]);
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MIN_SECONDS = 3600;
 const OPENAI_BATCH_OUTPUT_EXPIRES_AFTER_MAX_SECONDS = 2592000;
 const OPENAI_CONVERSATION_CREATE_MAX_ITEMS = 20;
@@ -7102,12 +7103,28 @@ async function handleResponseCompact(req, res, config, store, fileSearchStore, c
 
 async function handleFileCreate(req, res, config, fileSearchStore) {
   const upload = await readFileCreateRequest(req, config);
+  const validationError = validateOpenAIFileCreateRequest(upload);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
+    return;
+  }
   if (!upload.content) {
     sendError(res, 400, "file content is required", { code: "missing_file" });
     return;
   }
   const file = fileSearchStore.createFile(upload);
   sendJson(res, 200, file);
+}
+
+function validateOpenAIFileCreateRequest(upload) {
+  const purpose = upload?.purpose;
+  if (typeof purpose !== "string" || !purpose.trim()) {
+    return requestValidationError("purpose is required", "purpose");
+  }
+  if (!OPENAI_FILE_PURPOSE_VALUES.includes(purpose)) {
+    return requestValidationError(`purpose must be one of: ${OPENAI_FILE_PURPOSE_VALUES.join(", ")}`, "purpose");
+  }
+  return null;
 }
 
 function handleFilesList(res, fileSearchStore, url) {

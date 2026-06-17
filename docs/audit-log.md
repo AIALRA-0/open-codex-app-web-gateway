@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-17 Files Create Purpose Validation
+
+- Rechecked the current official OpenAI Files create reference and confirmed
+  public File uploads use the official File purpose values:
+  `assistants`, `batch`, `fine-tune`, `vision`, `user_data`, and `evals`.
+- Tightened local Files behavior:
+  - `POST /v1/files` now validates public JSON uploads against the official
+    purpose values before writing File state;
+  - `POST /v1/files` now validates public raw-body uploads that use
+    `x-purpose` against the same official purpose list;
+  - the validation is intentionally applied at the public request handler
+    layer, not in the low-level local file store, so internal compatibility
+    artifacts such as Batch `batch_output` and `batch_error` Files continue to
+    work.
+- Regression coverage updated:
+  - File/vector-store lifecycle tests now cover invalid JSON File purpose and
+    invalid raw-upload `x-purpose`.
+- Documentation updated:
+  - compatibility matrix now records public File create purpose validation.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "local Files and Vector Stores back Responses file_search compatibility" test/server.test.js`
+    passed 1/1 tests.
+  - `node --test test/*.test.js` passed 369/369 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all reported `active`.
+  - Public Files smoke marker `file-purpose-smoke-mqi4hxqa` confirmed invalid
+    JSON `purpose` and invalid raw `x-purpose` returned HTTP 400.
+  - Public Files smoke also created one valid `purpose:"assistants"` File and
+    deleted the temporary File successfully.
+  - Disk guard after deployment: `/` 193G size, 177G used, 17G available,
+    92% used; repo `state/` 40M, `output/` 4.6M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Uploads Create Request Validation
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0 schemas for:
