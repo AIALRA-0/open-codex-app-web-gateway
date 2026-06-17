@@ -606,7 +606,7 @@ local synthetic checkpoint without calling the upstream Chat provider.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/fine_tuning/jobs` | Implemented locally | Requires `training_file`; preserves `model`, `validation_file`, `suffix`, `method`, `hyperparameters`, `integrations`, and `metadata`; returns `object:"fine_tuning.job"`, `status:"succeeded"`, a local `ft:...` model id, and compatibility metadata with `actual_model_training:false` |
+| `POST /v1/fine_tuning/jobs` | Implemented locally | Requires official `model` and `training_file` string fields; validates optional `validation_file`, `suffix` length, `seed` range, and OpenAI string metadata before local mutation; preserves `validation_file`, `suffix`, `method`, `hyperparameters`, `integrations`, and `metadata`; returns `object:"fine_tuning.job"`, `status:"succeeded"`, a local `ft:...` model id, and compatibility metadata with `actual_model_training:false` |
 | `GET /v1/fine_tuning/jobs` | Implemented locally | Lists local jobs with official `limit` and `after` pagination plus `metadata[k]=v` / `metadata=null` filters; repeated official scalar query values return 400, invalid metadata filter syntax returns 400, default order is newest-first, and unsupported generic paginator parameters such as `before` and `order` do not affect the official list result |
 | `GET /v1/fine_tuning/jobs/{fine_tuning_job_id}` | Implemented locally | Retrieves a stored local Fine-tuning job |
 | `POST /v1/fine_tuning/jobs/{fine_tuning_job_id}/cancel` | Implemented locally | Marks the local job `status:"cancelled"` and records a local lifecycle event |

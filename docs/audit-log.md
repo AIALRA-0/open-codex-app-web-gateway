@@ -1,5 +1,67 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Job Create Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for
+  `POST /v1/fine_tuning/jobs`:
+  - operation `createFineTuningJob` uses request schema
+    `CreateFineTuningJobRequest`;
+  - the schema requires `model` and `training_file`;
+  - `training_file` is a string;
+  - `model` accepts a string model id;
+  - optional `suffix` is nullable string with length 1-64;
+  - optional `validation_file` is nullable string;
+  - optional `seed` is nullable integer in the range 0-2147483647;
+  - optional `metadata` uses OpenAI string metadata limits.
+- Tightened local Fine-tuning job create behavior:
+  - missing or blank `model` and `training_file` now return OpenAI-style
+    HTTP 400 `missing_required_parameter` errors before local state mutation;
+  - non-string `model`, `training_file`, and `validation_file` now return
+    HTTP 400 `invalid_request_parameter` errors;
+  - invalid `suffix`, `seed`, and string metadata payloads are rejected before
+    creating local jobs, events, or synthetic checkpoints;
+  - official top-level unknown-field pass-through remains unchanged because the
+    current request schema does not declare `additionalProperties:false`;
+  - successful local Fine-tuning jobs still simulate protocol compatibility
+    only and never call the upstream Chat Completions provider.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now covers missing `model`,
+    missing `training_file`, non-string required fields, blank required fields,
+    invalid `validation_file`, invalid `suffix`, invalid `seed`, invalid
+    metadata values, and the existing successful job lifecycle path.
+- Documentation updated:
+  - compatibility matrix now records the official create required fields and
+    the new local validation boundary.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Fine-tuning job create smoke marker
+    `ft-job-create-smoke-1781717352` verified missing `model` returns 400
+    `missing_required_parameter`, invalid `seed` returns 400
+    `invalid_request_parameter`, and a valid local job create returns
+    `object:"fine_tuning.job"`, `status:"succeeded"`, and
+    `compatibility.actual_model_training:false`. No upstream provider training
+    or model call was performed.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5367 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Fine-tuning Checkpoint Permission Create Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for

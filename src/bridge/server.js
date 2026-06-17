@@ -16914,18 +16914,69 @@ function officialAuditLogsListPaginationUrl(url) {
 
 async function handleFineTuningJobCreate(req, res, fineTuningStore) {
   const body = await readJson(req);
-  if (!isPlainObject(body)) {
-    throw requestError("Fine-tuning job request body must be a JSON object", {
-      code: "invalid_fine_tuning_job_request",
-    });
-  }
-  if (!stringifyContent(body.training_file).trim()) {
-    throw requestError("training_file is required", {
-      code: "missing_required_parameter",
-      param: "training_file",
-    });
+  const validationError = validateOpenAIFineTuningJobCreateBody(body);
+  if (validationError) {
+    sendError(res, 400, validationError.message, validationError);
+    return;
   }
   sendJson(res, 200, fineTuningStore.createJob(body));
+}
+
+function validateOpenAIFineTuningJobCreateBody(body) {
+  if (!isPlainObject(body)) {
+    return {
+      message: "Fine-tuning job request body must be a JSON object",
+      type: "invalid_request_error",
+      code: "invalid_fine_tuning_job_request",
+      param: null,
+    };
+  }
+
+  const modelError = validateOpenAIFineTuningRequiredString(body, "model");
+  if (modelError) return modelError;
+
+  const trainingFileError = validateOpenAIFineTuningRequiredString(body, "training_file");
+  if (trainingFileError) return trainingFileError;
+
+  const validationFileError = validateOpenAIStringParameter(body, "validation_file");
+  if (validationFileError) return validationFileError;
+
+  if (Object.prototype.hasOwnProperty.call(body, "suffix") && body.suffix != null) {
+    if (typeof body.suffix !== "string") {
+      return requestValidationError("suffix must be a string", "suffix");
+    }
+    const suffixLength = Array.from(body.suffix).length;
+    if (suffixLength < 1 || suffixLength > 64) {
+      return requestValidationError("suffix must be a string with length between 1 and 64", "suffix");
+    }
+  }
+
+  const seedError = validateIntegerParameter(body, "seed", { min: 0, max: 2147483647 });
+  if (seedError) return seedError;
+
+  const metadataError = validateOpenAIStringMetadata(body);
+  if (metadataError) return metadataError;
+
+  return null;
+}
+
+function validateOpenAIFineTuningRequiredString(body, param) {
+  if (
+    !Object.prototype.hasOwnProperty.call(body, param)
+    || body[param] == null
+    || (typeof body[param] === "string" && !body[param].trim())
+  ) {
+    return {
+      message: `${param} is required`,
+      type: "invalid_request_error",
+      code: "missing_required_parameter",
+      param,
+    };
+  }
+  if (typeof body[param] !== "string") {
+    return requestValidationError(`${param} must be a string`, param);
+  }
+  return null;
 }
 
 function handleFineTuningJobsList(res, fineTuningStore, url) {

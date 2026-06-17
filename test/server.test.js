@@ -26259,13 +26259,95 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.fail("Fine-tuning compatibility should not call upstream provider");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
-    const missingTrainingFile = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ model: "gpt-4o-mini" }),
-    });
-    assert.equal(missingTrainingFile.status, 400);
-    assert.equal((await missingTrainingFile.json()).error.param, "training_file");
+    for (const testCase of [
+      {
+        body: { training_file: "file_train_local" },
+        param: "model",
+        code: "missing_required_parameter",
+        message: "model is required",
+      },
+      {
+        body: { model: "gpt-4o-mini" },
+        param: "training_file",
+        code: "missing_required_parameter",
+        message: "training_file is required",
+      },
+      {
+        body: { model: 42, training_file: "file_train_local" },
+        param: "model",
+        code: "invalid_request_parameter",
+        message: "model must be a string",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: 42 },
+        param: "training_file",
+        code: "invalid_request_parameter",
+        message: "training_file must be a string",
+      },
+      {
+        body: { model: "   ", training_file: "file_train_local" },
+        param: "model",
+        code: "missing_required_parameter",
+        message: "model is required",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "   " },
+        param: "training_file",
+        code: "missing_required_parameter",
+        message: "training_file is required",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", validation_file: 42 },
+        param: "validation_file",
+        code: "invalid_request_parameter",
+        message: "validation_file must be a string",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", suffix: "" },
+        param: "suffix",
+        code: "invalid_request_parameter",
+        message: "suffix must be a string with length between 1 and 64",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", suffix: "x".repeat(65) },
+        param: "suffix",
+        code: "invalid_request_parameter",
+        message: "suffix must be a string with length between 1 and 64",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", seed: -1 },
+        param: "seed",
+        code: "invalid_request_parameter",
+        message: "seed must be an integer between 0 and 2147483647",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", seed: 1.5 },
+        param: "seed",
+        code: "invalid_request_parameter",
+        message: "seed must be an integer",
+      },
+      {
+        body: { model: "gpt-4o-mini", training_file: "file_train_local", metadata: { suite: 42 } },
+        param: "metadata.suite",
+        code: "invalid_request_parameter",
+        message: "metadata values must be strings",
+      },
+    ]) {
+      const invalidCreate = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(invalidCreate.status, 400, testCase.param);
+      assert.deepEqual(await invalidCreate.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: testCase.code,
+        },
+      }, testCase.param);
+    }
 
     const createResponse = await fetch(`${baseUrl}/v1/fine_tuning/jobs`, {
       method: "POST",
