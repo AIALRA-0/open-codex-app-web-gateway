@@ -1,5 +1,58 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Partial Images Validation
+
+- Rechecked official OpenAI Images API references:
+  - `POST /v1/images/generations` and `POST /v1/images/edits` expose
+    streaming `partial_images`;
+  - the documented `partial_images` value must be between 0 and 3 for both
+    image generation and image edit streaming responses.
+- Tightened local bridge behavior:
+  - direct Images generation now validates `partial_images` as an integer from
+    0 through 3 before placeholder generation, provider forwarding, streaming
+    event synthesis, or usage recording;
+  - direct Images edit now validates `partial_images` as an integer from 0
+    through 3 before resolving image references, fetching input images,
+    provider forwarding, streaming event synthesis, or usage recording;
+  - existing multipart string values such as `"2"` continue to normalize to
+    valid integers for provider-backed edit calls.
+- Regression coverage updated:
+  - added direct Images negative tests for generation and edit
+    `partial_images` values above range, below range, fractional strings, and
+    non-numeric strings;
+  - verified invalid requests return OpenAI-style
+    `invalid_request_parameter` errors with `param:"partial_images"` and do
+    not call the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records direct Images generation and edit
+    `partial_images` validation boundaries.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "POST /v1/images direct" test/server.test.js`
+    passed 2/2 matched tests.
+  - Full `node --test test/*.test.js` passed 381/381 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Images smokes verified invalid generation and edit
+    `partial_images` requests both return HTTP 400 with
+    `param:"partial_images"`.
+  - Disk guard after deployment: `/` 193G size, 181G used, 13G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 ChatKit Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 ChatKit coverage:

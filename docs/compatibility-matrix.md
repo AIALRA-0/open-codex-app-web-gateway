@@ -1915,7 +1915,8 @@ The bridge also exposes a direct OpenAI-compatible
 instead of the Responses hosted tool. JSON requests accept `prompt`, `model`,
 `n` from 1 to 10, `size`, `quality`, `background`, `moderation`,
 `output_format`, `output_compression`, `response_format`, `style`, `user`, and
-`stream`. Non-streaming responses use the OpenAI `ImagesResponse` shape with
+`stream`, with streaming `partial_images` validated from 0 through 3.
+Non-streaming responses use the OpenAI `ImagesResponse` shape with
 `created`, `data[].b64_json`, optional `data[].revised_prompt`, and provider
 `usage` when present. `stream:true` returns Image API SSE events
 `image_generation.partial_image` and `image_generation.completed`;
@@ -1933,7 +1934,9 @@ multipart bodies. Non-streaming direct edit responses use the same
 `ImagesResponse` shape; `stream:true` returns `image_edit.partial_image` and
 `image_edit.completed` SSE events, relaying upstream provider SSE when
 available and synthesizing compatible events for placeholder or JSON fallback
-responses. The direct `POST /v1/images/variations` endpoint follows the
+responses. Direct edit `partial_images` is validated from 0 through 3 before
+image reference resolution or provider forwarding. The direct
+`POST /v1/images/variations` endpoint follows the
 official Images variation operation shape: multipart requests accept one
 `image` file plus `model`, `n`, `size`, `response_format`, and `user`, default
 to `dall-e-2` when the client omits `model`, and return the same

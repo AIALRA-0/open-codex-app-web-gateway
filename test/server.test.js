@@ -15285,6 +15285,48 @@ test("POST /v1/images direct endpoints reject unsupported query parameters befor
   });
 });
 
+test("POST /v1/images direct streaming endpoints validate partial_images", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid direct image partial_images");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    for (const testCase of [
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", stream: true, partial_images: 4 },
+      },
+      {
+        endpoint: "/v1/images/generations",
+        body: { prompt: "Draw a compact badge.", stream: true, partial_images: "1.5" },
+      },
+      {
+        endpoint: "/v1/images/edits",
+        body: { prompt: "Edit a compact badge.", stream: true, partial_images: -1 },
+      },
+      {
+        endpoint: "/v1/images/edits",
+        body: { prompt: "Edit a compact badge.", stream: true, partial_images: "many" },
+      },
+    ]) {
+      const response = await fetch(`${baseUrl}${testCase.endpoint}`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(testCase.body),
+      });
+      assert.equal(response.status, 400, testCase.endpoint);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "partial_images must be an integer between 0 and 3",
+          type: "invalid_request_error",
+          param: "partial_images",
+          code: "invalid_request_parameter",
+        },
+      }, testCase.endpoint);
+    }
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("POST /v1/images/generations can call an OpenAI-compatible Images API", async () => {
   const tinyPng = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
   await withMockProvider(async (req, res, call) => {

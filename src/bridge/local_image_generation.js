@@ -439,6 +439,18 @@ function normalizePartialImageCount(value) {
   return Math.max(0, Math.min(3, Math.trunc(parsed)));
 }
 
+function normalizeImageApiPartialImageCount(value, param = "partial_images") {
+  if (value === undefined || value === null || value === "") return 0;
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0 || parsed > 3) {
+    throw imageApiError(`${param} must be an integer between 0 and 3`, {
+      code: "invalid_request_parameter",
+      param,
+    });
+  }
+  return parsed;
+}
+
 function normalizeImageApiBoolean(value) {
   if (value === true) return true;
   if (value === false || value === undefined || value === null) return false;
@@ -1145,6 +1157,7 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
   }
 
   const n = normalizeImagesGenerationN(request.n);
+  const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
   const prompt = truncateForPrompt(request.prompt.trim(), 32000);
   const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
   const options = {};
@@ -1168,7 +1181,7 @@ function normalizeImagesGenerationRequest(request = {}, config = {}) {
     n,
     options,
     stream: request.stream === true,
-    partial_images: normalizePartialImageCount(request.partial_images),
+    partial_images: partialImages,
     partial_images_requested: request.partial_images !== undefined,
     tool: {
       action: "generate",
@@ -1193,6 +1206,7 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
   }
 
   const n = normalizeImagesGenerationN(request.n);
+  const partialImages = normalizeImageApiPartialImageCount(request.partial_images);
   const prompt = truncateForPrompt(request.prompt.trim(), 32000);
   const model = stringifyContent(request.model || config.imageGenerationModel || "gpt-image-2");
   const requestOptions = {};
@@ -1230,7 +1244,7 @@ async function normalizeImagesEditRequest(request = {}, config = {}, options = {
     n,
     options: requestOptions,
     stream: normalizeImageApiBoolean(request.stream),
-    partial_images: normalizePartialImageCount(request.partial_images),
+    partial_images: partialImages,
     partial_images_requested: request.partial_images !== undefined,
     editInput,
     tool: {
