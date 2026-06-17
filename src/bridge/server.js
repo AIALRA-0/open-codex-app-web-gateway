@@ -17351,6 +17351,37 @@ function officialProjectRateLimitsListPaginationUrl(url) {
 }
 
 function validateOpenAIAuditLogsListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, [
+    "effective_at",
+    "effective_at[gt]",
+    "effective_at[gte]",
+    "effective_at[lt]",
+    "effective_at[lte]",
+    "effective_at.gt",
+    "effective_at.gte",
+    "effective_at.lt",
+    "effective_at.lte",
+    "effective_at_gt",
+    "effective_at_gte",
+    "effective_at_lt",
+    "effective_at_lte",
+    "project_ids",
+    "project_ids[]",
+    "event_types",
+    "event_types[]",
+    "actor_ids",
+    "actor_ids[]",
+    "actor_emails",
+    "actor_emails[]",
+    "resource_ids",
+    "resource_ids[]",
+    "tenant_only",
+    "after",
+    "before",
+    "limit",
+  ]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 

@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-17 Organization Audit Logs List Query Allowlist Validation
+
+- Rechecked official OpenAI API references:
+  - official OpenAPI 2.3.0 for `GET /v1/organization/audit_logs`
+    documents `effective_at` range filters (`gt`, `gte`, `lt`, `lte`),
+    `project_ids[]`, `event_types[]`, `actor_ids[]`, `actor_emails[]`,
+    `resource_ids[]`, `tenant_only`, `limit`, `after`, and `before`;
+  - no official `order` query parameter is documented for this endpoint.
+- Tightened local bridge behavior:
+  - Organization audit-log listing now rejects unsupported query parameters
+    before reading or filtering local audit state, so ignored `order` can no
+    longer shape or appear to shape list output;
+  - existing official filter and pagination validation remains unchanged,
+    including `limit` from 1 through 100, single `after`/`before`, boolean
+    `tenant_only`, and integer `effective_at` range values;
+  - local compatibility aliases for `effective_at.gte` / `effective_at_gte`
+    and the other dot/underscore range forms remain supported alongside the
+    official bracketed parameters.
+- Regression coverage updated:
+  - changed the Organization audit logs lifecycle/filter test from ignored
+    `order` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the audit-log list query allowlist,
+    preserved local `effective_at` aliases, and unsupported-query rejection
+    behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization audit logs list local admin lifecycle events and filters" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization audit logs smoke verified health, allowed
+    `limit=1&tenant_only=false` list access, and unsupported `order` query
+    rejection.
+  - Disk guard after deployment: `/` 193G size, 179G used, 15G available,
+    93% used.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated audit ids, or smoke payload
+    secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Project Rate Limits List Query Allowlist Validation
 
 - Rechecked official OpenAI API references and existing audit evidence:

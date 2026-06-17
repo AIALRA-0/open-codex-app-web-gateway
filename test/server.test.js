@@ -25557,12 +25557,16 @@ test("Organization audit logs list local admin lifecycle events and filters", as
     const pagedJson = await paged.json();
     assert.equal(pagedJson.data.length, 2);
     assert.equal(pagedJson.has_more, true);
-    const orderIgnored = await fetch(`${baseUrl}/v1/organization/audit_logs?order=asc&limit=2`);
-    assert.equal(orderIgnored.status, 200);
-    assert.deepEqual(
-      (await orderIgnored.json()).data.map((entry) => entry.id),
-      pagedJson.data.map((entry) => entry.id),
-    );
+    const auditLogsWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/audit_logs?order=asc&limit=2`);
+    assert.equal(auditLogsWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await auditLogsWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
     const nextPage = await fetch(`${baseUrl}/v1/organization/audit_logs?limit=2&after=${encodeURIComponent(pagedJson.last_id)}`);
     assert.equal(nextPage.status, 200);
     const nextPageJson = await nextPage.json();
