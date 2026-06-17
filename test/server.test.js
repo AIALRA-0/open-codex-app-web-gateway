@@ -23367,9 +23367,16 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     const nextListedUserId = [projectUser.id, secondProjectUser.id].find((userId) => userId !== firstListedUserId);
     assert.ok(nextListedUserId);
 
-    const orderIgnoredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=1&order=desc`);
-    assert.equal(orderIgnoredUsers.status, 200);
-    assert.equal((await orderIgnoredUsers.json()).data[0].id, firstListedUserId);
+    const usersWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/users?limit=1&order=desc`);
+    assert.equal(usersWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await usersWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const afterUsers = await fetch(`${baseUrl}/v1/organization/users?limit=1&after=${encodeURIComponent(firstListedUserId)}`);
     assert.equal(afterUsers.status, 200);
@@ -23382,13 +23389,16 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     const allUsersJson = await allUsers.json();
     assert.equal(allUsersJson.data.length, 2);
 
-    const beforeIgnoredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
-    assert.equal(beforeIgnoredUsers.status, 200);
-    const beforeIgnoredUsersJson = await beforeIgnoredUsers.json();
-    assert.deepEqual(
-      beforeIgnoredUsersJson.data.map((item) => item.id),
-      allUsersJson.data.map((item) => item.id),
-    );
+    const usersWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
+    assert.equal(usersWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await usersWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const filteredUsers = await fetch(`${baseUrl}/v1/organization/users?limit=10&emails=bridge-org@example.com&emails=bridge-org-second@example.com`);
     assert.equal(filteredUsers.status, 200);
@@ -23530,9 +23540,16 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     const nextListedInviteId = [invite.id, secondInvite.id].find((inviteId) => inviteId !== firstListedInviteId);
     assert.ok(nextListedInviteId);
 
-    const orderIgnoredInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=1&order=desc`);
-    assert.equal(orderIgnoredInvites.status, 200);
-    assert.equal((await orderIgnoredInvites.json()).data[0].id, firstListedInviteId);
+    const invitesWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/invites?limit=1&order=desc`);
+    assert.equal(invitesWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await invitesWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const afterInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=1&after=${encodeURIComponent(firstListedInviteId)}`);
     assert.equal(afterInvites.status, 200);
@@ -23545,13 +23562,16 @@ test("Organization users and invites manage local admin lifecycle", async () => 
     const allInvitesJson = await allInvites.json();
     assert.equal(allInvitesJson.data.length, 2);
 
-    const beforeIgnoredInvites = await fetch(`${baseUrl}/v1/organization/invites?limit=10&before=${encodeURIComponent(nextListedInviteId)}`);
-    assert.equal(beforeIgnoredInvites.status, 200);
-    const beforeIgnoredInvitesJson = await beforeIgnoredInvites.json();
-    assert.deepEqual(
-      beforeIgnoredInvitesJson.data.map((item) => item.id),
-      allInvitesJson.data.map((item) => item.id),
-    );
+    const invitesWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/invites?limit=10&before=${encodeURIComponent(nextListedInviteId)}`);
+    assert.equal(invitesWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await invitesWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidOrganizationInviteListCases = [
       {

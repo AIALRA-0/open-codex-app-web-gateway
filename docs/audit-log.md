@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Organization Users And Invites List Query Allowlist Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for Organization administration:
+  - `GET /v1/organization/users` declares only `limit`, `after`, and
+    `emails` query parameters;
+  - `GET /v1/organization/invites` declares only `limit` and `after` query
+    parameters.
+- Tightened local bridge behavior:
+  - organization users list now rejects unsupported query parameters before
+    reading local admin state while preserving official `emails` filtering and
+    the local SDK compatibility `emails[]` alias;
+  - organization invites list now rejects unsupported `order` / `before`
+    queries instead of ignoring generic paginator fields;
+  - existing official `limit` and `after` scalar/range validation remains
+    unchanged for both lists.
+- Regression coverage updated:
+  - changed the Organization users/invites lifecycle test from ignored
+    `order` / `before` behavior to OpenAI-style 400 rejection.
+- Documentation updated:
+  - compatibility matrix now records the organization users and invites list
+    query allowlists.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization users and invites manage local admin lifecycle" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Organization admin smoke verified health, allowed users/invites
+    list access, allowed users `emails[]` compatibility filtering, and
+    unsupported `order` / `before` query rejection without creating local admin
+    state.
+  - Disk guard after deployment: `/` 193G size, 185G used, 7.8G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated admin record ids, or smoke
+    payload secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Videos List Query Allowlist Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Videos:

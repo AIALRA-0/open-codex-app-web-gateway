@@ -17184,6 +17184,9 @@ function officialProjectsListPaginationUrl(url) {
 }
 
 function validateOpenAIOrganizationUsersListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["limit", "after", "emails", "emails[]"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
@@ -17199,6 +17202,9 @@ function officialOrganizationUsersListPaginationUrl(url) {
 }
 
 function validateOpenAIOrganizationInvitesListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["limit", "after"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
