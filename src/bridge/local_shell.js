@@ -32,15 +32,17 @@ class LocalContainerStore {
   }
 
   createContainer(body = {}) {
+    if (!isPlainObject(body)) {
+      throw invalidContainerRequest("container request body must be a JSON object", null);
+    }
+    const expiresAfter = normalizeContainerExpiresAfter(body.expires_after);
     const now = nowSeconds();
     const container = {
       id: prefixedId("cntr"),
       object: "container",
       created_at: now,
       status: "running",
-      expires_after: isPlainObject(body.expires_after)
-        ? body.expires_after
-        : { anchor: "last_active_at", minutes: 20 },
+      expires_after: expiresAfter,
       last_active_at: now,
       memory_limit: body.memory_limit || this.defaultMemoryLimit,
       name: body.name || null,
@@ -846,6 +848,33 @@ function nowSeconds() {
   return Math.floor(Date.now() / 1000);
 }
 
+function normalizeContainerExpiresAfter(policy) {
+  if (policy == null) return { anchor: "last_active_at", minutes: 20 };
+  if (!isPlainObject(policy)) {
+    throw invalidContainerRequest("expires_after must be an object", "expires_after");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "anchor")) {
+    throw invalidContainerRequest("expires_after.anchor is required", "expires_after.anchor");
+  }
+  if (typeof policy.anchor !== "string") {
+    throw invalidContainerRequest("expires_after.anchor must be a string", "expires_after.anchor");
+  }
+  if (policy.anchor !== "last_active_at") {
+    throw invalidContainerRequest("expires_after.anchor must be last_active_at", "expires_after.anchor");
+  }
+  if (!Object.prototype.hasOwnProperty.call(policy, "minutes")) {
+    throw invalidContainerRequest("expires_after.minutes is required", "expires_after.minutes");
+  }
+  if (typeof policy.minutes !== "number") {
+    throw invalidContainerRequest("expires_after.minutes must be an integer", "expires_after.minutes");
+  }
+  const minutes = policy.minutes;
+  if (!Number.isInteger(minutes) || minutes < 1) {
+    throw invalidContainerRequest("expires_after.minutes must be a positive integer", "expires_after.minutes");
+  }
+  return { anchor: "last_active_at", minutes };
+}
+
 function containerExpiresAt(container = {}) {
   const policy = container.expires_after;
   if (!isPlainObject(policy)) return 0;
@@ -865,6 +894,14 @@ function containerExpiredError(containerId) {
   error.status = 400;
   error.code = "container_expired";
   error.param = "container_id";
+  return error;
+}
+
+function invalidContainerRequest(message, param) {
+  const error = new Error(message);
+  error.status = 400;
+  error.code = "invalid_container_request";
+  error.param = param;
   return error;
 }
 

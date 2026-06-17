@@ -15317,6 +15317,71 @@ test("local Containers back Responses shell compatibility and artifacts", async 
   });
 });
 
+test("local Containers validate create expires_after request shape", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for local container create validation");
+  }, async ({ bridgeAddress }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const invalidCases = [{
+      body: null,
+      message: "container request body must be a JSON object",
+      param: null,
+    }, {
+      body: { expires_after: "soon" },
+      message: "expires_after must be an object",
+      param: "expires_after",
+    }, {
+      body: { expires_after: { minutes: 20 } },
+      message: "expires_after.anchor is required",
+      param: "expires_after.anchor",
+    }, {
+      body: { expires_after: { anchor: "created_at", minutes: 20 } },
+      message: "expires_after.anchor must be last_active_at",
+      param: "expires_after.anchor",
+    }, {
+      body: { expires_after: { anchor: "last_active_at" } },
+      message: "expires_after.minutes is required",
+      param: "expires_after.minutes",
+    }, {
+      body: { expires_after: { anchor: "last_active_at", minutes: "20" } },
+      message: "expires_after.minutes must be an integer",
+      param: "expires_after.minutes",
+    }, {
+      body: { expires_after: { anchor: "last_active_at", minutes: 0 } },
+      message: "expires_after.minutes must be a positive integer",
+      param: "expires_after.minutes",
+    }];
+
+    for (const item of invalidCases) {
+      const response = await fetch(`${baseUrl}/v1/containers`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(item.body),
+      });
+      assert.equal(response.status, 400, item.message);
+      const json = await response.json();
+      assert.equal(json.error.code, "invalid_container_request");
+      assert.equal(json.error.message, item.message);
+      assert.equal(json.error.param, item.param);
+    }
+
+    const valid = await fetch(`${baseUrl}/v1/containers`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "container-validation-ok",
+        expires_after: { anchor: "last_active_at", minutes: 30 },
+      }),
+    });
+    assert.equal(valid.status, 200);
+    const container = await valid.json();
+    assert.deepEqual(container.expires_after, { anchor: "last_active_at", minutes: 30 });
+
+    const deleted = await fetch(`${baseUrl}/v1/containers/${container.id}`, { method: "DELETE" });
+    assert.equal(deleted.status, 200);
+  });
+});
+
 test("local Containers expire workspaces and block shell reuse", async () => {
   await withMockProvider(async () => {
     assert.fail("provider should not be called when a referenced local container is expired");

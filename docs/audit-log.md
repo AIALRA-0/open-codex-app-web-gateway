@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Container Create Expiration Validation
+
+- Rechecked the official OpenAI Containers create/retrieve documentation
+  through the OpenAI developer docs MCP:
+  - container metadata exposes `expires_after`;
+  - `expires_after` uses an `anchor` reference point and a `minutes` duration;
+  - official examples and lifecycle text use `last_active_at` as the container
+    activity anchor.
+- Tightened local Container create request validation:
+  - `POST /v1/containers` now requires the body to be a JSON object;
+  - provided `expires_after` must be an object;
+  - `expires_after.anchor` is required, must be a string, and must be
+    `last_active_at`;
+  - `expires_after.minutes` is required, must be a JSON number, and must be a
+    positive integer;
+  - invalid requests fail before any local storage or provider interaction with
+    `code:"invalid_container_request"` and the precise `param`;
+  - omitted `expires_after` still defaults to
+    `{anchor:"last_active_at",minutes:20}` for local container compatibility.
+- Regression coverage added:
+  - invalid non-object body, non-object `expires_after`, missing/unsupported
+    anchor, missing minutes, string minutes, and zero minutes all return 400;
+  - a valid `{anchor:"last_active_at",minutes:30}` policy is preserved on the
+    created container.
+- Documentation updated:
+  - compatibility matrix now records create-time `expires_after` validation;
+  - evaluation plan now includes container expiration-policy request validation
+    before lifecycle checks.
+- Validation:
+  - `node --check src/bridge/local_shell.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "local Containers"
+    test/server.test.js` passes: 3 tests;
+  - `git diff --check` passes;
+  - `npm test` passes: 350 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` verifies invalid
+    `expires_after.anchor:"created_at"` and string `expires_after.minutes`
+    return `400 invalid_container_request`, then creates and deletes a valid
+    temporary container with `{anchor:"last_active_at",minutes:30}`.
+- Runtime/storage check:
+  - `/` has 15 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Container Expiration Lifecycle
 
 - Rechecked the official OpenAI Containers and data-retention documentation

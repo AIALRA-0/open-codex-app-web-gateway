@@ -1074,7 +1074,7 @@ not in Git.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata, preserves `memory_limit`, `expires_after`, `network_policy`, `metadata`, and local `skill_reference` defaults from `skills` |
+| `POST /v1/containers` | Implemented | Creates a local container workspace with OpenAI-style `container` metadata, preserves `memory_limit`, `expires_after`, `network_policy`, `metadata`, and local `skill_reference` defaults from `skills`; validates `expires_after:{anchor:"last_active_at",minutes:<positive integer>}` before storage |
 | `GET /v1/containers` | Implemented | Lists local containers with `name`, `limit`, `after`, `before`, and `order` pagination; lazily marks elapsed `expires_after` containers `expired` and prunes the local `/mnt/data` workspace |
 | `GET /v1/containers/{container_id}` | Implemented | Returns local container metadata, lazily refreshing elapsed `expires_after` containers to `status:"expired"` with local compatibility metadata |
 | `DELETE /v1/containers/{container_id}` | Implemented | Deletes the local container workspace and artifacts |
