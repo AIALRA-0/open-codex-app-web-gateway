@@ -26372,9 +26372,16 @@ test("Organization projects manage local users and rate limits", async () => {
     const nextListedUserId = [user.id, secondUser.id].find((userId) => userId !== firstListedUserId);
     assert.ok(nextListedUserId);
 
-    const orderIgnoredUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1&order=desc`);
-    assert.equal(orderIgnoredUsers.status, 200);
-    assert.equal((await orderIgnoredUsers.json()).data[0].id, firstListedUserId);
+    const projectUsersWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1&order=desc`);
+    assert.equal(projectUsersWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await projectUsersWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const afterUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=1&after=${encodeURIComponent(firstListedUserId)}`);
     assert.equal(afterUsers.status, 200);
@@ -26387,13 +26394,16 @@ test("Organization projects manage local users and rate limits", async () => {
     const allUsersJson = await allUsers.json();
     assert.equal(allUsersJson.data.length, 2);
 
-    const beforeIgnoredUsers = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
-    assert.equal(beforeIgnoredUsers.status, 200);
-    const beforeIgnoredUsersJson = await beforeIgnoredUsers.json();
-    assert.deepEqual(
-      beforeIgnoredUsersJson.data.map((item) => item.id),
-      allUsersJson.data.map((item) => item.id),
-    );
+    const projectUsersWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/users?limit=10&before=${encodeURIComponent(nextListedUserId)}`);
+    assert.equal(projectUsersWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await projectUsersWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidProjectUserListCases = [
       {

@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Project Users List Query Allowlist Validation
+
+- Rechecked official OpenAI API references:
+  - the official endpoint list includes
+    `/v1/organization/projects/{project_id}/users`;
+  - the earlier 2026-06-17 Project Users list audit recorded the current
+    official OpenAPI YAML contract for this endpoint as `limit` and `after`
+    only, with no documented `order` or `before` query parameters.
+- Tightened local bridge behavior:
+  - project user listing now rejects unsupported query parameters before
+    reading local project/user state, so ignored `order` / `before`
+    pagination can no longer shape or appear to shape list output;
+  - existing official `limit` and `after` scalar/range validation remains
+    unchanged, including `limit` from 1 through 100 and the default 20 item
+    limit.
+- Regression coverage updated:
+  - changed the Organization project users/rate-limits lifecycle test from
+    ignored project-user `order` / `before` behavior to OpenAI-style 400
+    rejection.
+- Documentation updated:
+  - compatibility matrix now records the official project users list query
+    allowlist and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local users and rate limits" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Project Users smoke verified health, unsupported `order` query
+    rejection, and unsupported `before` query rejection before local project
+    lookup, without creating local project or user state.
+  - Disk guard after deployment: `/` 193G size, 182G used, 11G available,
+    95% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, admin keys, account credentials, bearer tokens, provider
+    headers, local deployment env files, generated project ids, generated user
+    ids, or smoke payload secrets were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Organization Projects List Query Allowlist Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Projects:
