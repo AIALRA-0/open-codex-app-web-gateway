@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning Checkpoint Permission List Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 for
+  `GET /v1/fine_tuning/checkpoints/{fine_tuned_model_checkpoint}/permissions`:
+  - operation `listFineTuningCheckpointPermissions` lists permissions for a
+    fine-tuned model checkpoint;
+  - official query parameters are `project_id`, `after`, `limit`, and `order`;
+  - `order` uses the endpoint-specific `ascending` / `descending` enum, with
+    default `descending`;
+  - `before` is not an official query parameter for this endpoint.
+- Tightened local Fine-tuning checkpoint permission list behavior:
+  - `GET /v1/fine_tuning/checkpoints/{checkpoint}/permissions` now validates
+    `project_id`, `after`, `limit`, and endpoint-specific `order` before
+    listing local permission records;
+  - repeated `project_id` / `after` / `limit` / `order`, invalid `order`, and
+    invalid positive-integer limits return OpenAI-style HTTP 400
+    `invalid_request_parameter` errors;
+  - official `order=ascending` / `order=descending` is mapped into the local
+    paginator while preserving the default descending response order;
+  - unsupported generic paginator parameters such as `before` no longer shape
+    official checkpoint-permission list results.
+- Regression coverage updated:
+  - the Fine-tuning lifecycle test now verifies `project_id` filtering,
+    `ascending` / `descending` order, `after` pagination, ignored unsupported
+    `before`, invalid `limit`, repeated `limit` / `after` / `project_id`,
+    invalid `order=asc`, and repeated `order`.
+- Documentation updated:
+  - compatibility matrix now records the official checkpoint-permission list
+    query boundary, endpoint-specific order enum, scalar validation, and ignored
+    unsupported `before`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public checkpoint-permission smoke marker
+    `ft-permissions-list-smoke-mqic3oiu` created one local Fine-tuning job and
+    synthetic checkpoint, created two temporary checkpoint permissions, verified
+    `ascending` / `descending` order, `after` pagination, ignored unsupported
+    `before`, `project_id` filtering, invalid `order=asc`, and repeated
+    `project_id` errors, then deleted both temporary permissions. No provider
+    fine-tuning or upstream model call was performed.
+  - Disk guard after deployment: `/` 193G size, 178G used, 15G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5364 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, training datasets, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Videos List Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 through the developer-docs MCP for

@@ -17056,10 +17056,51 @@ async function handleFineTuningCheckpointPermissionsCreate(req, res, fineTuningS
 }
 
 function handleFineTuningCheckpointPermissionsList(res, fineTuningStore, checkpoint, url) {
+  const queryError = validateOpenAIFineTuningCheckpointPermissionsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const permissions = fineTuningStore.listCheckpointPermissions(checkpoint, {
     projectId: url.searchParams.get("project_id") || null,
   });
-  sendJson(res, 200, paginateListWithDefaultOrder(permissions, url, "desc", 10, 100));
+  sendJson(res, 200, paginateListWithDefaultOrder(
+    permissions,
+    officialFineTuningCheckpointPermissionsListPaginationUrl(url),
+    "desc",
+    10,
+    100,
+  ));
+}
+
+function validateOpenAIFineTuningCheckpointPermissionsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url);
+  if (limitError) return limitError;
+
+  const afterError = validateOpenAISingleQueryValue(url, "after");
+  if (afterError) return afterError;
+
+  const projectIdError = validateOpenAISingleQueryValue(url, "project_id");
+  if (projectIdError) return projectIdError;
+
+  const orders = url.searchParams.getAll("order");
+  if (orders.length > 1) {
+    return requestValidationError("order must be a single string query value", "order");
+  }
+  if (orders.length && !["ascending", "descending"].includes(orders[0])) {
+    return requestValidationError("order must be one of: ascending, descending", "order");
+  }
+  return null;
+}
+
+function officialFineTuningCheckpointPermissionsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  if (url.searchParams.has("after")) localUrl.searchParams.set("after", url.searchParams.get("after"));
+  if (url.searchParams.has("limit")) localUrl.searchParams.set("limit", url.searchParams.get("limit"));
+  if (url.searchParams.has("order")) {
+    localUrl.searchParams.set("order", url.searchParams.get("order") === "ascending" ? "asc" : "desc");
+  }
+  return localUrl;
 }
 
 function handleFineTuningCheckpointPermissionDelete(res, fineTuningStore, checkpoint, permissionId) {

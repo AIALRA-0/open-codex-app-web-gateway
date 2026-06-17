@@ -26471,6 +26471,78 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(permissionListJson.data.length, 1);
     assert.equal(permissionListJson.data[0].project_id, "proj_local_a");
 
+    const permissionsAscending = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&limit=10`);
+    assert.equal(permissionsAscending.status, 200);
+    const permissionsAscendingJson = await permissionsAscending.json();
+    assert.equal(permissionsAscendingJson.data.length, 2);
+    const ascendingPermissionIds = permissionsAscendingJson.data.map((permission) => permission.id);
+
+    const permissionsDescending = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=descending&limit=10`);
+    assert.equal(permissionsDescending.status, 200);
+    const permissionsDescendingJson = await permissionsDescending.json();
+    assert.deepEqual(
+      permissionsDescendingJson.data.map((permission) => permission.id),
+      ascendingPermissionIds.slice().reverse(),
+    );
+
+    const permissionsAfter = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&after=${encodeURIComponent(ascendingPermissionIds[0])}&limit=10`);
+    assert.equal(permissionsAfter.status, 200);
+    assert.deepEqual(
+      (await permissionsAfter.json()).data.map((permission) => permission.id),
+      ascendingPermissionIds.slice(1),
+    );
+
+    const permissionsBeforeIgnored = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&before=${encodeURIComponent(ascendingPermissionIds[1])}&limit=10`);
+    assert.equal(permissionsBeforeIgnored.status, 200);
+    assert.deepEqual(
+      (await permissionsBeforeIgnored.json()).data.map((permission) => permission.id),
+      ascendingPermissionIds,
+    );
+
+    for (const testCase of [
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?limit=0`,
+        param: "limit",
+        message: "limit must be a positive integer",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?limit=1&limit=2`,
+        param: "limit",
+        message: "limit must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?after=${encodeURIComponent(ascendingPermissionIds[0])}&after=cp_other`,
+        param: "after",
+        message: "after must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?project_id=proj_local_a&project_id=proj_local_b`,
+        param: "project_id",
+        message: "project_id must be a single string query value",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=asc`,
+        param: "order",
+        message: "order must be one of: ascending, descending",
+      },
+      {
+        path: `/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&order=descending`,
+        param: "order",
+        message: "order must be a single string query value",
+      },
+    ]) {
+      const invalidPermissionsList = await fetch(`${baseUrl}${testCase.path}`);
+      assert.equal(invalidPermissionsList.status, 400, testCase.path);
+      assert.deepEqual(await invalidPermissionsList.json(), {
+        error: {
+          message: testCase.message,
+          type: "invalid_request_error",
+          param: testCase.param,
+          code: "invalid_request_parameter",
+        },
+      }, testCase.path);
+    }
+
     const deletePermission = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions/${createdPermissions.data[0].id}`, {
       method: "DELETE",
     });
