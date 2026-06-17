@@ -1,5 +1,50 @@
 # Audit Log
 
+## 2026-06-17 Fine-tuning List Query Allowlist Validation
+
+- Rechecked official OpenAI docs for Fine-tuning list endpoints:
+  - `GET /v1/fine_tuning/jobs` declares `after`, `limit`, and
+    `metadata[k]=v` / `metadata=null` query controls;
+  - local events/checkpoints list endpoints keep the documented `after` and
+    `limit` pagination surface;
+  - checkpoint permission list keeps `project_id`, `limit`, `after`, and
+    `order` controls.
+- Tightened local bridge behavior:
+  - fine-tuning jobs list now rejects unsupported query parameters before
+    reading local state while preserving official metadata filter validation;
+  - job events and checkpoints lists now reject unsupported `before` / `order`
+    query parameters instead of ignoring generic paginator fields;
+  - checkpoint permission list now rejects unsupported query parameters such
+    as `before` before reading local permission records.
+- Regression coverage updated:
+  - changed the fine-tuning lifecycle test to expect OpenAI-style 400
+    `invalid_request_error` responses for unsupported `before` queries on
+    jobs, events, checkpoints, and checkpoint permissions.
+- Documentation updated:
+  - compatibility matrix now records the fine-tuning list query allowlists and
+    the unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Fine-tuning API manages local jobs, checkpoints, events, and permissions" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public Fine-tuning smoke verified health, normal jobs list access, and
+    unsupported `before` rejection on jobs, events, checkpoints, and checkpoint
+    permissions without creating local fine-tuning state.
+  - Disk guard after deployment: `/` 193G size, 185G used, 8.3G available,
+    96% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated runtime ids, or smoke payload secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Files List Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Files:

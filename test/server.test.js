@@ -27437,8 +27437,15 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(listedMetadataNullJson.data.every((entry) => entry.metadata == null || Object.keys(entry.metadata).length === 0), true);
 
     const listedWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs?limit=10&metadata%5Bsuite%5D=fine-tuning-local&before=${job.id}&order=asc`);
-    assert.equal(listedWithNonOfficialPagination.status, 200);
-    assert.equal((await listedWithNonOfficialPagination.json()).data.some((entry) => entry.id === job.id), true);
+    assert.equal(listedWithNonOfficialPagination.status, 400);
+    assert.deepEqual(await listedWithNonOfficialPagination.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     for (const testCase of [
       {
@@ -27493,8 +27500,15 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.equal(events.data.some((event) => /fine-tuned model/i.test(event.message)), true);
 
     const eventsWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/events?limit=10&before=${events.data[0].id}&order=asc`);
-    assert.equal(eventsWithNonOfficialPagination.status, 200);
-    assert.equal((await eventsWithNonOfficialPagination.json()).data.length, events.data.length);
+    assert.equal(eventsWithNonOfficialPagination.status, 400);
+    assert.deepEqual(await eventsWithNonOfficialPagination.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     for (const testCase of [
       {
@@ -27538,8 +27552,15 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
     assert.match(checkpoint.fine_tuned_model_checkpoint, /:ckpt-step-1000$/);
 
     const checkpointsWithNonOfficialPagination = await fetch(`${baseUrl}/v1/fine_tuning/jobs/${job.id}/checkpoints?limit=10&before=${checkpoint.id}&order=asc`);
-    assert.equal(checkpointsWithNonOfficialPagination.status, 200);
-    assert.equal((await checkpointsWithNonOfficialPagination.json()).data.length, 1);
+    assert.equal(checkpointsWithNonOfficialPagination.status, 400);
+    assert.deepEqual(await checkpointsWithNonOfficialPagination.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     for (const testCase of [
       {
@@ -27684,12 +27705,16 @@ test("Fine-tuning API manages local jobs, checkpoints, events, and permissions",
       ascendingPermissionIds.slice(1),
     );
 
-    const permissionsBeforeIgnored = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&before=${encodeURIComponent(ascendingPermissionIds[1])}&limit=10`);
-    assert.equal(permissionsBeforeIgnored.status, 200);
-    assert.deepEqual(
-      (await permissionsBeforeIgnored.json()).data.map((permission) => permission.id),
-      ascendingPermissionIds,
-    );
+    const permissionsWithUnsupportedBefore = await fetch(`${baseUrl}/v1/fine_tuning/checkpoints/${checkpointPath}/permissions?order=ascending&before=${encodeURIComponent(ascendingPermissionIds[1])}&limit=10`);
+    assert.equal(permissionsWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await permissionsWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     for (const testCase of [
       {

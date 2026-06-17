@@ -17653,6 +17653,9 @@ function handleFineTuningJobsList(res, fineTuningStore, url) {
 }
 
 function validateOpenAIFineTuningJobsListQuery(url) {
+  const allowedError = validateOpenAIFineTuningJobsListAllowedQueryKeys(url);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url);
   if (limitError) return limitError;
 
@@ -17662,7 +17665,20 @@ function validateOpenAIFineTuningJobsListQuery(url) {
   return validateOpenAIFineTuningMetadataQueryFilters(url);
 }
 
+function validateOpenAIFineTuningJobsListAllowedQueryKeys(url) {
+  for (const key of url.searchParams.keys()) {
+    if (["after", "limit", "metadata"].includes(key) || /^metadata\[[^\]]+\]$/.test(key)) {
+      continue;
+    }
+    return requestValidationError(`Unsupported query parameter: ${key}`, key);
+  }
+  return null;
+}
+
 function validateOpenAIFineTuningSubListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url);
   if (limitError) return limitError;
 
@@ -17866,6 +17882,9 @@ function handleFineTuningCheckpointPermissionsList(res, fineTuningStore, checkpo
 }
 
 function validateOpenAIFineTuningCheckpointPermissionsListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["project_id", "limit", "after", "order"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url);
   if (limitError) return limitError;
 
