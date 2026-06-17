@@ -12704,7 +12704,27 @@ async function handleAudioVoiceConsentsCreate(req, res, config, audioVoiceStore)
 }
 
 function handleAudioVoiceConsentsList(res, audioVoiceStore, url) {
-  sendJson(res, 200, paginateList(audioVoiceStore.listConsents(), url));
+  const queryError = validateOpenAIAudioVoiceConsentsListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+  sendJson(res, 200, paginateList(audioVoiceStore.listConsents(), officialAudioVoiceConsentsListPaginationUrl(url)));
+}
+
+function validateOpenAIAudioVoiceConsentsListQuery(url) {
+  const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialAudioVoiceConsentsListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleAudioVoiceConsentGet(res, audioVoiceStore, consentId) {

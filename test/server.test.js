@@ -6224,11 +6224,61 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     assert.equal(consent.recording.content, undefined);
     assert.equal(consent.compatibility.provider, "local");
 
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const secondConsentForm = new FormData();
+    secondConsentForm.append("name", "Second Consent");
+    secondConsentForm.append("language", "en-US");
+    secondConsentForm.append("recording", new Blob([Buffer.from("second consent recording")], { type: "audio/wav" }), "second-consent.wav");
+
+    const secondConsentResponse = await fetch(`${baseUrl}/v1/audio/voice_consents`, {
+      method: "POST",
+      body: secondConsentForm,
+    });
+    assert.equal(secondConsentResponse.status, 200);
+    const secondConsent = await secondConsentResponse.json();
+    assert.match(secondConsent.id, /^cons_/);
+
     const consentList = await fetch(`${baseUrl}/v1/audio/voice_consents?limit=1`);
     assert.equal(consentList.status, 200);
     const consentListJson = await consentList.json();
     assert.equal(consentListJson.object, "list");
     assert.equal(consentListJson.data[0].id, consent.id);
+    assert.equal(consentListJson.has_more, true);
+
+    const consentAfter = await fetch(`${baseUrl}/v1/audio/voice_consents?after=${encodeURIComponent(consent.id)}&limit=10`);
+    assert.equal(consentAfter.status, 200);
+    const consentAfterJson = await consentAfter.json();
+    assert.deepEqual(consentAfterJson.data.map((item) => item.id), [secondConsent.id]);
+
+    const consentBeforeIgnored = await fetch(`${baseUrl}/v1/audio/voice_consents?order=desc&before=${encodeURIComponent(secondConsent.id)}&limit=10`);
+    assert.equal(consentBeforeIgnored.status, 200);
+    const consentBeforeIgnoredJson = await consentBeforeIgnored.json();
+    assert.deepEqual(
+      consentBeforeIgnoredJson.data.map((item) => item.id),
+      [consent.id, secondConsent.id],
+    );
+
+    const invalidConsentLimit = await fetch(`${baseUrl}/v1/audio/voice_consents?limit=101`);
+    assert.equal(invalidConsentLimit.status, 400);
+    assert.deepEqual(await invalidConsentLimit.json(), {
+      error: {
+        message: "limit must be an integer between 1 and 100",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const invalidConsentAfter = await fetch(`${baseUrl}/v1/audio/voice_consents?after=${encodeURIComponent(consent.id)}&after=${encodeURIComponent(secondConsent.id)}`);
+    assert.equal(invalidConsentAfter.status, 400);
+    assert.deepEqual(await invalidConsentAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const consentGet = await fetch(`${baseUrl}/v1/audio/voice_consents/${consent.id}`);
     assert.equal(consentGet.status, 200);
@@ -6290,6 +6340,16 @@ test("Audio custom voice consent and voice endpoints store local metadata", asyn
     assert.equal(consentDelete.status, 200);
     assert.deepEqual(await consentDelete.json(), {
       id: consent.id,
+      object: "audio.voice_consent.deleted",
+      deleted: true,
+    });
+
+    const secondConsentDelete = await fetch(`${baseUrl}/v1/audio/voice_consents/${secondConsent.id}`, {
+      method: "DELETE",
+    });
+    assert.equal(secondConsentDelete.status, 200);
+    assert.deepEqual(await secondConsentDelete.json(), {
+      id: secondConsent.id,
       object: "audio.voice_consent.deleted",
       deleted: true,
     });

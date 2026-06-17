@@ -1,5 +1,61 @@
 # Audit Log
 
+## 2026-06-17 Audio Voice Consent List Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 through the developer-docs MCP for
+  `GET /v1/audio/voice_consents`:
+  - operation `listVoiceConsents` returns voice consent recordings available to
+    the organization;
+  - official query parameters are `after` and `limit`;
+  - `limit` is documented as ranging from 1 through 100, with default 20;
+  - `before` and `order` are not official query parameters for this endpoint.
+- Tightened local Audio voice consent list behavior:
+  - `GET /v1/audio/voice_consents` now validates official `limit` and `after`
+    before reading local consent metadata;
+  - repeated `limit` / `after`, non-integer limits, zero limits, and limits
+    above 100 return OpenAI-style HTTP 400 `invalid_request_parameter` errors;
+  - pagination now passes only official `after` and `limit` through to the
+    shared list paginator, so unsupported generic paginator fields such as
+    `before` and `order` cannot silently affect official voice-consent list
+    results.
+- Regression coverage updated:
+  - the Audio custom voice lifecycle test now creates two local consent
+    records, verifies `after` pagination, verifies unsupported
+    `order=desc&before=<second_consent_id>` is ignored and both records are
+    still returned in official ascending order, and checks invalid `limit` and
+    repeated `after` errors.
+- Documentation updated:
+  - compatibility matrix now records the official `after` / `limit`
+    voice-consent list boundary, limit range, single `after` rule, and ignored
+    unsupported `before` / `order` parameters.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Audio custom voice consent and voice endpoints store local metadata" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public voice consent list smoke marker `voice-consents-list-smoke-mqibrtgs`
+    created two temporary local voice consent records, verified official
+    `after` pagination, verified unsupported `order=desc` plus `before` is
+    ignored, verified invalid `limit=101` and repeated `after` return HTTP 400,
+    then deleted both temporary records.
+  - Disk guard after deployment: `/` 193G size, 178G used, 16G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5361 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, voice recordings, or smoke-test request secrets were
+    added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Chat Completion Messages List Official Pagination
 
 - Rechecked official OpenAI OpenAPI for
