@@ -1329,6 +1329,28 @@ test("Responses endpoints validate input image and file detail before provider c
       {
         endpoint: "/v1/responses",
         input: [{
+          type: "apply_patch_call",
+          call_id: "call_patch",
+          status: "completed",
+          operation: { type: "update", path: "README.md" },
+        }],
+        param: "input.0.id",
+        message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "apply_patch_call_output",
+          id: "apco_missing_status",
+          call_id: "call_patch",
+          output: "ok",
+        }],
+        param: "input.0.status",
+        message: "input.0.status must be one of: completed, failed",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
           type: "tool_search_call",
           status: "failed",
           arguments: { paths: ["crm.lookup"] },

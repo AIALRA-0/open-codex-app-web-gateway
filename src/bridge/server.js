@@ -5832,16 +5832,20 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "apply_patch_call") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
+    const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
+    if (requiredStatusError) return requiredStatusError;
     const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
     if (callIdError) return callIdError;
     return validateOpenAIRequiredObjectItemField(item, param, "operation");
   }
 
   if (item.type === "apply_patch_call_output") {
-    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
+    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
     if (idError) return idError;
+    const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
+    if (requiredStatusError) return requiredStatusError;
     const callIdError = validateOpenAIRequiredStringItemField(item, param, "call_id");
     if (callIdError) return callIdError;
     return validateOpenAIOptionalStringItemField(item, param, "output", { nullable: true });

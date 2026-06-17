@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Responses Apply Patch Replay Required Fields
+
+- Rechecked the current official OpenAI OpenAPI 2.3.0 `ApplyPatchToolCall`,
+  `ApplyPatchToolCallOutput`, `ApplyPatchCallStatus`, and
+  `ApplyPatchCallOutputStatus` schemas through the developer docs MCP workflow
+  and the official `openai-openapi` YAML:
+  - `apply_patch_call` requires `id`, `call_id`, `status`, and `operation`;
+  - `apply_patch_call_output` requires `id`, `call_id`, and `status`;
+  - status enums are `in_progress`/`completed` for calls and
+    `completed`/`failed` for outputs.
+- Tightened Responses input validation before provider calls:
+  - `/v1/responses`, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` now reject missing apply-patch replay ids and
+    statuses;
+  - existing `call_id`, operation object, and output string/null validation
+    remains in place.
+- Regression coverage updated:
+  - extended the shared Responses input-detail boundary test with missing
+    `apply_patch_call.id` and missing `apply_patch_call_output.status` cases.
+- Documentation updated:
+  - compatibility matrix now records required apply-patch ids and statuses.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - `node --check test/translator.test.js` passes;
+  - `node --test --test-name-pattern "input image and file detail|hosted and local tool items" test/server.test.js test/translator.test.js`
+    passes 2/2;
+  - `node --test test/*.test.js` passes 367/367;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `apply_patch_call` replay smoke against
+    `https://opencodexapp.aialra.online/v1/responses` returns 400
+    `invalid_request_parameter` for `param:"input.0.id"` with message
+    `input.0.id must be a non-empty string`.
+- Disk guard:
+  - root filesystem has 16 GB free and is 93% used;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, MCP authorization values,
+    or deployment env files were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Responses Code Interpreter Replay Required Fields
 
 - Rechecked the current official OpenAI OpenAPI 2.3.0
