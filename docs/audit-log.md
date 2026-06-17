@@ -1,5 +1,62 @@
 # Audit Log
 
+## 2026-06-17 Videos List Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 through the developer-docs MCP for
+  `GET /v1/videos`:
+  - operation `ListVideos` lists recently generated videos for the current
+    project;
+  - official query parameters are `limit`, `order`, and `after`;
+  - `limit` is documented with minimum 0 and maximum 100;
+  - `order` uses the official `asc` / `desc` enum;
+  - `before` is not an official query parameter for this endpoint.
+- Tightened local Videos list behavior:
+  - `GET /v1/videos` now validates official `limit`, `order`, and `after`
+    query inputs before reading local video records;
+  - repeated `limit` / `order` / `after`, invalid `order`, non-integer limits,
+    negative limits, and limits above 100 return OpenAI-style HTTP 400
+    `invalid_request_parameter` errors;
+  - `limit=0` now follows the official zero-minimum contract by returning an
+    empty page with `has_more:true` when local video records exist;
+  - pagination now passes only official `after`, `order`, and `limit` through
+    to the local video paginator, so unsupported generic paginator fields such
+    as `before` cannot shape official video-list results.
+- Regression coverage updated:
+  - the Videos lifecycle test now verifies `limit=0`, invalid `limit`, invalid
+    `order`, repeated `after`, default descending order, explicit ascending
+    order, `after` pagination, and ignored unsupported `before`.
+- Documentation updated:
+  - compatibility matrix now records the official Videos list query boundary,
+    zero-limit behavior, scalar validation, order enum validation, and ignored
+    unsupported `before`.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Videos API creates, lists, retrieves, downloads, remixes, and deletes local jobs" test/server.test.js`
+    passed 1/1 tests.
+  - Full `node --test test/*.test.js` passed 372/372 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public health check for `https://opencodexapp.aialra.online/healthz`
+    returned `ok:true`, provider base `https://api.deepseek.com`, default
+    model `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public Videos list smoke marker `videos-list-smoke-mqibx4ss` created two
+    temporary local video jobs, verified `limit=0`, explicit ascending order,
+    `after` pagination, ignored unsupported `before`, invalid `limit=101`,
+    invalid `order`, and repeated `after` errors, then deleted both temporary
+    video jobs.
+  - Disk guard after deployment: `/` 193G size, 178G used, 15G available, 93%
+    used; repo `state/` 41M, `output/` 4.4M,
+    `/srv/aialra/data/opencodexapp` 176K, and
+    `/srv/aialra/logs/opencodexapp` 31M.
+  - Runtime prune dry-run scanned 5361 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated media payloads, or smoke-test request
+    secrets were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Audio Voice Consent List Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 through the developer-docs MCP for

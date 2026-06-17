@@ -13151,11 +13151,34 @@ async function handleVideoCharacterCreate(req, res, config, store) {
 }
 
 function handleVideosList(res, store, url) {
+  const queryError = validateOpenAIVideosListQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
   const videos = store.list()
     .filter((record) => record?.video)
     .map((record) => clone(record.video))
     .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
-  sendJson(res, 200, paginateVideosList(videos, url));
+  sendJson(res, 200, paginateVideosList(videos, officialVideosListPaginationUrl(url)));
+}
+
+function validateOpenAIVideosListQuery(url) {
+  const orderError = validateOpenAIListOrderQuery(url);
+  if (orderError) return orderError;
+
+  const limitError = validateOpenAIListZeroLimitQuery(url, { max: 100 });
+  if (limitError) return limitError;
+
+  return validateOpenAISingleQueryValue(url, "after");
+}
+
+function officialVideosListPaginationUrl(url) {
+  const localUrl = new URL("http://local/");
+  for (const name of ["after", "order", "limit"]) {
+    if (url.searchParams.has(name)) localUrl.searchParams.set(name, url.searchParams.get(name));
+  }
+  return localUrl;
 }
 
 function handleVideoCharacterGet(res, store, characterId) {
@@ -13610,7 +13633,7 @@ function placeholderVideoContent(video, variant) {
 function paginateVideosList(items, url) {
   const order = String(url.searchParams.get("order") || "desc").toLowerCase() === "asc" ? "asc" : "desc";
   const after = url.searchParams.get("after");
-  const limit = parseLimit(url.searchParams.get("limit"), 20, 100);
+  const limit = parseZeroLimit(url.searchParams.get("limit"), 20, 100);
   let data = items.map((item) => clone(item));
   if (order === "asc") data.reverse();
   if (after) {

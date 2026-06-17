@@ -1978,7 +1978,7 @@ Completions.
 | Endpoint | Status | Notes |
 | --- | --- | --- |
 | `POST /v1/videos` | Implemented locally | Accepts JSON or multipart `prompt`, optional `model`, `size`, `seconds`, `quality`, `metadata`, `characters` with up to two character ID references, and asset references; returns an OpenAI-style `object:"video"` record with `status:"completed"` and `progress:100` |
-| `GET /v1/videos` | Implemented locally | Lists local video jobs with `limit`, `after`, and `order` pagination |
+| `GET /v1/videos` | Implemented locally | Lists local video jobs with official `limit`, `after`, and `order` pagination; `limit` is validated from 0 through 100 with default 20, `limit=0` returns an empty page with `has_more` when records exist, scalar `after` / `order` / `limit` may appear only once, `order` is validated against `asc` / `desc`, and unsupported generic paginator parameters such as `before` do not affect the official list result |
 | `GET /v1/videos/{video_id}` | Implemented locally | Retrieves a stored local video job |
 | `DELETE /v1/videos/{video_id}` | Implemented locally | Deletes a local video job and returns `object:"video.deleted"` |
 | `GET /v1/videos/{video_id}/content` | Implemented locally | Returns small placeholder bytes with `variant=video`, `thumbnail`, or `spritesheet` and matching `video/mp4`, `image/webp`, or `image/jpeg` content type |

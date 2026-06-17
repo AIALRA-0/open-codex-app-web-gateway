@@ -26864,6 +26864,78 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
     assert.equal(listJson.data[0].id, video.id);
     assert.equal(listJson.has_more, false);
 
+    const zeroLimitList = await fetch(`${baseUrl}/v1/videos?limit=0`);
+    assert.equal(zeroLimitList.status, 200);
+    const zeroLimitListJson = await zeroLimitList.json();
+    assert.equal(zeroLimitListJson.object, "list");
+    assert.deepEqual(zeroLimitListJson.data, []);
+    assert.equal(zeroLimitListJson.first_id, null);
+    assert.equal(zeroLimitListJson.last_id, null);
+    assert.equal(zeroLimitListJson.has_more, true);
+
+    const invalidVideoLimit = await fetch(`${baseUrl}/v1/videos?limit=101`);
+    assert.equal(invalidVideoLimit.status, 400);
+    assert.deepEqual(await invalidVideoLimit.json(), {
+      error: {
+        message: "limit must be an integer between 0 and 100",
+        type: "invalid_request_error",
+        param: "limit",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const invalidVideoOrder = await fetch(`${baseUrl}/v1/videos?order=sideways`);
+    assert.equal(invalidVideoOrder.status, 400);
+    assert.deepEqual(await invalidVideoOrder.json(), {
+      error: {
+        message: "order must be one of: asc, desc",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    const repeatedVideoAfter = await fetch(`${baseUrl}/v1/videos?after=${encodeURIComponent(video.id)}&after=video_other`);
+    assert.equal(repeatedVideoAfter.status, 400);
+    assert.deepEqual(await repeatedVideoAfter.json(), {
+      error: {
+        message: "after must be a single string query value",
+        type: "invalid_request_error",
+        param: "after",
+        code: "invalid_request_parameter",
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const secondCreated = await fetch(`${baseUrl}/v1/videos`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        model: "sora-2",
+        prompt: "A second compact protocol test video.",
+        metadata: { suite: "video-local-second" },
+      }),
+    });
+    assert.equal(secondCreated.status, 200);
+    const secondVideo = await secondCreated.json();
+    assert.match(secondVideo.id, /^video_/);
+
+    const listDesc = await fetch(`${baseUrl}/v1/videos?limit=2`);
+    assert.equal(listDesc.status, 200);
+    assert.deepEqual((await listDesc.json()).data.map((item) => item.id), [secondVideo.id, video.id]);
+
+    const listAsc = await fetch(`${baseUrl}/v1/videos?order=asc&limit=10`);
+    assert.equal(listAsc.status, 200);
+    assert.deepEqual((await listAsc.json()).data.map((item) => item.id), [video.id, secondVideo.id]);
+
+    const listAfter = await fetch(`${baseUrl}/v1/videos?order=asc&after=${encodeURIComponent(video.id)}&limit=10`);
+    assert.equal(listAfter.status, 200);
+    assert.deepEqual((await listAfter.json()).data.map((item) => item.id), [secondVideo.id]);
+
+    const listBeforeIgnored = await fetch(`${baseUrl}/v1/videos?order=asc&before=${encodeURIComponent(secondVideo.id)}&limit=10`);
+    assert.equal(listBeforeIgnored.status, 200);
+    assert.deepEqual((await listBeforeIgnored.json()).data.map((item) => item.id), [video.id, secondVideo.id]);
+
     const content = await fetch(`${baseUrl}/v1/videos/${video.id}/content`);
     assert.equal(content.status, 200);
     assert.equal(content.headers.get("content-type"), "video/mp4");
@@ -26952,6 +27024,15 @@ test("Videos API creates, lists, retrieves, downloads, remixes, and deletes loca
       object: "video.deleted",
       deleted: true,
     });
+
+    const secondDeleted = await fetch(`${baseUrl}/v1/videos/${secondVideo.id}`, { method: "DELETE" });
+    assert.equal(secondDeleted.status, 200);
+    assert.deepEqual(await secondDeleted.json(), {
+      id: secondVideo.id,
+      object: "video.deleted",
+      deleted: true,
+    });
+
     const missing = await fetch(`${baseUrl}/v1/videos/${video.id}`);
     assert.equal(missing.status, 404);
 
