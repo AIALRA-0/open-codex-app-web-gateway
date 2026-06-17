@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-17 Direct Images Variation Model Bounds
+
+- Rechecked official OpenAI Images API references:
+  - OpenAPI 3.1.0 / API spec 2.3.0 exposes `POST /v1/images/variations`
+    as `createImageVariation`;
+  - the operation summary states that image variations only support
+    `dall-e-2`;
+  - the body reference keeps the existing one-PNG, under-4MB, square image
+    contract plus `n`, `size`, `response_format`, and `user` boundaries.
+- Tightened local bridge behavior:
+  - direct `POST /v1/images/variations` now rejects non-string `model` values
+    before image resolution, placeholder generation, provider forwarding, or
+    usage recording;
+  - known OpenAI image model ids other than `dall-e-2`, including
+    `dall-e-3` and GPT image models, now fail closed with an OpenAI-style
+    `invalid_request_parameter` error;
+  - unknown/custom OpenAI-compatible provider model ids remain pass-through so
+    non-OpenAI variation providers can still be tested behind the gateway.
+- Regression coverage updated:
+  - added direct variation negative tests for non-string `model`, `dall-e-3`,
+    and `gpt-image-1`;
+  - verified these invalid requests return `invalid_request_parameter` with
+    `param:"model"` and do not call the upstream provider.
+- Documentation updated:
+  - compatibility matrix now records direct Images variation model validation,
+    the official `dall-e-2` boundary, and the custom-provider pass-through
+    policy.
+- Validation:
+  - `node --check src/bridge/local_image_generation.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `git diff --check` passed.
+  - `node --test --test-name-pattern "POST /v1/images" test/server.test.js`
+    passed 15/15 matched tests.
+  - Full `node --test test/*.test.js` passed 387/387 tests.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Disk guard before deployment: `/` 193G size, 182G used, 12G available,
+    95% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated image bytes, provider image responses, or
+    smoke request payloads were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Direct Images Edit Model and Input Bounds
 
 - Rechecked official OpenAI Images API references:

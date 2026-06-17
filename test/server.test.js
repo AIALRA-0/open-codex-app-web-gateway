@@ -15907,6 +15907,21 @@ test("POST /v1/images/variations validates official option fields and image cont
       "user must be a string",
       "user",
     );
+    await assertJsonVariationError(
+      { model: { id: "dall-e-2" } },
+      "model must be a string",
+      "model",
+    );
+    await assertJsonVariationError(
+      { model: "dall-e-3" },
+      "model must be dall-e-2 for image variations",
+      "model",
+    );
+    await assertJsonVariationError(
+      { model: "gpt-image-1" },
+      "model must be dall-e-2 for image variations",
+      "model",
+    );
 
     const jpegForm = new FormData();
     jpegForm.append("image", new Blob([Buffer.from([0xff, 0xd8, 0xff, 0xd9])], { type: "image/jpeg" }), "source.jpg");

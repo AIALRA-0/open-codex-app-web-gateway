@@ -787,6 +787,16 @@ function validateImagesEditModelConstraints({
   if (editInput) validateImagesEditInputModelConstraints({ editInput, model });
 }
 
+function validateImagesVariationModelConstraints(model) {
+  if (isDallE2ImageModel(model)) return;
+  if (isDallEImageModel(model) || isKnownGptImageModel(model)) {
+    throw imageApiError("model must be dall-e-2 for image variations", {
+      code: "invalid_request_parameter",
+      param: "model",
+    });
+  }
+}
+
 function validateImagesEditJsonReferences(request = {}) {
   if (request.images !== undefined) {
     if (!Array.isArray(request.images)) {
@@ -1747,7 +1757,8 @@ async function normalizeImagesVariationRequest(request = {}, config = {}, option
   }
 
   const n = normalizeImagesGenerationN(request.n);
-  const model = stringifyContent(request.model || config.imageGenerationVariationModel || "dall-e-2");
+  const model = normalizeImageApiModel(request.model, config.imageGenerationVariationModel || "dall-e-2");
+  validateImagesVariationModelConstraints(model);
   const requestOptions = normalizeImagesVariationOptions(request);
 
   const variationInputRequest = { ...request };
