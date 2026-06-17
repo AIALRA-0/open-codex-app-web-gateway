@@ -1,5 +1,69 @@
 # Audit Log
 
+## 2026-06-17 Responses Image Generation Tool Schema Validation
+
+- Rechecked the current official OpenAI image-generation guide and OpenAPI
+  schema through the developer docs/OpenAPI source:
+  - Responses `tools:[{type:"image_generation"}]` supports generation,
+    multi-turn edit flows, streaming partial images, and optional masks;
+  - `partial_images` is an integer range from 0 through 3;
+  - `quality`, `output_format`, `moderation`, `background`,
+    `input_fidelity`, and `action` are closed enum fields;
+  - `input_image_mask` only exposes optional string `image_url` and
+    `file_id` fields and rejects extra properties in the official schema.
+- Tightened local Responses request validation before provider or adapter work:
+  - `image_generation` tool `model` and `size` must be strings when present;
+  - `quality`, `output_format`, `moderation`, `background`,
+    `input_fidelity`, and `action` now validate against the official enum
+    values, with `input_fidelity:null` preserved as an accepted nullable
+    official shape;
+  - `output_compression` must be an integer from 0 through 100;
+  - `partial_images` must be an integer from 0 through 3;
+  - `input_image_mask` must be an object containing only string `image_url`
+    and/or `file_id` fields.
+- Regression coverage updated:
+  - the Responses tools validation table now rejects malformed
+    `image_generation` schemas across `/v1/responses` and
+    `/v1/responses/input_tokens`;
+  - existing positive image-generation tests still cover local
+    `image_generation_call` output, streaming partial-image events, provider
+    backed generation/edit calls, mask handling, id-only multi-turn edit,
+    provider failure surfacing, tool-budget skipping, and Batch JSONL
+    execution.
+- Documentation updated:
+  - compatibility matrix documents the `image_generation` tool validation
+    boundary and the optional OpenAI-compatible Images API adapter;
+  - evaluation plan now requires malformed image-generation schema regression
+    coverage beside hosted search/container tool schema checks.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern
+    "Responses tools|image_generation" test/server.test.js` passes: 12 tests;
+  - `npm test` passes: 358 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` exits successfully;
+  - explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions.
+- Runtime/storage check:
+  - `/` has 20 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Deployment smoke:
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public `https://opencodexapp.aialra.online/healthz` returns 200 with
+    provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`;
+  - public malformed `image_generation.partial_images` request returns
+    `400 invalid_request_parameter` with `param:"tools.0.partial_images"`.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or deployment env files
+    were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Responses Hosted Search Tool Schema Validation
 
 - Rechecked the current official OpenAI OpenAPI schemas through the developer

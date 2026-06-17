@@ -3000,6 +3000,71 @@ test("POST /v1/responses and input_tokens validate Responses tools before provid
         message: "tools.0.search_content_types.1 must be one of: text, image",
       },
       {
+        body: { tools: [{ type: "image_generation", model: 7 }] },
+        param: "tools.0.model",
+        message: "tools.0.model must be a string",
+      },
+      {
+        body: { tools: [{ type: "image_generation", size: 1024 }] },
+        param: "tools.0.size",
+        message: "tools.0.size must be a string",
+      },
+      {
+        body: { tools: [{ type: "image_generation", quality: "draft" }] },
+        param: "tools.0.quality",
+        message: "tools.0.quality must be one of: low, medium, high, auto",
+      },
+      {
+        body: { tools: [{ type: "image_generation", output_format: "gif" }] },
+        param: "tools.0.output_format",
+        message: "tools.0.output_format must be one of: png, webp, jpeg",
+      },
+      {
+        body: { tools: [{ type: "image_generation", output_compression: 101 }] },
+        param: "tools.0.output_compression",
+        message: "tools.0.output_compression must be an integer between 0 and 100",
+      },
+      {
+        body: { tools: [{ type: "image_generation", moderation: "strict" }] },
+        param: "tools.0.moderation",
+        message: "tools.0.moderation must be one of: auto, low",
+      },
+      {
+        body: { tools: [{ type: "image_generation", background: "checkerboard" }] },
+        param: "tools.0.background",
+        message: "tools.0.background must be one of: transparent, opaque, auto",
+      },
+      {
+        body: { tools: [{ type: "image_generation", input_fidelity: "maximum" }] },
+        param: "tools.0.input_fidelity",
+        message: "tools.0.input_fidelity must be one of: high, low",
+      },
+      {
+        body: { tools: [{ type: "image_generation", partial_images: 4 }] },
+        param: "tools.0.partial_images",
+        message: "tools.0.partial_images must be an integer between 0 and 3",
+      },
+      {
+        body: { tools: [{ type: "image_generation", action: "paint" }] },
+        param: "tools.0.action",
+        message: "tools.0.action must be one of: generate, edit, auto",
+      },
+      {
+        body: { tools: [{ type: "image_generation", input_image_mask: [] }] },
+        param: "tools.0.input_image_mask",
+        message: "tools.0.input_image_mask must be an object",
+      },
+      {
+        body: { tools: [{ type: "image_generation", input_image_mask: { file_id: 7 } }] },
+        param: "tools.0.input_image_mask.file_id",
+        message: "tools.0.input_image_mask.file_id must be a string",
+      },
+      {
+        body: { tools: [{ type: "image_generation", input_image_mask: { file_id: "file_mask", extra: true } }] },
+        param: "tools.0.input_image_mask.extra",
+        message: "tools.0.input_image_mask.extra is not supported",
+      },
+      {
         body: { tools: [{ type: "shell", environment: "local" }] },
         param: "tools.0.environment",
         message: "tools.0.environment must be an object or null",

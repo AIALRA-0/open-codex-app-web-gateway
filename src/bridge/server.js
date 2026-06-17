@@ -298,6 +298,12 @@ const OPENAI_CHAT_ASSISTANT_CONTENT_PART_TYPES = Object.freeze(["text", "refusal
 const OPENAI_CHAT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high"]);
 const OPENAI_RESPONSES_INPUT_IMAGE_DETAIL_VALUES = Object.freeze(["auto", "low", "high", "original"]);
 const OPENAI_RESPONSES_INPUT_FILE_DETAIL_VALUES = Object.freeze(["low", "high"]);
+const OPENAI_IMAGE_GENERATION_QUALITY_VALUES = Object.freeze(["low", "medium", "high", "auto"]);
+const OPENAI_IMAGE_GENERATION_OUTPUT_FORMAT_VALUES = Object.freeze(["png", "webp", "jpeg"]);
+const OPENAI_IMAGE_GENERATION_MODERATION_VALUES = Object.freeze(["auto", "low"]);
+const OPENAI_IMAGE_GENERATION_BACKGROUND_VALUES = Object.freeze(["transparent", "opaque", "auto"]);
+const OPENAI_IMAGE_GENERATION_INPUT_FIDELITY_VALUES = Object.freeze(["high", "low"]);
+const OPENAI_IMAGE_GENERATION_ACTION_VALUES = Object.freeze(["generate", "edit", "auto"]);
 const OPENAI_CHAT_INPUT_AUDIO_FORMAT_VALUES = Object.freeze(["wav", "mp3"]);
 const OPENAI_CHAT_MESSAGE_TOOL_CALL_TYPES = Object.freeze(["function", "custom"]);
 const OPENAI_CHAT_TOOL_TYPES = Object.freeze(["function", "custom"]);
@@ -3728,6 +3734,9 @@ function validateOpenAIResponsesTools(body = {}) {
     } else if (isOpenAIResponsesWebSearchToolType(tool.type)) {
       const webSearchError = validateOpenAIResponsesWebSearchTool(tool, param);
       if (webSearchError) return webSearchError;
+    } else if (tool.type === "image_generation") {
+      const imageGenerationError = validateOpenAIResponsesImageGenerationTool(tool, param);
+      if (imageGenerationError) return imageGenerationError;
     } else if (tool.type === "mcp") {
       if (typeof tool.server_label !== "string") {
         return requestValidationError(`${param}.server_label must be a string`, `${param}.server_label`);
@@ -4179,6 +4188,88 @@ function validateOpenAIStringArray(value, param, options = {}) {
         `${itemParam} must be one of: ${options.allowedValues.join(", ")}`,
         itemParam,
       );
+    }
+  }
+  return null;
+}
+
+function validateOpenAIResponsesImageGenerationTool(tool, param) {
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "model")
+    && typeof tool.model !== "string"
+  ) {
+    return requestValidationError(`${param}.model must be a string`, `${param}.model`);
+  }
+  if (
+    Object.prototype.hasOwnProperty.call(tool, "size")
+    && typeof tool.size !== "string"
+  ) {
+    return requestValidationError(`${param}.size must be a string`, `${param}.size`);
+  }
+  const enumFields = [
+    ["quality", OPENAI_IMAGE_GENERATION_QUALITY_VALUES],
+    ["output_format", OPENAI_IMAGE_GENERATION_OUTPUT_FORMAT_VALUES],
+    ["moderation", OPENAI_IMAGE_GENERATION_MODERATION_VALUES],
+    ["background", OPENAI_IMAGE_GENERATION_BACKGROUND_VALUES],
+    ["input_fidelity", OPENAI_IMAGE_GENERATION_INPUT_FIDELITY_VALUES],
+    ["action", OPENAI_IMAGE_GENERATION_ACTION_VALUES],
+  ];
+  for (const [field, values] of enumFields) {
+    if (!Object.prototype.hasOwnProperty.call(tool, field)) continue;
+    const value = tool[field];
+    if (field === "input_fidelity" && value === null) continue;
+    if (typeof value !== "string" || !values.includes(value)) {
+      return requestValidationError(
+        `${param}.${field} must be one of: ${values.join(", ")}`,
+        `${param}.${field}`,
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "output_compression")) {
+    if (
+      !Number.isInteger(tool.output_compression)
+      || tool.output_compression < 0
+      || tool.output_compression > 100
+    ) {
+      return requestValidationError(
+        `${param}.output_compression must be an integer between 0 and 100`,
+        `${param}.output_compression`,
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "partial_images")) {
+    if (
+      !Number.isInteger(tool.partial_images)
+      || tool.partial_images < 0
+      || tool.partial_images > 3
+    ) {
+      return requestValidationError(
+        `${param}.partial_images must be an integer between 0 and 3`,
+        `${param}.partial_images`,
+      );
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(tool, "input_image_mask")) {
+    const maskError = validateOpenAIResponsesImageGenerationMask(
+      tool.input_image_mask,
+      `${param}.input_image_mask`,
+    );
+    if (maskError) return maskError;
+  }
+  return null;
+}
+
+function validateOpenAIResponsesImageGenerationMask(mask, param) {
+  if (!isPlainObject(mask)) {
+    return requestValidationError(`${param} must be an object`, param);
+  }
+  const allowedFields = new Set(["image_url", "file_id"]);
+  for (const field of Object.keys(mask)) {
+    if (!allowedFields.has(field)) {
+      return requestValidationError(`${param}.${field} is not supported`, `${param}.${field}`);
+    }
+    if (typeof mask[field] !== "string") {
+      return requestValidationError(`${param}.${field} must be a string`, `${param}.${field}`);
     }
   }
   return null;
