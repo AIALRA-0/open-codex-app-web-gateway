@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-17 Batch Output Expiration Cleanup
+
+- Rechecked the official OpenAI Batch OpenAPI surface through the OpenAI
+  developer docs MCP:
+  - `POST /v1/batches` accepts `output_expires_after`;
+  - the local bridge continues to reject unsupported shapes before file lookup
+    or endpoint execution.
+- Added local Batch output expiration enforcement:
+  - generated `purpose:"batch_output"` and `purpose:"batch_error"` Files now
+    receive local expiration metadata derived from
+    `output_expires_after:{anchor:"created_at",seconds:*}`;
+  - `GET /v1/batches`, `GET /v1/batches/{batch_id}`, and terminal
+    `POST /v1/batches/{batch_id}/cancel` no-ops lazily delete expired local
+    output/error Files;
+  - stale `output_file_id` and `error_file_id` values are cleared on the Batch
+    object;
+  - cleanup evidence is recorded under
+    `metadata.compatibility_output_expiration` with checked time and
+    cleared/missing file ids.
+- Documentation updated:
+  - compatibility matrix now records lazy Batch output-file expiration cleanup
+    instead of the previous unenforced TTL gap;
+  - evaluation plan now includes lazy cleanup coverage for Batch list/get/cancel.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "local Batch API"
+    test/server.test.js` passes: 11 tests;
+  - `git diff --check` passes;
+  - `npm run secret-scan` passes;
+  - diff-level key/token pattern scan over source, tests, docs, and package
+    manifests returns no matches;
+  - `npm test` passes: 348 tests;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` creates a tiny
+    local Batch from a `purpose:"batch"` JSONL File, confirms the output File
+    carries expiration metadata, simulates expiration on the temporary output
+    record, confirms `GET /v1/batches/{batch_id}` clears `output_file_id`, and
+    confirms the old output content endpoint returns 404.
+- Runtime/storage check:
+  - `/` has 16 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 SWE-bench Preflight-Only Scorer Gate
 
 - Tightened the disk-bounded SWE-bench scorer workflow so evaluation operators

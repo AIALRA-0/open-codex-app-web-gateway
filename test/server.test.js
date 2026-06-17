@@ -82,6 +82,17 @@ function expireUploadForTest(stateDir, uploadId) {
   return record.upload;
 }
 
+function expireBatchOutputFileForTest(stateDir, fileId) {
+  const filePath = path.join(stateDir, "local-file-search", "files", `${fileId}.json`);
+  const record = JSON.parse(fs.readFileSync(filePath, "utf8"));
+  record.file.metadata = {
+    ...(record.file.metadata || {}),
+    batch_output_expires_at: String(Math.floor(Date.now() / 1000) - 1),
+  };
+  fs.writeFileSync(filePath, `${JSON.stringify(record, null, 2)}\n`);
+  return record.file;
+}
+
 function readUploadRecordForTest(stateDir, uploadId) {
   const uploadPath = path.join(stateDir, "local-uploads", "uploads", uploadId, "upload.json");
   return JSON.parse(fs.readFileSync(uploadPath, "utf8"));
@@ -27055,7 +27066,7 @@ test("local Batch API executes Responses JSONL and exposes output and error file
 test("local Batch API validates create metadata and output expiration policy", async () => {
   await withMockProvider(async () => {
     assert.fail("provider should not be called for local batch create validation or embeddings");
-  }, async ({ bridgeAddress, requests }) => {
+  }, async ({ bridgeAddress, requests, stateDir }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
     const required = {
       input_file_id: "file_missing",
@@ -27147,8 +27158,41 @@ test("local Batch API validates create metadata and output expiration policy", a
     const batch = await created.json();
     assert.equal(batch.status, "completed");
     assert.deepEqual(batch.output_expires_after, { anchor: "created_at", seconds: 3600 });
+    assert.ok(batch.output_file_id);
     assert.equal(batch.metadata.suite, "batch-expiration-policy");
     assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/embeddings"), true);
+
+    const outputFile = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}`);
+    assert.equal(outputFile.status, 200);
+    const outputFileJson = await outputFile.json();
+    assert.equal(outputFileJson.metadata.batch_id, batch.id);
+    assert.equal(outputFileJson.metadata.endpoint, "/v1/embeddings");
+    assert.equal(outputFileJson.metadata.batch_output_expires_after_anchor, "created_at");
+    assert.equal(outputFileJson.metadata.batch_output_expires_after_seconds, "3600");
+    assert.match(outputFileJson.metadata.batch_output_expires_at, /^\d+$/);
+
+    const outputContentBeforeExpiration = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputContentBeforeExpiration.status, 200);
+
+    const expiredOutputFileId = batch.output_file_id;
+    expireBatchOutputFileForTest(stateDir, expiredOutputFileId);
+    const expiredBatchResponse = await fetch(`${baseUrl}/v1/batches/${batch.id}`);
+    assert.equal(expiredBatchResponse.status, 200);
+    const expiredBatch = await expiredBatchResponse.json();
+    assert.equal(expiredBatch.output_file_id, null);
+    assert.equal(expiredBatch.error_file_id, null);
+    assert.deepEqual(expiredBatch.output_expires_after, { anchor: "created_at", seconds: 3600 });
+    assert.deepEqual(expiredBatch.metadata.compatibility_output_expiration.cleared_file_ids, [expiredOutputFileId]);
+    assert.equal(expiredBatch.metadata.compatibility_output_expiration.reason, "batch_output_expires_after");
+
+    const outputContentAfterExpiration = await fetch(`${baseUrl}/v1/files/${expiredOutputFileId}/content`);
+    assert.equal(outputContentAfterExpiration.status, 404);
+
+    const listedAfterExpiration = await fetch(`${baseUrl}/v1/batches?limit=10`);
+    assert.equal(listedAfterExpiration.status, 200);
+    const listedBatch = (await listedAfterExpiration.json()).data.find((item) => item.id === batch.id);
+    assert.equal(listedBatch.output_file_id, null);
+    assert.deepEqual(listedBatch.metadata.compatibility_output_expiration.cleared_file_ids, [expiredOutputFileId]);
     assert.equal(requests.length, 0);
   });
 });

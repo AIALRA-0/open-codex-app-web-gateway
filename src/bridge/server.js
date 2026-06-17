@@ -11529,6 +11529,7 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
   }
 
   const finalizingAt = nowSeconds();
+  const outputExpirationMetadata = batchOutputExpirationMetadata(body.output_expires_after, finalizingAt);
   let outputFile = null;
   let errorFile = null;
   try {
@@ -11537,7 +11538,7 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
         filename: `${batchId}_output.jsonl`,
         purpose: "batch_output",
         content: `${outputLines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-        metadata: { batch_id: batchId, endpoint: body.endpoint },
+        metadata: { batch_id: batchId, endpoint: body.endpoint, ...outputExpirationMetadata },
         mime_type: "application/jsonl",
       })
       : null;
@@ -11546,7 +11547,7 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
         filename: `${batchId}_error.jsonl`,
         purpose: "batch_error",
         content: `${errorLines.map((line) => JSON.stringify(line)).join("\n")}\n`,
-        metadata: { batch_id: batchId, endpoint: body.endpoint },
+        metadata: { batch_id: batchId, endpoint: body.endpoint, ...outputExpirationMetadata },
         mime_type: "application/jsonl",
       })
       : null;
@@ -11662,6 +11663,68 @@ function validateBatchOutputExpiresAfter(body = {}) {
     );
   }
   return null;
+}
+
+function batchOutputExpirationMetadata(policy, anchorAt) {
+  if (!isPlainObject(policy)) return {};
+  const seconds = Number(policy.seconds);
+  const anchor = Number(anchorAt);
+  if (!Number.isInteger(seconds) || !Number.isFinite(anchor)) return {};
+  return {
+    batch_output_expires_after_anchor: String(policy.anchor || "created_at"),
+    batch_output_expires_after_seconds: String(seconds),
+    batch_output_expires_at: String(anchor + seconds),
+  };
+}
+
+function applyBatchOutputExpiration(record, store, fileSearchStore) {
+  const batch = clone(record?.batch || {});
+  if (!batch.id || !isPlainObject(batch.output_expires_after) || !fileSearchStore) return batch;
+  const policySeconds = Number(batch.output_expires_after.seconds);
+  if (!Number.isInteger(policySeconds)) return batch;
+
+  const now = nowSeconds();
+  const cleared = [];
+  const missing = [];
+  for (const field of ["output_file_id", "error_file_id"]) {
+    const fileId = batch[field];
+    if (!fileId) continue;
+    const file = fileSearchStore.getFile(fileId);
+    if (!file) {
+      batch[field] = null;
+      missing.push(fileId);
+      continue;
+    }
+    const metadataExpiresAt = Number(file.metadata?.batch_output_expires_at);
+    const anchorAt = Number.isFinite(metadataExpiresAt)
+      ? metadataExpiresAt - policySeconds
+      : Number(file.created_at || batch.completed_at || batch.finalizing_at || batch.created_at || now);
+    const expiresAt = Number.isFinite(metadataExpiresAt) ? metadataExpiresAt : anchorAt + policySeconds;
+    if (Number.isFinite(expiresAt) && expiresAt <= now) {
+      fileSearchStore.deleteFile(fileId);
+      batch[field] = null;
+      cleared.push(fileId);
+    }
+  }
+
+  if (!cleared.length && !missing.length) return batch;
+  batch.metadata = {
+    ...(isPlainObject(batch.metadata) ? batch.metadata : {}),
+    compatibility_output_expiration: {
+      provider: "local",
+      reason: "batch_output_expires_after",
+      checked_at: now,
+      ...(cleared.length ? { cleared_file_ids: cleared } : {}),
+      ...(missing.length ? { missing_file_ids: missing } : {}),
+    },
+  };
+  store.put(batch.id, {
+    ...record,
+    batch,
+    batch_output_file_id: batch.output_file_id,
+    batch_error_file_id: batch.error_file_id,
+  });
+  return batch;
 }
 
 function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
@@ -13988,30 +14051,30 @@ function scoreModelTokenUsage(usage) {
   };
 }
 
-function handleBatchesList(res, store, url) {
+function handleBatchesList(res, store, fileSearchStore, url) {
   const batches = store.list()
     .filter((record) => record?.batch)
-    .map((record) => clone(record.batch))
+    .map((record) => applyBatchOutputExpiration(record, store, fileSearchStore))
     .sort((a, b) => Number(b.created_at || 0) - Number(a.created_at || 0));
   sendJson(res, 200, paginateList(batches, url));
 }
 
-function handleBatchGet(res, store, batchId) {
+function handleBatchGet(res, store, fileSearchStore, batchId) {
   const record = store.get(batchId);
   if (!record?.batch) {
     sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
     return;
   }
-  sendJson(res, 200, record.batch);
+  sendJson(res, 200, applyBatchOutputExpiration(record, store, fileSearchStore));
 }
 
-function handleBatchCancel(res, store, batchId) {
+function handleBatchCancel(res, store, fileSearchStore, batchId) {
   const record = store.get(batchId);
   if (!record?.batch) {
     sendError(res, 404, `batch not found: ${batchId}`, { code: "batch_not_found" });
     return;
   }
-  const batch = clone(record.batch);
+  const batch = applyBatchOutputExpiration(record, store, fileSearchStore);
   if (["completed", "failed", "cancelled", "expired"].includes(batch.status)) {
     batch.metadata = {
       ...(batch.metadata || {}),
@@ -18643,7 +18706,7 @@ function createServer(config = loadConfig()) {
 
       if (url.pathname === "/v1/batches") {
         if (req.method === "GET") {
-          handleBatchesList(res, store, url);
+          handleBatchesList(res, store, fileSearchStore, url);
           return;
         }
         if (req.method === "POST") {
@@ -18657,11 +18720,11 @@ function createServer(config = loadConfig()) {
         const batchId = decodeURIComponent(batchRoute[1]);
         const action = batchRoute[2] || "";
         if (!action && req.method === "GET") {
-          handleBatchGet(res, store, batchId);
+          handleBatchGet(res, store, fileSearchStore, batchId);
           return;
         }
         if (action === "cancel" && req.method === "POST") {
-          handleBatchCancel(res, store, batchId);
+          handleBatchCancel(res, store, fileSearchStore, batchId);
           return;
         }
       }

@@ -897,10 +897,10 @@ OpenAI-compatible surfaces without adding a separate job runner.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/batches` | Implemented locally | Requires string `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates user-supplied `metadata` against the official string Metadata limits and validates `output_expires_after:{anchor:"created_at",seconds:3600..2592000}` before file lookup or provider calls; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File |
-| `GET /v1/batches` | Implemented locally | Lists local batch records with `limit`, `after`, `before`, and `order` pagination |
-| `GET /v1/batches/{batch_id}` | Implemented locally | Returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id` |
-| `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary |
+| `POST /v1/batches` | Implemented locally | Requires string `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates user-supplied `metadata` against the official string Metadata limits and validates `output_expires_after:{anchor:"created_at",seconds:3600..2592000}` before file lookup or provider calls; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File with local output-expiration metadata when requested |
+| `GET /v1/batches` | Implemented locally | Lists local batch records with `limit`, `after`, `before`, and `order` pagination; applies lazy `output_expires_after` cleanup before projecting each record |
+| `GET /v1/batches/{batch_id}` | Implemented locally | Returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id`; deletes expired local output/error Files and clears stale file ids when `output_expires_after` has elapsed |
+| `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary, after applying the same lazy output-file expiration check |
 
 Local Batch execution currently accepts the official Batch endpoints
 `/v1/responses`, `/v1/chat/completions`, `/v1/completions`,
@@ -913,9 +913,12 @@ current OpenAI Batch endpoint enum. Batch output lines preserve upstream JSON
 response bodies and upstream
 `x-request-id` values when a proxied Chat provider supplies them; otherwise a
 local `req_*` id is generated for auditability.
-The `output_expires_after` policy is stored on the local Batch object and
-validated against the official file-expiration shape; it is not yet enforced by
-a background TTL cleanup worker for generated output/error files.
+The `output_expires_after` policy is stored on the local Batch object, validated
+against the official file-expiration shape, and attached to generated
+`batch_output` / `batch_error` Files as local metadata. The bridge does not run
+a separate TTL worker, but `GET /v1/batches`, `GET /v1/batches/{batch_id}`, and
+terminal cancel no-ops lazily delete expired output/error Files, clear stale
+file ids, and record `metadata.compatibility_output_expiration`.
 Streaming (`stream:true`) and
 background Responses (`background:true`) requests are rejected per JSONL line
 and written to the error file because a completed Batch output file cannot
