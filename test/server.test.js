@@ -2066,6 +2066,7 @@ test("POST /v1/responses validates context_management before provider calls", as
   }, async ({ bridgeAddress, requests }) => {
     const invalidCases = [
       { context_management: {}, param: "context_management" },
+      { context_management: [], param: "context_management" },
       { context_management: ["compaction"], param: "context_management.0" },
       { context_management: [{ type: "retention_ratio" }], param: "context_management.0.type" },
       { context_management: [{ type: "compaction", compact_threshold: "4096" }], param: "context_management.0.compact_threshold" },

@@ -2704,6 +2704,9 @@ function validateOpenAIResponsesContextManagement(body = {}) {
   if (!Array.isArray(body.context_management)) {
     return requestValidationError("context_management must be an array", "context_management");
   }
+  if (!body.context_management.length) {
+    return requestValidationError("context_management must contain at least one item", "context_management");
+  }
   for (const [index, entry] of body.context_management.entries()) {
     const param = `context_management.${index}`;
     if (!isPlainObject(entry)) {

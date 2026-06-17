@@ -1,5 +1,58 @@
 # Audit Log
 
+## 2026-06-17 Responses `context_management` Non-Empty Validation
+
+- Rechecked the official OpenAI OpenAPI schema for `CreateResponse` through the
+  OpenAI developer docs/OpenAPI source:
+  - `context_management` is optional and nullable;
+  - when present as an array, it has `minItems:1`;
+  - entries reference `ContextManagementParam`.
+- Tightened local Responses request validation:
+  - explicit `context_management:[]` now returns `400 invalid_request_parameter`
+    before any upstream Chat provider call;
+  - missing `context_management` and `context_management:null` remain accepted;
+  - existing entry validation for object shape, `type:"compaction"`, and
+    numeric `compact_threshold` remains unchanged;
+  - the bridge still treats `context_management` as a local compatibility
+    boundary and does not forward it to Chat Completions providers.
+- Regression coverage updated:
+  - the invalid `context_management` test now includes the empty-array case and
+    verifies zero upstream provider calls;
+  - existing positive coverage still verifies valid compaction entries are
+    recorded in compatibility metadata without leaking threshold values.
+- Documentation updated:
+  - compatibility matrix now records the non-empty array requirement;
+  - evaluation plan now requires empty-array rejection in the
+    `context_management` compatibility regression;
+  - the web-search regression summary was also synchronized to mention both
+    `web_search_call.results` and `web_search_call.action.sources`.
+- Validation:
+  - `node --check src/bridge/server.js` passes;
+  - `node --check test/server.test.js` passes;
+  - targeted `node --test --test-name-pattern "context_management"
+    test/server.test.js` passes: 2 tests.
+  - `git diff --check` passes;
+  - `npm test` passes: 352 tests;
+  - `npm run secret-scan` passes;
+  - an explicit diff token scan found no API-key, bearer-token, or
+    provider-key-looking additions;
+  - restarted `aialra-opencodexapp-bridge`,
+    `aialra-opencodexapp-web`, and `aialra-opencodexapp-app-server`; all three
+    services are active;
+  - public smoke against `https://opencodexapp.aialra.online` verifies
+    `context_management:[]` returns `400 invalid_request_parameter` with
+    `param:"context_management"` and message
+    `context_management must contain at least one item`.
+- Runtime/storage check:
+  - `/` has 14 GB available;
+  - repo `state/` is 41 MB;
+  - repo `output/` is 4.6 MB;
+  - `/srv/aialra/data/opencodexapp` is 176 KB;
+  - `/srv/aialra/logs/opencodexapp` is 31 MB.
+- Secret handling:
+  - no API keys, provider credentials, bearer tokens, or local deployment env
+    files were added to source, tests, docs, logs, or commits.
+
 ## 2026-06-17 Web Search Results Include Projection
 
 - Rechecked the official Responses include surface through the OpenAI developer
