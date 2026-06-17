@@ -1,5 +1,57 @@
 # Audit Log
 
+## 2026-06-17 Project API Keys And Service Accounts List Query Allowlist Validation
+
+- Rechecked official OpenAI API references and existing audit evidence:
+  - the compatibility reference links the official OpenAPI operations
+    `admin-api-keys-list-project-api-keys` and
+    `admin-api-keys-list-project-service-accounts`;
+  - the earlier 2026-06-17 Project API Keys list audit recorded the current
+    official OpenAPI YAML contract for project API-key listing as `limit` and
+    `after` only, with no documented `order` or `before` query parameters;
+  - the earlier 2026-06-17 Project Service Accounts list audit recorded the
+    same local compatibility boundary for project service-account listing.
+- Tightened local bridge behavior:
+  - project API-key listing now rejects unsupported query parameters before
+    reading local redacted key state, so ignored `order` / `before` pagination
+    can no longer shape or appear to shape list output;
+  - project service-account listing now rejects unsupported query parameters
+    before reading local service-account state;
+  - existing official `limit` and `after` scalar/range validation remains
+    unchanged for both lists, including `limit` from 1 through 100 and the
+    default 20 item limit.
+- Regression coverage updated:
+  - changed the Organization project service accounts/API keys lifecycle test
+    from ignored `order` / `before` behavior to OpenAI-style 400 rejection for
+    both lists.
+- Documentation updated:
+  - compatibility matrix now records the project API keys and service accounts
+    list query allowlists and unsupported-query rejection behavior.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "Organization projects manage local service accounts and redacted API keys" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public smoke verified health, unsupported `order` / `before` query
+    rejection for project API keys, and unsupported `order` / `before` query
+    rejection for project service accounts before local project lookup, without
+    creating local project, service-account, or API-key state.
+  - Disk guard after deployment: `/` 193G size, 178G used, 15G available,
+    93% used.
+  - Runtime prune dry-run scanned 5392 local runtime candidates and selected
+    0 files, confirming no project-owned runtime cleanup was available.
+  - `npm run secret-scan` passed.
+- Secret handling:
+  - no API keys, one-time service-account key values, admin keys, account
+    credentials, bearer tokens, provider headers, local deployment env files,
+    generated project ids, generated service-account ids, generated key ids,
+    or smoke payload secrets were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Project Users List Query Allowlist Validation
 
 - Rechecked official OpenAI API references:

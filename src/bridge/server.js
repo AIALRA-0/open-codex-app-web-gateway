@@ -17118,6 +17118,9 @@ async function handleOrganizationProjectRateLimitUpdate(req, res, organizationAd
 }
 
 function validateOpenAIProjectServiceAccountsListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 
@@ -17133,6 +17136,9 @@ function officialProjectServiceAccountsListPaginationUrl(url) {
 }
 
 function validateOpenAIProjectApiKeysListQuery(url) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, ["after", "limit"]);
+  if (allowedError) return allowedError;
+
   const limitError = validateOpenAIListLimitQuery(url, { max: 100 });
   if (limitError) return limitError;
 

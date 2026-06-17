@@ -25901,10 +25901,16 @@ test("Organization projects manage local service accounts and redacted API keys"
       .find((apiKeyId) => apiKeyId !== firstListedApiKeyId);
     assert.ok(nextListedApiKeyId);
 
-    const apiKeysOrderIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&order=desc`);
-    assert.equal(apiKeysOrderIgnored.status, 200);
-    const apiKeysOrderIgnoredJson = await apiKeysOrderIgnored.json();
-    assert.equal(apiKeysOrderIgnoredJson.data[0].id, firstListedApiKeyId);
+    const apiKeysWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&order=desc`);
+    assert.equal(apiKeysWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await apiKeysWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const apiKeysAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=1&after=${encodeURIComponent(firstListedApiKeyId)}`);
     assert.equal(apiKeysAfter.status, 200);
@@ -25917,13 +25923,16 @@ test("Organization projects manage local service accounts and redacted API keys"
     const apiKeysAllJson = await apiKeysAll.json();
     assert.equal(apiKeysAllJson.data.length, 2);
 
-    const apiKeysBeforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=10&before=${encodeURIComponent(nextListedApiKeyId)}`);
-    assert.equal(apiKeysBeforeIgnored.status, 200);
-    const apiKeysBeforeIgnoredJson = await apiKeysBeforeIgnored.json();
-    assert.deepEqual(
-      apiKeysBeforeIgnoredJson.data.map((item) => item.id),
-      apiKeysAllJson.data.map((item) => item.id),
-    );
+    const apiKeysWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=10&before=${encodeURIComponent(nextListedApiKeyId)}`);
+    assert.equal(apiKeysWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await apiKeysWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidApiKeyLimitZero = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/api_keys?limit=0`);
     assert.equal(invalidApiKeyLimitZero.status, 400);
@@ -25952,10 +25961,16 @@ test("Organization projects manage local service accounts and redacted API keys"
       .find((serviceAccountId) => serviceAccountId !== firstListedServiceAccountId);
     assert.ok(nextListedServiceAccountId);
 
-    const serviceAccountsOrderIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&order=desc`);
-    assert.equal(serviceAccountsOrderIgnored.status, 200);
-    const serviceAccountsOrderIgnoredJson = await serviceAccountsOrderIgnored.json();
-    assert.equal(serviceAccountsOrderIgnoredJson.data[0].id, firstListedServiceAccountId);
+    const serviceAccountsWithUnsupportedOrder = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&order=desc`);
+    assert.equal(serviceAccountsWithUnsupportedOrder.status, 400);
+    assert.deepEqual(await serviceAccountsWithUnsupportedOrder.json(), {
+      error: {
+        message: "Unsupported query parameter: order",
+        type: "invalid_request_error",
+        param: "order",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const serviceAccountsAfter = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=1&after=${encodeURIComponent(firstListedServiceAccountId)}`);
     assert.equal(serviceAccountsAfter.status, 200);
@@ -25968,13 +25983,16 @@ test("Organization projects manage local service accounts and redacted API keys"
     const serviceAccountsAllJson = await serviceAccountsAll.json();
     assert.equal(serviceAccountsAllJson.data.length, 2);
 
-    const serviceAccountsBeforeIgnored = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=10&before=${encodeURIComponent(nextListedServiceAccountId)}`);
-    assert.equal(serviceAccountsBeforeIgnored.status, 200);
-    const serviceAccountsBeforeIgnoredJson = await serviceAccountsBeforeIgnored.json();
-    assert.deepEqual(
-      serviceAccountsBeforeIgnoredJson.data.map((item) => item.id),
-      serviceAccountsAllJson.data.map((item) => item.id),
-    );
+    const serviceAccountsWithUnsupportedBefore = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=10&before=${encodeURIComponent(nextListedServiceAccountId)}`);
+    assert.equal(serviceAccountsWithUnsupportedBefore.status, 400);
+    assert.deepEqual(await serviceAccountsWithUnsupportedBefore.json(), {
+      error: {
+        message: "Unsupported query parameter: before",
+        type: "invalid_request_error",
+        param: "before",
+        code: "invalid_request_parameter",
+      },
+    });
 
     const invalidServiceAccountLimitZero = await fetch(`${baseUrl}/v1/organization/projects/${project.id}/service_accounts?limit=0`);
     assert.equal(invalidServiceAccountLimitZero.status, 400);
