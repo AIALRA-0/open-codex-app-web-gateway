@@ -28072,6 +28072,25 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.fail("ChatKit compatibility should not call upstream provider");
   }, async ({ bridgeAddress, requests }) => {
     const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const assertUnsupportedChatKitQuery = async (path, options = {}) => {
+      const response = await fetch(`${baseUrl}${path}`, options);
+      assert.equal(response.status, 400, path);
+      assert.deepEqual(await response.json(), {
+        error: {
+          message: "Unsupported query parameter: metadata",
+          type: "invalid_request_error",
+          param: "metadata",
+          code: "invalid_request_parameter",
+        },
+      }, path);
+    };
+
+    await assertUnsupportedChatKitQuery("/v1/chatkit/sessions?metadata=debug", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
     const missingWorkflow = await fetch(`${baseUrl}/v1/chatkit/sessions`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -28106,6 +28125,12 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.equal(session.max_requests_per_session, 500);
     assert.equal(session.compatibility.provider, "local");
 
+    await assertUnsupportedChatKitQuery("/v1/chatkit/threads?metadata=debug", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+
     const threadResponse = await fetch(`${baseUrl}/v1/chatkit/threads`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -28136,6 +28161,17 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.equal(fetchedThread.status, 200);
     assert.equal((await fetchedThread.json()).id, thread.id);
 
+    await assertUnsupportedChatKitQuery(`/v1/chatkit/threads/${thread.id}?metadata=debug`);
+
+    await assertUnsupportedChatKitQuery(`/v1/chatkit/threads/${thread.id}?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    const afterInvalidThreadUpdate = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`);
+    assert.equal(afterInvalidThreadUpdate.status, 200);
+    assert.equal((await afterInvalidThreadUpdate.json()).title, "Customer escalation");
+
     const updatedThread = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -28149,6 +28185,15 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.equal(updatedThreadJson.title, "Updated escalation");
     assert.equal(updatedThreadJson.metadata.owner, "updated");
     assert.ok(updatedThreadJson.updated_at >= thread.updated_at);
+
+    await assertUnsupportedChatKitQuery(`/v1/chatkit/threads/${thread.id}/items?metadata=debug`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "not-json",
+    });
+    const afterInvalidItemCreate = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items?limit=10`);
+    assert.equal(afterInvalidItemCreate.status, 200);
+    assert.deepEqual((await afterInvalidItemCreate.json()).data, []);
 
     const itemResponse = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}/items`, {
       method: "POST",
@@ -28237,6 +28282,11 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
         param: "before",
         message: "before must be a single string query value",
       },
+      {
+        path: `/v1/chatkit/threads/${thread.id}/items?metadata=debug`,
+        param: "metadata",
+        message: "Unsupported query parameter: metadata",
+      },
     ]) {
       const invalidItemsList = await fetch(`${baseUrl}${testCase.path}`);
       assert.equal(invalidItemsList.status, 400, testCase.path);
@@ -28308,6 +28358,11 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
         param: "user",
         message: "user must be a string with length between 1 and 512",
       },
+      {
+        path: "/v1/chatkit/threads?metadata=debug",
+        param: "metadata",
+        message: "Unsupported query parameter: metadata",
+      },
     ]) {
       const invalidThreadsList = await fetch(`${baseUrl}${testCase.path}`);
       assert.equal(invalidThreadsList.status, 400, testCase.path);
@@ -28321,6 +28376,10 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
       }, testCase.path);
     }
 
+    await assertUnsupportedChatKitQuery(`/v1/chatkit/sessions/${session.id}/cancel?metadata=debug`, {
+      method: "POST",
+    });
+
     const cancelled = await fetch(`${baseUrl}/v1/chatkit/sessions/${session.id}/cancel`, {
       method: "POST",
     });
@@ -28329,6 +28388,13 @@ test("ChatKit API manages local sessions, threads, and items", async () => {
     assert.equal(cancelledJson.id, session.id);
     assert.equal(cancelledJson.status, "cancelled");
     assert.equal(cancelledJson.compatibility.cancelled_locally, true);
+
+    await assertUnsupportedChatKitQuery(`/v1/chatkit/threads/${thread.id}?metadata=debug`, {
+      method: "DELETE",
+    });
+    const afterInvalidThreadDelete = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`);
+    assert.equal(afterInvalidThreadDelete.status, 200);
+    assert.equal((await afterInvalidThreadDelete.json()).id, thread.id);
 
     const deleted = await fetch(`${baseUrl}/v1/chatkit/threads/${thread.id}`, {
       method: "DELETE",

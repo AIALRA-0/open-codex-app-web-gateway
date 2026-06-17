@@ -558,15 +558,15 @@ without calling a Chat Completions provider.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/chatkit/sessions` | Implemented locally | Requires `user` and `workflow.id`, returns `object:"chatkit.session"`, a local `client_secret`, `expires_at`, workflow/scope, request caps, `status:"active"`, and local compatibility metadata |
-| `POST /v1/chatkit/sessions/{session_id}/cancel` | Implemented locally | Marks a local session `status:"cancelled"` with `cancelled_at` and returns the session resource |
-| `GET /v1/chatkit/threads` | Implemented locally | Lists local `chatkit.thread` records with official `limit`, `after`, `before`, `order`, and `user` filtering; default order is `desc`, repeated scalar query values return 400, `limit` is validated from 0 through 100, and `user` is validated with the official 1 through 512 character range |
-| `POST /v1/chatkit/threads` | Local compatibility extension | Creates a local thread so SDK/UI smoke tests can exercise the thread lifecycle before a hosted ChatKit workflow executor exists; `session_id` copies session user/workflow/scope when present |
-| `GET /v1/chatkit/threads/{thread_id}` | Implemented locally | Retrieves a stored local ChatKit thread |
-| `POST /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Updates local thread `title`, `user`, and `metadata` |
-| `DELETE /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Deletes local thread state and its items |
-| `GET /v1/chatkit/threads/{thread_id}/items` | Implemented locally | Lists local thread items with official `limit`, `after`, `before`, and `order` pagination; default order is `desc`, repeated scalar query values return 400, and `limit` is validated from 0 through 100 |
-| `POST /v1/chatkit/threads/{thread_id}/items` | Local compatibility extension | Appends one `{item}` or an `items[]` batch to the local thread and returns the created item or list |
+| `POST /v1/chatkit/sessions` | Implemented locally | Requires `user` and `workflow.id`, rejects unsupported query parameters before JSON body parsing, returns `object:"chatkit.session"`, a local `client_secret`, `expires_at`, workflow/scope, request caps, `status:"active"`, and local compatibility metadata |
+| `POST /v1/chatkit/sessions/{session_id}/cancel` | Implemented locally | Rejects unsupported query parameters before lifecycle mutation, then marks a local session `status:"cancelled"` with `cancelled_at` and returns the session resource |
+| `GET /v1/chatkit/threads` | Implemented locally | Lists local `chatkit.thread` records with official `limit`, `after`, `before`, `order`, and `user` filtering; unsupported query parameters return 400 before listing; default order is `desc`, repeated scalar query values return 400, `limit` is validated from 0 through 100, and `user` is validated with the official 1 through 512 character range |
+| `POST /v1/chatkit/threads` | Local compatibility extension | Rejects unsupported query parameters before JSON body parsing, then creates a local thread so SDK/UI smoke tests can exercise the thread lifecycle before a hosted ChatKit workflow executor exists; `session_id` copies session user/workflow/scope when present |
+| `GET /v1/chatkit/threads/{thread_id}` | Implemented locally | Rejects unsupported query parameters before lookup, then retrieves a stored local ChatKit thread |
+| `POST /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Rejects unsupported query parameters before JSON body parsing or mutation, then updates local thread `title`, `user`, and `metadata` |
+| `DELETE /v1/chatkit/threads/{thread_id}` | Local compatibility extension | Rejects unsupported query parameters before deletion, then deletes local thread state and its items |
+| `GET /v1/chatkit/threads/{thread_id}/items` | Implemented locally | Lists local thread items with official `limit`, `after`, `before`, and `order` pagination; unsupported query parameters return 400 before listing; default order is `desc`, repeated scalar query values return 400, and `limit` is validated from 0 through 100 |
+| `POST /v1/chatkit/threads/{thread_id}/items` | Local compatibility extension | Rejects unsupported query parameters before JSON body parsing or append, then appends one `{item}` or an `items[]` batch to the local thread and returns the created item or list |
 
 Local ChatKit state lives under
 `CODEXCOMPAT_CHATKIT_STATE_DIR=$CODEXCOMPAT_STATE_DIR/local-chatkit` by

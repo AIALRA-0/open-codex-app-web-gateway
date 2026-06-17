@@ -18184,7 +18184,13 @@ function parseRealtimeSessionField(value) {
   return isPlainObject(parsed) ? parsed : {};
 }
 
-async function handleChatKitSessionCreate(req, res, chatKitStore) {
+async function handleChatKitSessionCreate(req, res, chatKitStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("ChatKit session request body must be a JSON object", {
@@ -18206,7 +18212,13 @@ async function handleChatKitSessionCreate(req, res, chatKitStore) {
   sendJson(res, 200, chatKitStore.createSession(body));
 }
 
-function handleChatKitSessionCancel(res, chatKitStore, sessionId) {
+function handleChatKitSessionCancel(res, chatKitStore, sessionId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const session = chatKitStore.cancelSession(sessionId);
   if (!session) {
     sendError(res, 404, `ChatKit session not found: ${sessionId}`, {
@@ -18231,7 +18243,7 @@ function handleChatKitThreadsList(res, chatKitStore, url) {
 }
 
 function validateOpenAIChatKitThreadsListQuery(url) {
-  const listError = validateOpenAIChatKitCursorListQuery(url);
+  const listError = validateOpenAIChatKitCursorListQuery(url, ["user"]);
   if (listError) return listError;
 
   const userError = validateOpenAISingleQueryValue(url, "user");
@@ -18246,7 +18258,16 @@ function validateOpenAIChatKitThreadsListQuery(url) {
   return null;
 }
 
-function validateOpenAIChatKitCursorListQuery(url) {
+function validateOpenAIChatKitCursorListQuery(url, extraKeys = []) {
+  const allowedError = validateOpenAIAllowedQueryKeys(url, [
+    "limit",
+    "order",
+    "after",
+    "before",
+    ...extraKeys,
+  ]);
+  if (allowedError) return allowedError;
+
   const orderError = validateOpenAIListOrderQuery(url);
   if (orderError) return orderError;
 
@@ -18259,7 +18280,13 @@ function validateOpenAIChatKitCursorListQuery(url) {
   return validateOpenAISingleQueryValue(url, "before");
 }
 
-async function handleChatKitThreadCreate(req, res, chatKitStore) {
+async function handleChatKitThreadCreate(req, res, chatKitStore, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("ChatKit thread request body must be a JSON object", {
@@ -18276,7 +18303,13 @@ async function handleChatKitThreadCreate(req, res, chatKitStore) {
   sendJson(res, 200, chatKitStore.createThread(body));
 }
 
-function handleChatKitThreadGet(res, chatKitStore, threadId) {
+function handleChatKitThreadGet(res, chatKitStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const thread = chatKitStore.getThread(threadId);
   if (!thread) {
     sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
@@ -18288,7 +18321,13 @@ function handleChatKitThreadGet(res, chatKitStore, threadId) {
   sendJson(res, 200, thread);
 }
 
-async function handleChatKitThreadUpdate(req, res, chatKitStore, threadId) {
+async function handleChatKitThreadUpdate(req, res, chatKitStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("ChatKit thread update body must be a JSON object", {
@@ -18306,7 +18345,13 @@ async function handleChatKitThreadUpdate(req, res, chatKitStore, threadId) {
   sendJson(res, 200, thread);
 }
 
-function handleChatKitThreadDelete(res, chatKitStore, threadId) {
+function handleChatKitThreadDelete(res, chatKitStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const deleted = chatKitStore.deleteThread(threadId);
   if (!deleted) {
     sendError(res, 404, `ChatKit thread not found: ${threadId}`, {
@@ -18335,7 +18380,13 @@ function handleChatKitThreadItemsList(res, chatKitStore, threadId, url) {
   sendJson(res, 200, paginateChatKitList(items, url));
 }
 
-async function handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId) {
+async function handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId, url) {
+  const queryError = validateOpenAINoQuery(url);
+  if (queryError) {
+    sendError(res, 400, queryError.message, queryError);
+    return;
+  }
+
   const body = await readJson(req);
   if (!isPlainObject(body)) {
     throw requestError("ChatKit thread item request body must be a JSON object", {
@@ -23454,13 +23505,13 @@ function createServer(config = loadConfig()) {
       }
 
       if (req.method === "POST" && url.pathname === "/v1/chatkit/sessions") {
-        await handleChatKitSessionCreate(req, res, chatKitStore);
+        await handleChatKitSessionCreate(req, res, chatKitStore, url);
         return;
       }
 
       const chatKitSessionCancelRoute = url.pathname.match(/^\/v1\/chatkit\/sessions\/([^/]+)\/cancel$/);
       if (chatKitSessionCancelRoute && req.method === "POST") {
-        handleChatKitSessionCancel(res, chatKitStore, decodeURIComponent(chatKitSessionCancelRoute[1]));
+        handleChatKitSessionCancel(res, chatKitStore, decodeURIComponent(chatKitSessionCancelRoute[1]), url);
         return;
       }
 
@@ -23470,7 +23521,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleChatKitThreadCreate(req, res, chatKitStore);
+          await handleChatKitThreadCreate(req, res, chatKitStore, url);
           return;
         }
       }
@@ -23483,7 +23534,7 @@ function createServer(config = loadConfig()) {
           return;
         }
         if (req.method === "POST") {
-          await handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId);
+          await handleChatKitThreadItemsCreate(req, res, chatKitStore, threadId, url);
           return;
         }
       }
@@ -23492,15 +23543,15 @@ function createServer(config = loadConfig()) {
       if (chatKitThreadRoute) {
         const threadId = decodeURIComponent(chatKitThreadRoute[1]);
         if (req.method === "GET") {
-          handleChatKitThreadGet(res, chatKitStore, threadId);
+          handleChatKitThreadGet(res, chatKitStore, threadId, url);
           return;
         }
         if (req.method === "POST") {
-          await handleChatKitThreadUpdate(req, res, chatKitStore, threadId);
+          await handleChatKitThreadUpdate(req, res, chatKitStore, threadId, url);
           return;
         }
         if (req.method === "DELETE") {
-          handleChatKitThreadDelete(res, chatKitStore, threadId);
+          handleChatKitThreadDelete(res, chatKitStore, threadId, url);
           return;
         }
       }

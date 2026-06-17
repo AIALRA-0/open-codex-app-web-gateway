@@ -1,5 +1,65 @@
 # Audit Log
 
+## 2026-06-17 ChatKit Query Validation
+
+- Rechecked official OpenAI OpenAPI 2.3.0 ChatKit coverage:
+  - endpoint list includes `/chatkit/sessions`,
+    `/chatkit/sessions/{session_id}/cancel`, `/chatkit/threads`,
+    `/chatkit/threads/{thread_id}`, and
+    `/chatkit/threads/{thread_id}/items`;
+  - `POST /v1/chatkit/sessions` exposes no official query parameters;
+  - `GET /v1/chatkit/threads` exposes only `limit`, `order`, `after`,
+    `before`, and `user`, with `user` length constrained from 1 through 512
+    characters and `limit` constrained from 0 through 100.
+- Tightened local bridge behavior:
+  - ChatKit session create now rejects unsupported query parameters before
+    JSON body parsing;
+  - ChatKit session cancel now rejects unsupported query parameters before
+    local lifecycle mutation;
+  - ChatKit thread list and thread item list now reject unsupported query
+    parameters before listing while preserving official pagination validation;
+  - local thread create, retrieve, update, delete, and item append extension
+    endpoints now reject unsupported query parameters before body parsing,
+    lookup, append, or deletion.
+- Regression coverage updated:
+  - extended the ChatKit lifecycle test to cover unsupported query parameters
+    across session create/cancel, thread create/get/update/delete, thread
+    list, item append, and item list;
+  - verified malformed JSON requests with unsupported query parameters fail on
+    query validation before body parsing;
+  - verified invalid thread update/delete and invalid item append leave local
+    ChatKit state unchanged.
+- Documentation updated:
+  - compatibility matrix now records strict ChatKit query boundaries and
+    distinguishes official local implementations from local lifecycle
+    extensions.
+- Validation:
+  - `node --check src/bridge/server.js` passed.
+  - `node --check test/server.test.js` passed.
+  - `node --test --test-name-pattern "ChatKit API manages local sessions, threads, and items" test/server.test.js`
+    passed 1/1 matched tests.
+  - Full `node --test test/*.test.js` passed 380/380 tests.
+  - `git diff --check` passed.
+  - `npm run prune:runtime -- --dry-run` passed; scanned 5392 runtime
+    candidates and selected 0 files.
+  - `npm run secret-scan` passed.
+  - Restarted `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `/healthz` on `https://opencodexapp.aialra.online` returned
+    `ok:true`, provider base `https://api.deepseek.com`, default model
+    `deepseek-v4-pro`, and `has_provider_key:true`.
+  - Public ChatKit smokes verified invalid session create query and invalid
+    thread list query both return HTTP 400 with `param:"metadata"` before body
+    parsing or listing.
+  - Disk guard after deployment: `/` 193G size, 180G used, 13G available,
+    94% used.
+- Secret handling:
+  - no API keys, account credentials, bearer tokens, provider headers, local
+    deployment env files, generated ChatKit client secrets, generated ChatKit
+    ids, or smoke request payloads were added to source, tests, docs, logs, or
+    commits.
+
 ## 2026-06-17 Audio Voices Query Validation
 
 - Rechecked official OpenAI OpenAPI 2.3.0 for Audio custom voices:
