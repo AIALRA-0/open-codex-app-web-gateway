@@ -339,6 +339,11 @@ const OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES = Object.freeze({
   tool_search_call: Object.freeze(["in_progress", "completed", "incomplete"]),
   tool_search_output: Object.freeze(["in_progress", "completed", "incomplete"]),
 });
+const OPENAI_RESPONSES_APPLY_PATCH_OPERATION_TYPES = Object.freeze([
+  "create_file",
+  "delete_file",
+  "update_file",
+]);
 const OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES = new Set([
   ...Object.keys(OPENAI_RESPONSES_TOOL_CONTEXT_STATUS_VALUES),
   "mcp_list_tools",
@@ -5994,17 +5999,19 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   if (item.type === "apply_patch_call") {
-    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
+    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
     const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
     if (requiredStatusError) return requiredStatusError;
     const callIdError = validateOpenAIRequiredResponsesCallIdItemField(item, param);
     if (callIdError) return callIdError;
-    return validateOpenAIRequiredObjectItemField(item, param, "operation");
+    const operationError = validateOpenAIRequiredObjectItemField(item, param, "operation");
+    if (operationError) return operationError;
+    return validateOpenAIResponsesApplyPatchOperation(item.operation, `${param}.operation`);
   }
 
   if (item.type === "apply_patch_call_output") {
-    const idError = validateOpenAIRequiredStringItemField(item, param, "id");
+    const idError = validateOpenAIOptionalStringItemField(item, param, "id", { nullable: true });
     if (idError) return idError;
     const requiredStatusError = validateOpenAIRequiredResponsesToolContextInputItemStatus(item, param);
     if (requiredStatusError) return requiredStatusError;
@@ -6102,6 +6109,30 @@ function validateOpenAIResponsesToolContextInputItem(item, param) {
   }
 
   return null;
+}
+
+function validateOpenAIResponsesApplyPatchOperation(operation, param) {
+  if (
+    typeof operation.type !== "string"
+    || !OPENAI_RESPONSES_APPLY_PATCH_OPERATION_TYPES.includes(operation.type)
+  ) {
+    return requestValidationError(
+      `${param}.type must be one of: ${OPENAI_RESPONSES_APPLY_PATCH_OPERATION_TYPES.join(", ")}`,
+      `${param}.type`,
+    );
+  }
+  if (typeof operation.path !== "string" || !operation.path) {
+    return requestValidationError(`${param}.path must be a non-empty string`, `${param}.path`);
+  }
+  if (operation.type === "delete_file") return null;
+  if (typeof operation.diff !== "string") {
+    return requestValidationError(`${param}.diff must be a string`, `${param}.diff`);
+  }
+  return validateOpenAIStringMaxLength(
+    operation.diff,
+    `${param}.diff`,
+    OPENAI_RESPONSES_TOOL_OUTPUT_MAX_CHARS,
+  );
 }
 
 function validateOpenAIResponsesToolSearchItemExecution(item, param) {

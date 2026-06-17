@@ -432,6 +432,10 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
     assert.match(content, /tool-context-file-ok/);
     assert.match(content, /Prior Responses tool context \(shell_call_output\)/);
     assert.match(content, /tool-context-shell-ok/);
+    assert.match(content, /Prior Responses tool context \(apply_patch_call\)/);
+    assert.match(content, /tool-context-patch-ok/);
+    assert.match(content, /Prior Responses tool context \(apply_patch_call_output\)/);
+    assert.match(content, /tool-context-patch-output-ok/);
     assert.match(content, /Prior Responses tool context \(image_generation_call\)/);
     assert.match(content, /base64_image\(96 chars\)/);
     assert.doesNotMatch(content, /\[web_search_call:/);
@@ -487,6 +491,22 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
               stderr: "",
               outcome: { type: "exit", exit_code: 0 },
             }],
+          },
+          {
+            type: "apply_patch_call",
+            call_id: "call_patch_context",
+            status: "completed",
+            operation: {
+              type: "update_file",
+              path: "README.md",
+              diff: "--- a/README.md\n+++ b/README.md\n@@\n+tool-context-patch-ok\n",
+            },
+          },
+          {
+            type: "apply_patch_call_output",
+            call_id: "call_patch_context",
+            status: "completed",
+            output: "tool-context-patch-output-ok",
           },
           {
             type: "image_generation_call",
@@ -1548,7 +1568,7 @@ test("Responses endpoints validate input image and file detail before provider c
           type: "apply_patch_call",
           call_id: "call_patch",
           status: "failed",
-          operation: { type: "update", path: "README.md" },
+          operation: { type: "update_file", path: "README.md", diff: "--- a/README.md\n+++ b/README.md\n" },
         }],
         param: "input.0.status",
         message: "input.0.status must be one of: in_progress, completed",
@@ -1561,8 +1581,41 @@ test("Responses endpoints validate input image and file detail before provider c
           status: "completed",
           operation: { type: "update", path: "README.md" },
         }],
-        param: "input.0.id",
-        message: "input.0.id must be a non-empty string",
+        param: "input.0.operation.type",
+        message: "input.0.operation.type must be one of: create_file, delete_file, update_file",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: "apply_patch_call",
+          call_id: "call_patch",
+          status: "completed",
+          operation: { type: "delete_file", path: "" },
+        }],
+        param: "input.0.operation.path",
+        message: "input.0.operation.path must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses/compact",
+        input: [{
+          type: "apply_patch_call",
+          call_id: "call_patch",
+          status: "completed",
+          operation: { type: "update_file", path: "README.md" },
+        }],
+        param: "input.0.operation.diff",
+        message: "input.0.operation.diff must be a string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "apply_patch_call",
+          call_id: "call_patch",
+          status: "completed",
+          operation: { type: "create_file", path: "README.md", diff: oversizedToolOutput },
+        }],
+        param: "input.0.operation.diff",
+        message: `input.0.operation.diff must be at most ${maxToolOutputChars} characters`,
       },
       {
         endpoint: "/v1/responses/input_tokens",
@@ -1793,7 +1846,7 @@ test("Responses call_id length limits are validated before provider calls", asyn
           id: "apc_oversized_call",
           call_id: oversizedCallId,
           status: "completed",
-          operation: { type: "update", path: "README.md" },
+          operation: { type: "update_file", path: "README.md", diff: "--- a/README.md\n+++ b/README.md\n" },
         }],
       },
       {

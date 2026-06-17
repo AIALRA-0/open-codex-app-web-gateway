@@ -1,5 +1,56 @@
 # Audit Log
 
+## 2026-06-18 - Responses apply patch operation schema validation
+
+- Used the current official OpenAI OpenAPI 2.3.0 request schemas to correct
+  the next Responses replay compatibility target:
+  - `ApplyPatchToolCallItemParam.id` and
+    `ApplyPatchToolCallOutputItemParam.id` are optional/nullable, not required;
+  - `apply_patch_call` requires `call_id`, `status`, and `operation`;
+  - `apply_patch_call_output` requires `call_id` and `status`;
+  - operation types are `create_file`, `delete_file`, and `update_file`;
+  - operation `path` values must be non-empty strings;
+  - `create_file` and `update_file` operations require string `diff` values
+    capped at 10,485,760 characters.
+- Closed the compatibility gap without adding dependencies:
+  - stopped rejecting legal apply-patch replay items that omit `id`;
+  - added pre-provider validation for official apply-patch operation types,
+    paths, required create/update diffs, and diff length;
+  - kept delete operations type/path-only as defined by the official request
+    shape;
+  - preserved readable Chat replay for prior apply-patch call/output context.
+- Updated docs:
+  - compatibility matrix now records optional apply-patch replay ids and the
+    official operation/path/diff boundaries;
+  - the older 2026-06-17 audit note is explicitly marked as superseded where it
+    treated apply-patch replay ids as required.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - Focused `node --test --test-name-pattern "tool context replay|input image and file detail|call_id length limits|hosted and local tool items" test/server.test.js test/translator.test.js`:
+    passed 3/3.
+  - Focused `node --test --test-name-pattern "replays Responses tool items" test/server.test.js`:
+    passed 1/1, including legal apply-patch replay without ids.
+  - Full `node --test test/*.test.js`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5392 runtime
+    artifacts and selected 3 expired code-benchmark workdirs totaling 26,027
+    bytes for potential cleanup, with zero deletion in dry-run mode.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 7.6 GiB
+    available at 97% used; repository size was 289 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz`: returned `ok:true`.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with
+    `operation.type:"update"`: returned HTTP 400 with
+    `param:"input.0.operation.type"` and the official enum message.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses tool replay output length validation
 
 - Used the current official OpenAI OpenAPI schema to confirm the next Responses
@@ -5875,21 +5926,24 @@
   `ApplyPatchToolCallOutput`, `ApplyPatchCallStatus`, and
   `ApplyPatchCallOutputStatus` schemas through the developer docs MCP workflow
   and the official `openai-openapi` YAML:
-  - `apply_patch_call` requires `id`, `call_id`, `status`, and `operation`;
-  - `apply_patch_call_output` requires `id`, `call_id`, and `status`;
+  - superseded on 2026-06-18: this checkpoint treated `id` as required, but
+    the current official request schemas make `id` optional/nullable for both
+    apply-patch call and output replay items;
+  - `apply_patch_call` requires `call_id`, `status`, and `operation`;
+  - `apply_patch_call_output` requires `call_id` and `status`;
   - status enums are `in_progress`/`completed` for calls and
     `completed`/`failed` for outputs.
 - Tightened Responses input validation before provider calls:
   - `/v1/responses`, `/v1/responses/input_tokens`, and
-    `/v1/responses/compact` now reject missing apply-patch replay ids and
-    statuses;
-  - existing `call_id`, operation object, and output string/null validation
-    remains in place.
+    `/v1/responses/compact` reject invalid apply-patch replay statuses;
+  - superseded on 2026-06-18: current validation also checks official
+    operation types, operation paths, and create/update diffs, while keeping
+    apply-patch replay `id` optional/nullable.
 - Regression coverage updated:
-  - extended the shared Responses input-detail boundary test with missing
-    `apply_patch_call.id` and missing `apply_patch_call_output.status` cases.
+  - superseded on 2026-06-18: coverage now treats omitted apply-patch replay
+    ids as valid and rejects malformed operation fields instead.
 - Documentation updated:
-  - compatibility matrix now records required apply-patch ids and statuses.
+  - compatibility matrix now records required apply-patch statuses.
 - Validation:
   - `node --check src/bridge/server.js` passes;
   - `node --check test/server.test.js` passes;

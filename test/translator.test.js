@@ -637,7 +637,7 @@ test("maps Responses hosted and local tool items to readable context", () => {
       type: "apply_patch_call",
       call_id: "call_patch",
       status: "completed",
-      operation: { type: "update", path: "README.md" },
+      operation: { type: "update_file", path: "README.md", diff: "--- a/README.md\n+++ b/README.md\n" },
     },
     {
       type: "apply_patch_call_output",
