@@ -35535,6 +35535,96 @@ test("local Batch API executes Responses JSONL and exposes output and error file
   });
 });
 
+test("local Batch API validates JSONL custom_id uniqueness and shape", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid batch custom_id lines");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "dup",
+        method: "GET",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "first duplicate id is still recorded" },
+      }),
+      JSON.stringify({
+        custom_id: "dup",
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "duplicate custom id must fail" },
+      }),
+      JSON.stringify({
+        custom_id: 42,
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "custom id must be string" },
+      }),
+      JSON.stringify({
+        custom_id: "   ",
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "blank custom id must fail" },
+      }),
+      JSON.stringify({
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "missing custom id must fail" },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "responses-batch-custom-id-validation.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/responses",
+        completion_window: "24h",
+        metadata: { suite: "batch-custom-id-validation" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 5);
+    assert.equal(batch.request_counts.completed, 0);
+    assert.equal(batch.request_counts.failed, 5);
+    assert.equal(batch.output_file_id, null);
+    assert.ok(batch.error_file_id);
+
+    const errorResponse = await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
+    assert.equal(errorResponse.status, 200);
+    const errorLines = (await errorResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(errorLines.length, 5);
+    assert.equal(errorLines[0].custom_id, "dup");
+    assert.equal(errorLines[0].error.code, "unsupported_batch_method");
+    assert.equal(errorLines[1].custom_id, "dup");
+    assert.equal(errorLines[1].error.code, "duplicate_custom_id");
+    assert.equal(errorLines[1].error.message, "batch line custom_id must be unique within the batch input file");
+    assert.equal(errorLines[2].custom_id, "line-3");
+    assert.equal(errorLines[2].error.code, "invalid_custom_id");
+    assert.equal(errorLines[2].error.message, "batch line custom_id must be a string");
+    assert.equal(errorLines[3].custom_id, "line-4");
+    assert.equal(errorLines[3].error.code, "invalid_custom_id");
+    assert.equal(errorLines[3].error.message, "batch line custom_id must be a non-empty string");
+    assert.equal(errorLines[4].custom_id, "line-5");
+    assert.equal(errorLines[4].error.code, "missing_custom_id");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Batch API executes Responses input_tokens and compact JSONL", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

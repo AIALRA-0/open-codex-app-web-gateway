@@ -910,6 +910,9 @@ generated output. The bridge accepts this field on both `/v1/responses` and
 
 OpenAI's Batch API creates an asynchronous job from a `purpose:"batch"` JSONL
 File. Each JSONL line has a `custom_id`, `method`, `url`, and request `body`.
+Each local JSONL line must use a non-empty string `custom_id`, and custom IDs
+must be unique within the input file so output/error lines remain reliably
+matchable to inputs.
 Completed batches expose `output_file_id` and `error_file_id` that clients read
 through the Files API. The bridge implements a local synchronous compatibility
 layer so evaluation tooling can batch requests against the already implemented
@@ -917,7 +920,7 @@ OpenAI-compatible surfaces without adding a separate job runner.
 
 | Endpoint | Status | Notes |
 | --- | --- | --- |
-| `POST /v1/batches` | Implemented locally | Rejects unsupported query parameters before JSON parsing, file lookup, provider calls, or batch record creation; requires string `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates user-supplied `metadata` against the official string Metadata limits and validates `output_expires_after:{anchor:"created_at",seconds:3600..2592000}` before file lookup or provider calls; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers, preserving each line URL's query string so per-endpoint query validation can reject unsupported line-level parameters instead of silently dropping them; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File with local output-expiration metadata when requested |
+| `POST /v1/batches` | Implemented locally | Rejects unsupported query parameters before JSON parsing, file lookup, provider calls, or batch record creation; requires string `input_file_id`, `endpoint`, and `completion_window:"24h"`; validates user-supplied `metadata` against the official string Metadata limits and validates `output_expires_after:{anchor:"created_at",seconds:3600..2592000}` before file lookup or provider calls; validates `purpose:"batch"` input files; executes JSONL lines synchronously through the existing local endpoint handlers, rejecting per-line missing/non-string/blank/duplicate `custom_id` values into the Batch error file, and preserving each line URL's query string so per-endpoint query validation can reject unsupported line-level parameters instead of silently dropping them; writes successful lines to a `purpose:"batch_output"` File and failed lines to a `purpose:"batch_error"` File with local output-expiration metadata when requested |
 | `GET /v1/batches` | Implemented locally | Lists local batch records with official `limit` and `after` pagination only; repeated scalar query values and unsupported parameters such as `before`, `order`, or `metadata` return 400 before listing; applies lazy `output_expires_after` cleanup before projecting each record |
 | `GET /v1/batches/{batch_id}` | Implemented locally | Rejects unsupported query parameters before reading the stored Batch; returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id`; deletes expired local output/error Files and clears stale file ids when `output_expires_after` has elapsed |
 | `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Rejects unsupported query parameters before lifecycle mutation; returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary, after applying the same lazy output-file expiration check |

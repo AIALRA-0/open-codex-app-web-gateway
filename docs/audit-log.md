@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-18 - Batch JSONL custom_id validation
+
+- Re-checked the current OpenAI Batch guide through the OpenAI developer docs
+  MCP. The guide states that each Batch JSONL request must include a unique
+  `custom_id` value so completed output/error lines can be matched back to
+  inputs.
+- Closed a local Batch parsing gap:
+  - `custom_id` is now required to be a string;
+  - blank or whitespace-only `custom_id` values fail locally;
+  - duplicate `custom_id` values inside the same input file fail locally;
+  - invalid `custom_id` rows are written to the Batch error file and never call
+    the configured Chat provider.
+- Kept the existing per-line Batch execution model: a line with a valid unique
+  `custom_id` can still fail later for method, URL, body, stream, or endpoint
+  validation, and the same custom id is preserved in that error line for
+  client-side correlation.
+- Added regression coverage proving duplicate, numeric, blank, and missing
+  `custom_id` rows fail with structured error codes while making zero provider
+  calls.
+- Updated the compatibility matrix and evaluation plan to record the unique
+  non-empty string `custom_id` boundary.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "local Batch API executes Responses JSONL and exposes output and error files|local Batch API validates JSONL custom_id uniqueness and shape" test/server.test.js`: passed 2/2.
+  - Full `npm test`: passed 394/394.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,435 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    systemd units reported `active`.
+  - Local `http://127.0.0.1:12912/healthz` and public
+    `https://opencodexapp.aialra.online/healthz` returned HTTP 200.
+  - Live focused bridge-regression case `batch-responses-input-tokens`: passed
+    1/1 with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Batch line URL query preservation
 
 - Found and closed a local Batch execution gap: JSONL line `url` values were

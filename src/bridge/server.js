@@ -15323,6 +15323,7 @@ function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
   const text = Buffer.isBuffer(buffer) ? buffer.toString("utf8") : String(buffer || "");
   const rawLines = text.split(/\r?\n/);
   const requests = [];
+  const seenCustomIds = new Set();
   for (let index = 0; index < rawLines.length; index += 1) {
     const raw = rawLines[index].trim();
     if (!raw) continue;
@@ -15334,7 +15335,7 @@ function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
         details: { type: "invalid_request_error", code: "batch_too_large", param: "input_file_id" },
       };
     }
-    requests.push(normalizeBatchRequestLine(raw, index + 1, endpoint));
+    requests.push(normalizeBatchRequestLine(raw, index + 1, endpoint, seenCustomIds));
   }
   if (!requests.length) {
     return {
@@ -15375,7 +15376,7 @@ function countEmbeddingInputsForBatch(input) {
   return input == null ? 0 : 1;
 }
 
-function normalizeBatchRequestLine(raw, line, endpoint) {
+function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set()) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -15391,21 +15392,44 @@ function normalizeBatchRequestLine(raw, line, endpoint) {
     };
   }
 
-  const customId = parsed?.custom_id ? String(parsed.custom_id) : `line-${line}`;
   if (!isPlainObject(parsed)) {
     return {
       line,
-      custom_id: customId,
+      custom_id: `line-${line}`,
       error: { code: "invalid_batch_line", message: "batch line must be an object", param: "input_file_id" },
     };
   }
-  if (!parsed.custom_id) {
+  const rawCustomId = parsed.custom_id;
+  const customId = typeof rawCustomId === "string" && rawCustomId.trim() ? rawCustomId : `line-${line}`;
+  if (!Object.prototype.hasOwnProperty.call(parsed, "custom_id") || rawCustomId == null || rawCustomId === "") {
     return {
       line,
       custom_id: customId,
       error: { code: "missing_custom_id", message: "batch line custom_id is required", param: "custom_id" },
     };
   }
+  if (typeof rawCustomId !== "string") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_custom_id", message: "batch line custom_id must be a string", param: "custom_id" },
+    };
+  }
+  if (!rawCustomId.trim()) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_custom_id", message: "batch line custom_id must be a non-empty string", param: "custom_id" },
+    };
+  }
+  if (seenCustomIds.has(rawCustomId)) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "duplicate_custom_id", message: "batch line custom_id must be unique within the batch input file", param: "custom_id" },
+    };
+  }
+  seenCustomIds.add(rawCustomId);
   if (String(parsed.method || "").toUpperCase() !== "POST") {
     return {
       line,
