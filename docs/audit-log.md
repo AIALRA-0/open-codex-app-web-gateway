@@ -1,5 +1,48 @@
 # Audit Log
 
+## 2026-06-18 - Batch embeddings aggregate input cap
+
+- Used the current OpenAI OpenAPI 2.3.0 Batch create schema as the
+  compatibility target for this pass: official Batch supports
+  `/v1/embeddings` and notes that embeddings batches are restricted to a
+  maximum of 50,000 embedding inputs across all requests in the batch.
+- Closed the local validation gap before Batch execution:
+  - added `CODEXCOMPAT_BATCH_MAX_EMBEDDING_INPUTS`, defaulting to 50,000 and
+    bounded to the same maximum;
+  - added a pre-execution aggregate input counter for `/v1/embeddings` Batch
+    requests;
+  - token-id arrays count as one embedding input, while arrays of strings or
+    token arrays count per element, matching the bridge's local embeddings
+    normalization behavior;
+  - oversized embeddings batches now return a 400 `batch_embeddings_too_large`
+    error before creating a Batch record or executing local embedding
+    generation.
+- Added regression coverage proving the aggregate cap is enforced across
+  multiple JSONL lines before provider calls or local embedding work.
+- Updated the compatibility matrix and evaluation plan so eval operators know
+  embeddings Batch jobs are request-count and input-count bounded.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "local Batch API executes local embeddings|local Batch API enforces embeddings input count" test/server.test.js`: passed.
+  - Full `npm test`: passed 393/393.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,416 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; systemd reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz` returned HTTP 200 after
+    a short restart-window retry; local `http://127.0.0.1:12912/healthz`
+    returned HTTP 200.
+  - Live focused bridge-regression case `batch-embeddings-local`: passed 1/1
+    with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Batch Responses input-token and compaction execution
 
 - Extended the local synchronous Batch compatibility layer so JSONL batches can

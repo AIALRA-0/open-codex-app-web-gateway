@@ -36369,6 +36369,63 @@ test("local Batch API executes local embeddings without provider calls", async (
   });
 });
 
+test("local Batch API enforces embeddings input count limit before execution", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for rejected embeddings batch");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "embedding-a",
+        method: "POST",
+        url: "/v1/embeddings",
+        body: { model: "text-embedding-3-small", input: ["alpha", "beta"], dimensions: 8 },
+      }),
+      JSON.stringify({
+        custom_id: "embedding-b",
+        method: "POST",
+        url: "/v1/embeddings",
+        body: { model: "text-embedding-3-small", input: [[1, 2, 3], [4, 5, 6]], dimensions: 8 },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "embeddings-input-limit-batch.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/embeddings",
+        completion_window: "24h",
+      }),
+    });
+    assert.equal(created.status, 400);
+    assert.deepEqual(await created.json(), {
+      error: {
+        message: "embeddings batch input exceeds local limit of 3 embedding inputs",
+        type: "invalid_request_error",
+        param: "input_file_id",
+        code: "batch_embeddings_too_large",
+      },
+    });
+    assert.equal(requests.length, 0);
+  }, {
+    batchMaxEmbeddingInputs: 3,
+  });
+});
+
 test("local Batch API executes local video generations without provider calls", async () => {
   await withMockProvider(async (_req, res) => {
     res.writeHead(500, { "content-type": "application/json" });

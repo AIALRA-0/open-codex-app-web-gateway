@@ -637,6 +637,7 @@ function loadConfig(overrides = {}) {
     embeddingsDimensions: numberFromEnv("CODEXCOMPAT_EMBEDDINGS_DIMENSIONS", LOCAL_EMBEDDING_DIMENSIONS, 1, 3072),
     moderationsModel: process.env.CODEXCOMPAT_MODERATIONS_MODEL || "omni-moderation-latest",
     batchMaxRequests: numberFromEnv("CODEXCOMPAT_BATCH_MAX_REQUESTS", 1000, 1, 50000),
+    batchMaxEmbeddingInputs: numberFromEnv("CODEXCOMPAT_BATCH_MAX_EMBEDDING_INPUTS", 50000, 1, 50000),
     evalStateDir: process.env.CODEXCOMPAT_EVAL_STATE_DIR || path.join(stateDir, "local-evals"),
     evalMaxRows: numberFromEnv("CODEXCOMPAT_EVAL_MAX_ROWS", 100, 1, 5000),
     pythonGraderProvider: process.env.CODEXCOMPAT_PYTHON_GRADER_PROVIDER || "local",
@@ -15043,6 +15044,11 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
     sendError(res, parsed.status, parsed.message, parsed.details);
     return;
   }
+  const embeddingInputCountError = validateBatchEmbeddingInputCount(body.endpoint, parsed.requests, config.batchMaxEmbeddingInputs);
+  if (embeddingInputCountError) {
+    sendError(res, 400, embeddingInputCountError.message, embeddingInputCountError);
+    return;
+  }
 
   const now = nowSeconds();
   const batchId = prefixedId("batch");
@@ -15329,6 +15335,34 @@ function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
     };
   }
   return { ok: true, requests };
+}
+
+function validateBatchEmbeddingInputCount(endpoint, requests, maxInputs) {
+  if (endpoint !== "/v1/embeddings") return null;
+  const limit = Number.isInteger(maxInputs) ? maxInputs : 50000;
+  let total = 0;
+  for (const request of requests || []) {
+    if (request?.error) continue;
+    total += countEmbeddingInputsForBatch(request.body?.input);
+    if (total > limit) {
+      return {
+        type: "invalid_request_error",
+        code: "batch_embeddings_too_large",
+        param: "input_file_id",
+        message: `embeddings batch input exceeds local limit of ${limit} embedding inputs`,
+      };
+    }
+  }
+  return null;
+}
+
+function countEmbeddingInputsForBatch(input) {
+  if (Array.isArray(input)) {
+    if (!input.length) return 0;
+    if (input.every((item) => Number.isInteger(item))) return 1;
+    return input.length;
+  }
+  return input == null ? 0 : 1;
 }
 
 function normalizeBatchRequestLine(raw, line, endpoint) {
