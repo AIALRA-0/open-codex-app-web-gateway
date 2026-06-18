@@ -35625,6 +35625,118 @@ test("local Batch API validates JSONL custom_id uniqueness and shape", async () 
   });
 });
 
+test("local Batch API validates JSONL method and url shapes", async () => {
+  await withMockProvider(async () => {
+    assert.fail("provider should not be called for invalid batch method/url lines");
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "method-missing",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "method is required" },
+      }),
+      JSON.stringify({
+        custom_id: "method-number",
+        method: 42,
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "method must be string" },
+      }),
+      JSON.stringify({
+        custom_id: "method-blank",
+        method: "   ",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "method must be non-empty" },
+      }),
+      JSON.stringify({
+        custom_id: "method-get",
+        method: "GET",
+        url: "/v1/responses",
+        body: { model: "mock-model", input: "only POST is supported" },
+      }),
+      JSON.stringify({
+        custom_id: "url-missing",
+        method: "POST",
+        body: { model: "mock-model", input: "url is required" },
+      }),
+      JSON.stringify({
+        custom_id: "url-number",
+        method: "POST",
+        url: 42,
+        body: { model: "mock-model", input: "url must be string" },
+      }),
+      JSON.stringify({
+        custom_id: "url-blank",
+        method: "POST",
+        url: "   ",
+        body: { model: "mock-model", input: "url must be non-empty" },
+      }),
+      JSON.stringify({
+        custom_id: "url-mismatch",
+        method: "POST",
+        url: "/v1/chat/completions",
+        body: { model: "mock-model", input: "url must match batch endpoint" },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "responses-batch-method-url-validation.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/responses",
+        completion_window: "24h",
+        metadata: { suite: "batch-method-url-validation" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 8);
+    assert.equal(batch.request_counts.completed, 0);
+    assert.equal(batch.request_counts.failed, 8);
+    assert.equal(batch.output_file_id, null);
+    assert.ok(batch.error_file_id);
+
+    const errorResponse = await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
+    assert.equal(errorResponse.status, 200);
+    const errorLines = (await errorResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(errorLines.length, 8);
+    assert.deepEqual(errorLines.map((line) => [line.custom_id, line.error.code, line.error.param]), [
+      ["method-missing", "missing_batch_method", "method"],
+      ["method-number", "invalid_batch_method", "method"],
+      ["method-blank", "invalid_batch_method", "method"],
+      ["method-get", "unsupported_batch_method", "method"],
+      ["url-missing", "missing_batch_url", "url"],
+      ["url-number", "invalid_batch_url", "url"],
+      ["url-blank", "invalid_batch_url", "url"],
+      ["url-mismatch", "batch_endpoint_mismatch", "url"],
+    ]);
+    assert.equal(errorLines[0].error.message, "batch line method is required");
+    assert.equal(errorLines[1].error.message, "batch line method must be a string");
+    assert.equal(errorLines[2].error.message, "batch line method must be a non-empty string");
+    assert.equal(errorLines[3].error.message, "only POST batch requests are supported");
+    assert.equal(errorLines[4].error.message, "batch line url is required");
+    assert.equal(errorLines[5].error.message, "batch line url must be a string");
+    assert.equal(errorLines[6].error.message, "batch line url must be a non-empty string");
+    assert.equal(errorLines[7].error.message, "line url /v1/chat/completions does not match batch endpoint /v1/responses");
+    assert.equal(requests.length, 0);
+  });
+});
+
 test("local Batch API enforces a single model per input file", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

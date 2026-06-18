@@ -15431,14 +15431,58 @@ function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set(
     };
   }
   seenCustomIds.add(rawCustomId);
-  if (String(parsed.method || "").toUpperCase() !== "POST") {
+  const rawMethod = parsed.method;
+  if (!Object.prototype.hasOwnProperty.call(parsed, "method") || rawMethod == null || rawMethod === "") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "missing_batch_method", message: "batch line method is required", param: "method" },
+    };
+  }
+  if (typeof rawMethod !== "string") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_method", message: "batch line method must be a string", param: "method" },
+    };
+  }
+  if (!rawMethod.trim()) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_method", message: "batch line method must be a non-empty string", param: "method" },
+    };
+  }
+  if (rawMethod.toUpperCase() !== "POST") {
     return {
       line,
       custom_id: customId,
       error: { code: "unsupported_batch_method", message: "only POST batch requests are supported", param: "method" },
     };
   }
-  const urlPath = normalizeBatchLineUrl(parsed.url);
+  const rawUrl = parsed.url;
+  if (!Object.prototype.hasOwnProperty.call(parsed, "url") || rawUrl == null || rawUrl === "") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "missing_batch_url", message: "batch line url is required", param: "url" },
+    };
+  }
+  if (typeof rawUrl !== "string") {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_url", message: "batch line url must be a string", param: "url" },
+    };
+  }
+  if (!rawUrl.trim()) {
+    return {
+      line,
+      custom_id: customId,
+      error: { code: "invalid_batch_url", message: "batch line url must be a non-empty string", param: "url" },
+    };
+  }
+  const urlPath = normalizeBatchLineUrl(rawUrl);
   if (urlPath !== endpoint) {
     return {
       line,
@@ -15475,7 +15519,7 @@ function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set(
       error: { code: "unsupported_batch_background", message: "background Responses requests are not supported in local Batch execution", param: "body.background" },
     };
   }
-  return { line, custom_id: customId, request_url: normalizeBatchLineRequestUrl(parsed.url), body: clone(parsed.body) };
+  return { line, custom_id: customId, request_url: normalizeBatchLineRequestUrl(rawUrl), body: clone(parsed.body) };
 }
 
 function validateBatchLineModelScope(body, modelScope) {
@@ -15494,18 +15538,18 @@ function validateBatchLineModelScope(body, modelScope) {
 }
 
 function normalizeBatchLineUrl(value) {
-  if (!value) return "";
+  if (typeof value !== "string" || !value.trim()) return "";
   try {
-    return new URL(String(value), "http://local").pathname;
+    return new URL(value, "http://local").pathname;
   } catch {
     return "";
   }
 }
 
 function normalizeBatchLineRequestUrl(value) {
-  if (!value) return "";
+  if (typeof value !== "string" || !value.trim()) return "";
   try {
-    const url = new URL(String(value), "http://local");
+    const url = new URL(value, "http://local");
     return `${url.pathname}${url.search}`;
   } catch {
     return "";
