@@ -831,7 +831,7 @@ async function runWorkflow(page, config) {
       {
         id: "mobile",
         button: /Codex 移动版|Codex mobile/i,
-        expected: /扫描二维码|ChatGPT 应用|iOS|安卓|Android|Scan.*QR/i,
+        expected: /扫描二维码|ChatGPT 应用|iOS|安卓|Android|Scan.*QR|将手机连接到此电脑|通过手机或其他设备继续|开始设置|Connect.*phone|Continue.*phone|Start setup/i,
       },
     ];
 

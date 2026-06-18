@@ -1854,16 +1854,22 @@ function patchJavaScript(filePath, source) {
   if (base.startsWith("index-")) {
     return cacheBustJavaScriptDynamicImports(source);
   }
-  if (base.startsWith("rpc-y")) {
-    return source.replace(
-      "async function de(){Q=ue(),$=await Q.services}",
-      "async function de(){$=globalThis.codexappHostServices??{},Q=globalThis.codexappHost??{services:$}}",
-    );
+  if (base.startsWith("rpc-")) {
+    return source
+      .replace(
+        "async function de(){Q=ue(),$=await Q.services}",
+        "async function de(){$=globalThis.codexappHostServices??{},Q=globalThis.codexappHost??{services:$}}",
+      )
+      .replace(
+        "async function pt(){Q=ft(),$=await Q.services}",
+        "async function pt(){$=globalThis.codexappHostServices??{},Q=globalThis.codexappHost??{services:$}}",
+      );
   }
   if (base.startsWith("app-main-")) {
     let patched = source;
     if (patchUpdateRequiredGate) {
       patched = patched
+        .replace(/\b[$A-Z_a-z][$\w]*\(`2929582856`\)/g, "false")
         .replace(/ec\(`2929582856`\)/g, "false")
         .replace(/Oa\(`2929582856`\)/g, "false");
     }
@@ -1927,7 +1933,7 @@ function patchJavaScript(filePath, source) {
 function shouldPatchJavaScript(filePath) {
   const base = path.basename(filePath);
   return base.startsWith("index-")
-    || base.startsWith("rpc-y")
+    || base.startsWith("rpc-")
     || base.startsWith("app-main-")
     || base.startsWith("settings-page-")
     || base.startsWith("remote-connections-page-")
@@ -5693,7 +5699,7 @@ class BridgeSession {
       case "list-pending-automation-run-threads":
         return { threadIds: [] };
       case "inbox-items":
-        return { items: [] };
+        return { items: [], unreadRunCounts: { total: 0 } };
       case "codex-command-keymap-state":
         return readCodexCommandKeymapState();
       case "set-codex-command-keybinding":

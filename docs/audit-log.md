@@ -1,5 +1,73 @@
 # Audit Log
 
+## 2026-06-18 - CodexApp web shell startup and UI smoke recovery
+
+- Fixed the deployed CodexApp web shell startup path after the public UI smoke
+  exposed a multi-stage bootstrap failure:
+  - initial failure: app stayed on the startup loader because the current
+    `rpc-*.js` bundle awaited the newer `connect-app-host` MessagePort RPC
+    handshake, while the web gateway only exposed `globalThis.codexappHostServices`;
+  - second failure: after the RPC wait was removed, the app rendered the
+    update-required screen because the app sunset gate id `2929582856` was now
+    minified through a different function name;
+  - third failure: after the update gate was bypassed, the sidebar hit an error
+    boundary because the web host fallback for `inbox-items` returned
+    `{items:[]}` without the newer `unreadRunCounts.total` field.
+- Closed the web-host compatibility gaps without changing the upstream bundle on
+  disk:
+  - `patchJavaScript()` now targets all `rpc-*.js` assets, not only the older
+    `rpc-y*` name, and maps both the old `de()` and current `pt()` RPC startup
+    functions directly to `globalThis.codexappHostServices`;
+  - `shouldPatchJavaScript()` now includes all `rpc-*` assets so the runtime
+    patch is actually served with `Cache-Control: no-store`;
+  - the update-required gate patch now disables any minified call to the
+    official gate id `2929582856`, rather than only the previous `ec()`/`Oa()`
+    aliases;
+  - the `inbox-items` host method now returns
+    `{ items: [], unreadRunCounts: { total: 0 } }`, matching the current
+    sidebar signal expectations for an empty inbox;
+  - UI smoke now recognizes the current Codex mobile onboarding copy
+    (`将手机连接到此电脑` / `开始设置`) as a valid mobile page render.
+- Verification:
+  - `node --check web-server.js`: passed.
+  - `node --check scripts/ui-smoke.mjs`: passed.
+  - Public patched asset verification:
+    `rpc-Hf-fxjh7.js` contains the host-services startup patch and no longer
+    contains `async function pt(){Q=ft(),$=await Q.services}`.
+  - Public patched asset verification:
+    `app-main-Bi1wKPe3.js` no longer contains gate id `2929582856`; the sunset
+    component branch is served as `if(false)`.
+  - `npm run smoke:ui`: passed end-to-end against
+    `https://opencodexapp.aialra.online`; covered load/auth, sidebar controls,
+    plugins/automation/mobile navigation, project dialog, browser upload
+    service, writable-root service, new conversation submission, DeepSeek reply,
+    completed-turn copy/edit/branch controls, reload recovery, generated image
+    artifact rendering, and saved-project cleanup. Browser console captured zero
+    errors and zero warnings.
+  - Full `npm test`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,406 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - Public `/healthz` returned HTTP 200 after deployment; bridge, web, and
+    app-server systemd services all reported `active`.
+  - Disk check after the UI run: `/srv/aialra/apps` had 13 GiB available at 94%
+    used; repository size was 292 MiB.
+- Residual notes:
+  - The larger goal remains active. This fixes the web shell and UI smoke
+    blocker; it does not prove full Responses API parity, SWE-bench quality
+    parity, or every provider-specific workflow.
+  - App-server startup still logs a remote-control prewarm failure when no
+    ChatGPT auth token is present. The public CodexApp shell and smoke-tested
+    workflows now continue despite that condition, but remote-control/mobile
+    enrollment remains a separate compatibility item.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses input item reference dispatch validation
 
 - Used the current official OpenAI OpenAPI 2.3.0 Responses create schema as the
