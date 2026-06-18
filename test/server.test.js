@@ -35521,6 +35521,138 @@ test("local Batch API executes Responses JSONL and exposes output and error file
   });
 });
 
+test("local Batch API executes Responses input_tokens and compact JSONL", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    res.writeHead(200, { "content-type": "application/json" });
+
+    if (call.body.max_tokens === 1) {
+      assert.equal(call.body.stream, false);
+      assert.equal("store" in call.body, false);
+      res.end(JSON.stringify({
+        id: "chatcmpl_batch_response_input_tokens",
+        object: "chat.completion",
+        created: 1700000445,
+        model: call.body.model,
+        choices: [{
+          index: 0,
+          message: { role: "assistant", content: "." },
+          finish_reason: "length",
+        }],
+        usage: { prompt_tokens: 66, completion_tokens: 1, total_tokens: 67 },
+      }));
+      return;
+    }
+
+    assert.deepEqual(call.body.thinking, { type: "disabled" });
+    res.end(JSON.stringify({
+      id: "chatcmpl_batch_response_compact",
+      object: "chat.completion",
+      created: 1700000446,
+      model: call.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: "Batch compacted context includes atlas-77." },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 19, completion_tokens: 7, total_tokens: 26 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const createBatchFile = async (filename, jsonl) => {
+      const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          filename,
+          purpose: "batch",
+          content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+          mime_type: "application/jsonl",
+        }),
+      });
+      assert.equal(fileResponse.status, 200, filename);
+      return fileResponse.json();
+    };
+    const createBatch = async (inputFileId, endpoint, suite) => {
+      const response = await fetch(`${baseUrl}/v1/batches`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input_file_id: inputFileId,
+          endpoint,
+          completion_window: "24h",
+          metadata: { suite },
+        }),
+      });
+      assert.equal(response.status, 200, suite);
+      return response.json();
+    };
+    const readOutputLines = async (batch) => {
+      const response = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+      assert.equal(response.status, 200, batch.id);
+      return (await response.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    };
+
+    const inputTokensFile = await createBatchFile("responses-input-tokens-batch.jsonl", `${JSON.stringify({
+      custom_id: "input-tokens-ok",
+      method: "POST",
+      url: "/v1/responses/input_tokens",
+      body: {
+        model: "mock-model",
+        instructions: "Count batch prompt tokens.",
+        input: "Batch input token probe.",
+        store: true,
+      },
+    })}\n`);
+    const inputTokensBatch = await createBatch(inputTokensFile.id, "/v1/responses/input_tokens", "batch-responses-input-tokens");
+    assert.equal(inputTokensBatch.object, "batch");
+    assert.equal(inputTokensBatch.status, "completed");
+    assert.equal(inputTokensBatch.request_counts.completed, 1);
+    assert.equal(inputTokensBatch.request_counts.failed, 0);
+    assert.equal(inputTokensBatch.error_file_id, null);
+    assert.equal(inputTokensBatch.metadata.compatibility.supported_endpoints.includes("/v1/responses/input_tokens"), true);
+    const inputTokenLines = await readOutputLines(inputTokensBatch);
+    assert.equal(inputTokenLines.length, 1);
+    assert.equal(inputTokenLines[0].custom_id, "input-tokens-ok");
+    assert.equal(inputTokenLines[0].response.status_code, 200);
+    assert.deepEqual(inputTokenLines[0].response.body, {
+      object: "response.input_tokens",
+      input_tokens: 66,
+    });
+
+    const compactFile = await createBatchFile("responses-compact-batch.jsonl", `${JSON.stringify({
+      custom_id: "compact-ok",
+      method: "POST",
+      url: "/v1/responses/compact",
+      body: {
+        model: "mock-model",
+        input: [
+          { role: "user", content: "Project code word is atlas-77." },
+          { role: "assistant", content: "Acknowledged for batch compaction." },
+        ],
+        store: false,
+      },
+    })}\n`);
+    const compactBatch = await createBatch(compactFile.id, "/v1/responses/compact", "batch-responses-compact");
+    assert.equal(compactBatch.object, "batch");
+    assert.equal(compactBatch.status, "completed");
+    assert.equal(compactBatch.request_counts.completed, 1);
+    assert.equal(compactBatch.request_counts.failed, 0);
+    assert.equal(compactBatch.error_file_id, null);
+    assert.equal(compactBatch.metadata.compatibility.supported_endpoints.includes("/v1/responses/compact"), true);
+    const compactLines = await readOutputLines(compactBatch);
+    assert.equal(compactLines.length, 1);
+    assert.equal(compactLines[0].custom_id, "compact-ok");
+    assert.equal(compactLines[0].response.status_code, 200);
+    const compactBody = compactLines[0].response.body;
+    assert.equal(compactBody.object, "response.compaction");
+    assert.equal(compactBody.usage.input_tokens, 19);
+    assert.equal(compactBody.metadata.upstream_object, "chat.completion");
+    assert.equal(compactBody.output.some((item) => item.type === "compaction" && /^occomp1\./.test(item.encrypted_content || "")), true);
+    assert.equal(requests.length, 2);
+  });
+});
+
 test("local Batch API validates create metadata and output expiration policy", async () => {
   await withMockProvider(async () => {
     assert.fail("provider should not be called for local batch create validation or embeddings");

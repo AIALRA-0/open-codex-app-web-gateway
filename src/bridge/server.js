@@ -157,6 +157,8 @@ const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_CHAT_N_EMULATION_MAX = 10;
 const LOCAL_BATCH_ENDPOINTS = new Set([
   "/v1/responses",
+  "/v1/responses/input_tokens",
+  "/v1/responses/compact",
   "/v1/chat/completions",
   "/v1/completions",
   "/v1/embeddings",
@@ -15409,11 +15411,15 @@ function normalizeBatchLineUrl(value) {
 }
 
 async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore }) {
-  const req = makeInternalJsonRequest(requestBody, incomingHeaders);
+  const req = makeInternalJsonRequest(requestBody, incomingHeaders, endpoint);
   const res = makeCaptureResponse();
   try {
     if (endpoint === "/v1/responses") {
       await handleResponses(req, res, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore);
+    } else if (endpoint === "/v1/responses/input_tokens") {
+      await handleResponseInputTokens(req, res, config, store, fileSearchStore, conversationStore);
+    } else if (endpoint === "/v1/responses/compact") {
+      await handleResponseCompact(req, res, config, store, fileSearchStore, conversationStore);
     } else if (endpoint === "/v1/chat/completions") {
       await handleChatPassthrough(req, res, config, store, fileSearchStore);
     } else if (endpoint === "/v1/completions") {
@@ -15474,9 +15480,11 @@ async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders
   };
 }
 
-function makeInternalJsonRequest(body, incomingHeaders = {}) {
+function makeInternalJsonRequest(body, incomingHeaders = {}, url = "/") {
   const payload = Buffer.from(JSON.stringify(body || {}));
   return {
+    method: "POST",
+    url,
     headers: {
       accept: "application/json",
       "content-type": "application/json",

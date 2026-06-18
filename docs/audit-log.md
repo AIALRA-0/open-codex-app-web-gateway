@@ -1,5 +1,49 @@
 # Audit Log
 
+## 2026-06-18 - Batch Responses input-token and compaction execution
+
+- Extended the local synchronous Batch compatibility layer so JSONL batches can
+  execute Responses auxiliary endpoints in addition to Responses create:
+  - added `/v1/responses/input_tokens` and `/v1/responses/compact` to the
+    local Batch endpoint allow-list;
+  - routed those batch lines through the existing direct endpoint handlers so
+    input-token probes still use provider usage metadata and compaction still
+    returns `response.compaction` with encrypted local compaction content;
+  - gave internal Batch request objects a POST method and concrete endpoint URL
+    so handlers that validate query strings see the same path as direct API
+    callers.
+- Added regression coverage proving two separate Batch jobs can execute
+  `/v1/responses/input_tokens` and `/v1/responses/compact`, then read the
+  `batch_output` JSONL Files through the Files API and verify
+  `response.input_tokens` / `response.compaction` output bodies.
+- Added `bridge-regression` eval harness cases for the same two Batch paths and
+  updated Responses usage aggregation so `response.input_tokens` contributes to
+  compact benchmark reports.
+- Updated the compatibility matrix and evaluation plan so batch-based protocol
+  and quality evals can use token-count and compaction endpoints.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check scripts/eval-harness.mjs`: passed.
+  - `node --test --test-name-pattern "local Batch API executes Responses input_tokens and compact JSONL" test/server.test.js`: passed.
+  - Full `npm test`: passed 392/392.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,412 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; systemd reported `active`.
+  - Public `https://opencodexapp.aialra.online/healthz` returned HTTP 200.
+  - Live focused bridge-regression case `batch-responses-input-tokens`: passed
+    1/1 with pass rate 1.0 against the restarted bridge.
+  - Live focused bridge-regression case `batch-responses-compact`: passed 1/1
+    with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - CodexApp web shell startup and UI smoke recovery
 
 - Fixed the deployed CodexApp web shell startup path after the public UI smoke

@@ -1927,6 +1927,82 @@ function buildSuites(defaultModel) {
           && /batch-completion-one/i.test(completionOutputText(outputLines[0].response?.body)),
       },
       {
+        id: "batch-responses-input-tokens",
+        mode: "batch-local",
+        endpoint: "/v1/responses/input_tokens",
+        usage: "responses",
+        requests: [
+          {
+            custom_id: "batch-response-input-tokens",
+            body: {
+              model: defaultModel,
+              instructions: "Count the prompt tokens for this Batch compatibility probe.",
+              input: "Exercise Responses input token counting inside local Batch JSONL.",
+              store: true,
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/responses/input_tokens"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-response-input-tokens"
+            && outputLines[0].response?.status_code === 200
+            && response?.object === "response.input_tokens"
+            && Number.isInteger(response.input_tokens)
+            && response.input_tokens > 0;
+        },
+      },
+      {
+        id: "batch-responses-compact",
+        mode: "batch-local",
+        endpoint: "/v1/responses/compact",
+        usage: "responses",
+        requests: [
+          {
+            custom_id: "batch-response-compact",
+            body: {
+              model: defaultModel,
+              input: [
+                { role: "user", content: "For a Batch compaction regression, remember the exact code word atlas-77." },
+                {
+                  type: "message",
+                  role: "assistant",
+                  status: "completed",
+                  content: [{ type: "output_text", text: "Acknowledged." }],
+                },
+              ],
+              store: false,
+            },
+          },
+        ],
+        check: ({ batch, outputLines, errorText }) => {
+          const response = outputLines[0]?.response?.body;
+          return batch?.object === "batch"
+            && batch.status === "completed"
+            && batch.endpoint === "/v1/responses/compact"
+            && batch.request_counts?.total === 1
+            && batch.request_counts?.completed === 1
+            && batch.request_counts?.failed === 0
+            && !batch.error_file_id
+            && !errorText
+            && outputLines.length === 1
+            && outputLines[0].custom_id === "batch-response-compact"
+            && outputLines[0].response?.status_code === 200
+            && response?.object === "response.compaction"
+            && response.usage?.input_tokens > 0
+            && response.usage?.total_tokens > 0
+            && (response.output || []).some((item) => item.type === "compaction" && /^occomp1\./.test(item.encrypted_content || ""));
+        },
+      },
+      {
         id: "batch-responses-image-generation",
         mode: "batch-local",
         endpoint: "/v1/responses",
@@ -9817,6 +9893,14 @@ function assistantMessagePartText(part) {
 }
 
 function responseUsage(response) {
+  if (response?.object === "response.input_tokens") {
+    const inputTokens = response.input_tokens || 0;
+    return {
+      input_tokens: inputTokens,
+      output_tokens: 0,
+      total_tokens: inputTokens,
+    };
+  }
   const usage = response?.usage || {};
   return {
     input_tokens: usage.input_tokens || 0,
