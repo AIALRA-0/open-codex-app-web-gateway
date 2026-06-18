@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-18 - Batch line URL query preservation
+
+- Found and closed a local Batch execution gap: JSONL line `url` values were
+  normalized to pathname only, so line-level query strings such as
+  `/v1/responses?metadata=debug` were silently dropped before the internal
+  endpoint handler could run its normal OpenAI-compatible query validation.
+- Preserved each Batch line URL's query string in the internal request while
+  still matching the line's pathname against the Batch `endpoint`. Unsupported
+  line-level query parameters now flow through the existing endpoint validator
+  and are written to the Batch error file instead of triggering provider calls
+  or disappearing from the request boundary.
+- Added regression coverage to the existing Responses Batch JSONL test:
+  - a valid `/v1/responses` line still executes successfully;
+  - a `stream:true` line still fails as `unsupported_batch_stream`;
+  - a `/v1/responses?metadata=debug` line now fails as
+    `invalid_request_parameter` with `param:"metadata"`;
+  - the mock provider is still called only once for the single valid line.
+- Updated the compatibility matrix so Batch behavior documents line-level query
+  preservation and per-endpoint rejection instead of silent query dropping.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "local Batch API executes Responses JSONL and exposes output and error files" test/server.test.js`: passed 1/1.
+  - Full `npm test`: passed 393/393.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,430 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    systemd units reported `active`.
+  - Local `http://127.0.0.1:12912/healthz` and public
+    `https://opencodexapp.aialra.online/healthz` returned HTTP 200.
+  - Live focused bridge-regression case `batch-responses-input-tokens`: passed
+    1/1 with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Batch official versus local extension metadata
 
 - Re-checked the current OpenAI OpenAPI 2.3.0 Batch create schema before this

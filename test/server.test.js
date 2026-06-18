@@ -35392,6 +35392,16 @@ test("local Batch API executes Responses JSONL and exposes output and error file
           stream: true,
         },
       }),
+      JSON.stringify({
+        custom_id: "response-query-rejected",
+        method: "POST",
+        url: "/v1/responses?metadata=debug",
+        body: {
+          model: "mock-model",
+          input: "query parameters must not be silently dropped in local batches",
+          store: false,
+        },
+      }),
     ].join("\n") + "\n";
 
     const fileResponse = await fetch(`${baseUrl}/v1/files`, {
@@ -35421,9 +35431,9 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     const batch = await created.json();
     assert.equal(batch.object, "batch");
     assert.equal(batch.status, "completed");
-    assert.equal(batch.request_counts.total, 2);
+    assert.equal(batch.request_counts.total, 3);
     assert.equal(batch.request_counts.completed, 1);
-    assert.equal(batch.request_counts.failed, 1);
+    assert.equal(batch.request_counts.failed, 2);
     assert.ok(batch.output_file_id);
     assert.ok(batch.error_file_id);
     assert.equal(requests.length, 1);
@@ -35452,9 +35462,13 @@ test("local Batch API executes Responses JSONL and exposes output and error file
     const errorResponse = await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
     assert.equal(errorResponse.status, 200);
     const errorLines = (await errorResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
-    assert.equal(errorLines.length, 1);
+    assert.equal(errorLines.length, 2);
     assert.equal(errorLines[0].custom_id, "response-stream-rejected");
     assert.equal(errorLines[0].error.code, "unsupported_batch_stream");
+    assert.equal(errorLines[1].custom_id, "response-query-rejected");
+    assert.equal(errorLines[1].error.code, "invalid_request_parameter");
+    assert.equal(errorLines[1].error.message, "Unsupported query parameter: metadata");
+    assert.equal(errorLines[1].error.param, "metadata");
 
     const fetched = await fetch(`${baseUrl}/v1/batches/${batch.id}`);
     assert.equal(fetched.status, 200);

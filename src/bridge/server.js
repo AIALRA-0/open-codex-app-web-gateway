@@ -15098,6 +15098,7 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
 
     const result = await executeLocalBatchRequest({
       endpoint: body.endpoint,
+      requestUrl: item.request_url || body.endpoint,
       requestBody: item.body,
       incomingHeaders: req.headers,
       config,
@@ -15441,7 +15442,7 @@ function normalizeBatchRequestLine(raw, line, endpoint) {
       error: { code: "unsupported_batch_background", message: "background Responses requests are not supported in local Batch execution", param: "body.background" },
     };
   }
-  return { line, custom_id: customId, body: clone(parsed.body) };
+  return { line, custom_id: customId, request_url: normalizeBatchLineRequestUrl(parsed.url), body: clone(parsed.body) };
 }
 
 function normalizeBatchLineUrl(value) {
@@ -15453,8 +15454,18 @@ function normalizeBatchLineUrl(value) {
   }
 }
 
-async function executeLocalBatchRequest({ endpoint, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore }) {
-  const req = makeInternalJsonRequest(requestBody, incomingHeaders, endpoint);
+function normalizeBatchLineRequestUrl(value) {
+  if (!value) return "";
+  try {
+    const url = new URL(String(value), "http://local");
+    return `${url.pathname}${url.search}`;
+  } catch {
+    return "";
+  }
+}
+
+async function executeLocalBatchRequest({ endpoint, requestUrl, requestBody, incomingHeaders, config, store, backgroundJobs, fileSearchStore, imageGenerationStore, containerStore, conversationStore, skillStore }) {
+  const req = makeInternalJsonRequest(requestBody, incomingHeaders, requestUrl || endpoint);
   const res = makeCaptureResponse();
   try {
     if (endpoint === "/v1/responses") {
