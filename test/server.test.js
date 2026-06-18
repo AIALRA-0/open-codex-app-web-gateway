@@ -439,6 +439,9 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
     assert.match(content, /Prior Responses tool context \(image_generation_call\)/);
     assert.match(content, /base64_image\(96 chars\)/);
     assert.match(content, /prior-output-with-citation-ok/);
+    assert.match(content, /Prior Responses item reference:/);
+    assert.match(content, /id: msg_id_only_context/);
+    assert.match(content, /id: msg_null_type_context/);
     assert.doesNotMatch(content, /\[web_search_call:/);
     assert.doesNotMatch(content, /B{64}/);
 
@@ -539,6 +542,8 @@ test("POST /v1/responses replays Responses tool items as readable Chat context",
               }],
             }],
           },
+          { id: "msg_id_only_context" },
+          { type: null, id: "msg_null_type_context" },
           { role: "user", content: "Use the tool context." },
         ],
       }),
@@ -1177,6 +1182,24 @@ test("Responses endpoints validate input image and file detail before provider c
         }],
         param: "input.0.id",
         message: "input.0.id must be a non-empty string",
+      },
+      {
+        endpoint: "/v1/responses",
+        input: [{
+          type: "unknown_responses_item",
+          id: "item_unknown",
+        }],
+        param: "input.0.type",
+        message: "input.0.type is not a supported Responses input item type",
+      },
+      {
+        endpoint: "/v1/responses/input_tokens",
+        input: [{
+          type: 7,
+          id: "item_bad_type",
+        }],
+        param: "input.0.type",
+        message: "input.0.type must be a string or null",
       },
       {
         endpoint: "/v1/responses",

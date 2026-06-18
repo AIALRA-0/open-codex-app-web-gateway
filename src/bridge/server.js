@@ -351,6 +351,22 @@ const OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES = new Set([
   "mcp_approval_response",
   "additional_tools",
 ]);
+const OPENAI_RESPONSES_EXPLICIT_INPUT_ITEM_TYPES = new Set([
+  "message",
+  "input_image",
+  "image_url",
+  "input_file",
+  "file",
+  "function_call_output",
+  "custom_tool_call_output",
+  "function_call",
+  "item_reference",
+  "custom_tool_call",
+  "computer_call_output",
+  "reasoning",
+  "compaction",
+  ...OPENAI_RESPONSES_TOOL_CONTEXT_ITEM_TYPES,
+]);
 const OPENAI_IMAGE_GENERATION_QUALITY_VALUES = Object.freeze(["low", "medium", "high", "auto"]);
 const OPENAI_IMAGE_GENERATION_OUTPUT_FORMAT_VALUES = Object.freeze(["png", "webp", "jpeg"]);
 const OPENAI_IMAGE_GENERATION_MODERATION_VALUES = Object.freeze(["auto", "low"]);
@@ -5461,6 +5477,37 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
   }
   if (!isPlainObject(value)) return null;
 
+  const isTopLevelInputItem = isOpenAIResponsesTopLevelInputItemParam(param);
+  const isItemReferenceInputItem = isOpenAIResponsesItemReferenceInputItem(value);
+
+  if (isItemReferenceInputItem) {
+    const error = validateOpenAIResponsesItemReferenceInputItem(value, param);
+    if (error) return error;
+  } else if (
+    isTopLevelInputItem
+    && Object.prototype.hasOwnProperty.call(value, "type")
+    && value.type !== null
+    && typeof value.type !== "string"
+  ) {
+    return requestValidationError(`${param}.type must be a string or null`, `${param}.type`);
+  } else if (
+    isTopLevelInputItem
+    && typeof value.type === "string"
+    && !OPENAI_RESPONSES_EXPLICIT_INPUT_ITEM_TYPES.has(value.type)
+  ) {
+    return requestValidationError(
+      `${param}.type is not a supported Responses input item type`,
+      `${param}.type`,
+    );
+  } else if (
+    !isTopLevelInputItem
+    && Object.prototype.hasOwnProperty.call(value, "type")
+    && value.type !== null
+    && typeof value.type !== "string"
+  ) {
+    return requestValidationError(`${param}.type must be a string or null`, `${param}.type`);
+  }
+
   if (
     value.type === "message"
     || (Object.prototype.hasOwnProperty.call(value, "role") && value.type !== "additional_tools")
@@ -5482,10 +5529,6 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
   }
   if (value.type === "function_call") {
     const error = validateOpenAIResponsesFunctionCallInputItem(value, param);
-    if (error) return error;
-  }
-  if (value.type === "item_reference") {
-    const error = validateOpenAIResponsesItemReferenceInputItem(value, param);
     if (error) return error;
   }
   if (value.type === "custom_tool_call") {
@@ -5512,6 +5555,10 @@ function validateOpenAIResponsesInputDetailsValue(value, param) {
     return validateOpenAIResponsesInputDetailsValue(value.content, `${param}.content`);
   }
   return null;
+}
+
+function isOpenAIResponsesTopLevelInputItemParam(param) {
+  return param === "input" || /^input\.\d+$/.test(param);
 }
 
 function validateOpenAIStringMaxLength(value, param, maxLength) {
@@ -5825,6 +5872,16 @@ function validateOpenAIResponsesFunctionCallInputItem(item, param) {
     return requestValidationError(`${param}.arguments must be a string`, `${param}.arguments`);
   }
   return validateOpenAIResponsesInputItemStatus(item, param);
+}
+
+function isOpenAIResponsesItemReferenceInputItem(item) {
+  if (!isPlainObject(item)) return false;
+  if (item.type === "item_reference") return true;
+  if (Object.prototype.hasOwnProperty.call(item, "type") && item.type !== null) return false;
+  if (!Object.prototype.hasOwnProperty.call(item, "id")) return false;
+  return !Object.prototype.hasOwnProperty.call(item, "role")
+    && !Object.prototype.hasOwnProperty.call(item, "content")
+    && !Object.prototype.hasOwnProperty.call(item, "call_id");
 }
 
 function validateOpenAIResponsesItemReferenceInputItem(item, param) {
@@ -19911,6 +19968,15 @@ function normalizeStoredInputItem(item, index) {
   const stored = clone(item);
   if (!stored.id) stored.id = id;
   if (!stored.type && stored.role) stored.type = "message";
+  if (
+    (stored.type == null || stored.type === "")
+    && Object.prototype.hasOwnProperty.call(item, "id")
+    && !Object.prototype.hasOwnProperty.call(item, "role")
+    && !Object.prototype.hasOwnProperty.call(item, "content")
+    && !Object.prototype.hasOwnProperty.call(item, "call_id")
+  ) {
+    stored.type = "item_reference";
+  }
   return stored;
 }
 

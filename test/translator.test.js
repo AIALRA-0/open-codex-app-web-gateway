@@ -360,16 +360,36 @@ test("maps Responses custom tool call input items to native or text replay", () 
 test("maps Responses item references to Chat-visible context", () => {
   const messages = responseInputToChatMessages([
     { type: "item_reference", id: "msg_previous" },
+    { id: "msg_id_only" },
+    { type: null, id: "msg_null_type" },
   ]);
 
-  assert.deepEqual(messages, [{
-    role: "system",
-    content: [
-      "Prior Responses item reference:",
-      "id: msg_previous",
-      "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
-    ].join("\n"),
-  }]);
+  assert.deepEqual(messages, [
+    {
+      role: "system",
+      content: [
+        "Prior Responses item reference:",
+        "id: msg_previous",
+        "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
+      ].join("\n"),
+    },
+    {
+      role: "system",
+      content: [
+        "Prior Responses item reference:",
+        "id: msg_id_only",
+        "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
+      ].join("\n"),
+    },
+    {
+      role: "system",
+      content: [
+        "Prior Responses item reference:",
+        "id: msg_null_type",
+        "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
+      ].join("\n"),
+    },
+  ]);
 });
 
 test("maps Responses allowed_tools tool_choice to Chat allowed_tools shape", () => {

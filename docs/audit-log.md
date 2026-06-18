@@ -1,5 +1,75 @@
 # Audit Log
 
+## 2026-06-18 - Responses input item reference dispatch validation
+
+- Used the current official OpenAI OpenAPI 2.3.0 Responses create schema as the
+  compatibility target for `ItemReferenceParam`:
+  - item references require a non-empty `id`;
+  - `type:"item_reference"` is the explicit item-reference discriminator;
+  - id-only references and nullable-type references can appear in generated SDK
+    shapes and must not fall through to generic JSON replay.
+- Closed the dispatch gap without adding dependencies:
+  - explicit `type:"item_reference"` input items still validate and replay as
+    Chat-visible prior-item context;
+  - id-only `{id:"msg_..."}` and `{type:null,id:"msg_..."}` reference items are
+    accepted on Responses create, `/v1/responses/input_tokens`, and
+    `/v1/responses/compact` when no message/content/tool-call envelope fields are
+    present;
+  - stored id-only and nullable-type references are normalized back to
+    `type:"item_reference"` so later `input_items` reads and replay keep a stable
+    item shape;
+  - top-level input items with an explicit unsupported string `type` or a
+    non-string/non-null `type` now fail locally before provider calls;
+  - the new top-level type guard is scoped to top-level `input` items so nested
+    official message content parts such as `output_text` keep their own
+    content-part validation and are not misclassified as unknown input items.
+- Updated docs:
+  - compatibility matrix now documents id-only and nullable-type
+    `item_reference` handling, local normalization, explicit unknown-type
+    rejection, and the top-level-vs-content validation boundary.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check src/bridge/translator.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --check test/translator.test.js`: passed.
+  - Focused `node --test --test-name-pattern "item references|replays Responses tool items|input image and file detail" test/server.test.js test/translator.test.js`:
+    passed 3/3.
+  - Full `npm test`: passed 391/391.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,393 runtime
+    artifacts and selected 3 expired code-benchmark workdirs totaling 26,027
+    bytes for potential cleanup, with zero deletion in dry-run mode.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run smoke:bridge`: passed before and after deploy; deployed smoke
+    returned `output_text:"bridge-ok"`.
+  - Disk check before deploy: `/srv/aialra/apps` on `/dev/sda1` had 14 GiB
+    available at 93% used; repository size was 291 MiB.
+  - Deployed by restarting
+    `aialra-opencodexapp-bridge.service`,
+    `aialra-opencodexapp-web.service`, and
+    `aialra-opencodexapp-app-server.service`; all three reported `active`.
+  - Public and local health checks returned HTTP 200 after the restart window.
+    The first immediate public health check saw a transient HTTP 502 while the
+    bridge port was not listening yet; retry confirmed recovery.
+  - Local protocol smoke against `http://127.0.0.1:12912/v1/responses` with
+    `input[0].type:"unknown_responses_item"` returned HTTP 400 with
+    `param:"input.0.type"`.
+  - Local live DeepSeek smoke with id-only and nullable-type item references
+    returned HTTP 200 and `output_text:"item-reference-smoke"`.
+  - UI smoke did not pass: `npm run smoke:ui` timed out after 120 seconds waiting
+    for the `新对话` / `New chat` button. The captured screenshot
+    `output/playwright/ui-smoke-2026-06-18T00-28-00-570Z.png` shows the startup
+    loader, not the app shell. Static assets returned HTTP 200 and no browser
+    console errors were captured; web gateway logs repeatedly report
+    `remote control requires ChatGPT authentication` during app-server prewarm
+    while app-server `/healthz` and `/readyz` return HTTP 200. This remains an
+    unresolved UI/authentication workflow item for the larger goal and was not
+    treated as completed by this API compatibility patch.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Responses output text replay annotation/logprob validation
 
 - Used the current official OpenAI OpenAPI 2.3.0 Responses schemas to tighten

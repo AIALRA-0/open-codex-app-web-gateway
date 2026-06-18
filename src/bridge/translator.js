@@ -298,7 +298,7 @@ function inputItemToChatMessages(item, options = {}) {
     }];
   }
 
-  if (item.type === "item_reference") {
+  if (isResponsesItemReference(item)) {
     return [{
       role: options.itemReferenceRole || "system",
       content: itemReferenceToText(item),
@@ -387,6 +387,16 @@ function itemReferenceToText(item) {
     `id: ${stringifyContent(item.id)}`,
     "The referenced item content was not included in this Chat request; use any replayed conversation context if present.",
   ].join("\n");
+}
+
+function isResponsesItemReference(item) {
+  if (!isPlainObject(item)) return false;
+  if (item.type === "item_reference") return true;
+  if (Object.prototype.hasOwnProperty.call(item, "type") && item.type !== null) return false;
+  if (!Object.prototype.hasOwnProperty.call(item, "id")) return false;
+  return !Object.prototype.hasOwnProperty.call(item, "role")
+    && !Object.prototype.hasOwnProperty.call(item, "content")
+    && !Object.prototype.hasOwnProperty.call(item, "call_id");
 }
 
 const RESPONSES_TOOL_CONTEXT_TYPES = new Set([
