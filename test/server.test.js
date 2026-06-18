@@ -35625,6 +35625,98 @@ test("local Batch API validates JSONL custom_id uniqueness and shape", async () 
   });
 });
 
+test("local Batch API enforces a single model per input file", async () => {
+  await withMockProvider(async (_req, res, call) => {
+    assert.equal(call.req.url, "/chat/completions");
+    assert.equal(call.body.model, "mock-model-a");
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({
+      id: `chatcmpl_${call.body.messages.at(-1).content.includes("second") ? "second" : "first"}`,
+      object: "chat.completion",
+      created: 1700000447,
+      model: call.body.model,
+      choices: [{
+        index: 0,
+        message: { role: "assistant", content: call.body.messages.at(-1).content.includes("second") ? "same-model-second" : "same-model-first" },
+        finish_reason: "stop",
+      }],
+      usage: { prompt_tokens: 5, completion_tokens: 2, total_tokens: 7 },
+    }));
+  }, async ({ bridgeAddress, requests }) => {
+    const baseUrl = `http://127.0.0.1:${bridgeAddress.port}`;
+    const jsonl = [
+      JSON.stringify({
+        custom_id: "model-a-first",
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model-a", input: "first request uses model a", store: false },
+      }),
+      JSON.stringify({
+        custom_id: "model-b-rejected",
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model-b", input: "different model must fail", store: false },
+      }),
+      JSON.stringify({
+        custom_id: "model-a-second",
+        method: "POST",
+        url: "/v1/responses",
+        body: { model: "mock-model-a", input: "second request uses model a", store: false },
+      }),
+    ].join("\n") + "\n";
+
+    const fileResponse = await fetch(`${baseUrl}/v1/files`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        filename: "responses-batch-single-model.jsonl",
+        purpose: "batch",
+        content_base64: Buffer.from(jsonl, "utf8").toString("base64"),
+        mime_type: "application/jsonl",
+      }),
+    });
+    assert.equal(fileResponse.status, 200);
+    const file = await fileResponse.json();
+
+    const created = await fetch(`${baseUrl}/v1/batches`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        input_file_id: file.id,
+        endpoint: "/v1/responses",
+        completion_window: "24h",
+        metadata: { suite: "batch-single-model" },
+      }),
+    });
+    assert.equal(created.status, 200);
+    const batch = await created.json();
+    assert.equal(batch.status, "completed");
+    assert.equal(batch.request_counts.total, 3);
+    assert.equal(batch.request_counts.completed, 2);
+    assert.equal(batch.request_counts.failed, 1);
+    assert.ok(batch.output_file_id);
+    assert.ok(batch.error_file_id);
+
+    const outputResponse = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}/content`);
+    assert.equal(outputResponse.status, 200);
+    const outputLines = (await outputResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(outputLines.length, 2);
+    assert.deepEqual(outputLines.map((line) => line.custom_id), ["model-a-first", "model-a-second"]);
+    assert.match(JSON.stringify(outputLines[0].response.body), /same-model-first/);
+    assert.match(JSON.stringify(outputLines[1].response.body), /same-model-second/);
+
+    const errorResponse = await fetch(`${baseUrl}/v1/files/${batch.error_file_id}/content`);
+    assert.equal(errorResponse.status, 200);
+    const errorLines = (await errorResponse.text()).trim().split(/\n/).map((line) => JSON.parse(line));
+    assert.equal(errorLines.length, 1);
+    assert.equal(errorLines[0].custom_id, "model-b-rejected");
+    assert.equal(errorLines[0].error.code, "batch_model_mismatch");
+    assert.equal(errorLines[0].error.message, "batch input file can only include requests to a single model");
+    assert.equal(errorLines[0].error.param, "body.model");
+    assert.equal(requests.length, 2);
+  });
+});
+
 test("local Batch API executes Responses input_tokens and compact JSONL", async () => {
   await withMockProvider(async (_req, res, call) => {
     assert.equal(call.req.url, "/chat/completions");

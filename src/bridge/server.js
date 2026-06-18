@@ -15324,6 +15324,7 @@ function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
   const rawLines = text.split(/\r?\n/);
   const requests = [];
   const seenCustomIds = new Set();
+  const modelScope = { model: null };
   for (let index = 0; index < rawLines.length; index += 1) {
     const raw = rawLines[index].trim();
     if (!raw) continue;
@@ -15335,7 +15336,7 @@ function parseBatchInputJsonl(buffer, { endpoint, maxRequests }) {
         details: { type: "invalid_request_error", code: "batch_too_large", param: "input_file_id" },
       };
     }
-    requests.push(normalizeBatchRequestLine(raw, index + 1, endpoint, seenCustomIds));
+    requests.push(normalizeBatchRequestLine(raw, index + 1, endpoint, seenCustomIds, modelScope));
   }
   if (!requests.length) {
     return {
@@ -15376,7 +15377,7 @@ function countEmbeddingInputsForBatch(input) {
   return input == null ? 0 : 1;
 }
 
-function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set()) {
+function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set(), modelScope = { model: null }) {
   let parsed;
   try {
     parsed = JSON.parse(raw);
@@ -15452,6 +15453,14 @@ function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set(
       error: { code: "invalid_batch_body", message: "batch line body must be a JSON object", param: "body" },
     };
   }
+  const modelError = validateBatchLineModelScope(parsed.body, modelScope);
+  if (modelError) {
+    return {
+      line,
+      custom_id: customId,
+      error: modelError,
+    };
+  }
   if (parsed.body.stream === true) {
     return {
       line,
@@ -15467,6 +15476,21 @@ function normalizeBatchRequestLine(raw, line, endpoint, seenCustomIds = new Set(
     };
   }
   return { line, custom_id: customId, request_url: normalizeBatchLineRequestUrl(parsed.url), body: clone(parsed.body) };
+}
+
+function validateBatchLineModelScope(body, modelScope) {
+  const model = body?.model;
+  if (typeof model !== "string" || !model.trim()) return null;
+  if (!modelScope.model) {
+    modelScope.model = model;
+    return null;
+  }
+  if (modelScope.model === model) return null;
+  return {
+    code: "batch_model_mismatch",
+    message: "batch input file can only include requests to a single model",
+    param: "body.model",
+  };
 }
 
 function normalizeBatchLineUrl(value) {

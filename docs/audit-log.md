@@ -1,5 +1,46 @@
 # Audit Log
 
+## 2026-06-18 - Batch single-model input validation
+
+- Re-checked the current OpenAI Batch guide through the OpenAI developer docs
+  MCP. The guide states that each Batch input file can only include requests to
+  a single model.
+- Closed a local Batch parsing gap:
+  - the first non-empty string `body.model` in a Batch JSONL file establishes
+    the file's local model scope;
+  - later rows with a different string `body.model` fail as
+    `batch_model_mismatch` with `param:"body.model"`;
+  - same-model rows still execute normally;
+  - rows with missing/non-string model values continue to flow to the existing
+    endpoint-specific request validators instead of being preempted by the
+    Batch parser.
+- Added regression coverage proving a mixed-model `/v1/responses` Batch writes
+  only the mismatched model row to the error file, executes the two same-model
+  rows, and calls the provider exactly twice.
+- Updated the compatibility matrix and evaluation plan to record the
+  single-model Batch input-file boundary.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "local Batch API validates JSONL custom_id uniqueness and shape|local Batch API enforces a single model per input file|local Batch API executes Responses JSONL and exposes output and error files" test/server.test.js`: passed 3/3.
+  - Full `npm test`: passed 395/395.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,440 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    systemd units reported `active`.
+  - Local `http://127.0.0.1:12912/healthz` and public
+    `https://opencodexapp.aialra.online/healthz` returned HTTP 200.
+  - Live focused bridge-regression case `batch-responses-input-tokens`: passed
+    1/1 with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Batch JSONL custom_id validation
 
 - Re-checked the current OpenAI Batch guide through the OpenAI developer docs
