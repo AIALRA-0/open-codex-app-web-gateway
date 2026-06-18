@@ -922,18 +922,23 @@ OpenAI-compatible surfaces without adding a separate job runner.
 | `GET /v1/batches/{batch_id}` | Implemented locally | Rejects unsupported query parameters before reading the stored Batch; returns the stored local Batch object, including `request_counts`, `output_file_id`, and `error_file_id`; deletes expired local output/error Files and clears stale file ids when `output_expires_after` has elapsed |
 | `POST /v1/batches/{batch_id}/cancel` | Implemented as a compatibility no-op after synchronous completion | Rejects unsupported query parameters before lifecycle mutation; returns terminal local batches unchanged with metadata explaining the local synchronous execution boundary, after applying the same lazy output-file expiration check |
 
-Local Batch execution currently accepts the official Batch endpoints
-`/v1/responses`, `/v1/responses/input_tokens`, `/v1/responses/compact`,
-`/v1/chat/completions`, `/v1/completions`, `/v1/embeddings`,
-`/v1/images/generations`, `/v1/images/edits`, `/v1/videos`, and
-`/v1/moderations`. It also accepts local compatibility extensions
-`/v1/audio/transcriptions`, `/v1/audio/translations`, and
-`/v1/images/variations`, because those surfaces are implemented by the bridge
-and are useful for local regression coverage even though they are outside the
-current OpenAI Batch endpoint enum. The Responses `input_tokens` and `compact`
-Batch paths run through the same provider-backed usage-probe and local
-compaction handlers as their direct endpoints, so batch evals can measure prompt
-token costs and compacted continuation behavior without special-case clients.
+Local Batch execution currently accepts the official OpenAI Batch endpoint enum
+from OpenAPI 2.3.0: `/v1/responses`, `/v1/chat/completions`,
+`/v1/completions`, `/v1/embeddings`, `/v1/images/generations`,
+`/v1/images/edits`, `/v1/videos`, and `/v1/moderations`. It also accepts local
+compatibility extensions `/v1/responses/input_tokens`,
+`/v1/responses/compact`, `/v1/audio/transcriptions`,
+`/v1/audio/translations`, and `/v1/images/variations`, because those surfaces
+are implemented by the bridge and are useful for local regression coverage even
+though they are outside the current OpenAI Batch endpoint enum. Completed Batch
+metadata records `endpoint_kind:"official"` or
+`endpoint_kind:"local_extension"` plus separate `official_endpoints` and
+`local_extension_endpoints` lists so audit tooling can distinguish strict
+OpenAI parity from local regression extensions. The Responses `input_tokens`
+and `compact` Batch paths run through the same provider-backed usage-probe and
+local compaction handlers as their direct endpoints, so batch evals can measure
+prompt token costs and compacted continuation behavior without special-case
+clients.
 Batch output lines preserve upstream JSON response bodies and upstream
 `x-request-id` values when a proxied Chat provider supplies them; otherwise a
 local `req_*` id is generated for auditability.

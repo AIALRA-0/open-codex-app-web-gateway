@@ -35611,6 +35611,10 @@ test("local Batch API executes Responses input_tokens and compact JSONL", async 
     assert.equal(inputTokensBatch.request_counts.failed, 0);
     assert.equal(inputTokensBatch.error_file_id, null);
     assert.equal(inputTokensBatch.metadata.compatibility.supported_endpoints.includes("/v1/responses/input_tokens"), true);
+    assert.equal(inputTokensBatch.metadata.compatibility.endpoint_kind, "local_extension");
+    assert.equal(inputTokensBatch.metadata.compatibility.official_endpoints.includes("/v1/responses"), true);
+    assert.equal(inputTokensBatch.metadata.compatibility.official_endpoints.includes("/v1/responses/input_tokens"), false);
+    assert.equal(inputTokensBatch.metadata.compatibility.local_extension_endpoints.includes("/v1/responses/input_tokens"), true);
     const inputTokenLines = await readOutputLines(inputTokensBatch);
     assert.equal(inputTokenLines.length, 1);
     assert.equal(inputTokenLines[0].custom_id, "input-tokens-ok");
@@ -35640,6 +35644,9 @@ test("local Batch API executes Responses input_tokens and compact JSONL", async 
     assert.equal(compactBatch.request_counts.failed, 0);
     assert.equal(compactBatch.error_file_id, null);
     assert.equal(compactBatch.metadata.compatibility.supported_endpoints.includes("/v1/responses/compact"), true);
+    assert.equal(compactBatch.metadata.compatibility.endpoint_kind, "local_extension");
+    assert.equal(compactBatch.metadata.compatibility.official_endpoints.includes("/v1/responses/compact"), false);
+    assert.equal(compactBatch.metadata.compatibility.local_extension_endpoints.includes("/v1/responses/compact"), true);
     const compactLines = await readOutputLines(compactBatch);
     assert.equal(compactLines.length, 1);
     assert.equal(compactLines[0].custom_id, "compact-ok");
@@ -35751,6 +35758,9 @@ test("local Batch API validates create metadata and output expiration policy", a
     assert.ok(batch.output_file_id);
     assert.equal(batch.metadata.suite, "batch-expiration-policy");
     assert.equal(batch.metadata.compatibility.supported_endpoints.includes("/v1/embeddings"), true);
+    assert.equal(batch.metadata.compatibility.endpoint_kind, "official");
+    assert.equal(batch.metadata.compatibility.official_endpoints.includes("/v1/embeddings"), true);
+    assert.equal(batch.metadata.compatibility.local_extension_endpoints.includes("/v1/audio/transcriptions"), true);
 
     const outputFile = await fetch(`${baseUrl}/v1/files/${batch.output_file_id}`);
     assert.equal(outputFile.status, 200);

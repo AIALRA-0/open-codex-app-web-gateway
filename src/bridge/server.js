@@ -155,20 +155,26 @@ const {
 
 const DEFAULT_PROVIDER_BASE_URL = "https://api.deepseek.com";
 const DEFAULT_CHAT_N_EMULATION_MAX = 10;
-const LOCAL_BATCH_ENDPOINTS = new Set([
+const OFFICIAL_OPENAI_BATCH_ENDPOINTS = new Set([
   "/v1/responses",
-  "/v1/responses/input_tokens",
-  "/v1/responses/compact",
   "/v1/chat/completions",
   "/v1/completions",
   "/v1/embeddings",
-  "/v1/audio/transcriptions",
-  "/v1/audio/translations",
   "/v1/images/generations",
   "/v1/images/edits",
-  "/v1/images/variations",
   "/v1/videos",
   "/v1/moderations",
+]);
+const LOCAL_BATCH_EXTENSION_ENDPOINTS = new Set([
+  "/v1/responses/input_tokens",
+  "/v1/responses/compact",
+  "/v1/audio/transcriptions",
+  "/v1/audio/translations",
+  "/v1/images/variations",
+]);
+const LOCAL_BATCH_ENDPOINTS = new Set([
+  ...OFFICIAL_OPENAI_BATCH_ENDPOINTS,
+  ...LOCAL_BATCH_EXTENSION_ENDPOINTS,
 ]);
 
 const AUDIO_SPEECH_CONTENT_TYPES = Object.freeze({
@@ -15165,6 +15171,9 @@ async function handleBatchCreate(req, res, config, store, fileSearchStore, image
     compatibility: {
       provider: "local",
       execution: "synchronous",
+      endpoint_kind: OFFICIAL_OPENAI_BATCH_ENDPOINTS.has(body.endpoint) ? "official" : "local_extension",
+      official_endpoints: Array.from(OFFICIAL_OPENAI_BATCH_ENDPOINTS),
+      local_extension_endpoints: Array.from(LOCAL_BATCH_EXTENSION_ENDPOINTS),
       supported_endpoints: Array.from(LOCAL_BATCH_ENDPOINTS),
     },
   };

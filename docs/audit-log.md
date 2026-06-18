@@ -1,5 +1,52 @@
 # Audit Log
 
+## 2026-06-18 - Batch official versus local extension metadata
+
+- Re-checked the current OpenAI OpenAPI 2.3.0 Batch create schema before this
+  pass. The official Batch endpoint enum is limited to `/v1/responses`,
+  `/v1/chat/completions`, `/v1/embeddings`, `/v1/completions`,
+  `/v1/moderations`, `/v1/images/generations`, `/v1/images/edits`, and
+  `/v1/videos`.
+- Corrected local Batch audit metadata so the bridge no longer flattens
+  official Batch endpoints and local regression extensions into one ambiguous
+  concept:
+  - added `OFFICIAL_OPENAI_BATCH_ENDPOINTS`;
+  - added `LOCAL_BATCH_EXTENSION_ENDPOINTS` for `/v1/responses/input_tokens`,
+    `/v1/responses/compact`, `/v1/audio/transcriptions`,
+    `/v1/audio/translations`, and `/v1/images/variations`;
+  - kept accepting both sets through `LOCAL_BATCH_ENDPOINTS`, but now completed
+    Batch metadata records `endpoint_kind:"official"` or
+    `endpoint_kind:"local_extension"`, plus separate `official_endpoints` and
+    `local_extension_endpoints` lists.
+- Added regression assertions proving official embeddings batches are labeled
+  `official`, while Responses `input_tokens` and `compact` Batch jobs are
+  labeled `local_extension` and do not appear in the official endpoint list.
+- Updated the compatibility matrix wording so protocol docs distinguish strict
+  OpenAI Batch parity from local extension coverage.
+- Verification:
+  - `node --check src/bridge/server.js`: passed.
+  - `node --check test/server.test.js`: passed.
+  - `node --test --test-name-pattern "local Batch API executes Responses input_tokens and compact JSONL|local Batch API validates create metadata" test/server.test.js`: passed 2/2.
+  - Full `npm test`: passed 393/393.
+  - `git diff --check`: passed.
+  - `npm run secret-scan`: passed.
+  - `npm run smoke:bridge`: passed and returned `output_text:"bridge-ok"`.
+  - `npm run eval:protocol`: passed 2/2 with pass rate 1.0 against
+    `http://127.0.0.1:12912` using `deepseek-v4-pro`.
+  - `npm run prune:runtime -- --dry-run`: passed; scanned 5,422 runtime
+    artifacts and selected 8 old artifacts totaling 435,383 bytes for potential
+    cleanup, with zero deletion in dry-run mode.
+  - Restarted `aialra-opencodexapp-bridge.service`; bridge, web, and app-server
+    systemd units reported `active`.
+  - Local `http://127.0.0.1:12912/healthz` and public
+    `https://opencodexapp.aialra.online/healthz` returned HTTP 200.
+  - Live focused bridge-regression case `batch-responses-input-tokens`: passed
+    1/1 with pass rate 1.0 against the restarted bridge.
+  - Live focused bridge-regression case `batch-embeddings-local`: passed 1/1
+    with pass rate 1.0 against the restarted bridge.
+- Secret handling: no API keys, account credentials, provider headers, or local
+  deployment env files were added to the repository.
+
 ## 2026-06-18 - Batch embeddings aggregate input cap
 
 - Used the current OpenAI OpenAPI 2.3.0 Batch create schema as the
